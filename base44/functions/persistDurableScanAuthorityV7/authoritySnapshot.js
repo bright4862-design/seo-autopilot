@@ -1,6 +1,7 @@
 import * as legacy from "./authoritySnapshotStage1Legacy.js";
 import {
   STAGE3_AUTHORITY_VERSION,
+  STAGE3_AUTHORITY_CLAIM_VERSION,
   STAGE3_V7_DELIVERY_VERSION,
   buildAuthoritySnapshotStage3,
   buildPersistedAuthoritySnapshotStage3,
@@ -23,16 +24,21 @@ function hasPersistedStage3Delivery(run) {
   );
 }
 
-function claimsDurableStage3Delivery(review) {
+function claimsDurableStage3Delivery(review, identity) {
   if (!review || typeof review !== "object" || Array.isArray(review)) return false;
-  // The identity-bound B22/B24 sources are the upgrade boundary. B19/B21
-  // factors/counts and the identity-agnostic delivery/score decision can be
-  // computed in historical/basic review fixtures without a trusted scan id;
-  // those fields alone must not silently upgrade the signed authority version.
-  // Once either exact-scan source is present, strict Stage-3 validation owns the
-  // whole contract, so a partial/malformed new delivery still fails closed.
-  return review.stage3_private_preview_source !== undefined
-    || review.stage3_handoff_v2_source !== undefined;
+  if (review.stage3_authority_claim === undefined) return false;
+  const claim = review.stage3_authority_claim;
+  const scanId = typeof identity?.scan_id === "string" ? identity.scan_id.trim() : "";
+  if (
+    !claim || typeof claim !== "object" || Array.isArray(claim)
+    || claim.version !== STAGE3_AUTHORITY_CLAIM_VERSION
+    || typeof claim.scan_id !== "string" || claim.scan_id.trim() !== scanId || !scanId
+    || claim.delivery_version !== "stage3_delivery_v1_rank_before_truncate"
+    || claim.score_version !== "stage3_health_score_caps_v1_verified_root_cause"
+  ) {
+    throw new Error("Stage3 authority claim is invalid");
+  }
+  return true;
 }
 
 /**
@@ -45,7 +51,7 @@ export function buildAuthoritySnapshot(options = {}) {
   if (options?.[INTERNAL_STAGE3_BASE] === true) {
     return legacy.buildAuthoritySnapshot(withoutInternalMarker(options));
   }
-  if (!claimsDurableStage3Delivery(options?.review)) {
+  if (!claimsDurableStage3Delivery(options?.review, options?.identity)) {
     return legacy.buildAuthoritySnapshot(options);
   }
   const staged = buildAuthoritySnapshotStage3({

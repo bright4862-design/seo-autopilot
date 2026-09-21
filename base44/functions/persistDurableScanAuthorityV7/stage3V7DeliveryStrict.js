@@ -5,6 +5,7 @@ import {
 import { PUBLISHED_REVIEW_ATTESTATION_VERSION } from "./publishedRepairEvidence.js";
 
 export const STAGE3_AUTHORITY_VERSION = "standard_review_snapshot_hmac_stage3_delivery_v1";
+export const STAGE3_AUTHORITY_CLAIM_VERSION = "stage3_authority_claim_v1";
 export const STAGE3_V7_DELIVERY_VERSION = "stage3_v7_delivery_v1";
 export const STAGE3_PRIORITY_VERSION = "repair_priority_v3_four_factor_v1";
 export const STAGE3_DELIVERY_SOURCE_VERSION = "stage3_delivery_v1_rank_before_truncate";
@@ -26,6 +27,11 @@ const MAX_SAMPLES = 10;
 const plainObject = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : null;
 const cleanText = (value, limit = 2_000) => typeof value === "string" ? value.trim().slice(0, limit) : "";
 const nullableText = (value, limit = 2_000) => value === null || value === undefined ? null : (typeof value === "string" ? value.trim().slice(0, limit) : null);
+const nullableTextField = (value, limit = 2_000) => {
+  if (value === null || value === undefined) return { valid: true, value: null };
+  if (typeof value !== "string") return { valid: false, value: null };
+  return { valid: true, value: value.trim().slice(0, limit) };
+};
 const exactInteger = (value, min = 0, max = Number.MAX_SAFE_INTEGER) => Number.isInteger(value) && value >= min && value <= max ? value : null;
 const exactNumber = (value, min, max) => typeof value === "number" && Number.isFinite(value) && value >= min && value <= max ? value : null;
 const nullableNumber = (value, min, max) => value === null ? null : exactNumber(value, min, max);
@@ -46,6 +52,7 @@ function textArray(value, limit, itemLimit = 2_000) {
 
 function stage3Attempted(review) {
   return [
+    "stage3_authority_claim",
     "stage3_delivery",
     "stage3_private_preview_source",
     "stage3_health_score_decision",
@@ -95,6 +102,20 @@ function normalizePriorityFactors(value) {
   };
   if ([output.impact_reason, output.reach_state, output.page_value_state, output.page_value_role, output.page_value_source, output.confidence_state, output.score_state, output.technical_base_severity, output.technical_severity_source].some((item) => item === null)) return null;
   return output;
+}
+
+function normalizeAuthorityClaim(value, scanId) {
+  const source = plainObject(value);
+  if (!source || cleanText(source.version, 120) !== STAGE3_AUTHORITY_CLAIM_VERSION) return null;
+  if (!scanId || cleanText(source.scan_id, 160) !== scanId) return null;
+  if (cleanText(source.delivery_version, 120) !== STAGE3_DELIVERY_SOURCE_VERSION) return null;
+  if (cleanText(source.score_version, 120) !== STAGE3_SCORE_CAP_VERSION) return null;
+  return {
+    version: STAGE3_AUTHORITY_CLAIM_VERSION,
+    scan_id: scanId,
+    delivery_version: STAGE3_DELIVERY_SOURCE_VERSION,
+    score_version: STAGE3_SCORE_CAP_VERSION,
+  };
 }
 
 function normalizeCounts(value) {
@@ -156,24 +177,24 @@ function normalizePreview(value, scanId, canonicalIds) {
     const row = plainObject(raw);
     if (!row) return null;
     const ruleId = cleanText(row.rule_id, 160);
-    const title = nullableText(row.title, 240);
-    const evidenceSummary = nullableText(row.evidence_summary, 500);
+    const title = nullableTextField(row.title, 240);
+    const evidenceSummary = nullableTextField(row.evidence_summary, 500);
     const impact = exactInteger(row.impact, 0, 5);
-    if (!ruleId || !canonicalIds.has(ruleId) || ids.has(ruleId) || title === null || evidenceSummary === null || impact === null) return null;
+    if (!ruleId || !canonicalIds.has(ruleId) || ids.has(ruleId) || !title.valid || !evidenceSummary.valid || impact === null) return null;
     ids.add(ruleId);
-    findings.push({ rule_id: ruleId, title, impact, evidence_summary: evidenceSummary });
+    findings.push({ rule_id: ruleId, title: title.value, impact, evidence_summary: evidenceSummary.value });
   }
   if (state === "findings" && findings.length === 0) return null;
   if (state !== "findings" && findings.length !== 0) return null;
-  const qualification = nullableText(source.coverage_qualification, 500);
-  if (qualification === null) return null;
+  const qualification = nullableTextField(source.coverage_qualification, 500);
+  if (!qualification.valid) return null;
   return {
     version: STAGE3_PREVIEW_SOURCE_VERSION,
     scan_id: scanId,
     entitlement_state: "requires_authenticated_customer_gate",
     state,
     findings,
-    coverage_qualification: qualification,
+    coverage_qualification: qualification.value,
   };
 }
 
@@ -264,28 +285,28 @@ function normalizeHandoff(value, scanId, canonicalIds) {
     const provenance = plainObject(row.url_provenance);
     if (!counts || !factors || !families || !examples || !evidenceRefs || !verificationSteps || !provenance) return null;
     if (counts.displayed_examples !== examples.length || row.examples_partial !== (examples.length < counts.unique_affected_pages)) return null;
-    const publishedUrl = nullableText(provenance.published_url, 2_000);
-    const requestUrl = nullableText(provenance.request_url, 2_000);
-    const finalUrl = nullableText(provenance.final_url, 2_000);
-    const title = nullableText(row.title, 500);
-    const rootCauseId = nullableText(row.root_cause_id, 200);
-    const dependency = nullableText(row.dependency, 500);
-    const vendorOwner = nullableText(row.vendor_owner, 200);
-    if ([publishedUrl, requestUrl, finalUrl, title, rootCauseId, dependency, vendorOwner].some((item) => item === null)) return null;
+    const publishedUrl = nullableTextField(provenance.published_url, 2_000);
+    const requestUrl = nullableTextField(provenance.request_url, 2_000);
+    const finalUrl = nullableTextField(provenance.final_url, 2_000);
+    const title = nullableTextField(row.title, 500);
+    const rootCauseId = nullableTextField(row.root_cause_id, 200);
+    const dependency = nullableTextField(row.dependency, 500);
+    const vendorOwner = nullableTextField(row.vendor_owner, 200);
+    if ([publishedUrl, requestUrl, finalUrl, title, rootCauseId, dependency, vendorOwner].some((item) => !item.valid)) return null;
     fixes.push({
       rule_id: ruleId,
-      title,
-      root_cause_id: rootCauseId,
+      title: title.value,
+      root_cause_id: rootCauseId.value,
       family_ids: families,
-      url_provenance: { published_url: publishedUrl, request_url: requestUrl, final_url: finalUrl },
+      url_provenance: { published_url: publishedUrl.value, request_url: requestUrl.value, final_url: finalUrl.value },
       counts,
       examples,
       examples_partial: row.examples_partial === true,
       priority_factors: factors,
       evidence_refs: evidenceRefs,
       verification_steps: verificationSteps,
-      dependency,
-      vendor_owner: vendorOwner,
+      dependency: dependency.value,
+      vendor_owner: vendorOwner.value,
     });
   }
   if (source.suppressed_findings !== undefined) return null;
@@ -322,18 +343,22 @@ function normalizeStage3Sources(review, snapshot) {
     if (!id || !canonicalIds.has(id) || perFix.has(id) || !factors || !counts) return null;
     perFix.set(id, { version: STAGE3_V7_DELIVERY_VERSION, priority_factors: factors, counts });
   }
+  const claim = normalizeAuthorityClaim(review?.stage3_authority_claim, snapshot.scan_id);
   const delivery = normalizeDelivery(review?.stage3_delivery, canonicalIds);
-  const preview = normalizePreview(review?.stage3_private_preview_source, snapshot.scan_id, canonicalIds);
   const decision = normalizeScoreDecision(review?.stage3_health_score_decision);
-  const handoff = normalizeHandoff(review?.stage3_handoff_v2_source, snapshot.scan_id, canonicalIds);
-  if (!delivery || !preview || !decision || !handoff) return null;
+  const previewAttempted = review?.stage3_private_preview_source !== undefined;
+  const handoffAttempted = review?.stage3_handoff_v2_source !== undefined;
+  const preview = previewAttempted ? normalizePreview(review.stage3_private_preview_source, snapshot.scan_id, canonicalIds) : null;
+  const handoff = handoffAttempted ? normalizeHandoff(review.stage3_handoff_v2_source, snapshot.scan_id, canonicalIds) : null;
+  if (!claim || !delivery || !decision || (previewAttempted && !preview) || (handoffAttempted && !handoff)) return null;
   return {
     capsule: {
       version: STAGE3_V7_DELIVERY_VERSION,
+      authority_claim: claim,
       delivery,
-      private_preview_source: preview,
+      ...(preview ? { private_preview_source: preview } : {}),
       health_score_decision: decision,
-      handoff_v2_source: handoff,
+      ...(handoff ? { handoff_v2_source: handoff } : {}),
     },
     perFix,
   };
@@ -380,10 +405,11 @@ function persistedReviewForStage3(run, fixItems) {
   const capsule = plainObject(explanation?.stage3_delivery);
   if (!capsule) return null;
   return {
+    stage3_authority_claim: capsule.authority_claim,
     stage3_delivery: capsule.delivery,
-    stage3_private_preview_source: capsule.private_preview_source,
+    ...(capsule.private_preview_source ? { stage3_private_preview_source: capsule.private_preview_source } : {}),
     stage3_health_score_decision: capsule.health_score_decision,
-    stage3_handoff_v2_source: capsule.handoff_v2_source,
+    ...(capsule.handoff_v2_source ? { stage3_handoff_v2_source: capsule.handoff_v2_source } : {}),
     canonical_repairs: (Array.isArray(fixItems) ? fixItems : []).map((item) => {
       const raw = plainObject(item?.raw_finding) || {};
       const perFix = plainObject(raw.stage3_delivery) || {};
@@ -425,6 +451,7 @@ export function stage3CustomerFields(run, item) {
 export function stage3PreviewFixIds(run) {
   if (run?.authority_seal_version !== STAGE3_AUTHORITY_VERSION) return null;
   const preview = plainObject(plainObject(run?.health_score_explanation)?.stage3_delivery)?.private_preview_source;
+  if (preview === undefined) return [];
   if (!plainObject(preview) || preview.version !== STAGE3_PREVIEW_SOURCE_VERSION || preview.scan_id !== run?.id) return null;
   return Array.isArray(preview.findings) ? preview.findings.map((finding) => cleanText(finding?.rule_id, 160)).filter(Boolean) : null;
 }

@@ -212,7 +212,11 @@ def apply_indexability_quality_to_result(result: dict, *, identity_version: str 
     assessed_provider_urls = [
         str(page.get("final_url") or page.get("url") or "").strip()
         for page in pages
-        if isinstance(page, dict) and str(page.get("final_url") or page.get("url") or "").strip()
+        if (
+            isinstance(page, dict)
+            and not page.get("trust_discovery_probe")
+            and str(page.get("final_url") or page.get("url") or "").strip()
+        )
     ]
     connected_provider_evidence = build_disconnected_provider_bundle(
         assessed_urls=assessed_provider_urls,

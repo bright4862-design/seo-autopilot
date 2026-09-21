@@ -43,6 +43,7 @@ REPAIR_PERSISTENCE_GROUPING_VERSION = "repair_persistence_grouping_v2_valid_fing
 STAGE3_DELIVERY_VERSION = "stage3_delivery_v1_rank_before_truncate"
 STAGE3_PREVIEW_SOURCE_VERSION = "stage3_preview_source_v1_verified_evidence"
 STAGE3_SCORE_CAP_VERSION = "stage3_health_score_caps_v1_verified_root_cause"
+STAGE3_AUTHORITY_CLAIM_VERSION = "stage3_authority_claim_v1"
 
 
 class CanonicalRepairContractError(RuntimeError):
@@ -875,6 +876,19 @@ def apply_canonical_repair_contract(
         scan_result,
         **identity_context,
     )
+    trusted_stage3_scan_id = _trusted_stage3_scan_id(scan_result)
+    stage3_authority_claim = (
+        {
+            "version": STAGE3_AUTHORITY_CLAIM_VERSION,
+            "scan_id": trusted_stage3_scan_id,
+            "delivery_version": stage3_delivery.get("version"),
+            "score_version": stage3_health_score_decision.get("version"),
+        }
+        if trusted_stage3_scan_id
+        and isinstance(stage3_delivery, dict)
+        and isinstance(stage3_health_score_decision, dict)
+        else None
+    )
 
     return {
         **review,
@@ -882,6 +896,7 @@ def apply_canonical_repair_contract(
         "canonical_repairs": canonical_items,
         "stage3_root_cause_groups": root_cause_groups,
         "stage3_delivery": stage3_delivery,
+        **({"stage3_authority_claim": stage3_authority_claim} if stage3_authority_claim is not None else {}),
         **({"stage3_private_preview_source": stage3_private_preview_source} if stage3_private_preview_source is not None else {}),
         **({"stage3_health_score_decision": stage3_health_score_decision} if stage3_health_score_decision is not None else {}),
         **({"stage3_handoff_v2_source": stage3_handoff_v2_source} if stage3_handoff_v2_source is not None else {}),

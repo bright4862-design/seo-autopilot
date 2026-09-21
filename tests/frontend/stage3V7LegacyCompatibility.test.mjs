@@ -44,6 +44,7 @@ test("B27 historical/basic V7 review is not upgraded merely because non-durable 
   // per-fix factors/counts and an identity-agnostic delivery/score decision,
   // but without an exact-scan preview or handoff they do not claim the new
   // durable Stage-3 authority contract.
+  delete historicalReview.stage3_authority_claim;
   delete historicalReview.stage3_private_preview_source;
   delete historicalReview.stage3_handoff_v2_source;
 
@@ -56,18 +57,17 @@ test("B27 historical/basic V7 review is not upgraded merely because non-durable 
   assert.equal(actual.recommendations.some((fix) => fix.raw_finding?.stage3_delivery), false);
 });
 
-test("B24 an identity-bound partial Stage-3 durable claim still fails closed", () => {
+test("a malformed explicit Stage-3 authority claim fails closed instead of upgrading or downgrading", () => {
   const emitted = signedPythonCompletion();
   const { envelope } = emitted;
-  const partialReview = structuredClone(envelope.review);
-
-  // Presence of an exact-scan preview is an identity-bound durable claim. Once
-  // that claim exists, omitting another required B24 source must be rejected;
-  // compatibility cannot turn a partial new contract into a legacy success.
-  delete partialReview.stage3_handoff_v2_source;
+  const malformedReview = structuredClone(envelope.review);
+  malformedReview.stage3_authority_claim = {
+    ...malformedReview.stage3_authority_claim,
+    delivery_version: "stage3_delivery_untrusted",
+  };
 
   assert.throws(
-    () => buildAuthoritySnapshot(optionsFor(envelope, emitted, partialReview)),
-    /Stage3 durable delivery source is invalid or incomplete/,
+    () => buildAuthoritySnapshot(optionsFor(envelope, emitted, malformedReview)),
+    /Stage3 authority claim is invalid/,
   );
 });

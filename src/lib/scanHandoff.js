@@ -30,6 +30,16 @@ function validStage3Handoff(scanRecord) {
  * counts or scores in the browser. Historical scans continue to use v1.
  */
 export function buildScanHandoff(options = {}) {
-  const handoff = validStage3Handoff(options?.scanRecord);
-  return handoff ? structuredClone(handoff) : legacy.buildScanHandoff(options);
+  const scanRecord = options?.scanRecord;
+  const stage3Claimed = Boolean(
+    scanRecord
+    && (
+      Object.prototype.hasOwnProperty.call(scanRecord, "stage3_handoff_v2")
+      || Object.prototype.hasOwnProperty.call(scanRecord, "stage3_health_score_decision")
+    )
+  );
+  if (!stage3Claimed) return legacy.buildScanHandoff(options);
+  const handoff = validStage3Handoff(scanRecord);
+  if (!handoff) throw new Error("Stage3 handoff is invalid");
+  return structuredClone(handoff);
 }

@@ -98,3 +98,19 @@ def test_disconnected_provider_state_survives_bounded_authority_review_payload()
     # scan id. Actual connected provider evidence must pass the exact-scan gate.
     assert bundle["crux"]["scan_id"] is None
     assert bundle["gsc"]["scan_id"] is None
+
+def test_trust_discovery_probes_do_not_expand_provider_assessed_set_beyond_standard_150():
+    pages = [_page(f"https://example.com/page-{index}") for index in range(150)]
+    trust_probe = _page("https://example.com/privacy")
+    trust_probe["trust_discovery_probe"] = True
+    result = _result()
+    result["pages"] = [*pages, trust_probe]
+    result["crawled_pages"] = [*pages, trust_probe]
+    result["pages_crawled"] = 151
+    result["pages_found"] = 151
+
+    processed = apply_indexability_quality_to_result(result)
+
+    bundle = processed["connected_provider_evidence"]
+    assert bundle["provider_data_admitted"] is False
+    assert bundle["gsc"]["assessed_url_count"] == 150

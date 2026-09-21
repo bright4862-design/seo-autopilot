@@ -7,10 +7,17 @@ next-generation mode.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
-from .sampling import MONEY_FAMILIES, is_trust_path, route_signature, select_balanced_urls
+from .sampling import (
+    MONEY_FAMILIES,
+    is_trust_path,
+    route_signature,
+    select_balanced_urls,
+    strip_locale_prefix,
+)
 
 ADAPTIVE_CRAWL_VERSION = "adaptive_crawl_v1_shadow"
 ADAPTIVE_SCORE_VERSION = "adaptive_candidate_score_v1"
@@ -33,7 +40,8 @@ def _unique_urls(urls: Iterable[str]) -> list[str]:
 
 
 def _top_prefix(path: str) -> str:
-    segments = [segment for segment in str(path or "/").split("/") if segment]
+    normalized = strip_locale_prefix(str(path or "/"))
+    segments = [segment for segment in normalized.split("/") if segment]
     return f"/{segments[0].lower()}" if segments else "/"
 
 
@@ -44,17 +52,21 @@ def _bounded_unit(value: Any) -> float | None:
         number = float(value)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(number):
+        return None
     return max(0.0, min(1.0, number))
 
 
 def _normalized_targets(candidate_targets: Sequence[int]) -> list[int]:
-    return sorted(
-        {
-            min(MAX_ADAPTIVE_TARGET, int(target))
-            for target in candidate_targets
-            if int(target) > 0
-        }
-    )
+    normalized: set[int] = set()
+    for raw_target in candidate_targets:
+        try:
+            target = int(raw_target)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if target > 0:
+            normalized.add(min(MAX_ADAPTIVE_TARGET, target))
+    return sorted(normalized)
 
 
 def plan_tranche_targets(
@@ -255,8 +267,20 @@ def build_tranche_yield_telemetry(
     }
     deltas = {name: _new_count(previous, current, key) for name, key in signal_keys.items()}
     rates = {f"{name}_per_100": _per_100(value, pages_added) for name, value in deltas.items()}
+    regressed_signal_keys = tuple(sorted(
+        key
+        for key in signal_keys.values()
+        if (
+            (before := _as_set(previous, key)) is not None
+            and (after := _as_set(current, key)) is not None
+            and not before.issubset(after)
+        )
+    ))
+    evidence_monotonic = not regressed_signal_keys
     if not counts_valid:
         signal_state = "invalid_counts"
+    elif not evidence_monotonic:
+        signal_state = "invalid_evidence"
     elif pages_added > 0 and all(value is not None for value in deltas.values()):
         signal_state = "observed"
     else:
@@ -268,6 +292,8 @@ def build_tranche_yield_telemetry(
         "assessed_count": assessed,
         "pages_added": pages_added,
         "counts_valid": counts_valid,
+        "evidence_monotonic": evidence_monotonic,
+        "regressed_signal_keys": regressed_signal_keys,
         "signal_state": signal_state,
         **deltas,
         **rates,
@@ -285,6 +311,14 @@ def continuation_decision(
     normalized_targets = _normalized_targets(tranche_targets)
     max_target = max(normalized_targets, default=0)
 
+    if telemetry.get("version") != ADAPTIVE_TELEMETRY_VERSION:
+        return {
+            "version": ADAPTIVE_CRAWL_VERSION,
+            "decision": "insufficient_evidence",
+            "next_target": None,
+            "reason": "telemetry_version_mismatch",
+            "site_fully_understood": False,
+        }
     if not normalized_targets:
         return {
             "version": ADAPTIVE_CRAWL_VERSION,
@@ -293,12 +327,20 @@ def continuation_decision(
             "reason": "no_tranche_targets_configured",
             "site_fully_understood": False,
         }
-    if telemetry.get("signal_state") == "invalid_counts":
+    if telemetry.get("signal_state") == "invalid_counts" or telemetry.get("counts_valid") is not True:
         return {
             "version": ADAPTIVE_CRAWL_VERSION,
             "decision": "insufficient_evidence",
             "next_target": None,
             "reason": "invalid_tranche_counts",
+            "site_fully_understood": False,
+        }
+    if telemetry.get("signal_state") == "invalid_evidence" or telemetry.get("evidence_monotonic") is False:
+        return {
+            "version": ADAPTIVE_CRAWL_VERSION,
+            "decision": "insufficient_evidence",
+            "next_target": None,
+            "reason": "regressed_tranche_evidence",
             "site_fully_understood": False,
         }
     if assessed >= max_target:
@@ -443,7 +485,7 @@ def benchmark_smart_500_vs_blind_1000(
         else None
     )
     coverage_ratio = (
-        round(len(smart_findings) / len(blind_findings), 4)
+        round(len(shared_findings) / len(blind_findings), 4)
         if blind_findings
         else None
     )

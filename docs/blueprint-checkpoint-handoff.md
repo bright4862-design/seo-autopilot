@@ -24,78 +24,56 @@ Existing isolated lanes were integrated serially, not merged to `main`: B19/B20 
 Current requirement state:
 
 - **B19 partial:** signed canonical Review uses exact impact × reach × page value × confidence with versioned explanations and truthful unknowns; repair leverage is not a factor. Numeric source evidence and downstream factor domains are fail-closed. Durable V7 customer/card/export consumption remains open.
-- **B20 partial:** verified shared-root-cause grouping requires explicit versioned same-cause evidence, actual string root-cause/surface/reference identifiers, and literal exact producer scan identity. Family similarity or structured/coercible identity cannot establish trust. Stage-3 customer-bound group/member/family/reference identifiers now reject structured upstream coercion. Durable customer projection remains open.
-- **B21 partial:** signed Review has exact unique affected-page / observation / known-population / displayed-sample counts and ranks all eligible B19 candidates before truncation. Malformed numeric count evidence remains unknown; a supplied known population smaller than the exact affected-page union fails closed to unknown; customer-bound displayed IDs reject structured coercion. Durable customer/card/export proof remains open.
-- **B22 partial:** signed evidence-led preview source prefers verified impact-4/5 findings with a two-item cap and otherwise one best verified fallback; good-shape requires explicit sufficient coverage and fixed controller wording. Customer private preview requires literal non-empty string requested scan/owner identity and string candidate identity before exact equality. Producer rule/title projection now accepts only literal strings with safe fallback instead of stringifying structured/debug values. Fresh independent review and durable exact-owner/exact-scan V7 customer proof remain open.
+- **B20 partial:** verified shared-root-cause grouping requires explicit versioned same-cause evidence, actual string root-cause/surface/reference identifiers, and literal exact producer scan identity. Family similarity or structured/coercible identity cannot establish trust. Stage-3 customer-bound group/member/family/reference identifiers reject structured upstream coercion. Durable customer projection remains open.
+- **B21 partial:** signed Review has exact unique affected-page / observation / known-population / displayed-sample counts and ranks all eligible B19 candidates before truncation. Malformed numeric count evidence remains unknown; malformed explicit observation evidence no longer becomes a fabricated zero; real observation lists remain a truthful count fallback; a supplied known population smaller than the exact affected-page union fails closed to unknown; customer-bound displayed IDs reject structured coercion. Durable customer/card/export proof remains open.
+- **B22 partial:** signed evidence-led preview source prefers verified impact-4/5 findings with a two-item cap and otherwise one best verified fallback; good-shape requires explicit sufficient coverage and fixed controller wording. Customer private preview requires literal non-empty string requested scan/owner identity and string candidate identity before exact equality. Producer rule/title projection accepts only literal strings with safe fallback instead of stringifying structured/debug values. Fresh independent review and durable exact-owner/exact-scan V7 customer proof remain open.
 - **B23 partial:** only explicit verified B20 root-cause evidence can contribute documented score caps; conflicting/unverified/cross-scan or malformed evidence fails closed and stricter access/sample/incomplete ceilings remain authoritative. Customer-bound root-cause-cap identifiers reject structured coercion. Durable customer-visible adjusted-score consumption remains open.
-- **B24 partial:** signed handoff-v2 requires literal trusted exact scan identity and verified B20 root-cause mapping; historical v1 reader compatibility remains preserved; `suppressed_findings` requires literal `operator_authorized is True`. Scan metadata, fix title/ID, family/evidence references and vendor-owner projection fail closed before signing rather than accepting upstream stringification. Contradictory B21 population denominators cannot be signed as known. Durable V7 persistence/read/customer/operator/export proof and fresh independent review remain open.
+- **B24 partial:** signed handoff-v2 requires literal trusted exact scan identity and verified B20 root-cause mapping; historical v1 reader compatibility remains preserved; `suppressed_findings` requires literal `operator_authorized is True`. Scan metadata, fix title/ID, family/evidence references and vendor-owner projection fail closed before signing. Contradictory B21 population denominators and malformed B21 observation counts cannot be signed as known values. Durable V7 persistence/read/customer/operator/export proof and fresh independent review remain open.
 
-## Latest serialized slice — B22/B24 upstream signed-projection coercion fail-closed
+## Latest serialized slice — B21/B24 observation-count unknown fail-closed
 
-Fresh producer-to-authority inspection found the strict B22/B24 serializers could be bypassed one layer earlier because `scanner-api/app/repair_contract_v2.py` reused the legacy coercive `_clean_text()` helper at the Stage-3 trust seam. A dict/list/debug object could become non-empty plain text before the downstream serializer applied its type checks.
+Fresh B21/B24 inspection found an invalid-evidence coercion in `scanner-api/app/stage3_delivery.py`. `summarize_candidate_counts()` strictly rejected malformed explicit `observation_count`, but then always normalized `observations` with `_list()` and used its length. Missing or malformed observation collections therefore became `[]`, allowing invalid explicit evidence to become `0` rather than remain unknown. Because B24 uses the same helper, that fabricated zero could enter the signed customer handoff.
 
 ### RED
 
-Commit `8800fa6f72caf814024b965b5c3eb5c59b5515db` added signed-source integration regressions in `scanner-api/tests/test_stage3_b24_signed_handoff_source_integration.py`.
+Commit `913dfd011aced1cd6a348468dcfd357bd316c40a` added `scanner-api/tests/test_stage3_b21_observation_count_unknown.py` with three behavioral regressions:
 
-FixList CI `35576295545` reproduced two concrete defects:
+- malformed explicit observation count without a real observation list must remain `None`;
+- structured operator/debug count must remain unknown in B24 handoff-v2 and its private sentinel must not leak;
+- a real observation list may still truthfully supply its length when the explicit count is invalid.
 
-- immutable checkout matched the RED SHA;
-- root scanner regressions: `115 passed`;
-- scanner-api: `2 failed, 2092 passed, 18 skipped`;
-- structured `scan_result.normalized_domain` was stringified into the B24 signed customer handoff instead of becoming unknown;
-- structured `issue_title` / `evidence_refs` were stringified before B22/B24 projection, allowing producer/debug structure to become customer text;
-- lint, typecheck, generated release contracts, frontend contracts and production build passed;
-- corpus/frozen-revision/image steps were skipped after the intentional scanner-suite RED failure.
+FixList CI `35581103845` produced the intended RED. Immutable checkout matched. The separate lint/typecheck/generated-contract/frontend/build job passed. The scanner job passed root scanner regressions and failed at the Python scanner-api step; labelled corpus, frozen-revision and image steps were skipped after the intentional RED failure.
 
 ### SOURCE CORRECTION
 
-Implementation commit `5708b1b6b7fd661c7343d574ca08e785e3ba32f7` adds Stage-3-specific literal-string projection helpers in `scanner-api/app/repair_contract_v2.py`. It does not globally alter legacy `_clean_text()` behavior.
+Implementation commit `f2afc1cfa87a9fbcecbd33e4b378d2edc737f658` changes the fallback so:
 
-The strict projection is used for:
+- a real list/tuple of observations supplies its actual length;
+- explicitly present malformed observation/count evidence remains `None`;
+- only the historical case where both fields are entirely absent preserves the prior zero fallback.
 
-- exact B20 group/member identity consumed by B24;
-- root-cause and repair-surface identifiers;
-- B22 rule/title fallback;
-- B24 rule/title/vendor owner, family/evidence references and scan metadata;
-- B21 customer-bound displayed IDs;
-- B23 root-cause-cap identifiers.
-
-Structured/non-string values fail closed while valid literal strings retain the prior fallback order. RED-to-source-correction compare changes exactly one implementation file: `scanner-api/app/repair_contract_v2.py`, 46 additions / 27 deletions.
-
-FixList CI `35576782551` confirmed the two reproduced customer-source leaks were corrected, but retained one failing assertion because the new regression incorrectly required the *entire signed internal Review* to omit the private sentinel. The internal canonical Review deliberately retains richer producer/review evidence; B22/B24 constrain the customer projections inside that signed Review. That run therefore ended `1 failed, 2093 passed, 18 skipped` with root tests `115 passed`, while lint/typecheck/generated-contract/frontend/build passed. Corpus/frozen/image steps were skipped after the scanner-suite failure.
+RED-to-source compare changes exactly one implementation file: `scanner-api/app/stage3_delivery.py`, 8 additions / 3 deletions. No ranking, URL identity, score, preview, historical reader/signature, network, admission, persistence or release behavior changed.
 
 ### GREEN
 
-Test-scope correction commit `dfb9043d3cbf510ec867c68a5cde02c7cea29323` keeps the no-leak assertion on the two actual signed customer projections after `build_completion_envelope()` rather than redefining unrelated internal Review fields as customer-safe.
+Exact-source FixList CI `35581439449` passed both jobs on `f2afc1cfa87a9fbcecbd33e4b378d2edc737f658`.
 
-Exact-source FixList CI `35577052441` passed both jobs on that exact SHA:
+Verified steps: immutable checkout; root scanner regressions; full Python scanner-api suite including the new B21/B24 tests; labelled Stage-1 synthetic corpus; frozen beta revision verification; production scanner image build; lint; typecheck; generated release-contract verification; frontend contract tests; and production build. The available GitHub job metadata for this run does not expose trustworthy pytest totals or image digest, so they are not fabricated in this record.
 
-- immutable checkout matched `dfb9043d3cbf510ec867c68a5cde02c7cea29323`;
-- root scanner regressions: `115 passed`;
-- scanner-api: `2094 passed, 18 skipped`;
-- all new B22/B24 signed-projection coercion regressions passed;
-- labelled Stage-1 corpus remained explicitly synthetic: `14 cases / 55 assertions`, `full_30_site_gate=not_assessed`;
-- frozen beta revision matched `01ebe8e90df1e6bd`;
-- scanner image: `sha256:4e9407eba4ede42737012e22c730905ffa2dfe1dd9e06a5fbefe7f29eeead33e`;
-- lint, typecheck, generated release-contract verification, frontend contracts and production build all passed.
+Detailed checkpoint: `docs/superpowers/plans/2026-09-21-stage3-b21-observation-count-unknown-fail-closed.md`.
 
-Runtime note: setup requested Node 20 but resolved Node `20.20.2`; exact Node 20.19.5 evidence is not claimed. GitHub Actions also emitted the Node-20 action-runtime deprecation warning.
-
-Detailed checkpoint: `docs/superpowers/plans/2026-09-21-stage3-b22-b24-upstream-projection-coercion-fail-closed.md`.
-
-Prior B22 exact-owner/exact-scan identity hardening remains certified at `4ef7fb44a1bdb614d7bea764aa121dfac355f61c`, CI `35571774891`. Earlier B19/B20/B21/B23/B24 fail-closed slices remain in this branch history and their executable plans/regressions remain authoritative.
+Prior B22/B24 upstream projection hardening remains certified at stable persisted checkpoint `fc7d9359870efdfa437b2c9c7e38c115c198de00`, exact-head CI `35577485322`; its source GREEN was `dfb9043d3cbf510ec867c68a5cde02c7cea29323`, CI `35577052441`. Earlier B19/B20/B21/B22/B23/B24 fail-closed slices remain in this branch history and their executable plans/regressions remain authoritative.
 
 ## What remains before Stage 3 can be complete
 
 1. Certify this run's final persisted plan/ledger branch head with exact-head FixList CI.
-2. Obtain one genuinely fresh independent review of the corrected B22/B24 shared authority/privacy boundary, including upstream B19/B20/B21/B23 evidence feeding signed delivery. A skipped automatic review is not approval.
+2. Obtain one genuinely fresh independent review of the current corrected B19–B24 shared authority/privacy boundary. A skipped automatic review or old September 19 submission is not approval.
 3. The separate Stage-1 release operator must record exact-source production publication and fresh non-owner acceptance.
 4. Reconcile this integration branch onto then-current accepted `main`, preserve V7/#308, and run fresh exact integrated-head CI.
 5. Prove actual V7 B19/B21/B22/B23/B24 producer -> signed authority -> persisted rows -> exact-owner/exact-scan read/reload/history -> customer card/export/preview paths, including suppressed/operator privacy and historical-v1 compatibility.
 6. Persist exact source SHAs, regressions/failures, CI and independent-review evidence before declaring Stage 3 complete.
 
-Stage 3 is **not complete**. Latest executable source GREEN is `dfb9043d3cbf510ec867c68a5cde02c7cea29323`, FixList CI `35577052441`. This handoff update occurs after source certification, so the resulting final persisted documentation head requires its own exact-head CI before being called the stable checkpoint.
+Stage 3 is **not complete**. Latest executable source GREEN is `f2afc1cfa87a9fbcecbd33e4b378d2edc737f658`, FixList CI `35581439449`. This handoff update occurs after source certification, so the resulting final persisted documentation head requires its own exact-head CI before being called the stable checkpoint.
 
 ## Stage 4 handoff — held
 

@@ -1,6 +1,6 @@
 # Full blueprint progress
 
-Authoritative design: `docs/superpowers/specs/2026-09-19-full-scanner-blueprint-design.md`. The approved spec's exact B01–B28 semantics control over older handoff paraphrases. Detailed RED/GREEN history is retained in executable plans under `docs/superpowers/plans/`; this file is the concise current state ledger.
+Authoritative design: `docs/superpowers/specs/2026-09-19-full-scanner-blueprint-design.md`. The approved spec's exact B01–B28 semantics control over older handoff paraphrases. Detailed RED/GREEN history is retained in executable plans under `docs/superpowers/plans/`; this file is the concise current-state ledger.
 
 ## Release sequencing / freeze
 
@@ -35,31 +35,33 @@ Stable corrected Stage-2 checkpoint: `10f51529bf5bf64b7b24ab8424f3ae821de46b39`;
 
 Existing isolated lanes were integrated serially, never merged directly to `main`: B19/B20 lane `e74d87acd0cec2955402b96f635f13bc275f3a91` -> shared `c3f9d685e17b26c372a5a47403b478caec36ed2a`; B21–B24 lane `a998b4e38a06d6c163ac8853c3e49e9f10a58cb7` -> shared `3aebc7375e854ce063ac0bcec0a46210473e061c7`; combined lane FixList CI `35501672504` passed.
 
-### Latest executable slice — B19 factor-range authority hardening
+### Latest executable slice — B21 impossible population denominator fail-closed
 
-Fresh inspection found downstream Stage-3 delivery accepted actual numeric values without enforcing B19's documented domains. That allowed impossible values such as `impact=99`, `reach=1.5`, `page_value=-0.1`, `confidence=2.0`, or `priority_factor_score=42.0` to influence B21/B22 ordering/selection or enter B24's customer-safe signed factor projection.
+Fresh inspection found `scanner-api/app/stage3_delivery.py::summarize_candidate_counts()` accepted a non-negative `known_population_count` even when that denominator was smaller than the exact unique affected-page union. That could report contradictory B21 evidence and then sign the same impossible denominator into B24 customer handoff counts.
 
-- **RED `fd12cd307987587ac99246bec93914724c9e1f9b`, FixList CI `35563364990`:** new `scanner-api/tests/test_stage3_b19_factor_range_fail_closed.py`. Root tests `115 passed`; scanner-api `2 failed, 2084 passed, 18 skipped`; exactly the two negative range regressions failed, while the valid-boundary regression passed. The independent lint/typecheck/generated-contract/frontend/build job passed.
-- **GREEN `c8e88394e32421b7706197750da618e105fe2a6b`, FixList CI `35563424610`:** bounded downstream B19 evidence to impact `0..5`, normalized reach/page-value/confidence `0..1`, and product score `0..5`. B21 treats an out-of-range B19 score as unknown/deferred; B22 cannot manufacture high impact from an impossible value; B24 projects impossible factor values as `None`. RED→GREEN implementation compare changes exactly `scanner-api/app/stage3_delivery.py`, 42 additions / 22 deletions.
-- Exact GREEN evidence: both jobs passed; root tests `115 passed`; scanner-api `2086 passed, 18 skipped`; labelled synthetic corpus `14/55` with `full_30_site_gate=not_assessed`; frozen revision `01ebe8e90df1e6bd`; scanner image `sha256:dc2f58206b7f754c8d31fafbaf12f27f603c156e3d07456b159f3cd5c2f5ac27`; lint/typecheck/generated contracts/frontend/build all passed.
-- Detailed checkpoint: `docs/superpowers/plans/2026-09-21-stage3-b19-factor-range-fail-closed.md`.
+- **RED `3d4b15d1ba486bb97283c528001ca007b3094a04`, FixList CI `35567099549`:** added `scanner-api/tests/test_stage3_b21_population_truthfulness.py`. Root tests `115 passed`; scanner-api `2 failed, 2087 passed, 18 skipped`; exactly the two negative denominator regressions failed, while the valid equal-population regression passed. The independent lint/typecheck/generated-contract/frontend/build job passed.
+- **GREEN `ebd83739b49da4a7aabd3fef3c171da23cdd8dd8`, FixList CI `35567449548`:** if a supplied known population is smaller than the exact affected-page union, B21 now keeps the population unknown (`None`) rather than emitting an impossible denominator. B24 uses the same helper, so the invalid denominator is not signed into customer handoff output. RED→GREEN implementation compare changes exactly `scanner-api/app/stage3_delivery.py`, 6 additions / 0 deletions.
+- Exact GREEN evidence: both jobs passed; root tests `115 passed`; scanner-api `2089 passed, 18 skipped`; labelled synthetic corpus `14/55` with `full_30_site_gate=not_assessed`; frozen revision `01ebe8e90df1e6bd`; scanner image `sha256:04782550e621a58e28d9c59be13a9efed5e14d566149f2b28fa500f28e03aeb3`; lint/typecheck/generated contracts/frontend/build all passed.
+- Detailed checkpoint: `docs/superpowers/plans/2026-09-21-stage3-b21-population-denominator-fail-closed.md`.
+
+Prior B19 range-hardening remains certified at `c8e88394e32421b7706197750da618e105fe2a6b`, CI `35563424610`; detailed evidence is in `docs/superpowers/plans/2026-09-21-stage3-b19-factor-range-fail-closed.md`.
 
 ### Requirement state
 
-- **B19 partial:** canonical signed Review carries exact versioned **impact × reach × page value × confidence**, truthful unknown denominators and explanations. Repair leverage is not a fourth factor. Numeric source evidence and downstream factor ranges now fail closed. Durable V7 FixItem/card/export consumption remains release-gated.
+- **B19 partial:** canonical signed Review carries exact versioned **impact × reach × page value × confidence**, truthful unknown denominators and explanations. Repair leverage is not a fourth factor. Numeric source evidence and downstream factor ranges fail closed. Durable V7 FixItem/card/export consumption remains release-gated.
 - **B20 partial:** verified shared-root-cause grouping requires explicit versioned same-cause evidence, actual string root-cause/surface/reference identifiers, and trusted enclosing exact producer identity. Family similarity or coercible structured/debug identity cannot establish trust. Exact-scan coercion GREEN: `08c94082bd731c371bc06946df5b821521aa3861`, CI `35559929454`. Durable customer projection remains open.
-- **B21 partial:** signed Review carries exact unique affected-page, observation, known-population and displayed-sample counts; exact unions precede samples and all eligible B19 candidates rank before truncation. Malformed or impossible B19 numeric evidence stays unknown. Durable persistence/card/export proof remains open.
+- **B21 partial:** signed Review carries exact unique affected-page, observation, known-population and displayed-sample counts; exact unions precede samples and all eligible B19 candidates rank before truncation. Malformed numeric counts fail closed, and a known population smaller than the exact affected union is now unknown rather than contradictory. Durable persistence/card/export proof remains open.
 - **B22 partial:** signed evidence-led preview source requires verified evidence and trusted exact producer identity, prefers verified impact-4/5 findings with a two-item cap, otherwise exactly one best verified fallback, and emits controller-owned sufficient-coverage wording only for explicit sufficient coverage. Impossible B19 factor ranges no longer manufacture high-impact preview priority. Fresh independent review and durable exact-owner/exact-scan V7 preview proof remain open.
 - **B23 partial:** only explicit verified B20 root-cause evidence may contribute a documented score cap; conflicts, unverified/cross-scan evidence and malformed caps fail closed while stricter access/sample/incomplete ceilings remain authoritative. Coverage state is bounded to documented vocabulary. Durable customer-visible adjusted-score persistence/card/export consumption remains open.
-- **B24 partial:** signed handoff-v2 requires literal trusted exact scan identity and exact-scan verified B20 root causes; historical v1 reader compatibility remains preserved and suppressed findings require literal `operator_authorized is True`. Customer scan/fix/B19-factor projection is positive-allowlisted, type-checked, and now range-checked. Durable V7 persistence/read/customer/operator/export proof and fresh independent review remain open.
+- **B24 partial:** signed handoff-v2 requires literal trusted exact scan identity and exact-scan verified B20 root causes; historical v1 reader compatibility remains preserved and suppressed findings require literal `operator_authorized is True`. Customer scan/fix/B19-factor projection is positive-allowlisted, type-checked and range-checked; impossible B21 population denominators now remain unknown in the handoff. Durable V7 persistence/read/customer/operator/export proof and fresh independent review remain open.
 
 ## Stage 3 current gate
 
-Stage 3 is **not complete**. Source implementation GREEN for the latest range-hardening slice is `c8e88394e32421b7706197750da618e105fe2a6b`, FixList CI `35563424610`. This documentation update occurs after source certification, so the final persisted documentation/checkpoint branch head must itself receive exact-head FixList CI before it is called the stable checkpoint.
+Stage 3 is **not complete**. Latest executable source GREEN is `ebd83739b49da4a7aabd3fef3c171da23cdd8dd8`, FixList CI `35567449548`. This documentation update occurs after source certification, so the final persisted documentation/checkpoint branch head must itself receive exact-head FixList CI before it is called the stable checkpoint.
 
 Open gates:
 
-1. one genuinely fresh independent review of the latest corrected B22/B24 shared authority/privacy boundary, including upstream B19/B20/B23 evidence feeding signed delivery; the current CodeRabbit issue comment says automatic review is skipped because the repository has fewer than 10 stars, and that skip is not approval;
+1. one genuinely fresh independent review of the latest corrected B22/B24 shared authority/privacy boundary, including upstream B19/B20/B21/B23 evidence feeding signed delivery; an automatic-review skip is not approval;
 2. separate Stage-1 operator records exact-source publication and fresh non-owner acceptance;
 3. reconcile this branch onto then-current accepted `main` without reverting V7/#308 and run exact integrated-head CI;
 4. prove real V7 B19/B21/B22/B23/B24 producer -> signed authority -> persisted rows -> exact-owner/exact-scan read/reload/history -> customer card/export/preview seams, including suppressed/operator privacy and historical-v1 compatibility.
@@ -77,7 +79,7 @@ Canonical isolated lane remains `agent/stage4-b25-b28-compat-release-20260919` a
 
 ## Next serialized action
 
-1. Certify the final persisted documentation/checkpoint head for this B19 factor-range slice with exact-head FixList CI and record it in PR #303 without mutating that certified source afterward.
+1. Certify this slice's final persisted documentation/checkpoint head with exact-head FixList CI and record it in PR #303 without mutating that certified source afterward.
 2. Refresh PR #303 review state. Require a genuinely fresh independent review; do not count an automatic-review skip as approval and do not repeatedly dispatch broken/skipped launchers.
 3. Keep V7 durable/customer mutation and shared Stage-4 integration held while Stage-1 publication/non-owner acceptance remains open.
 4. When that separate gate closes, reconcile onto accepted `main`, preserve V7/#308, run fresh exact integrated-head CI, and complete real B19–B24 persistence/customer seams before integrating the existing Stage-4 lane.

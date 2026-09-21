@@ -123,8 +123,13 @@ def summarize_candidate_counts(
 
     explicit_observations = _nonnegative_int(candidate.get("observation_count"))
     if explicit_observations is None:
-        observations = _list(candidate.get("observations"))
-        explicit_observations = len(observations)
+        raw_observations = candidate.get("observations")
+        if isinstance(raw_observations, (list, tuple)):
+            explicit_observations = len(raw_observations)
+        elif "observation_count" in candidate or "observations" in candidate:
+            explicit_observations = None
+        else:
+            explicit_observations = 0
 
     known_population = _nonnegative_int(candidate.get("known_population_count"))
     # A known population is the denominator for the exact affected union. A

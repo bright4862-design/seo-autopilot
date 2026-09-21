@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -112,6 +113,14 @@ def _lower(value: Any) -> str:
     return _clean(value).lower()
 
 
+def _finite_number(value: Any) -> float | None:
+    """Accept only actual finite numeric evidence; strings and booleans stay unknown."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    numeric = float(value)
+    return numeric if math.isfinite(numeric) else None
+
+
 def _raw_key(value: Any) -> str:
     return _clean(value)
 
@@ -178,9 +187,8 @@ def _verification_class(fix: dict[str, Any]) -> str:
     confidence = fix.get("evidence_confidence")
     if confidence is None:
         confidence = fix.get("confidence_score")
-    try:
-        numeric = float(confidence)
-    except (TypeError, ValueError):
+    numeric = _finite_number(confidence)
+    if numeric is None:
         return "unverified"
     if numeric >= 90:
         return "verified"
@@ -226,11 +234,8 @@ def _valid_gsc_page_value(fix: dict[str, Any]) -> float | None:
         return None
     if _lower(evidence.get("freshness_state")) not in {"current", "fresh"}:
         return None
-    try:
-        value = float(evidence.get("normalized_page_value"))
-    except (TypeError, ValueError):
-        return None
-    if not 0.0 <= value <= 1.0:
+    value = _finite_number(evidence.get("normalized_page_value"))
+    if value is None or not 0.0 <= value <= 1.0:
         return None
     return value
 

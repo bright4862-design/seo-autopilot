@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from typing import Any, Iterable
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 PERFORMANCE_EVIDENCE_VERSION = "nextgen_performance_evidence_v1"
 FIELD_PERFORMANCE_VERSION = "nextgen_field_performance_v1"
@@ -66,6 +66,18 @@ def _number(value: Any) -> float | None:
     return None if number < 0 or number != number or number in {float("inf"), float("-inf")} else number
 
 
+def _unit_interval(value: Any) -> float | None:
+    number = _number(value)
+    return number if number is not None and number <= 1 else None
+
+
+def _provider_state(state: Any) -> tuple[str, str | None]:
+    normalized = _text(state).lower()
+    if normalized in PROVIDER_STATES:
+        return normalized, None
+    return "unavailable", "provider_state_invalid"
+
+
 def _rating(value: Any) -> str | None:
     value = _text(value).lower().replace("-", "_").replace(" ", "_")
     value = {"fast": "good", "average": "needs_improvement", "slow": "poor"}.get(value, value)
@@ -100,32 +112,36 @@ def normalize_field_performance_evidence(*, provider: str, state: str,
     observed_at: str | None = None, source_url: str | None = None,
     reason: str | None = None) -> dict[str, Any]:
     """Normalize field evidence; non-connected states never retain metrics."""
-    normalized_state = _text(state).lower()
-    if normalized_state not in PROVIDER_STATES:
-        normalized_state, reason = "unavailable", "provider_state_invalid"
+    normalized_state, invalid_reason = _provider_state(state)
     base = {
         "version": FIELD_PERFORMANCE_VERSION, "evidence_kind": "field",
         "provider": _text(provider) or "unknown", "state": normalized_state,
-        "reason": _text(reason) or None, "scope": _text(scope) or None,
+        "reason": _text(reason) or invalid_reason, "scope": _text(scope) or None,
         "observed_at": _text(observed_at) or None, "source_url": _text(source_url) or None,
         "metrics": None,
     }
     if normalized_state != "connected":
         return base
     normalized = _metrics(metrics)
-    return {**base, "metrics": normalized} if normalized else {**base, "state": "unavailable", "reason": "field_metrics_unavailable"}
+    return {**base, "metrics": normalized} if normalized else {
+        **base, "state": "unavailable", "reason": _text(reason) or "field_metrics_unavailable"
+    }
 
 
 def normalize_crux_evidence(payload: dict[str, Any] | None, *, state: str = "connected",
     observed_at: str | None = None, scope: str | None = None,
     source_url: str | None = None, reason: str | None = None) -> dict[str, Any]:
     """Normalize a CrUX-style payload into the field contract."""
-    provider_state = _text(state).lower()
-    if provider_state != "connected" or not isinstance(payload, dict):
+    provider_state, invalid_reason = _provider_state(state)
+    if provider_state != "connected":
         return normalize_field_performance_evidence(
-            provider="CrUX", state=provider_state if provider_state in PROVIDER_STATES else "unavailable",
-            scope=scope, observed_at=observed_at, source_url=source_url,
-            reason=reason or ("provider_payload_missing" if not isinstance(payload, dict) else None),
+            provider="CrUX", state=provider_state, scope=scope, observed_at=observed_at,
+            source_url=source_url, reason=reason or invalid_reason,
+        )
+    if not isinstance(payload, dict):
+        return normalize_field_performance_evidence(
+            provider="CrUX", state="unavailable", scope=scope, observed_at=observed_at,
+            source_url=source_url, reason=reason or "provider_payload_missing",
         )
     values = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else payload
     return normalize_field_performance_evidence(
@@ -140,43 +156,53 @@ def normalize_lighthouse_evidence(payload: dict[str, Any] | None, *, provider: s
     state: str = "connected", observed_at: str | None = None,
     source_url: str | None = None, reason: str | None = None) -> dict[str, Any]:
     """Normalize bounded lab evidence from Lighthouse JSON."""
-    normalized_state = _text(state).lower()
-    if normalized_state not in PROVIDER_STATES:
-        normalized_state, reason = "unavailable", "provider_state_invalid"
+    normalized_state, invalid_reason = _provider_state(state)
     base = {
         "version": LIGHTHOUSE_EVIDENCE_VERSION, "evidence_kind": "lab",
         "provider": _text(provider) or "Lighthouse", "state": normalized_state,
-        "reason": _text(reason) or None, "observed_at": _text(observed_at) or None,
+        "reason": _text(reason) or invalid_reason, "observed_at": _text(observed_at) or None,
         "source_url": _text(source_url) or None, "performance_score": None,
         "metrics": None, "opportunities": [],
     }
     if normalized_state != "connected":
         return base
     if not isinstance(payload, dict):
-        return {**base, "state": "unavailable", "reason": "lighthouse_payload_missing"}
+        return {**base, "state": "unavailable", "reason": _text(reason) or "lighthouse_payload_missing"}
     categories = payload.get("categories") if isinstance(payload.get("categories"), dict) else {}
     performance = categories.get("performance") if isinstance(categories.get("performance"), dict) else {}
-    score = _number(performance.get("score"))
-    score = round(score * 100, 1) if score is not None and score <= 1 else score
+    score = _unit_interval(performance.get("score"))
+    score = round(score * 100, 1) if score is not None else None
     audits = payload.get("audits") if isinstance(payload.get("audits"), dict) else {}
     metrics: dict[str, dict[str, Any]] = {}
     for audit_id, canonical in LIGHTHOUSE_AUDITS.items():
         audit = audits.get(audit_id)
         value = _number(audit.get("numericValue")) if isinstance(audit, dict) else None
         if value is not None:
-            metrics[canonical] = {"value": value, "unit": _text(audit.get("numericUnit")) or None, "score": _number(audit.get("score"))}
+            metrics[canonical] = {
+                "value": value,
+                "unit": _text(audit.get("numericUnit")) or None,
+                "score": _unit_interval(audit.get("score")),
+            }
     opportunities = []
     for audit_id in LIGHTHOUSE_OPPORTUNITIES:
         audit = audits.get(audit_id)
         if not isinstance(audit, dict):
             continue
         details = audit.get("details") if isinstance(audit.get("details"), dict) else {}
-        savings_ms, savings_bytes = _number(audit.get("numericValue")), _number(details.get("overallSavingsBytes"))
-        if savings_ms is not None or savings_bytes is not None or audit.get("score") is not None:
-            opportunities.append({"audit_id": audit_id, "score": _number(audit.get("score")),
-                "estimated_savings_ms": savings_ms, "estimated_savings_bytes": savings_bytes})
+        savings_ms = _number(details.get("overallSavingsMs"))
+        if savings_ms is None:
+            savings_ms = _number(audit.get("numericValue"))
+        savings_bytes = _number(details.get("overallSavingsBytes"))
+        audit_score = _unit_interval(audit.get("score"))
+        if savings_ms is not None or savings_bytes is not None or audit_score is not None:
+            opportunities.append({
+                "audit_id": audit_id,
+                "score": audit_score,
+                "estimated_savings_ms": savings_ms,
+                "estimated_savings_bytes": savings_bytes,
+            })
     if score is None and not metrics and not opportunities:
-        return {**base, "state": "unavailable", "reason": "lighthouse_measurements_unavailable"}
+        return {**base, "state": "unavailable", "reason": _text(reason) or "lighthouse_measurements_unavailable"}
     return {**base, "performance_score": score, "metrics": metrics or None, "opportunities": opportunities}
 
 
@@ -202,26 +228,54 @@ def normalize_pagespeed_insights_evidence(payload: dict[str, Any] | None, *, sta
     observed_at: str | None = None, source_url: str | None = None,
     reason: str | None = None) -> dict[str, Any]:
     """Normalize PSI while keeping CrUX field and Lighthouse lab evidence distinct."""
-    provider_state = _text(state).lower()
-    if not isinstance(payload, dict) or provider_state != "connected":
-        state_out = provider_state if provider_state in PROVIDER_STATES else "unavailable"
-        why = reason or ("provider_payload_missing" if not isinstance(payload, dict) else None)
-        return {"version": PERFORMANCE_EVIDENCE_VERSION, "provider": "PageSpeed Insights",
-            "field": normalize_field_performance_evidence(provider="PageSpeed Insights / CrUX", state=state_out, observed_at=observed_at, source_url=source_url, reason=why),
-            "lab": normalize_lighthouse_evidence(None, provider="PageSpeed Insights / Lighthouse", state=state_out, observed_at=observed_at, source_url=source_url, reason=why)}
+    provider_state, invalid_reason = _provider_state(state)
+    if provider_state != "connected" or not isinstance(payload, dict):
+        if provider_state == "connected":
+            state_out, why = "unavailable", reason or "provider_payload_missing"
+        else:
+            state_out, why = provider_state, reason or invalid_reason
+        return {
+            "version": PERFORMANCE_EVIDENCE_VERSION,
+            "provider": "PageSpeed Insights",
+            "field": normalize_field_performance_evidence(
+                provider="PageSpeed Insights / CrUX", state=state_out,
+                observed_at=observed_at, source_url=source_url, reason=why,
+            ),
+            "lab": normalize_lighthouse_evidence(
+                None, provider="PageSpeed Insights / Lighthouse", state=state_out,
+                observed_at=observed_at, source_url=source_url, reason=why,
+            ),
+        }
     field_values, field_scope = _psi_field(payload)
-    field = normalize_field_performance_evidence(provider="PageSpeed Insights / CrUX",
-        state="connected" if field_values else "unavailable", metrics=field_values, scope=field_scope,
-        observed_at=observed_at, source_url=source_url, reason=None if field_values else "crux_field_data_unavailable")
+    field = normalize_field_performance_evidence(
+        provider="PageSpeed Insights / CrUX",
+        state="connected" if field_values else "unavailable",
+        metrics=field_values, scope=field_scope,
+        observed_at=observed_at, source_url=source_url,
+        reason=None if field_values else "crux_field_data_unavailable",
+    )
     lighthouse = payload.get("lighthouseResult") if isinstance(payload.get("lighthouseResult"), dict) else None
-    lab = normalize_lighthouse_evidence(lighthouse, provider="PageSpeed Insights / Lighthouse",
+    lab = normalize_lighthouse_evidence(
+        lighthouse, provider="PageSpeed Insights / Lighthouse",
         state="connected" if lighthouse else "unavailable", observed_at=observed_at,
-        source_url=source_url, reason=None if lighthouse else "lighthouse_lab_data_unavailable")
+        source_url=source_url, reason=None if lighthouse else "lighthouse_lab_data_unavailable",
+    )
     return {"version": PERFORMANCE_EVIDENCE_VERSION, "provider": "PageSpeed Insights", "field": field, "lab": lab}
 
 
+def _normalized_url(value: Any) -> str | None:
+    raw = _text(value)
+    if not raw:
+        return None
+    try:
+        parsed = urlsplit(raw)
+        return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), parsed.path, parsed.query, "")) if parsed.scheme and parsed.netloc else raw
+    except Exception:
+        return raw
+
+
 def _url(page: dict[str, Any]) -> str:
-    return _text(page.get("url") or page.get("final_url"))
+    return _normalized_url(page.get("final_url") or page.get("url")) or ""
 
 
 def _eligible(page: Any) -> bool:
@@ -254,19 +308,30 @@ def _family_rank(family: str) -> int:
         return len(TEMPLATE_FAMILY_PRIORITY)
 
 
+def _candidate_rank(page: dict[str, Any]) -> tuple[Any, ...]:
+    family = _family(page)
+    return (-_weight(page), _family_rank(family), family, _url(page))
+
+
 def select_representative_performance_pages(pages: Iterable[dict[str, Any]], *, max_pages: int = 8) -> dict[str, Any]:
     """Take one page per template first, then high-value fills; hard-cap browser work."""
     requested = max(0, int(max_pages or 0))
     limit = min(requested, MAX_PERFORMANCE_SAMPLE_PAGES)
     unique: dict[str, dict[str, Any]] = {}
+    eligible_observations = 0
     for page in pages:
-        if _eligible(page):
-            unique.setdefault(_url(page), page)
+        if not _eligible(page):
+            continue
+        eligible_observations += 1
+        key = _url(page)
+        current = unique.get(key)
+        if current is None or _candidate_rank(page) < _candidate_rank(current):
+            unique[key] = page
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for page in unique.values():
         grouped[_family(page)].append(page)
     for family_pages in grouped.values():
-        family_pages.sort(key=lambda p: (-_weight(p), _url(p)))
+        family_pages.sort(key=_candidate_rank)
     families = sorted(grouped, key=lambda f: (-max((_weight(p) for p in grouped[f]), default=0.0), _family_rank(f), f))
     selected: list[dict[str, Any]] = []
     for family in families[:limit]:
@@ -276,31 +341,47 @@ def select_representative_performance_pages(pages: Iterable[dict[str, Any]], *, 
         rest = [page for family_pages in grouped.values() for page in family_pages if _url(page) not in selected_urls]
         rest.sort(key=lambda p: (-_weight(p), _family_rank(_family(p)), _family(p), _url(p)))
         selected.extend(rest[: limit - len(selected)])
-    rows = [{"url": _url(page), "template_family": _family(page), "high_value_weight": _weight(page),
-        "selection_reason": "template_representative" if grouped[_family(page)][0] is page else "high_value_fill"} for page in selected]
+    rows = [{
+        "url": _url(page),
+        "template_family": _family(page),
+        "high_value_weight": _weight(page),
+        "selection_reason": "template_representative" if grouped[_family(page)][0] is page else "high_value_fill",
+    } for page in selected]
     covered = {row["template_family"] for row in rows}
     omitted = [family for family in families if family not in covered]
-    return {"version": REPRESENTATIVE_SAMPLE_VERSION, "requested_max_pages": requested, "max_pages": limit,
-        "hard_cap": MAX_PERFORMANCE_SAMPLE_PAGES, "eligible_pages": len(unique), "template_families": len(grouped),
-        "selected_pages": len(rows), "template_coverage_complete": not omitted,
-        "omitted_template_families": omitted, "pages": rows}
-
-
-def _normalized_url(value: Any) -> str | None:
-    raw = _text(value)
-    if not raw:
-        return None
-    try:
-        parsed = urlsplit(raw)
-        return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), parsed.path, parsed.query, "")) if parsed.scheme and parsed.netloc else raw
-    except Exception:
-        return raw
+    return {
+        "version": REPRESENTATIVE_SAMPLE_VERSION,
+        "requested_max_pages": requested,
+        "max_pages": limit,
+        "hard_cap": MAX_PERFORMANCE_SAMPLE_PAGES,
+        "eligible_page_observations": eligible_observations,
+        "duplicate_page_observations_dropped": max(0, eligible_observations - len(unique)),
+        "eligible_pages": len(unique),
+        "template_families": len(grouped),
+        "selected_pages": len(rows),
+        "template_coverage_complete": not omitted,
+        "omitted_template_families": omitted,
+        "pages": rows,
+    }
 
 
 def _strings(value: Any) -> set[str] | None:
     if value is None or not isinstance(value, list):
         return None
     return {text for item in value if (text := _text(item.get("href") if isinstance(item, dict) else item))}
+
+
+def _links(page: dict[str, Any]) -> set[str] | None:
+    values = page.get("important_links")
+    raw_links = _strings(values)
+    if raw_links is None:
+        return None
+    base = _url(page)
+    normalized: set[str] = set()
+    for link in raw_links:
+        absolute = urljoin(base, link) if base else link
+        normalized.add(_normalized_url(absolute) or absolute)
+    return normalized
 
 
 def _schemas(page: dict[str, Any]) -> set[str] | None:
@@ -354,33 +435,85 @@ def _scalar(raw: Any, rendered: Any, normalize=lambda x: x) -> dict[str, Any]:
 
 def _sets(raw: set[str] | None, rendered: set[str] | None) -> dict[str, Any]:
     if raw is None or rendered is None:
-        return {"state": "not_verified", "raw_count": len(raw) if raw is not None else None,
-            "rendered_count": len(rendered) if rendered is not None else None, "rendered_only": [], "raw_only": []}
+        return {
+            "state": "not_verified",
+            "raw_count": len(raw) if raw is not None else None,
+            "rendered_count": len(rendered) if rendered is not None else None,
+            "rendered_only": [],
+            "raw_only": [],
+        }
     rendered_only, raw_only = sorted(rendered - raw), sorted(raw - rendered)
-    return {"state": "same" if not rendered_only and not raw_only else "changed", "raw_count": len(raw),
-        "rendered_count": len(rendered), "rendered_only": rendered_only[:20], "raw_only": raw_only[:20]}
+    return {
+        "state": "same" if not rendered_only and not raw_only else "changed",
+        "raw_count": len(raw),
+        "rendered_count": len(rendered),
+        "rendered_only": rendered_only[:20],
+        "raw_only": raw_only[:20],
+    }
+
+
+def _explicitly_unusable_render(page: dict[str, Any]) -> str | None:
+    if _text(page.get("fetch_error")):
+        return "render_fetch_error"
+    status = page.get("status_code")
+    if isinstance(status, int) and not 200 <= status < 400:
+        return "render_http_status_unusable"
+    evidence_class = _text(page.get("page_evidence_class"))
+    if evidence_class and evidence_class != "usable_html":
+        return "render_evidence_class_unusable"
+    return None
 
 
 def compare_critical_content_parity(raw_page: dict[str, Any], rendered_page: dict[str, Any] | None, *,
     render_state: str = "completed", render_reason: str | None = None) -> dict[str, Any]:
     """Compare critical raw/rendered evidence; failed rendering is always not_verified."""
-    url = _url(raw_page) if isinstance(raw_page, dict) else ""
+    if not isinstance(raw_page, dict):
+        return {
+            "version": CRITICAL_PARITY_VERSION, "url": None, "state": "not_verified",
+            "reason": "raw_evidence_unavailable", "material_delta": None,
+            "verified_fields": [], "changed_fields": [], "fields": {},
+        }
+    url = _url(raw_page)
     if render_state != "completed" or not isinstance(rendered_page, dict):
-        return {"version": CRITICAL_PARITY_VERSION, "url": url or None, "state": "not_verified",
-            "reason": _text(render_reason) or "render_evidence_unavailable", "material_delta": None, "fields": {}}
+        return {
+            "version": CRITICAL_PARITY_VERSION, "url": url or None, "state": "not_verified",
+            "reason": _text(render_reason) or "render_evidence_unavailable", "material_delta": None,
+            "verified_fields": [], "changed_fields": [], "fields": {},
+        }
+    if unusable_reason := _explicitly_unusable_render(rendered_page):
+        return {
+            "version": CRITICAL_PARITY_VERSION, "url": url or None, "state": "not_verified",
+            "reason": _text(render_reason) or unusable_reason, "material_delta": None,
+            "verified_fields": [], "changed_fields": [], "fields": {},
+        }
+    rendered_url = _url(rendered_page)
+    if url and rendered_url and url != rendered_url:
+        return {
+            "version": CRITICAL_PARITY_VERSION, "url": url, "rendered_url": rendered_url,
+            "state": "not_verified", "reason": "render_identity_mismatch", "material_delta": None,
+            "verified_fields": [], "changed_fields": [], "fields": {},
+        }
     fields = {
         "title": _scalar(raw_page.get("title"), rendered_page.get("title"), lambda x: _text(x) or None),
         "h1": _scalar(raw_page.get("h1"), rendered_page.get("h1"), lambda x: _text(x) or None),
         "canonical": _scalar(raw_page.get("canonical"), rendered_page.get("canonical"), _normalized_url),
         "indexability": _scalar(_indexability(raw_page), _indexability(rendered_page)),
         "main_content_present": _scalar(_main_present(raw_page), _main_present(rendered_page)),
-        "important_links": _sets(_strings(raw_page.get("important_links")), _strings(rendered_page.get("important_links"))),
+        "important_links": _sets(_links(raw_page), _links(rendered_page)),
         "structured_data": _sets(_schemas(raw_page), _schemas(rendered_page)),
         "business_facts": _scalar(_facts(raw_page), _facts(rendered_page)),
     }
-    comparable = [row for row in fields.values() if row["state"] != "not_verified"]
-    delta = any(row["state"] != "same" for row in comparable)
-    return {"version": CRITICAL_PARITY_VERSION, "url": url or None,
-        "state": "not_verified" if not comparable else ("material_delta" if delta else "matched"),
-        "reason": "critical_fields_unavailable" if not comparable else "paired_render_evidence",
-        "material_delta": delta if comparable else None, "fields": fields}
+    verified_fields = sorted(name for name, row in fields.items() if row["state"] != "not_verified")
+    changed_fields = sorted(name for name, row in fields.items() if row["state"] not in {"same", "not_verified"})
+    delta = bool(changed_fields)
+    return {
+        "version": CRITICAL_PARITY_VERSION,
+        "url": url or None,
+        "rendered_url": rendered_url or None,
+        "state": "not_verified" if not verified_fields else ("material_delta" if delta else "matched"),
+        "reason": "critical_fields_unavailable" if not verified_fields else "paired_render_evidence",
+        "material_delta": delta if verified_fields else None,
+        "verified_fields": verified_fields,
+        "changed_fields": changed_fields,
+        "fields": fields,
+    }

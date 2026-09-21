@@ -47,6 +47,23 @@ def test_crux_wrapper_normalizes_percentile_shape_and_provider_categories():
     assert evidence["metrics"]["inp"]["rating"] == "needs_improvement"
 
 
+def test_missing_or_invalid_provider_payloads_fail_closed_with_truthful_reason():
+    missing = normalize_crux_evidence(None, state="connected")
+    assert missing["state"] == "unavailable"
+    assert missing["reason"] == "provider_payload_missing"
+    assert missing["metrics"] is None
+
+    invalid = normalize_pagespeed_insights_evidence({}, state="mystery")
+    assert invalid["field"]["state"] == "unavailable"
+    assert invalid["field"]["reason"] == "provider_state_invalid"
+    assert invalid["lab"]["state"] == "unavailable"
+    assert invalid["lab"]["reason"] == "provider_state_invalid"
+
+    absent = normalize_pagespeed_insights_evidence(None, state="connected")
+    assert absent["field"]["reason"] == "provider_payload_missing"
+    assert absent["lab"]["reason"] == "provider_payload_missing"
+
+
 def test_pagespeed_keeps_field_and_lab_evidence_distinct():
     payload = json.loads(FIXTURE.read_text())
     evidence = normalize_pagespeed_insights_evidence(
@@ -85,6 +102,17 @@ def test_lighthouse_normalizer_is_bounded_and_deterministic():
         "estimated_savings_ms": 220.0,
         "estimated_savings_bytes": 120000.0,
     }]
+
+
+def test_lighthouse_normalizer_rejects_invalid_scores_and_prefers_explicit_savings():
+    payload = json.loads(FIXTURE.read_text())["lighthouseResult"]
+    payload["categories"]["performance"]["score"] = 7
+    payload["audits"]["largest-contentful-paint"]["score"] = 2
+    payload["audits"]["unused-javascript"]["details"]["overallSavingsMs"] = 175
+    normalized = normalize_lighthouse_evidence(payload)
+    assert normalized["performance_score"] is None
+    assert normalized["metrics"]["lcp"]["score"] is None
+    assert normalized["opportunities"][0]["estimated_savings_ms"] == 175.0
 
 
 def test_representative_sampler_covers_templates_before_extra_pages():
@@ -139,6 +167,29 @@ def test_representative_sampler_uses_high_value_fill_after_template_coverage():
     assert sample["pages"][2]["selection_reason"] == "high_value_fill"
 
 
+def test_representative_sampler_deduplicates_final_urls_deterministically():
+    low = {
+        "url": "https://e.test/go#tracking",
+        "final_url": "https://E.TEST/product/a#hero",
+        "page_template_family": "product_page",
+        "page_value": 0.2,
+    }
+    high = {
+        "url": "https://e.test/product/a",
+        "final_url": "https://e.test/product/a",
+        "page_template_family": "product_page",
+        "page_value": 0.9,
+    }
+    first = select_representative_performance_pages([low, high], max_pages=1)
+    second = select_representative_performance_pages([high, low], max_pages=1)
+    assert first == second
+    assert first["eligible_page_observations"] == 2
+    assert first["duplicate_page_observations_dropped"] == 1
+    assert first["eligible_pages"] == 1
+    assert first["pages"][0]["url"] == "https://e.test/product/a"
+    assert first["pages"][0]["high_value_weight"] == 0.9
+
+
 def test_render_failure_is_not_verified_not_a_site_defect():
     raw = {"url": "https://e.test/p", "title": "Raw", "h1": "Raw H1"}
     parity = compare_critical_content_parity(raw, None, render_state="provider_error", render_reason="renderer_failed")
@@ -146,6 +197,42 @@ def test_render_failure_is_not_verified_not_a_site_defect():
     assert parity["material_delta"] is None
     assert parity["reason"] == "renderer_failed"
     assert parity["fields"] == {}
+
+
+def test_render_identity_mismatch_is_not_treated_as_a_content_delta():
+    raw = {"url": "https://e.test/a", "title": "A"}
+    rendered = {"url": "https://e.test/b", "title": "B"}
+    parity = compare_critical_content_parity(raw, rendered)
+    assert parity["state"] == "not_verified"
+    assert parity["reason"] == "render_identity_mismatch"
+    assert parity["material_delta"] is None
+    assert parity["fields"] == {}
+
+
+def test_explicitly_unusable_render_is_not_verified_even_if_render_state_completed():
+    raw = {"url": "https://e.test/a", "title": "A"}
+    rendered = {"url": "https://e.test/a", "title": "A", "status_code": 503}
+    parity = compare_critical_content_parity(raw, rendered)
+    assert parity["state"] == "not_verified"
+    assert parity["reason"] == "render_http_status_unusable"
+    assert parity["material_delta"] is None
+
+
+def test_parity_normalizes_relative_links_against_page_identity():
+    raw = {
+        "url": "https://e.test/p",
+        "title": "Product",
+        "important_links": ["/shipping#top"],
+    }
+    rendered = {
+        "url": "https://e.test/p",
+        "title": "Product",
+        "important_links": ["https://E.TEST/shipping"],
+    }
+    parity = compare_critical_content_parity(raw, rendered)
+    assert parity["state"] == "matched"
+    assert parity["fields"]["important_links"]["state"] == "same"
+    assert parity["changed_fields"] == []
 
 
 def test_parity_reports_critical_render_deltas_as_evidence_only():
@@ -161,6 +248,7 @@ def test_parity_reports_critical_render_deltas_as_evidence_only():
         "product_facts": {"price": "49"},
     }
     rendered = {
+        "url": "https://e.test/p",
         "title": "Product",
         "h1": "Product A",
         "canonical": "https://e.test/p",
@@ -177,6 +265,9 @@ def test_parity_reports_critical_render_deltas_as_evidence_only():
     assert parity["fields"]["h1"]["state"] == "raw_missing_rendered_present"
     assert parity["fields"]["canonical"]["state"] == "same"
     assert parity["fields"]["main_content_present"]["state"] == "changed"
-    assert parity["fields"]["important_links"]["rendered_only"] == ["/shipping"]
+    assert parity["fields"]["important_links"]["rendered_only"] == ["https://e.test/shipping"]
     assert parity["fields"]["structured_data"]["rendered_only"] == ["Product"]
     assert parity["fields"]["business_facts"]["state"] == "changed"
+    assert parity["changed_fields"] == [
+        "business_facts", "h1", "important_links", "main_content_present", "structured_data"
+    ]

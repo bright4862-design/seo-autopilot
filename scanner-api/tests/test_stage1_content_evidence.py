@@ -261,5 +261,9 @@ def test_extracting_content_evidence_preserves_schema_and_link_observations():
     extracted = page('''<main><h1>Catalog</h1><p>Useful furniture for your home.</p>
       <a href="/products">Products</a></main>''', head='''<script type="application/ld+json">{"@type":"Product"}</script>''', include_links=True)
     assert extracted['schema_types'] == ['Product']
-    assert extracted['_links'] == [{'href': 'https://example.com/products', 'text': 'Products'}]
+    assert extracted['_links'] == [{
+        'href': 'https://example.com/products',
+        'text': 'Products',
+        'navigation_presence': False,
+    }]
     assert extracted['geo_evidence']['accepted'] is True

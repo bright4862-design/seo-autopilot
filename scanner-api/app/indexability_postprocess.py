@@ -4,6 +4,9 @@ import hashlib
 from .search_applicability import filter_search_findings, search_applicability
 from .metadata_title_evidence import relative_evidence_url
 from .repair_coverage import repair_evidence_key_function, scan_evidence_origin
+from .coverage_probes import SOFT_404_PROBE_VERSION, compare_page_to_soft_404_baselines
+from .stage2_local_entity_producer import build_local_entity_scan_evidence
+from .stage2_connected_provider_evidence import build_disconnected_provider_bundle
 
 from .indexability_quality import (
     annotate_indexability_quality,
@@ -58,16 +61,62 @@ def _unique(values) -> list[str]:
     return output
 
 
+def _active_soft_404_baselines(result: dict) -> list[dict]:
+    """Return only current, explicitly-labelled active soft-404 baselines.
+
+    The scanner producer owns network access and provenance. This postprocess
+    boundary consumes only the bounded baseline records it was given; absent,
+    stale or unknown evidence must not be reconstructed from the current web.
+    """
+    coverage = result.get("coverage_probe_evidence")
+    if not isinstance(coverage, dict):
+        return []
+    baselines = coverage.get("soft_404_baselines")
+    if not isinstance(baselines, list):
+        return []
+    return [
+        dict(item)
+        for item in baselines
+        if isinstance(item, dict) and item.get("version") == SOFT_404_PROBE_VERSION
+    ]
+
+
+def _apply_active_soft_404_match(page: dict, baselines: list[dict]) -> dict:
+    """Promote a verified active-baseline match without erasing passive evidence."""
+    evidence = compare_page_to_soft_404_baselines(page, baselines)
+    if evidence.get("state") != "fail" or evidence.get("reason") != "active_soft_404_baseline_match":
+        return evidence
+
+    signals = _unique([
+        "active_baseline_match",
+        *(evidence.get("intent_signals") or []),
+        *(page.get("soft_404_signals") or []),
+    ])
+    page["soft_404_suspected"] = True
+    page["soft_404_signals"] = signals
+    page["soft_404_confidence"] = max(98, int(page.get("soft_404_confidence") or 0))
+    if str(page.get("indexability_state") or "") in {"Indexable", "Canonicalized", "Soft 404"}:
+        page["indexable"] = False
+        page["indexability_state"] = "Soft 404"
+        page["robots_indexability_status"] = "soft_404"
+    return evidence
+
+
 def group_indexability_quality_findings(findings: list[dict]) -> list[dict]:
-    groups: dict[tuple[str, str], list[dict]] = {}
+    groups: dict[tuple[str, str, str], list[dict]] = {}
     for finding in findings:
         rule = str(finding.get("rule") or "")
         family = str(finding.get("page_template_family") or "standard")
-        groups.setdefault((rule, family), []).append(finding)
+        # Active-baseline findings are authenticated under a different evidence
+        # revision than legacy/passive soft-404 heuristics. Never collapse the
+        # two into one repair card and then imply the active proof covered URLs
+        # that were only heuristically classified.
+        evidence_version = str(finding.get("observed_evidence_version") or "")
+        groups.setdefault((rule, family, evidence_version), []).append(finding)
 
     output: list[dict] = []
     severity = {"critical": 4, "high": 3, "medium": 2, "low": 1}
-    for (rule, family), members in groups.items():
+    for (rule, family, evidence_version), members in groups.items():
         affected = _unique(
             page
             for member in members
@@ -78,13 +127,22 @@ def group_indexability_quality_findings(findings: list[dict]) -> list[dict]:
             continue
 
         sample = dict(members[0])
-        group_key = f"indexability-quality|{rule}|{family}"
+        group_key = f"indexability-quality|{rule}|{family}|{evidence_version}"
         group_id = "finding_" + hashlib.sha1(group_key.encode("utf-8")).hexdigest()[:12]
         highest_priority = max(
             (str(member.get("priority") or "low") for member in members),
             key=lambda value: severity.get(value, 0),
         )
         title = QUALITY_GROUP_TITLES.get(rule, str(sample.get("title") or "Fix repeated indexability issue"))
+        verified_observed_pages = _unique(
+            page
+            for member in members
+            for page in (
+                member.get("verified_observed_pages")
+                if isinstance(member.get("verified_observed_pages"), list)
+                else []
+            )
+        )
         sample.update({
             "id": group_id,
             "fix_id": group_id,
@@ -119,16 +177,21 @@ def group_indexability_quality_findings(findings: list[dict]) -> list[dict]:
                 text for member in members for text in (member.get("link_text_samples") or [])
             ),
         })
+        if evidence_version and verified_observed_pages:
+            sample["observed_evidence_version"] = evidence_version
+            sample["verified_observed_pages"] = verified_observed_pages
         output.append(sample)
     return output
 
 
 def apply_indexability_quality_to_result(result: dict, *, identity_version: str = "") -> dict:
-    """Apply bounded indexability and navigation evidence to a scan response.
+    """Apply bounded Stage-2 evidence to a successful scan response.
 
-    This runs at the scanner API boundary after bounded trust-page enrichment. It
-    preserves the scanner's existing evidence and only replaces its own idempotent
-    quality rules, making the operation safe to run more than once.
+    Indexability/navigation rules can update findings. B13/B14 local-entity and
+    the disconnected B17/B18 provider bundle added here are evidence-only: they
+    are attached to the shared scanner result and authenticated technical
+    summary, but they do not create a repair, customer card, score change, new
+    request, provider connection, or sitewide consistency claim.
     """
     if not isinstance(result, dict) or not result.get("success"):
         return result
@@ -136,11 +199,33 @@ def apply_indexability_quality_to_result(result: dict, *, identity_version: str 
     pages = list(result.get("crawled_pages") or result.get("pages") or [])
     if not pages:
         return result
+
+    # B13/B14 page observations were already extracted from accepted retained
+    # HTML. Aggregate only that exact retained set here so evidence cannot expand
+    # the Standard-150 assessed denominator or create a second fetch path.
+    local_entity_scan_evidence = build_local_entity_scan_evidence(pages)
+
+    # The ordinary Standard-150 worker does not own a CrUX/GSC account or accept
+    # provider payloads from the browser/task request. Record that absence
+    # explicitly on the exact retained page set. No metric can be admitted here;
+    # connected data still requires the exact durable scan-id gate later.
+    assessed_provider_urls = [
+        str(page.get("final_url") or page.get("url") or "").strip()
+        for page in pages
+        if isinstance(page, dict) and str(page.get("final_url") or page.get("url") or "").strip()
+    ]
+    connected_provider_evidence = build_disconnected_provider_bundle(
+        assessed_urls=assessed_provider_urls,
+    )
+
     identity = {"scan_origin": scan_evidence_origin(result) if identity_version else "", "identity_version": identity_version}
     key_for = repair_evidence_key_function(legacy_key=str, **identity)
+    active_baselines = _active_soft_404_baselines(result)
+    active_soft_404_evidence: dict[int, dict] = {}
 
     for page in pages:
         annotate_indexability_quality(page)
+        active_soft_404_evidence[id(page)] = _apply_active_soft_404_match(page, active_baselines)
         annotate_navigation_indexability(page)
         page["search_applicability"] = search_applicability(page)
 
@@ -176,7 +261,25 @@ def apply_indexability_quality_to_result(result: dict, *, identity_version: str 
         # part of the representative SEO sample and should not generate new tasks.
         if page.get("trust_discovery_probe"):
             continue
-        quality_raw.extend(build_indexability_quality_findings(page, create_finding, **identity))
+        page_quality = build_indexability_quality_findings(page, create_finding, **identity)
+        active = active_soft_404_evidence.get(id(page)) or {}
+        if active.get("state") == "fail" and active.get("reason") == "active_soft_404_baseline_match":
+            observed_url = (
+                relative_evidence_url(page, **identity)
+                if identity_version
+                else str(page.get("url") or page.get("final_url") or _page_path(page))
+            )
+            for finding in page_quality:
+                if str(finding.get("rule") or "") != "soft_404":
+                    continue
+                finding.update({
+                    "evidence_status": "confirmed_active_baseline",
+                    "verification_state": "verified",
+                    "confidence_score": 98,
+                    "observed_evidence_version": SOFT_404_PROBE_VERSION,
+                    "verified_observed_pages": [observed_url],
+                })
+        quality_raw.extend(page_quality)
 
     navigation_raw = build_navigation_indexability_findings(pages, create_finding, **identity)
     raw_findings = existing_raw + quality_raw + navigation_raw
@@ -198,6 +301,8 @@ def apply_indexability_quality_to_result(result: dict, *, identity_version: str 
     result["health_score"] = health_score
     result["indexability_quality_evidence"] = indexability_evidence
     result["navigation_indexability_evidence"] = navigation_evidence
+    result["local_entity_scan_evidence"] = local_entity_scan_evidence
+    result["connected_provider_evidence"] = connected_provider_evidence
 
     summary = result.get("scan_summary")
     if not isinstance(summary, dict):
@@ -221,6 +326,8 @@ def apply_indexability_quality_to_result(result: dict, *, identity_version: str 
     technical.update({
         "indexability_quality_evidence": indexability_evidence,
         "navigation_indexability_evidence": navigation_evidence,
+        "local_entity_scan_evidence": local_entity_scan_evidence,
+        "connected_provider_evidence": connected_provider_evidence,
         "soft_404_pages": indexability_evidence.get("soft_404_count", 0),
         "canonicalized_pages": indexability_evidence.get("canonicalized_count", 0),
         "indexability_conflicts": sum(indexability_evidence.get("conflict_counts", {}).values()),

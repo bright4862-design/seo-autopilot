@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
+from .coverage_probes import LINK_INTEGRITY_PROBE_VERSION
 from .repair_coverage import repair_evidence_key_function
 
 REPAIR_PRIORITY_VERSION = "repair_priority_v1_contextual_evidence"
@@ -307,6 +308,26 @@ def build_coverage_context(fix: dict[str, Any], pages: list[dict[str, Any]], *, 
     }
     matched_affected = [page_lookup[key] for key in affected if key in page_lookup]
 
+    # A bounded coverage probe can prove an HTTP outcome for a URL that was
+    # intentionally kept outside the assessed-page sample. Count that URL as
+    # observed only when the producer supplies the exact supported evidence
+    # version and a confirmed verification state. It never enters the assessed
+    # HTML denominator, so affected_eligible remains based on page_lookup below.
+    verified_probe_keys: set[str] = set()
+    verified_probe_pages = fix.get("verified_observed_pages")
+    if (
+        identity_version
+        and fix.get("observed_evidence_version") == LINK_INTEGRITY_PROBE_VERSION
+        and str(fix.get("verification_state") or "").strip().lower() == "verified"
+        and str(fix.get("evidence_status") or "").strip().lower() == "confirmed"
+        and isinstance(verified_probe_pages, list)
+    ):
+        for value in verified_probe_pages:
+            key = key_for(value)
+            if key and key in affected:
+                verified_probe_keys.add(key)
+    observed_affected_keys = {key for key in affected if key in page_lookup} | verified_probe_keys
+
     family = _fix_family(fix)
     comparable_family = bool(family and family not in {"mixed", "sitewide", "cross_cutting", "standard"})
     usable = [page for page in pages if isinstance(page, dict) and _usable_html(page)]
@@ -354,7 +375,7 @@ def build_coverage_context(fix: dict[str, Any], pages: list[dict[str, Any]], *, 
 
     return CoverageContext(
         affected_reported=len(affected),
-        affected_observed=len(matched_affected),
+        affected_observed=len(observed_affected_keys),
         affected_eligible=affected_eligible,
         checked_eligible=checked_eligible,
         indexable_affected=indexable_affected,

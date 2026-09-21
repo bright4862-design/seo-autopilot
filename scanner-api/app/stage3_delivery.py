@@ -389,17 +389,88 @@ def apply_root_cause_score_caps(
     }
 
 
+def _handoff_text(value: Any) -> str | None:
+    """Project one customer-visible handoff text value without coercing structures."""
+    return value if isinstance(value, str) else None
+
+
+def _handoff_scan_identity(value: Any) -> dict[str, Any]:
+    """Positive-allowlist the signed B24 scan identity exposed to customer readers."""
+    source = _dict(value)
+    allowed = (
+        "scan_id",
+        "scan_run_id",
+        "domain",
+        "normalized_domain",
+        "scan_origin",
+        "evidence_url_identity_version",
+    )
+    return {
+        key: _handoff_text(source.get(key))
+        for key in allowed
+        if key in source
+    }
+
+
+def _handoff_priority_factors(value: Any) -> dict[str, Any]:
+    """Project only the versioned public B19 factor schema into handoff v2.
+
+    The canonical repair can carry richer operator/debug state. B24 is a customer-safe
+    signed handoff, so unknown keys and malformed values fail closed instead of being
+    deep-copied into the authority/customer boundary.
+    """
+    source = _dict(value)
+    output: dict[str, Any] = {}
+    text_fields = (
+        "version",
+        "impact_reason",
+        "reach_state",
+        "page_value_state",
+        "page_value_role",
+        "page_value_source",
+        "confidence_state",
+        "score_state",
+        "technical_base_severity",
+        "technical_severity_source",
+    )
+    numeric_fields = (
+        "reach",
+        "page_value",
+        "confidence",
+        "priority_factor_score",
+    )
+    integer_fields = (
+        "impact",
+        "reach_affected_indexable",
+        "reach_observed_indexable_family",
+    )
+    for key in text_fields:
+        if key in source:
+            output[key] = _handoff_text(source.get(key))
+    for key in numeric_fields:
+        if key in source:
+            output[key] = _number(source.get(key))
+    for key in integer_fields:
+        if key in source:
+            output[key] = _nonnegative_int(source.get(key))
+    if "explanation" in source:
+        output["explanation"] = [
+            item for item in _list(source.get("explanation")) if isinstance(item, str) and item
+        ]
+    return output
+
+
 def _handoff_fix(candidate: dict[str, Any], *, sample_limit: int) -> dict[str, Any]:
     counts = summarize_candidate_counts(candidate, sample_limit=sample_limit)
     output = {
-        "rule_id": candidate.get("rule_id"),
-        "title": candidate.get("title"),
-        "root_cause_id": candidate.get("root_cause_id"),
+        "rule_id": _handoff_text(candidate.get("rule_id")),
+        "title": _handoff_text(candidate.get("title")),
+        "root_cause_id": _handoff_text(candidate.get("root_cause_id")),
         "family_ids": _unique_strings(_list(candidate.get("family_ids"))),
         "url_provenance": {
-            "published_url": candidate.get("published_url"),
-            "request_url": candidate.get("request_url"),
-            "final_url": candidate.get("final_url"),
+            "published_url": _handoff_text(candidate.get("published_url")),
+            "request_url": _handoff_text(candidate.get("request_url")),
+            "final_url": _handoff_text(candidate.get("final_url")),
         },
         "counts": {
             "unique_affected_pages": counts["unique_affected_page_count"],
@@ -409,13 +480,13 @@ def _handoff_fix(candidate: dict[str, Any], *, sample_limit: int) -> dict[str, A
         },
         "examples": counts["displayed_samples"],
         "examples_partial": counts["examples_partial"],
-        "priority_factors": deepcopy(_dict(candidate.get("priority_factors"))),
+        "priority_factors": _handoff_priority_factors(candidate.get("priority_factors")),
         "evidence_refs": _unique_strings(_list(candidate.get("evidence_refs"))),
         "verification_steps": [
             value for value in _list(candidate.get("verification_steps")) if isinstance(value, str) and value
         ],
-        "dependency": candidate.get("dependency"),
-        "vendor_owner": candidate.get("vendor_owner"),
+        "dependency": _handoff_text(candidate.get("dependency")),
+        "vendor_owner": _handoff_text(candidate.get("vendor_owner")),
     }
     return output
 
@@ -432,8 +503,8 @@ def build_handoff_v2(
     """Build a new v2 handoff without changing legacy v1 serialization."""
     payload: dict[str, Any] = {
         "handoff_version": HANDOFF_V2,
-        "scan": deepcopy(_dict(scan_identity)),
-        "user_agent": user_agent,
+        "scan": _handoff_scan_identity(scan_identity),
+        "user_agent": _handoff_text(user_agent),
         "fixes": [
             _handoff_fix(item, sample_limit=sample_limit)
             for item in fixes

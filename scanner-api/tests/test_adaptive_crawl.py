@@ -117,6 +117,12 @@ def test_tranche_plan_hard_caps_requested_ceiling_and_supports_shadow_intermedia
     assert plan["targets"] == [150, 300, 500, 750, 1000]
 
 
+def test_tranche_plan_with_no_configured_targets_authorizes_nothing():
+    plan = plan_tranche_targets(5000, candidate_targets=())
+    assert plan["targets"] == []
+    assert plan["discovery_scope_complete"] is False
+
+
 def test_yield_telemetry_preserves_unknown_instead_of_coercing_it_to_zero():
     telemetry = build_tranche_yield_telemetry(
         {"assessed_count": 150, "route_signatures": {"a"}},
@@ -139,9 +145,21 @@ def test_invalid_assessed_counts_fail_closed_instead_of_authorizing_expansion():
     assert telemetry["counts_valid"] is False
     assert telemetry["signal_state"] == "invalid_counts"
     decision = continuation_decision(telemetry)
-    assert decision["decision"] == "hold"
-    assert decision["reason"] == "adaptive_ceiling_reached"
+    assert decision["decision"] == "insufficient_evidence"
+    assert decision["reason"] == "invalid_tranche_counts"
     assert decision["next_target"] is None
+
+
+def test_invalid_counts_below_ceiling_return_explicit_insufficient_evidence():
+    previous = _observed_snapshot(300)
+    current = _observed_snapshot(500, route_count=50, template_count=10, graph_count=100, finding_count=20)
+    telemetry = build_tranche_yield_telemetry(previous, current, discovered_urls=400)
+    decision = continuation_decision(telemetry)
+    assert telemetry["signal_state"] == "invalid_counts"
+    assert decision["decision"] == "insufficient_evidence"
+    assert decision["reason"] == "invalid_tranche_counts"
+    assert decision["next_target"] is None
+    assert decision["site_fully_understood"] is False
 
 
 def test_continuation_expands_on_measured_novelty_not_just_a_large_discovered_count():

@@ -121,3 +121,56 @@ def test_b24_handoff_source_fails_closed_when_producer_scan_identity_is_not_exac
     )
 
     assert "stage3_handoff_v2_source" not in integrated
+
+
+def test_b24_signed_source_does_not_stringify_structured_scan_identity_into_customer_handoff():
+    url = "https://example.com/products/a"
+    sentinel = "https://private.example/operator-debug?token=stage3-b24-scan-identity"
+    scan_result = _scan_result([url])
+    scan_result["normalized_domain"] = {"operator_debug": sentinel}
+
+    integrated = apply_canonical_repair_contract(
+        _review([_fix("meta-a", url)]),
+        scan_result,
+    )
+
+    source = integrated["stage3_handoff_v2_source"]
+    assert source["scan"]["normalized_domain"] is None
+    assert sentinel not in json.dumps(source, sort_keys=True)
+
+    envelope = build_completion_envelope(_scan_record(), scan_result, integrated, "stage3-b24-secret")
+    signed_source = envelope["review"]["stage3_handoff_v2_source"]
+    assert signed_source == source
+    assert sentinel not in json.dumps(signed_source, sort_keys=True)
+
+
+def test_b22_b24_signed_sources_do_not_stringify_structured_customer_fields():
+    url = "https://example.com/products/a"
+    sentinel = "https://private.example/operator-debug?token=stage3-b22-b24-fields"
+    fix = _fix("meta-a", url)
+    fix["issue_title"] = {"operator_debug": sentinel}
+    fix["evidence_refs"] = ["evidence:public", {"operator_debug": sentinel}]
+
+    integrated = apply_canonical_repair_contract(
+        _review([fix]),
+        _scan_result([url]),
+    )
+
+    preview_source = integrated["stage3_private_preview_source"]
+    handoff_source = integrated["stage3_handoff_v2_source"]
+    assert preview_source["findings"][0]["title"] == "meta-a"
+    assert handoff_source["fixes"][0]["title"] == "meta-a"
+    assert "evidence:public" in handoff_source["fixes"][0]["evidence_refs"]
+
+    serialized = json.dumps(
+        {"preview": preview_source, "handoff": handoff_source},
+        sort_keys=True,
+    )
+    assert sentinel not in serialized
+    assert "operator_debug" not in serialized
+
+    envelope = build_completion_envelope(_scan_record(), _scan_result([url]), integrated, "stage3-b24-secret")
+    signed_review = envelope["review"]
+    assert signed_review["stage3_private_preview_source"] == preview_source
+    assert signed_review["stage3_handoff_v2_source"] == handoff_source
+    assert sentinel not in json.dumps(signed_review, sort_keys=True)

@@ -403,6 +403,26 @@ def resolve_scan_budget(scan_mode: str, timeout_seconds: float | None = None, *,
     return budget
 
 
+def _link_probe_observed_url(target: str, probe_page: dict | None = None) -> str:
+    """Return the exact HTTP identity used for a bounded link probe.
+
+    Link hrefs may contain spaces or other characters that HTTP clients
+    percent-encode before requesting them. Preserve the original link target
+    semantics, but publish the normalized request identity so downstream
+    evidence cannot collapse an otherwise verified broken target to an empty
+    route/homepage fallback.
+    """
+    raw = str(target or "").strip()
+    if raw:
+        try:
+            return str(httpx.URL(raw))
+        except Exception:
+            pass
+    if isinstance(probe_page, dict):
+        return str(probe_page.get("final_url") or probe_page.get("url") or "").strip()
+    return raw
+
+
 def _supports_stage2_probe_fetch(fetcher) -> bool:
     """Require the hardened callback seam before active Standard-150 probes run.
 
@@ -871,13 +891,14 @@ async def run_scan(
             )
             if status_code in {404, 410}:
                 rule = "410_error" if status_code == 410 else "404_error"
+                observed_probe_url = _link_probe_observed_url(target, probe_page)
                 link_probe_findings.append(create_finding(
                     rule=rule,
                     category="404_error",
                     priority="high",
                     title="Fix a broken internal link",
                     page_url=relative_evidence_url(
-                        {"url": target},
+                        {"url": observed_probe_url},
                         scan_origin=scope_evidence["requested_origin"],
                         identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION,
                     ),
@@ -898,7 +919,7 @@ async def run_scan(
                     "verification_state": "verified",
                     "confidence_score": 96,
                     "observed_evidence_version": LINK_INTEGRITY_PROBE_VERSION,
-                    "verified_observed_pages": [target],
+                    "verified_observed_pages": [observed_probe_url],
                     # Stage 3 owns score/root-cause semantics. Coverage evidence
                     # is intentionally non-scoring until those caps land.
                     "non_scoring": True,

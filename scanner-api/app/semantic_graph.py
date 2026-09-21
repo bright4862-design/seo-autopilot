@@ -517,8 +517,14 @@ def cannibalization_candidates(
     vectorizer = vectorizer or DeterministicLocalVectorizer()
     vectors = vectorizer.vectors(pages)
     shingles_by_url = {url: _b10_shingles(page) for url, page in by_url.items()}
+    near_duplicate_filtered_count = 0
+    near_duplicate_comparison_verified_count = 0
+    near_duplicate_comparison_not_verified_count = 0
 
     def candidate_rows() -> Iterable[dict[str, Any]]:
+        nonlocal near_duplicate_filtered_count
+        nonlocal near_duplicate_comparison_verified_count
+        nonlocal near_duplicate_comparison_not_verified_count
         for pair in _semantic_pair_rows(vectors, float(semantic_threshold)):
             left_url, right_url = pair["left_url"], pair["right_url"]
             left_page, right_page = by_url.get(left_url), by_url.get(right_url)
@@ -530,17 +536,34 @@ def cannibalization_candidates(
                 continue
             left_shingles = shingles_by_url.get(left_url, frozenset())
             right_shingles = shingles_by_url.get(right_url, frozenset())
-            if left_shingles and right_shingles and _shingle_similarity(left_shingles, right_shingles) >= duplicate_threshold:
-                continue
+            near_duplicate_similarity = None
+            if left_shingles and right_shingles:
+                near_duplicate_similarity = _shingle_similarity(left_shingles, right_shingles)
+                if near_duplicate_similarity >= duplicate_threshold:
+                    near_duplicate_filtered_count += 1
+                    continue
+                near_duplicate_comparison_state = "verified_distinct"
+                near_duplicate_comparison_verified_count += 1
+                reason = "distinct_indexable_pages_share_local_semantic_intent"
+            else:
+                near_duplicate_comparison_state = "not_verified"
+                near_duplicate_comparison_not_verified_count += 1
+                reason = "indexable_pages_share_local_semantic_intent_duplicate_status_not_verified"
             yield {
                 "left_url": left_url,
                 "right_url": right_url,
                 "semantic_similarity": pair["similarity"],
                 "shared_terms": pair["shared_terms"],
-                "near_duplicate_excluded": True,
+                "near_duplicate_comparison_state": near_duplicate_comparison_state,
+                "near_duplicate_similarity": (
+                    round(near_duplicate_similarity, 6)
+                    if near_duplicate_similarity is not None
+                    else None
+                ),
+                "near_duplicate_exclusion_verified": near_duplicate_comparison_state == "verified_distinct",
                 "indexability_verified": True,
                 "state": "candidate",
-                "reason": "distinct_indexable_pages_share_local_semantic_intent",
+                "reason": reason,
             }
 
     candidates, candidate_count = _bounded_best_rows(
@@ -552,6 +575,9 @@ def cannibalization_candidates(
         "scope": "observed_assessed_pages_only",
         "semantic_pair_scan_complete": True,
         "candidate_count": candidate_count,
+        "near_duplicate_filtered_count": near_duplicate_filtered_count,
+        "near_duplicate_comparison_verified_count": near_duplicate_comparison_verified_count,
+        "near_duplicate_comparison_not_verified_count": near_duplicate_comparison_not_verified_count,
         "state": "candidate" if candidates else ("not_verified" if not vectors else "no_candidate_observed"),
         "candidates": candidates,
         "candidates_truncated": candidate_count > MAX_CANDIDATES,

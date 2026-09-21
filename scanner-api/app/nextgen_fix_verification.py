@@ -18,6 +18,12 @@ FAIL = "FAIL"
 COULD_NOT_VERIFY = "COULD_NOT_VERIFY"
 VERIFICATION_STATES = frozenset({PASS, PARTIAL, FAIL, COULD_NOT_VERIFY})
 MAX_RECHECK_URLS = 150
+REQUIRED_RECHECK_OBSERVATIONS = (
+    "http_status",
+    "content_type",
+    "indexability",
+    "rule_predicate",
+)
 
 
 def _clean(value: Any) -> str:
@@ -35,6 +41,13 @@ def _raw_affected_pages(fix: dict[str, Any]) -> list[str]:
         fallback = fix.get("page_url") or fix.get("representative_page_url")
         values = [fallback] if fallback else []
     return [_clean(value) for value in values if _clean(value)]
+
+
+def _declared_population_count(plan: dict[str, Any]) -> int | None:
+    value = plan.get("population_count") if isinstance(plan, dict) else None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
 
 
 def build_acceptance_criterion(previous_fix: dict[str, Any]) -> dict[str, Any]:
@@ -156,7 +169,7 @@ def build_targeted_recheck_plan(
                 **item,
                 "criterion_id": _clean(criterion.get("criterion_id")),
                 "rule": _clean(criterion.get("rule")),
-                "required_observations": ["http_status", "content_type", "indexability", "rule_predicate"],
+                "required_observations": list(REQUIRED_RECHECK_OBSERVATIONS),
             }
             for item in requested
         ],
@@ -164,12 +177,13 @@ def build_targeted_recheck_plan(
 
 
 def _result_base(plan: dict[str, Any]) -> dict[str, Any]:
+    population_count = _declared_population_count(plan)
     return {
         "version": VERIFICATION_RESULT_VERSION,
         "state": COULD_NOT_VERIFY,
         "repair_fingerprint": _clean(plan.get("repair_fingerprint")) if isinstance(plan, dict) else "",
         "criterion_id": _clean(plan.get("criterion_id")) if isinstance(plan, dict) else "",
-        "required_population_count": int(plan.get("population_count") or 0) if isinstance(plan, dict) else 0,
+        "required_population_count": population_count if population_count is not None else 0,
         "observed_population_count": 0,
         "evaluated_population_count": 0,
         "resolved_scope": [],
@@ -219,6 +233,22 @@ def _evaluation_evidence_key(row: dict[str, Any], key_for: Any) -> tuple[str, st
     return (key, "") if key else ("", "evaluation_evidence_key_missing")
 
 
+def _historical_evidence_keys(previous_fix: dict[str, Any], key_for: Any) -> tuple[list[str], str]:
+    keys: list[str] = []
+    seen: set[str] = set()
+    for raw in _raw_affected_pages(previous_fix if isinstance(previous_fix, dict) else {}):
+        key = key_for(raw)
+        if not key:
+            return [], "Historical affected-page evidence cannot be resolved under the declared URL-identity contract."
+        if key in seen:
+            continue
+        seen.add(key)
+        keys.append(key)
+    if not keys:
+        return [], "Historical affected-page evidence population is empty."
+    return keys, ""
+
+
 def evaluate_verification_plan(
     plan: dict[str, Any],
     previous_fix: dict[str, Any],
@@ -237,6 +267,34 @@ def evaluate_verification_plan(
     criterion = plan.get("criterion") if isinstance(plan.get("criterion"), dict) else {}
     if criterion.get("version") != ACCEPTANCE_CRITERION_VERSION or criterion.get("state") != "ready":
         return _cannot_verify(plan, "The acceptance criterion is missing, blocked, or uses an unsupported version.")
+
+    expected_criterion = build_acceptance_criterion(previous_fix if isinstance(previous_fix, dict) else {})
+    criterion_fields = (
+        "criterion_id",
+        "repair_identity_version",
+        "repair_fingerprint",
+        "rule",
+        "rule_definition_version",
+        "comparison_profile_version",
+        "evidence_url_identity_version",
+        "predicate",
+    )
+    if expected_criterion.get("state") != "ready" or any(
+        _clean(criterion.get(field)) != _clean(expected_criterion.get(field)) for field in criterion_fields
+    ) or criterion.get("predicate_contract") != expected_criterion.get("predicate_contract"):
+        return _cannot_verify(plan, "The acceptance criterion does not exactly match the historical repair contract.")
+
+    plan_identity_fields = (
+        "repair_identity_version",
+        "repair_fingerprint",
+        "criterion_id",
+        "rule",
+        "rule_definition_version",
+        "comparison_profile_version",
+        "evidence_url_identity_version",
+    )
+    if any(_clean(plan.get(field)) != _clean(expected_criterion.get(field)) for field in plan_identity_fields):
+        return _cannot_verify(plan, "The verification plan identity/version metadata does not match the historical repair contract.")
 
     identity = build_repair_identity(previous_fix if isinstance(previous_fix, dict) else {})
     fingerprint = _clean(identity.get("fingerprint"))
@@ -264,6 +322,36 @@ def evaluate_verification_plan(
         return _cannot_verify(plan, "Unsupported evidence URL identity version.")
     key_for = repair_evidence_key_function(scan_origin=scan_origin, identity_version=evidence_version)
 
+    expected_keys, population_error = _historical_evidence_keys(previous_fix, key_for)
+    if population_error:
+        return _cannot_verify(plan, population_error)
+
+    requests = plan.get("requests") if isinstance(plan.get("requests"), list) else []
+    if not requests or any(not isinstance(item, dict) for item in requests):
+        return _cannot_verify(plan, "The recheck plan contains an empty or malformed evidence population.")
+    required_keys = [_clean(item.get("evidence_key")) for item in requests]
+    if any(not key for key in required_keys) or len(set(required_keys)) != len(required_keys):
+        return _cannot_verify(plan, "The recheck plan contains an empty or ambiguous evidence population.")
+
+    declared_population_count = _declared_population_count(plan)
+    if (
+        declared_population_count is None
+        or declared_population_count != len(expected_keys)
+        or len(required_keys) != len(expected_keys)
+        or set(required_keys) != set(expected_keys)
+    ):
+        return _cannot_verify(plan, "The recheck plan does not exactly match the complete historical evidence population.")
+
+    for item in requests:
+        declared_key = _clean(item.get("evidence_key"))
+        derived_key = key_for(item.get("url")) if item.get("url") else ""
+        if not derived_key or derived_key != declared_key:
+            return _cannot_verify(plan, "A recheck request URL does not match its declared evidence identity.")
+        if _clean(item.get("criterion_id")) != _clean(plan.get("criterion_id")) or _clean(item.get("rule")) != _clean(plan.get("rule")):
+            return _cannot_verify(plan, "A recheck request does not match the plan criterion/rule identity.")
+        if item.get("required_observations") != list(REQUIRED_RECHECK_OBSERVATIONS):
+            return _cannot_verify(plan, "A recheck request does not carry the complete required observation contract.")
+
     page_index: dict[str, dict[str, Any]] = {}
     duplicate_page_keys: set[str] = set()
     for page in current_pages or []:
@@ -287,11 +375,6 @@ def evaluate_verification_plan(
             duplicate_evaluation_keys.add(key)
         else:
             evaluation_index[key] = row
-
-    requests = plan.get("requests") if isinstance(plan.get("requests"), list) else []
-    required_keys = [_clean(item.get("evidence_key")) for item in requests if isinstance(item, dict)]
-    if not required_keys or any(not key for key in required_keys) or len(set(required_keys)) != len(required_keys):
-        return _cannot_verify(plan, "The recheck plan contains an empty or ambiguous evidence population.")
 
     observed_count = 0
     evaluated_count = 0

@@ -275,3 +275,67 @@ def test_could_not_verify_never_reopens_by_itself():
     )
     assert current["state"] == COULD_NOT_VERIFY
     assert decision["should_reopen"] is False
+
+
+def test_tampered_plan_cannot_drop_historical_population_member():
+    previous = fix()
+    plan = build_targeted_recheck_plan(previous, previous_scan_origin=ORIGIN)
+    plan["requests"] = plan["requests"][:1]
+    result = evaluate_verification_plan(
+        plan,
+        previous,
+        pages("/a", "/b"),
+        evaluations(plan, [False]),
+        contract(),
+        scan_origin=ORIGIN,
+    )
+    assert result["state"] == COULD_NOT_VERIFY
+    assert "complete historical evidence population" in result["reason"]
+
+
+def test_invalid_population_count_fails_closed_without_exception():
+    previous = fix()
+    plan = build_targeted_recheck_plan(previous, previous_scan_origin=ORIGIN)
+    plan["population_count"] = "not-an-int"
+    result = evaluate_verification_plan(
+        plan,
+        previous,
+        pages("/a", "/b"),
+        evaluations(plan, [False, False]),
+        contract(),
+        scan_origin=ORIGIN,
+    )
+    assert result["state"] == COULD_NOT_VERIFY
+    assert result["required_population_count"] == 0
+
+
+def test_tampered_criterion_identity_fails_closed():
+    previous = fix()
+    plan = build_targeted_recheck_plan(previous, previous_scan_origin=ORIGIN)
+    plan["criterion"] = {**plan["criterion"], "criterion_id": "tampered"}
+    result = evaluate_verification_plan(
+        plan,
+        previous,
+        pages("/a", "/b"),
+        evaluations(plan, [False, False]),
+        contract(),
+        scan_origin=ORIGIN,
+    )
+    assert result["state"] == COULD_NOT_VERIFY
+    assert "historical repair contract" in result["reason"]
+
+
+def test_recheck_request_url_must_match_declared_evidence_key():
+    previous = fix()
+    plan = build_targeted_recheck_plan(previous, previous_scan_origin=ORIGIN)
+    plan["requests"][0] = {**plan["requests"][0], "url": "/different"}
+    result = evaluate_verification_plan(
+        plan,
+        previous,
+        pages("/a", "/b"),
+        evaluations(plan, [False, False]),
+        contract(),
+        scan_origin=ORIGIN,
+    )
+    assert result["state"] == COULD_NOT_VERIFY
+    assert "declared evidence identity" in result["reason"]

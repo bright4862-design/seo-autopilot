@@ -198,3 +198,22 @@ def test_b08_wrong_destination_copy_covers_unrelated_sections_not_only_homepage(
     assert len(grouped) == 1
     assert grouped[0]["title"] == "Fix redirects that send specific URLs to unrelated destinations"
     assert "unrelated or catch-all destinations" in grouped[0]["plain_english_explanation"]
+
+
+def test_link_probe_observed_url_percent_encodes_unsafe_path_without_homepage_fallback():
+    raw = "https://tinyseed.com/Season 1 Trailer (Castos)"
+    observed = scanner._link_probe_observed_url(
+        raw,
+        {"final_url": "https://tinyseed.com/Season%201%20Trailer%20(Castos)"},
+    )
+
+    assert observed == "https://tinyseed.com/Season%201%20Trailer%20(Castos)"
+
+    page_url = scanner.relative_evidence_url(
+        {"url": observed},
+        scan_origin="https://tinyseed.com",
+        identity_version=scanner.PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION,
+    )
+    assert page_url == observed
+    assert page_url != ""
+    assert page_url != "https://tinyseed.com/"

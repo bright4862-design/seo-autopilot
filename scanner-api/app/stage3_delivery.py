@@ -16,6 +16,13 @@ HANDOFF_V2 = "fixlist_handoff_v2"
 DEFAULT_PRESENTATION_LIMIT = 36
 DEFAULT_SAMPLE_LIMIT = 10
 SAFE_SUFFICIENT_COVERAGE_QUALIFICATION = "Coverage was sufficient for the assessed scan scope."
+KNOWN_SCORE_COVERAGE_STATES = frozenset({
+    "sufficient",
+    "limited_coverage",
+    "inventory_unproven",
+    "access_limited",
+    "unknown",
+})
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -326,6 +333,14 @@ def _valid_score_cap(value: Any) -> int | None:
     return number
 
 
+def _score_coverage_state(value: Any) -> str:
+    """Keep B23 coverage provenance on the documented vocabulary or fail closed."""
+    if not isinstance(value, str):
+        return "unknown"
+    state = value.strip().lower()
+    return state if state in KNOWN_SCORE_COVERAGE_STATES else "unknown"
+
+
 def apply_root_cause_score_caps(
     base_health_score: int,
     root_causes: Iterable[dict[str, Any]],
@@ -341,6 +356,7 @@ def apply_root_cause_score_caps(
     """
     base = min(100, max(0, int(base_health_score)))
     existing = _valid_score_cap(existing_score_ceiling)
+    coverage = _score_coverage_state(coverage_state)
     applied: list[dict[str, Any]] = []
     ignored: list[dict[str, Any]] = []
     seen_root_causes: set[str] = set()
@@ -379,7 +395,7 @@ def apply_root_cause_score_caps(
 
     return {
         "base_health_score": base,
-        "coverage_state": coverage_state,
+        "coverage_state": coverage,
         "existing_score_ceiling": existing,
         "root_cause_score_ceiling": root_ceiling,
         "effective_score_ceiling": effective,

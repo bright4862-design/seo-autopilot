@@ -21,6 +21,8 @@ The common envelope is versioned as `connected_evidence_v1`. Every envelope carr
 - **GA4 AI-assistant referrals:** `normalize_ga4_ai_referral_rows(...)` and CSV wrapper normalize aggregate referral rows for recognized assistant hosts and retain landing page, geography/device and traffic/conversion metrics. Referral evidence proves observed traffic only; it does not prove all mentions/citations or AI-answer ranking.
 - **CSV import boundary:** bounded UTF-8 CSV parsing rejects oversized files/row sets and duplicate normalized headers.
 
+Freshness now fails closed whenever freshness checking is enabled but the provider observation time cannot be established, parsed, or is later than retrieval. GSC Search Analytics, Bing AI Performance imports, and GA4 AI-assistant referrals emit `not_verified` with no retained observation records in that case rather than representing freshness-unknown evidence as `verified`. `stale_after_days=None` remains the explicit opt-out when a caller intentionally chooses not to make a freshness claim. URL Inspection continues to use the time of the authorized inspection response as the observation time unless a separate source observation time is supplied.
+
 Sanitized fixtures live under `scanner-api/tests/fixtures_connected_evidence/` for GSC Search Analytics, URL Inspection, Bing AI Performance and GA4 referral evidence. No test performs a live provider call.
 
 ## Future connector work requiring separate owner authorization
@@ -48,11 +50,17 @@ Recommended integration sequence:
 
 ## Verification
 
-Focused adapter tests: `scanner-api/tests/test_connected_evidence.py` (provider normalizers, explicit unavailable/stale states, sanitized fixtures).  
-Strict contract tests: `scanner-api/tests/test_connected_evidence_contract.py` (**24 deterministic tests** after the strict-JSON/provenance/state hardening).  
-Local contract verification for this checkpoint: `PYTHONPATH=. pytest -q tests/test_connected_evidence_contract.py` → **24 passed**; `python -m py_compile app/connected_evidence_contract.py` → passed.
+Strict contract tests: `scanner-api/tests/test_connected_evidence_contract.py` contains **24 deterministic tests**. The previous strict-contract checkpoint ran `PYTHONPATH=. pytest -q tests/test_connected_evidence_contract.py` → **24 passed** and `python -m py_compile app/connected_evidence_contract.py` → passed.
 
-The existing 15 adapter tests were not re-run in this isolated checkpoint environment; their code/fixtures were not changed by this hardening pass. The serialized integrator must still run the repository-relevant suites after transplant/integration.
+The adapter suite `scanner-api/tests/test_connected_evidence.py` now contains **20 deterministic tests**: the previous 15 adapter/fixture regressions plus five freshness regressions covering date-less GSC, Bing and GA4 evidence; an explicit freshness opt-out; and a future observation timestamp. The new code checkpoint is `58aeca5373b57071af8cdbbce81bd24a4a893e19`.
+
+Exact-head execution of the adapter + contract suites is currently blocked by the automation runtime rather than by repository code: both local Python/container execution returned an infrastructure `ClientError`, and the available remote code runner required interactive authorization that this non-interactive lane run cannot provide. GitHub reports no Actions workflow run for this integration-target head. Do **not** treat the added tests as passed until an executable runner runs:
+
+`PYTHONPATH=. pytest -q tests/test_connected_evidence.py tests/test_connected_evidence_contract.py`
+
+and:
+
+`python -m py_compile app/connected_evidence.py app/connected_evidence_contract.py tests/test_connected_evidence.py tests/test_connected_evidence_contract.py`
 
 The normal repository PR workflow currently targets `main`; this draft lane PR targets `nextgen/integration-20260921`, so a normal PR workflow run is not assumed here.
 
@@ -61,6 +69,7 @@ The normal repository PR workflow currently targets `main`; this draft lane PR t
 - Connected evidence is optional enrichment, not crawl authority.
 - Citation share is observational and is not a ranking, quality, or probability score.
 - Search Console and Analytics payload freshness depends on the provider/report window; stale evidence remains retained but explicitly labelled.
+- Date-less GSC/Bing/GA4 observations do not become `verified` under the default freshness gate; callers must supply a trustworthy observation/report end time or explicitly disable freshness evaluation.
 - GA4 referral-source classification cannot measure dark/direct AI traffic or uncited mentions.
 - Bing UI/export columns can evolve; unknown columns/rows fail closed rather than being guessed.
 - Dedicated Google Gen-AI reporting remains unsupported/not verified until an official programmatic surface is established.

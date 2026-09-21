@@ -11,12 +11,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: b25-accelerated-gate-0fe34f0d
+  group: b25-accelerated-gate-53d8d110
   cancel-in-progress: false
 
 env:
   BASELINE_SHA: 2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad
-  CANDIDATE_SHA: 0fe34f0d5d50d917bcb040cb060db6f1637c9dc2
+  CANDIDATE_SHA: 53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2
 
 jobs:
   prepare:
@@ -66,7 +66,7 @@ jobs:
           echo "Baseline:  $BASELINE_SHA"
           echo "Candidate: $CANDIDATE_SHA"
           test "$BASELINE_SHA" = "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
-          test "$CANDIDATE_SHA" = "0fe34f0d5d50d917bcb040cb060db6f1637c9dc2"
+          test "$CANDIDATE_SHA" = "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
 
   collect:
     name: "B25 pair · ${{ matrix.site }}"

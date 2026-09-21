@@ -2,6 +2,7 @@ from app.adaptive_crawl import (
     ADAPTIVE_CRAWL_VERSION,
     ADAPTIVE_TELEMETRY_VERSION,
     MAX_ADAPTIVE_TARGET,
+    adaptive_candidate_score,
     benchmark_smart_500_vs_blind_1000,
     build_tranche_yield_telemetry,
     continuation_decision,
@@ -63,13 +64,7 @@ def _observed_snapshot(assessed_count, *, route_count=1, template_count=1, graph
 def test_standard_150_selection_is_byte_for_byte_existing_sampling_order():
     urls, family, _, _, metadata = _fixture()
     expected = select_balanced_urls(urls, _family_of(family), _path_of, 150)
-    actual = select_adaptive_urls(
-        urls,
-        _family_of(family),
-        _path_of,
-        150,
-        metadata_by_url=metadata,
-    )
+    actual = select_adaptive_urls(urls, _family_of(family), _path_of, 150, metadata_by_url=metadata)
     assert actual == expected
 
 
@@ -85,13 +80,7 @@ def test_selection_is_bounded_deterministic_and_keeps_baseline_prefix():
 
 def test_selector_hard_caps_even_if_caller_requests_more_than_nextgen_contract():
     urls, family, _, _, metadata = _fixture()
-    selected = select_adaptive_urls(
-        urls,
-        _family_of(family),
-        _path_of,
-        5000,
-        metadata_by_url=metadata,
-    )
+    selected = select_adaptive_urls(urls, _family_of(family), _path_of, 5000, metadata_by_url=metadata)
     assert len(selected) == MAX_ADAPTIVE_TARGET == 1000
 
 
@@ -107,11 +96,7 @@ def test_tranche_plan_is_bounded_by_current_discovery_without_claiming_complete_
 
 
 def test_tranche_plan_hard_caps_requested_ceiling_and_supports_shadow_intermediate_targets():
-    plan = plan_tranche_targets(
-        5000,
-        ceiling=5000,
-        candidate_targets=(150, 300, 500, 750, 1000, 2500),
-    )
+    plan = plan_tranche_targets(5000, ceiling=5000, candidate_targets=(150, 300, 500, 750, 1000, 2500))
     assert plan["requested_ceiling"] == 5000
     assert plan["assessment_ceiling"] == 1000
     assert plan["targets"] == [150, 300, 500, 750, 1000]
@@ -121,6 +106,39 @@ def test_tranche_plan_with_no_configured_targets_authorizes_nothing():
     plan = plan_tranche_targets(5000, candidate_targets=())
     assert plan["targets"] == []
     assert plan["discovery_scope_complete"] is False
+
+
+def test_tranche_plan_ignores_malformed_optional_targets_instead_of_crashing():
+    plan = plan_tranche_targets(5000, candidate_targets=(150, "bad", None, 500, float("inf"), 1000))
+    assert plan["targets"] == [150, 500, 1000]
+
+
+def test_candidate_prefix_novelty_is_locale_normalized():
+    score = adaptive_candidate_score(
+        "https://x.test/fr/products/widget",
+        family="product_page",
+        path="/fr/products/widget",
+        covered_families={"product_page"},
+        covered_signatures={"/products/widget"},
+        covered_prefixes={"/products"},
+    )
+    assert score["path_prefix"] == "/products"
+    assert "new_path_prefix" not in score["reasons"]
+    assert "new_route_signature" not in score["reasons"]
+
+
+def test_candidate_score_ignores_non_finite_optional_metadata():
+    score = adaptive_candidate_score(
+        "https://x.test/guides/a",
+        family="guide_article",
+        path="/guides/a",
+        covered_families={"guide_article"},
+        covered_signatures={"/guides/a"},
+        covered_prefixes={"/guides"},
+        metadata={"template_novelty": float("nan"), "graph_novelty": float("inf"), "finding_affinity": "-inf"},
+    )
+    assert score["score"] == 0.0
+    assert score["reasons"] == ()
 
 
 def test_yield_telemetry_preserves_unknown_instead_of_coercing_it_to_zero():
@@ -160,6 +178,29 @@ def test_invalid_counts_below_ceiling_return_explicit_insufficient_evidence():
     assert decision["reason"] == "invalid_tranche_counts"
     assert decision["next_target"] is None
     assert decision["site_fully_understood"] is False
+
+
+def test_regressed_cumulative_evidence_fails_closed():
+    previous = _observed_snapshot(150, route_count=10, template_count=4, graph_count=20, finding_count=5)
+    current = _observed_snapshot(500, route_count=20, template_count=3, graph_count=40, finding_count=9)
+    telemetry = build_tranche_yield_telemetry(previous, current, discovered_urls=1800)
+    assert telemetry["counts_valid"] is True
+    assert telemetry["evidence_monotonic"] is False
+    assert telemetry["regressed_signal_keys"] == ("template_keys",)
+    assert telemetry["signal_state"] == "invalid_evidence"
+    decision = continuation_decision(telemetry)
+    assert decision["decision"] == "insufficient_evidence"
+    assert decision["reason"] == "regressed_tranche_evidence"
+    assert decision["next_target"] is None
+
+
+def test_continuation_rejects_foreign_or_missing_telemetry_version():
+    telemetry = build_tranche_yield_telemetry(_observed_snapshot(150), _observed_snapshot(500, route_count=50), discovered_urls=1800)
+    telemetry["version"] = "adaptive_tranche_yield_v0"
+    decision = continuation_decision(telemetry)
+    assert decision["decision"] == "insufficient_evidence"
+    assert decision["reason"] == "telemetry_version_mismatch"
+    assert decision["next_target"] is None
 
 
 def test_continuation_expands_on_measured_novelty_not_just_a_large_discovered_count():
@@ -252,19 +293,33 @@ def test_smart_500_benchmark_has_higher_finding_efficiency_than_blind_1000():
     assert result["blind_1000"]["pages_assessed"] == 1000
     assert result["smart_efficiency_vs_blind"] > 1.0
     assert result["smart_500"]["families"] >= result["blind_1000"]["families"]
+    assert 0.0 <= result["smart_finding_coverage_vs_blind"] <= 1.0
     assert result["pages_saved_by_smart"] == 500
     assert result["finding_comparison_state"] == "observed"
+
+
+def test_benchmark_coverage_counts_shared_blind_findings_not_smart_only_findings():
+    urls = [f"https://x.test/page/{i}" for i in range(1200)]
+    family = {url: "guide_article" for url in urls}
+    findings = {urls[0]: {"shared"}, urls[1100]: {"smart-only"}}
+    metadata = {urls[1100]: {"finding_affinity": 1.0, "template_novelty": 1.0}}
+    result = benchmark_smart_500_vs_blind_1000(
+        urls,
+        _family_of(family),
+        _path_of,
+        finding_fingerprints_by_url=findings,
+        metadata_by_url=metadata,
+    )
+    assert result["shared_finding_fingerprints"] == 1
+    assert result["smart_only_finding_fingerprints"] == 1
+    assert result["blind_only_finding_fingerprints"] == 0
+    assert result["smart_finding_coverage_vs_blind"] == 1.0
 
 
 def test_benchmark_does_not_fabricate_ratios_when_blind_sample_has_no_findings():
     urls = [f"https://x.test/page/{i}" for i in range(1200)]
     family = {url: "guide_article" for url in urls}
-    result = benchmark_smart_500_vs_blind_1000(
-        urls,
-        _family_of(family),
-        _path_of,
-        finding_fingerprints_by_url={},
-    )
+    result = benchmark_smart_500_vs_blind_1000(urls, _family_of(family), _path_of, finding_fingerprints_by_url={})
     assert result["smart_finding_coverage_vs_blind"] is None
     assert result["smart_efficiency_vs_blind"] is None
     assert result["finding_comparison_state"] == "no_blind_findings"

@@ -40,7 +40,7 @@ non-HTTP(S) hrefs cannot influence link-zone evidence. Repeated sibling-link
 counts now count only visible/navigable HTTP(S) anchors, preventing hidden menu
 markup from incorrectly promoting a contextual container to `listing`.
 
-## Focused verification
+## Focused verification from the prior checkpoint
 
 Executed from an isolated reconstruction of the lane-owned scanner package:
 
@@ -54,7 +54,7 @@ python -m py_compile app/semantic_graph.py app/semantic_graph_html.py \
 PASS
 ```
 
-New regressions prove:
+Those regressions prove:
 
 - a 260-page fully connected semantic cluster remains one 260-page cluster even
   though public pair output truncates at 250 rows;
@@ -67,13 +67,71 @@ New regressions prove:
   accepted link-zone observations;
 - hidden anchors do not inflate listing sibling counts.
 
+## 2026-09-22 evidence-truthfulness hardening
+
+A serialized-integration review identified one material overclaim in
+`cannibalization_candidates(...)`: a semantic/indexable pair with missing B10
+main-content shingle evidence could still be emitted with
+`near_duplicate_excluded=True` and the reason
+`distinct_indexable_pages_share_local_semantic_intent`. In that case the lane had
+not actually verified that the pages were distinct rather than near duplicates.
+
+The lane now fails closed at that evidence boundary:
+
+- verified B10 shingle pairs at or above the duplicate threshold are filtered and
+  counted in `near_duplicate_filtered_count`;
+- verified B10 shingle pairs below the threshold are emitted with
+  `near_duplicate_comparison_state="verified_distinct"`, an observed similarity,
+  and `near_duplicate_exclusion_verified=True`;
+- pairs lacking verified B10 evidence remain only semantic cannibalization
+  candidates and explicitly carry
+  `near_duplicate_comparison_state="not_verified"`,
+  `near_duplicate_similarity=None`, and
+  `near_duplicate_exclusion_verified=False`;
+- aggregate verified/not-verified duplicate-comparison counts are exposed so the
+  integrator can preserve evidence coverage rather than treating every candidate
+  as equally verified.
+
+Two deterministic regressions were added in
+`scanner-api/tests/test_semantic_graph_cannibalization_evidence.py` covering the
+missing-B10, verified-distinct, and verified-near-duplicate paths.
+
+### Verification blocker on this checkpoint
+
+The code and regressions are committed, but this automation execution environment
+could not execute the focused Python suite: the available local Python/container
+runners returned infrastructure `ClientError`, and the connected remote execution
+runner requires interactive user input that is unavailable in a scheduled run.
+GitHub reports no Actions workflow run for this integration-target PR head. The
+current head does have `CodeRabbit: success`, but that status is not a substitute
+for executing pytest.
+
+Therefore the new two-test file is **not claimed as freshly executed yet**. The
+serialized integrator must run:
+
+```text
+PYTHONPATH=. pytest -q \
+  tests/test_semantic_graph.py \
+  tests/test_semantic_graph_html.py \
+  tests/test_semantic_graph_cannibalization_evidence.py
+
+python -m py_compile \
+  app/semantic_graph.py \
+  app/semantic_graph_html.py \
+  tests/test_semantic_graph.py \
+  tests/test_semantic_graph_html.py \
+  tests/test_semantic_graph_cannibalization_evidence.py
+```
+
+before transplant acceptance.
+
 ## Integrator implications
 
 No new shared wiring is required. The serialized integrator may continue using
-`build_semantic_graph_evidence(...)` at the same proposed hook. The only contract
-additions are coverage telemetry fields (`qualifying_pair_count`,
-`candidate_count`, `pair_scan_complete`, `semantic_pair_scan_complete`) and more
-truthful bounded-candidate semantics.
+`build_semantic_graph_evidence(...)` at the same proposed hook. The contract now
+includes pair/candidate coverage telemetry plus explicit near-duplicate comparison
+verification state. Consumers must not reinterpret `not_verified` duplicate
+comparison as proof that two semantically similar pages are distinct.
 
 The pairwise CPU cost remains O(n²) inside the hard 1,000-page Lane-B bound, but
 memory no longer grows with the number of qualifying semantic/duplicate pairs.

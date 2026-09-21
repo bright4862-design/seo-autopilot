@@ -23,6 +23,18 @@ function hasPersistedStage3Delivery(run) {
   );
 }
 
+function claimsDurableStage3Delivery(review) {
+  if (!review || typeof review !== "object" || Array.isArray(review)) return false;
+  // The identity-bound B22/B24 sources are the upgrade boundary. B19/B21
+  // factors/counts and the identity-agnostic delivery/score decision can be
+  // computed in historical/basic review fixtures without a trusted scan id;
+  // those fields alone must not silently upgrade the signed authority version.
+  // Once either exact-scan source is present, strict Stage-3 validation owns the
+  // whole contract, so a partial/malformed new delivery still fails closed.
+  return review.stage3_private_preview_source !== undefined
+    || review.stage3_handoff_v2_source !== undefined;
+}
+
 /**
  * Keep the published-route V7 HMAC version stable while extending its signed
  * payload with the versioned Stage-3 delivery capsule. The nested capsule is
@@ -32,6 +44,9 @@ function hasPersistedStage3Delivery(run) {
 export function buildAuthoritySnapshot(options = {}) {
   if (options?.[INTERNAL_STAGE3_BASE] === true) {
     return legacy.buildAuthoritySnapshot(withoutInternalMarker(options));
+  }
+  if (!claimsDurableStage3Delivery(options?.review)) {
+    return legacy.buildAuthoritySnapshot(options);
   }
   const staged = buildAuthoritySnapshotStage3({
     ...options,

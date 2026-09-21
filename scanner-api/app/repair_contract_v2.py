@@ -336,13 +336,18 @@ def _trusted_stage3_scan_id(scan_result: dict[str, Any]) -> str:
 
     Stage 3 must not invent or borrow a later durable identity. The crawler has
     historically carried both scan_id and scan_run_id; only an exact non-empty
-    match is accepted here. Otherwise B20 grouping deliberately fails closed to
-    singleton/unverified groups until the durable worker can prove the identity.
+    string match is accepted here. Otherwise B20 grouping deliberately fails
+    closed to singleton/unverified groups until the durable worker can prove the
+    identity.
     """
     if not isinstance(scan_result, dict):
         return ""
-    scan_id = _clean_text(scan_result.get("scan_id"))
-    scan_run_id = _clean_text(scan_result.get("scan_run_id"))
+    raw_scan_id = scan_result.get("scan_id")
+    raw_scan_run_id = scan_result.get("scan_run_id")
+    if not isinstance(raw_scan_id, str) or not isinstance(raw_scan_run_id, str):
+        return ""
+    scan_id = raw_scan_id.strip()
+    scan_run_id = raw_scan_run_id.strip()
     return scan_id if scan_id and scan_run_id and scan_id == scan_run_id else ""
 
 

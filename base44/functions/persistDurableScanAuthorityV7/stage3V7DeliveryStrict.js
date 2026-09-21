@@ -26,6 +26,11 @@ const MAX_SAMPLES = 10;
 const plainObject = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : null;
 const cleanText = (value, limit = 2_000) => typeof value === "string" ? value.trim().slice(0, limit) : "";
 const nullableText = (value, limit = 2_000) => value === null || value === undefined ? null : (typeof value === "string" ? value.trim().slice(0, limit) : null);
+const nullableTextField = (value, limit = 2_000) => {
+  if (value === null || value === undefined) return { valid: true, value: null };
+  if (typeof value !== "string") return { valid: false, value: null };
+  return { valid: true, value: value.trim().slice(0, limit) };
+};
 const exactInteger = (value, min = 0, max = Number.MAX_SAFE_INTEGER) => Number.isInteger(value) && value >= min && value <= max ? value : null;
 const exactNumber = (value, min, max) => typeof value === "number" && Number.isFinite(value) && value >= min && value <= max ? value : null;
 const nullableNumber = (value, min, max) => value === null ? null : exactNumber(value, min, max);
@@ -156,24 +161,24 @@ function normalizePreview(value, scanId, canonicalIds) {
     const row = plainObject(raw);
     if (!row) return null;
     const ruleId = cleanText(row.rule_id, 160);
-    const title = nullableText(row.title, 240);
-    const evidenceSummary = nullableText(row.evidence_summary, 500);
+    const title = nullableTextField(row.title, 240);
+    const evidenceSummary = nullableTextField(row.evidence_summary, 500);
     const impact = exactInteger(row.impact, 0, 5);
-    if (!ruleId || !canonicalIds.has(ruleId) || ids.has(ruleId) || title === null || evidenceSummary === null || impact === null) return null;
+    if (!ruleId || !canonicalIds.has(ruleId) || ids.has(ruleId) || !title.valid || !evidenceSummary.valid || impact === null) return null;
     ids.add(ruleId);
-    findings.push({ rule_id: ruleId, title, impact, evidence_summary: evidenceSummary });
+    findings.push({ rule_id: ruleId, title: title.value, impact, evidence_summary: evidenceSummary.value });
   }
   if (state === "findings" && findings.length === 0) return null;
   if (state !== "findings" && findings.length !== 0) return null;
-  const qualification = nullableText(source.coverage_qualification, 500);
-  if (qualification === null) return null;
+  const qualification = nullableTextField(source.coverage_qualification, 500);
+  if (!qualification.valid) return null;
   return {
     version: STAGE3_PREVIEW_SOURCE_VERSION,
     scan_id: scanId,
     entitlement_state: "requires_authenticated_customer_gate",
     state,
     findings,
-    coverage_qualification: qualification,
+    coverage_qualification: qualification.value,
   };
 }
 
@@ -264,28 +269,28 @@ function normalizeHandoff(value, scanId, canonicalIds) {
     const provenance = plainObject(row.url_provenance);
     if (!counts || !factors || !families || !examples || !evidenceRefs || !verificationSteps || !provenance) return null;
     if (counts.displayed_examples !== examples.length || row.examples_partial !== (examples.length < counts.unique_affected_pages)) return null;
-    const publishedUrl = nullableText(provenance.published_url, 2_000);
-    const requestUrl = nullableText(provenance.request_url, 2_000);
-    const finalUrl = nullableText(provenance.final_url, 2_000);
-    const title = nullableText(row.title, 500);
-    const rootCauseId = nullableText(row.root_cause_id, 200);
-    const dependency = nullableText(row.dependency, 500);
-    const vendorOwner = nullableText(row.vendor_owner, 200);
-    if ([publishedUrl, requestUrl, finalUrl, title, rootCauseId, dependency, vendorOwner].some((item) => item === null)) return null;
+    const publishedUrl = nullableTextField(provenance.published_url, 2_000);
+    const requestUrl = nullableTextField(provenance.request_url, 2_000);
+    const finalUrl = nullableTextField(provenance.final_url, 2_000);
+    const title = nullableTextField(row.title, 500);
+    const rootCauseId = nullableTextField(row.root_cause_id, 200);
+    const dependency = nullableTextField(row.dependency, 500);
+    const vendorOwner = nullableTextField(row.vendor_owner, 200);
+    if ([publishedUrl, requestUrl, finalUrl, title, rootCauseId, dependency, vendorOwner].some((item) => !item.valid)) return null;
     fixes.push({
       rule_id: ruleId,
-      title,
-      root_cause_id: rootCauseId,
+      title: title.value,
+      root_cause_id: rootCauseId.value,
       family_ids: families,
-      url_provenance: { published_url: publishedUrl, request_url: requestUrl, final_url: finalUrl },
+      url_provenance: { published_url: publishedUrl.value, request_url: requestUrl.value, final_url: finalUrl.value },
       counts,
       examples,
       examples_partial: row.examples_partial === true,
       priority_factors: factors,
       evidence_refs: evidenceRefs,
       verification_steps: verificationSteps,
-      dependency,
-      vendor_owner: vendorOwner,
+      dependency: dependency.value,
+      vendor_owner: vendorOwner.value,
     });
   }
   if (source.suppressed_findings !== undefined) return null;

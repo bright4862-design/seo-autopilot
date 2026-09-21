@@ -8,12 +8,13 @@ Lane branch: `agent/nextgen-adaptive-crawl-20260921`
 
 This lane adds a pure, shadow-only adaptive crawl foundation. It does not change `run_scan`, `SCAN_BUDGETS`, Standard 150, repair priority, authority/persistence, customer projection, admission, release or deployment behavior.
 
-The helper contract is versioned and deterministic:
+The helper contracts are versioned and deterministic:
 
 - `adaptive_crawl_v1_shadow` — tranche planning and continuation decisions.
 - `adaptive_candidate_score_v1` — per-candidate selection score/reasons.
 - `adaptive_tranche_yield_v1` — marginal assessed-page yield telemetry.
 - `adaptive_benchmark_v1` — smart-500 vs blind-1000 simulation output.
+- `adaptive_tranche_integrity_v1` — fail-closed integrity validation for transported/caller-supplied tranche telemetry.
 
 ## Selection contract
 
@@ -27,22 +28,34 @@ The selector never claims that exhausting the discovered URL set means the whole
 
 ## Tranche and telemetry contract
 
-`plan_tranche_targets(...)` defaults to 150 → 500 → 1000 and truncates targets to the current discovered inventory plus the hard 1000-page lane ceiling. It records both the requested ceiling and effective assessment ceiling. The candidate target sequence remains configurable so the integrator can shadow-test 150 → 300/500 → 750/1000 without changing selector semantics. An empty candidate-target configuration authorizes no tranche. Malformed optional candidate targets are ignored rather than raising or expanding the crawl.
+`plan_tranche_targets(...)` defaults to 150 → 500 → 1000 and truncates targets to the current discovered inventory plus the hard 1000-page lane ceiling. It records both the requested ceiling and effective assessment ceiling. The candidate target sequence remains configurable so the integrator can shadow-test intermediate targets without changing selector semantics. An empty candidate-target configuration authorizes no tranche. Malformed optional candidate targets are ignored rather than raising or expanding the crawl.
 
-`build_tranche_yield_telemetry(...)` separates discovered and assessed counts and records marginal novelty for:
+`build_tranche_yield_telemetry(...)` separates discovered and assessed counts and records marginal novelty for route signatures, template keys, graph edges, finding fingerprints, high-impact finding fingerprints, and high-value families assessed.
 
-- route signatures;
-- template keys;
-- graph edges;
-- finding fingerprints;
-- high-impact finding fingerprints;
-- high-value families assessed.
+Missing signals remain `None` and force `signal_state="insufficient_evidence"`; they are never coerced to zero. Impossible count relationships produce `signal_state="invalid_counts"` and fail closed. Cumulative evidence snapshots must remain monotonic: if a previously observed route/template/edge/finding/high-value-family disappears from the later cumulative snapshot, telemetry records the exact `regressed_signal_keys`, sets `signal_state="invalid_evidence"`, and continuation fails closed.
 
-Missing signals remain `None` and force `signal_state="insufficient_evidence"`; they are never coerced to zero. Impossible count relationships, such as assessed pages exceeding the discovered inventory or a decreasing assessed count, produce `signal_state="invalid_counts"` and fail closed. Cumulative evidence snapshots must also be monotonic: if a previously observed route/template/edge/finding/high-value-family disappears from the later cumulative snapshot, telemetry records the exact `regressed_signal_keys`, sets `signal_state="invalid_evidence"`, and continuation fails closed. This prevents a mixed identity/version or incomplete later snapshot from being mistaken for low or high marginal yield.
-
-`continuation_decision(...)` requires the current telemetry contract version and valid count/evidence invariants before it can consider expansion. A foreign/missing telemetry version, invalid counts, or regressed cumulative evidence returns `insufficient_evidence` with no next target. Expansion can occur only when complete observed novelty/yield crosses the shadow thresholds. A large discovered inventory by itself is not enough. The helper never produces a next target above 1000, and once the 1000-page ceiling is reached the state is `hold` with reason `adaptive_ceiling_reached`. A hold decision always keeps `site_fully_understood=false`.
+`continuation_decision(...)` requires the current telemetry contract version and valid count/evidence invariants before it can consider expansion. Expansion can occur only when complete observed novelty/yield crosses the shadow thresholds. A large discovered inventory by itself is not enough. The helper never produces a next target above 1000, and once the 1000-page ceiling is reached the state is `hold` with reason `adaptive_ceiling_reached`. A hold decision always keeps `site_fully_understood=false`.
 
 `finding_fingerprints` are pre-repair evidence identifiers only. They are not final customer Fixes and do not alter repair ranking.
+
+## Telemetry integrity boundary
+
+`scanner-api/app/adaptive_crawl_integrity.py` adds a pure integrity layer for the boundary where telemetry may have been transported, persisted in a shadow store, or supplied by another component before continuation is considered.
+
+`validate_tranche_telemetry(...)` fails closed unless:
+
+- the telemetry contract version is exact;
+- discovered/previous-assessed/current-assessed/pages-added counts are non-negative integers with `previous <= current <= discovered`;
+- `pages_added == assessed_count - previous_assessed_count`;
+- the builder's `counts_valid` and `evidence_monotonic` invariants are true;
+- no regressed evidence keys are present;
+- observed telemetry has every marginal delta;
+- every supplied delta is a non-negative integer;
+- every supplied per-100 rate is finite, non-negative, and exactly recomputable from the corresponding delta and `pages_added`.
+
+This prevents forged, stale, malformed, `NaN`/`Infinity`, or internally inconsistent rates from authorizing a deeper crawl.
+
+`verified_continuation_decision(...)` is the recommended serialized-integrator entry point for transported telemetry. It runs the integrity gate first; invalid telemetry returns `insufficient_evidence` with `next_target=None`. Valid telemetry delegates to the existing `continuation_decision(...)`, preserving the current Lane-A thresholds and behavior.
 
 ## Serialized integrator hook required
 
@@ -52,51 +65,44 @@ No shared integration surface was modified in this lane. The serialized integrat
 2. Behind a new off-by-default/shadow next-generation flag, after existing discovery/classification has produced the bounded URL inventory, call `plan_tranche_targets(...)`.
 3. For the first 150 assessed pages, retain the current `select_balanced_urls(...)` selection and existing crawl/security/deadline behavior exactly.
 4. If shadow policy requests another tranche, call `select_adaptive_urls(...)` with already-discovered URLs and only already-available metadata. Do not let the helper schedule or fetch URLs itself.
-5. After a tranche has produced accepted retained evidence, construct cumulative snapshots from one stable evidence identity/version and call `build_tranche_yield_telemetry(...)` + `continuation_decision(...)` before authorizing any later tranche.
+5. After a tranche has produced accepted retained evidence, construct cumulative snapshots from one stable evidence identity/version and call `build_tranche_yield_telemetry(...)` followed by `verified_continuation_decision(...)` before authorizing any later tranche.
 6. Charge all later network work to the integrator-owned global request/deadline/security/robots budgets. This lane deliberately does not create a second fetch loop or budget.
 7. Keep telemetry operator/shadow-only until corpus acceptance establishes thresholds and customer semantics.
 
-If the integrator cannot provide a complete telemetry signal, the correct state is `insufficient_evidence`, not an automatic 1000-page crawl and not a claim of full understanding. If discovered/assessed counters are inconsistent, cumulative evidence regresses, or telemetry is from a different contract version, no expansion should occur.
+If the integrator cannot provide a complete or integrity-valid telemetry signal, the correct state is `insufficient_evidence`, not an automatic 1000-page crawl and not a claim of full understanding.
 
 ## Benchmark helper
 
 `benchmark_smart_500_vs_blind_1000(...)` compares adaptive selection of up to 500 pages against FIFO selection of up to 1000 already-discovered URLs. It reports assessed-page count, unique finding fingerprints, finding yield per 100 assessed pages, template coverage, family coverage, route-signature coverage, page savings, and shared/smart-only/blind-only finding counts.
 
-`smart_finding_coverage_vs_blind` is now a true coverage fraction: `shared findings / blind findings`, so smart-only discoveries cannot inflate the value above 1.0. `smart_efficiency_vs_blind` remains a yield-per-100 ratio. When the blind sample has zero findings, both comparison ratios that require a blind denominator are `None` with `finding_comparison_state="no_blind_findings"`; the helper does not fabricate a denominator merely to produce a numeric ratio.
+`smart_finding_coverage_vs_blind` is a true coverage fraction: `shared findings / blind findings`, so smart-only discoveries cannot inflate the value above 1.0. `smart_efficiency_vs_blind` remains a yield-per-100 ratio. When the blind sample has zero findings, comparison ratios that require a blind denominator are `None` with `finding_comparison_state="no_blind_findings"`.
 
-The benchmark is a deterministic engineering instrument, not a production claim that 500 pages always outperform 1000. Corpus results should decide the eventual expansion thresholds.
+The benchmark is a deterministic engineering instrument, not a production claim that 500 pages always outperform 1000. Corpus results should decide eventual expansion thresholds.
 
 ## Verification
 
-Focused isolated verification for the current lane behavior:
+Last executed Lane-A checkpoint before the new integrity slice:
 
 - `PYTHONPATH=. pytest -q tests/test_adaptive_crawl.py` → **21 passed**.
 - `PYTHONPATH=. python -m py_compile app/adaptive_crawl.py tests/test_adaptive_crawl.py` → **passed**.
 
-The isolated harness mirrors the current `sampling.py` behavior needed by this pure module because the automation container cannot resolve GitHub over external DNS. Repository CI on the serialized integration branch remains the authoritative full-environment verification. The lane has not run, merged or deployed any production scanner.
+The new integrity slice adds `tests/test_adaptive_crawl_integrity.py` with 10 deterministic regressions covering valid delegation, forged-rate rejection, non-finite rates, malformed count types, pages-added mismatch, missing observed deltas, rate-without-delta, honest incomplete evidence, forged monotonic flags, and non-mutation.
 
-Focused regressions cover:
+Exact-head commands that still need to run:
 
-- exact Standard-150 selection equality;
-- deterministic 500-page extension;
-- hard 1000-page selector/planner ceiling even when callers request more;
-- configurable 300/750 shadow tranches without allowing >1000;
-- empty or partially malformed tranche configuration failing safely;
-- locale-normalized path-prefix novelty for multi-market URLs;
-- non-finite optional score metadata being ignored;
-- unknown telemetry staying unknown;
-- invalid discovered/assessed count relationships failing closed;
-- cumulative evidence regression failing closed with exact regressed keys;
-- telemetry contract-version mismatch failing closed;
-- no continuation beyond the 1000-page ceiling;
-- partial discovered inventory expanding only to the available bound;
-- smart-500 coverage remaining a bounded fraction of blind-1000 findings;
-- benchmark ratio honesty when blind-1000 observes zero findings.
+```text
+PYTHONPATH=. pytest -q tests/test_adaptive_crawl.py tests/test_adaptive_crawl_integrity.py
+PYTHONPATH=. python -m py_compile app/adaptive_crawl.py app/adaptive_crawl_integrity.py tests/test_adaptive_crawl.py tests/test_adaptive_crawl_integrity.py
+```
+
+Current automation-run blocker: the available local Python/container runner is returning infrastructure `ClientError`, and this draft PR targets `nextgen/integration-20260921`, so the repository's `main`-targeted PR workflow does not produce a GitHub Actions run for this head. Therefore the new 10-test integrity slice is committed but **not claimed green yet**. Full repository scanner regression remains a serialized-integrator gate.
 
 ## Changed files owned by Lane A
 
 - `scanner-api/app/adaptive_crawl.py`
+- `scanner-api/app/adaptive_crawl_integrity.py`
 - `scanner-api/tests/test_adaptive_crawl.py`
+- `scanner-api/tests/test_adaptive_crawl_integrity.py`
 - `docs/nextgen/lane-a-adaptive-crawl-handoff.md`
 - `docs/nextgen/lane-a-adaptive-crawl.md`
 

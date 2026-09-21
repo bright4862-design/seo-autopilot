@@ -74,7 +74,7 @@ def plan_tranche_targets(
     hard_ceiling = min(requested_ceiling, MAX_ADAPTIVE_TARGET)
     bound = min(discovered, hard_ceiling)
     normalized = _normalized_targets(candidate_targets)
-    if bound <= 0:
+    if bound <= 0 or not normalized:
         targets: list[int] = []
     else:
         targets = sorted({min(bound, target) for target in normalized if target > 0})
@@ -293,6 +293,14 @@ def continuation_decision(
             "reason": "no_tranche_targets_configured",
             "site_fully_understood": False,
         }
+    if telemetry.get("signal_state") == "invalid_counts":
+        return {
+            "version": ADAPTIVE_CRAWL_VERSION,
+            "decision": "insufficient_evidence",
+            "next_target": None,
+            "reason": "invalid_tranche_counts",
+            "site_fully_understood": False,
+        }
     if assessed >= max_target:
         return {
             "version": ADAPTIVE_CRAWL_VERSION,
@@ -319,11 +327,7 @@ def continuation_decision(
         next_target = bounded_discovered
 
     if telemetry.get("signal_state") != "observed":
-        reason = (
-            "invalid_tranche_counts"
-            if telemetry.get("signal_state") == "invalid_counts"
-            else "marginal_yield_signals_incomplete"
-        )
+        reason = "marginal_yield_signals_incomplete"
         return {
             "version": ADAPTIVE_CRAWL_VERSION,
             "decision": "insufficient_evidence",

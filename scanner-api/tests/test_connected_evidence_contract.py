@@ -141,6 +141,12 @@ def test_provenance_requires_explicit_transport():
         validate_connected_evidence(evidence)
 
 
+def test_unavailable_state_may_omit_transport_when_nothing_was_observed():
+    evidence = _evidence(state="not_connected")
+    evidence["provenance"] = {}
+    assert validate_connected_evidence(evidence)["state"] == "not_connected"
+
+
 def test_unavailable_state_cannot_claim_observation_timestamp():
     evidence = _evidence(state="not_verified")
     evidence["observed_at"] = "2026-09-20T00:00:00Z"

@@ -379,3 +379,111 @@ jobs:
                       f"{site}:semantic:redirect-meaning",
                       "expected_change",
                       f"artifact://{adir.name}/candidate-raw.json::.scan.pages[*].redirect_fetch_evidence.meaning_evidence",
+                      reviewer,
+                  )
+
+              if site == "tinyseed":
+                  encoded = "https://tinyseed.com/Season%201%20Trailer%20(Castos)"
+                  c404 = [x for x in cfind.values() if rule(x) == "404_error"]
+                  r404 = [x for x in crep.values() if rule(x) == "404_error"]
+                  assert c404 and r404, "TinySeed final 404 finding/repair missing"
+                  blob = json.dumps({"findings": c404, "repairs": r404}, sort_keys=True)
+                  assert encoded in blob, "TinySeed encoded broken URL missing from final finding/repair"
+                  homepage_only = all(
+                      set(x.get("affected_pages") or []) <= {"https://tinyseed.com/", ""}
+                      for x in c404 + r404
+                  )
+                  assert not homepage_only, "TinySeed still falls back to homepage"
+
+              assert len(new_ids) == len(set(new_ids))
+              assert len(adjudications) == len(new_ids)
+              pairs.append({
+                  "site_id": site,
+                  "url": roster[site]["url"],
+                  "stratum": roster[site]["stratum"],
+                  "baseline": baseline_env,
+                  "candidate": candidate_env,
+                  "difference_summary": {
+                      "new_artifact_ids": new_ids,
+                      "removed_finding_ids": removed_findings,
+                      "removed_repair_ids": removed_repairs,
+                      "review_comment_id": reviewer["comment_id"],
+                  },
+                  "adjudications": adjudications,
+              })
+
+          assert observed_sites == set(roster), (
+              f"roster mismatch missing={sorted(set(roster)-observed_sites)} "
+              f"extra={sorted(observed_sites-set(roster))}"
+          )
+
+          pairs.sort(key=lambda pair: [row["site"] for row in rows].index(pair["site_id"]))
+          record = {
+              "version": "blueprint_30_site_baseline_candidate_v1",
+              "roster_sha256": roster_sha,
+              "provenance": "captured_baseline_candidate",
+              "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+              "baseline_source_sha": BASELINE,
+              "candidate_source_sha": CANDIDATE,
+              "capture_run_id": int(os.environ["CAPTURE_RUN_ID"]),
+              "reviewers": reviewer_comments,
+              "pairs": pairs,
+          }
+          gate_path.write_text(
+              json.dumps(record, sort_keys=True, indent=2, ensure_ascii=False) + "\n",
+              encoding="utf-8",
+          )
+          print(f"record={gate_path}")
+          print(f"roster_sha256={roster_sha}")
+          print(f"pairs={len(pairs)}")
+          print(f"new_artifacts={sum(len(p['difference_summary']['new_artifact_ids']) for p in pairs)}")
+          PY
+
+      - name: Run exact candidate B25 gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          node candidate/scripts/assertBlueprint30SiteGate.mjs "control/$GATE_PATH" | tee gate-result.json
+          python - <<'PY'
+          import json
+          result=json.load(open("gate-result.json"))
+          assert result == {
+            "status": "pass",
+            "pass": True,
+            "failures": [],
+            "blockers": [],
+            "site_count": 30,
+            "roster_sha256": result["roster_sha256"],
+          }, result
+          print("B25_FINAL_PASS")
+          PY
+
+      - name: Persist reviewed record on evidence branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "control/$GATE_PATH" /tmp/b25-final-reviewed.json
+          cd control
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin b25/accelerated-gate-20260921
+          git reset --hard origin/b25/accelerated-gate-20260921
+          mkdir -p "$(dirname "$GATE_PATH")"
+          cp /tmp/b25-final-reviewed.json "$GATE_PATH"
+          git add "$GATE_PATH"
+          if git diff --cached --quiet; then
+            echo "Reviewed record already persisted"
+          else
+            git commit -m "Record final B25 reviewed gate PASS"
+            git push origin "HEAD:b25/accelerated-gate-20260921"
+          fi
+
+      - name: Upload reviewed gate record
+        uses: actions/upload-artifact@v4
+        with:
+          name: b25-final-reviewed-gate-53d8d110
+          path: |
+            control/${{ env.GATE_PATH }}
+            gate-result.json
+          if-no-files-found: error
+          retention-days: 30

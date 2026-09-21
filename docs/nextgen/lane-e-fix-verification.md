@@ -59,6 +59,20 @@ Each request names:
 
 The plan is hard-bounded to 150 evidence members. If a repair population exceeds the bound, the plan becomes `bounded_incomplete`; that state is useful for orchestration but can never yield PASS. Unresolvable/ambiguous prior URLs block verification.
 
+### Plan integrity / historical population binding
+
+The evaluator does not trust caller-supplied plan completeness flags by themselves. Before any PASS/PARTIAL/FAIL outcome it independently rebuilds the acceptance criterion and full historical evidence-key population from the historical repair under the declared published URL-identity contract.
+
+A plan fails closed to `COULD_NOT_VERIFY` when:
+- `population_count` is malformed or differs from the historical population;
+- any historical evidence member is missing from `requests`;
+- requests contain missing/duplicate/unexpected evidence keys;
+- a request URL does not derive to its declared evidence key;
+- criterion, rule, fingerprint, identity version, rule-definition version, comparison-profile version, or URL-identity version is tampered or inconsistent;
+- a request omits or alters the required observation contract.
+
+This makes plan objects untrusted declarative inputs rather than proof that the full repair population was actually requested.
+
 ### Result state machine
 
 `evaluate_verification_plan(...)` reuses the existing repair comparability rules and fails closed.
@@ -66,7 +80,7 @@ The plan is hard-bounded to 150 evidence members. If a repair population exceeds
 - `PASS`: every required URL is re-observed in a comparable eligible state, every rule-evaluation row matches criterion/fingerprint/version identity, every predicate is actually re-evaluated, and the defect is absent everywhere.
 - `PARTIAL`: the full population is comparable/evaluated, some members pass and some still detect the defect. `unresolved_scope` contains the exact remaining evidence keys.
 - `FAIL`: the comparable/evaluated population still detects the defect with no resolved members.
-- `COULD_NOT_VERIFY`: any missing page, disappeared URL, redirect/error/non-HTML/non-indexable ineligible evidence, missing predicate evaluation, duplicate/ambiguous evidence, identity mismatch, version mismatch, blocked criterion, or incomplete bounded population.
+- `COULD_NOT_VERIFY`: any missing page, disappeared URL, redirect/error/non-HTML/non-indexable ineligible evidence, missing predicate evaluation, duplicate/ambiguous evidence, identity mismatch, version mismatch, blocked criterion, incomplete/tampered plan population, or incomplete bounded population.
 
 A URL disappearing from the crawl is therefore never proof of a fix.
 
@@ -89,7 +103,7 @@ No workflow state or durable row is changed by the helper.
 
 ## Behavioral regression coverage
 
-`scanner-api/tests/test_nextgen_fix_verification.py` covers 14 focused cases:
+`scanner-api/tests/test_nextgen_fix_verification.py` covers 18 focused cases:
 
 1. deterministic versioned criterion identity;
 2. missing stable identity/version metadata blocks planning;
@@ -104,9 +118,13 @@ No workflow state or durable row is changed by the helper.
 11. duplicate/ambiguous rule evaluation fails closed;
 12. NextGen PASS cannot replace the existing `verified_fixed` gate;
 13. proven PARTIAL regression produces a pure reopen decision;
-14. COULD_NOT_VERIFY does not reopen a previously verified repair.
+14. COULD_NOT_VERIFY does not reopen a previously verified repair;
+15. removing a historical population member from an otherwise-ready plan => COULD_NOT_VERIFY;
+16. malformed `population_count` fails closed without raising;
+17. tampered acceptance-criterion identity => COULD_NOT_VERIFY;
+18. request URL/evidence-key identity mismatch => COULD_NOT_VERIFY.
 
-Focused isolated contract execution passed 14/14 before publication. The local container does not contain the full repository runtime/dependency set, so full scanner-suite execution is left to the integration environment/serialized integrator rather than weakening or retargeting repository CI.
+Focused isolated contract execution passed 18/18, and `py_compile` passed, after the population-integrity hardening. The isolated harness uses faithful local stubs for imported repair identity/coverage behavior; it is not a claim of full repository scanner regression execution. Full scanner-suite execution remains an integration-environment/serialized-integrator gate rather than weakening or retargeting repository CI.
 
 ## Serialized integration hook
 
@@ -125,7 +143,9 @@ The later integrator should keep all durable/shared wiring outside this lane and
 
 - Historical rows without explicit rule/profile/URL-identity versions are not silently upgraded into the NextGen path.
 - More than 150 required evidence members cannot produce PASS until the integrator defines an approved complete-population strategy inside existing global budgets.
-- Extra or duplicate evidence is treated conservatively; ambiguous identity cannot prove a repair.
+- Plan metadata is treated as untrusted input and independently rebound to the historical repair before evaluation.
+- Extra, missing, malformed or duplicate evidence is treated conservatively; ambiguous identity cannot prove a repair.
+- If historical and current origin context do not permit the same published evidence keys to be reconstructed, evaluation fails closed rather than assuming equivalence.
 - No customer-facing state should consume PASS/PARTIAL/FAIL directly until authority/persistence and projection changes are separately reviewed and signed.
 
 ## Rollback

@@ -4,8 +4,8 @@ Authoritative design: `docs/superpowers/specs/2026-09-19-full-scanner-blueprint-
 
 ## Release boundary
 
-- Direct `main` refreshed during this 2026-09-21 serialized slice remains `2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad`.
-- Current-main `docs/stage-one-evidence-acceptance.md` still records Stage-1 exact-source production publication and fresh non-owner acceptance as pending.
+- Direct `main` refreshed during this 2026-09-21 serialized work remains `2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad`.
+- Current-main `docs/stage-one-evidence-acceptance.md` still records Stage-1 exact-source production publication and fresh non-owner acceptance as pending; no accepted Stage-1 production deployment is recorded.
 - Later-stage integration branch: `agent/full-blueprint-stage2-coverage-b06-20260919`, PR #303.
 - Worker candidate `fixlist-standard150-worker-00091-bdr` and cutover-pause run `35462502364` remain historical checkpoints only.
 - Do not merge later-stage work to `main`, deploy/publish, promote workers, mutate admission/queues/scheduler, launch a production scan, broaden schema/RLS, rotate secrets, connect fabricated providers, or enable Premium/Grok while the Stage-1 release gate remains open.
@@ -25,66 +25,67 @@ Current requirement state:
 
 - **B19 partial:** signed canonical Review uses exact impact × reach × page value × confidence with versioned explanations and truthful unknowns; repair leverage is not a factor. Numeric source evidence and downstream factor domains are fail-closed. Durable V7 customer/card/export consumption remains open.
 - **B20 partial:** verified shared-root-cause grouping requires explicit versioned same-cause evidence, actual string root-cause/surface/reference identifiers, and literal exact producer scan identity. Family similarity or structured/coercible identity cannot establish trust. Durable customer projection remains open.
-- **B21 partial:** signed Review has exact unique affected-page / observation / known-population / displayed-sample counts and ranks all eligible B19 candidates before truncation. Malformed numeric count evidence remains unknown; a supplied known population smaller than the exact affected-page union now also fails closed to unknown. Durable customer/card/export proof remains open.
-- **B22 partial:** signed evidence-led preview source prefers verified impact-4/5 findings with a two-item cap and otherwise one best verified fallback; good-shape requires explicit sufficient coverage and fixed controller wording. Impossible B19 factor values cannot manufacture high impact. Fresh independent review and durable exact-owner/exact-scan V7 customer proof remain open.
+- **B21 partial:** signed Review has exact unique affected-page / observation / known-population / displayed-sample counts and ranks all eligible B19 candidates before truncation. Malformed numeric count evidence remains unknown; a supplied known population smaller than the exact affected-page union fails closed to unknown. Durable customer/card/export proof remains open.
+- **B22 partial:** signed evidence-led preview source prefers verified impact-4/5 findings with a two-item cap and otherwise one best verified fallback; good-shape requires explicit sufficient coverage and fixed controller wording. Customer private preview now additionally requires requested scan/owner IDs to be literal non-empty strings and candidate scan/owner IDs to be strings before exact equality. Structured identity cannot satisfy owner/scan authority. Fresh independent review and durable exact-owner/exact-scan V7 customer proof remain open.
 - **B23 partial:** only explicit verified B20 root-cause evidence can contribute documented score caps; conflicting/unverified/cross-scan or malformed evidence fails closed and stricter access/sample/incomplete ceilings remain authoritative. Durable customer-visible adjusted-score consumption remains open.
 - **B24 partial:** signed handoff-v2 requires literal trusted exact scan identity and verified B20 root-cause mapping; historical v1 reader compatibility remains preserved; `suppressed_findings` requires literal `operator_authorized is True`. Customer-safe scan/fix/B19-factor projection is positive-allowlisted, type-checked and range-checked; contradictory B21 population denominators cannot be signed as known. Durable V7 persistence/read/customer/operator/export proof and fresh independent review remain open.
 
-## Latest serialized slice — B21 population denominator fail-closed
+## Latest serialized slice — B22 private-preview identity type fail-closed
 
-Fresh source inspection found `scanner-api/app/stage3_delivery.py::summarize_candidate_counts()` accepted a non-negative `known_population_count` even when that denominator was smaller than the exact unique affected-page union. This could report impossible B21 evidence and then carry the same impossible denominator into B24 customer handoff counts.
+Fresh source inspection found `scanner-api/app/stage3_delivery.py::_preview_eligible()` compared candidate and requested `scan_id` / `owner_id` with raw Python equality. Matching dictionaries/lists could therefore satisfy the customer exact-owner/exact-scan preview boundary if the same structured values appeared on both sides.
 
 ### RED
 
-Commit `3d4b15d1ba486bb97283c528001ca007b3094a04` added `scanner-api/tests/test_stage3_b21_population_truthfulness.py`.
+Commit `1b3f5ae219a733f8b9642761c0ef75d89f4ef65e` added `scanner-api/tests/test_stage3_b22_preview_identity_type_fail_closed.py`.
 
-FixList CI `35567099549` proved the defect:
+FixList CI `35571403257` proved the defect:
 
 - immutable checkout matched the RED commit;
 - root scanner regressions: `115 passed`;
-- scanner-api: `2 failed, 2087 passed, 18 skipped`;
-- both failures were exactly the two new negative regressions: the contradictory denominator remained `1` with 2 exact affected pages, both in B21 count summary and B24 handoff output;
-- the positive equal-population regression passed;
-- independent lint/typecheck/generated-release-contract/frontend-contract/build job passed;
+- scanner-api: `2 failed, 2090 passed, 18 skipped`;
+- both failures were exactly the new malformed identity regressions: matching structured scan or owner identity returned `findings` instead of `not_available`;
+- the literal exact-string scan/owner positive control passed;
+- lint, typecheck, generated release contracts, frontend contracts and production build passed;
 - corpus/frozen-revision/image steps were skipped after the intentional scanner-suite RED failure.
 
 ### GREEN
 
-Implementation commit `ebd83739b49da4a7aabd3fef3c171da23cdd8dd8` keeps the contradictory population unknown:
+Implementation commit `4ef7fb44a1bdb614d7bea764aa121dfac355f61c` makes `_preview_eligible()` fail closed unless:
 
-- existing non-coercive non-negative integer validation is unchanged;
-- after exact affected-page union construction, a known population smaller than that union is set to `None`;
-- B24 handoff construction reuses the same count helper, so there is no second denominator implementation and no impossible signed population;
-- valid equal/larger known populations remain known.
+- requested `scan_id` is an actual non-empty string;
+- requested `owner_id` is an actual non-empty string;
+- candidate `scan_id` and `owner_id` are actual strings;
+- those strings compare literally equal;
+- existing `authority_verified is True`, `preview_allowed is True`, and `evidence_state == "verified"` gates also pass.
 
-RED→GREEN compare changes exactly `scanner-api/app/stage3_delivery.py`: 6 additions / 0 deletions.
+There is no string coercion or scan/owner normalization. Dict/list/bool/numeric values cannot establish private-preview authority. RED→GREEN compare changes exactly `scanner-api/app/stage3_delivery.py`: 10 additions / 2 deletions.
 
-Exact-head FixList CI `35567449548` passed both jobs on `ebd83739b49da4a7aabd3fef3c171da23cdd8dd8`:
+Exact-source FixList CI `35571774891` passed both jobs on `4ef7fb44a1bdb614d7bea764aa121dfac355f61c`:
 
 - root scanner regressions: `115 passed`;
-- scanner-api: `2089 passed, 18 skipped`;
-- all three new B21 population regressions passed;
+- scanner-api: `2092 passed, 18 skipped`;
+- all three new B22 identity regressions passed;
 - labelled synthetic Stage-1 corpus: `14 cases / 55 assertions`, `full_30_site_gate=not_assessed`;
 - frozen beta revision: `01ebe8e90df1e6bd`;
-- scanner image: `sha256:04782550e621a58e28d9c59be13a9efed5e14d566149f2b28fa500f28e03aeb3`;
+- scanner image: `sha256:a52ecebf7b90fdd6793ecf106444052d5d65737ca21a443c28e51f4a109d28a0`;
 - lint, typecheck, generated release-contract verification, frontend contracts and production build passed.
 
 Runtime note: setup requested Node 20 but resolved Node `20.20.2`; exact Node 20.19.5 evidence is not claimed. GitHub Actions also emitted the Node-20 action-runtime deprecation warning.
 
-Detailed checkpoint: `docs/superpowers/plans/2026-09-21-stage3-b21-population-denominator-fail-closed.md`.
+Detailed checkpoint: `docs/superpowers/plans/2026-09-21-stage3-b22-preview-identity-type-fail-closed.md`.
 
-Prior B19 range-hardening remains certified at `c8e88394e32421b7706197750da618e105fe2a6b`, CI `35563424610`; detailed evidence remains in `docs/superpowers/plans/2026-09-21-stage3-b19-factor-range-fail-closed.md`.
+Prior B21 population-denominator hardening remains certified at `ebd83739b49da4a7aabd3fef3c171da23cdd8dd8`, CI `35567449548`. Earlier B19/B20/B23/B24 fail-closed slices remain in this branch history and their executable plans/regressions remain authoritative.
 
 ## What remains before Stage 3 can be complete
 
-1. Certify this run's final persisted documentation/checkpoint branch head with exact-head FixList CI.
+1. Certify this run's final persisted plan/ledger branch head with exact-head FixList CI.
 2. Obtain one genuinely fresh independent review of the corrected B22/B24 shared authority/privacy boundary, including upstream B19/B20/B21/B23 evidence feeding signed delivery. A skipped automatic review is not approval.
 3. The separate Stage-1 release operator must record exact-source production publication and fresh non-owner acceptance.
 4. Reconcile this integration branch onto then-current accepted `main`, preserve V7/#308, and run fresh exact integrated-head CI.
 5. Prove actual V7 B19/B21/B22/B23/B24 producer -> signed authority -> persisted rows -> exact-owner/exact-scan read/reload/history -> customer card/export/preview paths, including suppressed/operator privacy and historical-v1 compatibility.
 6. Persist exact source SHAs, regressions/failures, CI and independent-review evidence before declaring Stage 3 complete.
 
-Stage 3 is **not complete**. Latest executable source GREEN is `ebd83739b49da4a7aabd3fef3c171da23cdd8dd8`, FixList CI `35567449548`. The final documentation head still requires its own exact-head CI before being called the stable checkpoint.
+Stage 3 is **not complete**. Latest executable source GREEN is `4ef7fb44a1bdb614d7bea764aa121dfac355f61c`, FixList CI `35571774891`. The final documentation head still requires its own exact-head CI before being called the stable checkpoint.
 
 ## Stage 4 handoff — held
 

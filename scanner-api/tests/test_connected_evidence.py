@@ -345,3 +345,48 @@ def test_future_observation_timestamp_fails_closed_instead_of_becoming_verified(
     assert result["state"] == "not_verified"
     assert result["records"] == []
     assert result["observed_at"] is None
+
+
+def test_unparseable_retrieved_at_is_rejected_before_any_envelope_is_emitted():
+    with pytest.raises(ValueError, match="retrieved_at must be a parseable timestamp"):
+        unavailable_evidence(
+            provider="google_search_console",
+            source_kind="search_analytics",
+            state="not_connected",
+            reason="property is not connected",
+            retrieved_at="not-a-timestamp",
+        )
+
+
+def test_bing_rejected_recent_row_cannot_make_old_accepted_evidence_fresh():
+    result = normalize_bing_ai_performance_rows(
+        [
+            {"Date": "2026-08-01", "URL": "https://getfixlist.com/a", "Citations": 1},
+            {"Date": "2026-09-20", "Topic": "recognized but not an evidence-bearing row"},
+        ],
+        site_url="https://getfixlist.com",
+        retrieved_at=NOW,
+        stale_after_days=7,
+    )
+    assert result["state"] == "stale"
+    assert result["observed_at"] == "2026-08-01T00:00:00Z"
+    assert result["coverage"]["period_end"] == "2026-08-01"
+    assert result["coverage"]["rejected_row_count"] == 1
+    assert len(result["records"]) == 1
+
+
+def test_ga4_rejected_recent_row_cannot_make_old_accepted_evidence_fresh():
+    result = normalize_ga4_ai_referral_rows(
+        [
+            {"date": "2026-08-01", "sessionSource": "chatgpt.com", "sessions": 1},
+            {"date": "2026-09-20", "sessionSource": "chatgpt.com", "sessions": -1},
+        ],
+        property_id="properties/123",
+        retrieved_at=NOW,
+        stale_after_days=7,
+    )
+    assert result["state"] == "stale"
+    assert result["observed_at"] == "2026-08-01T00:00:00Z"
+    assert result["coverage"]["period_end"] == "2026-08-01"
+    assert result["coverage"]["rejected_row_count"] == 1
+    assert len(result["records"]) == 1

@@ -25,66 +25,66 @@ Current requirement state:
 
 - **B19 partial:** signed canonical Review uses exact impact × reach × page value × confidence with versioned explanations and truthful unknowns; repair leverage is not a factor. Numeric source evidence and downstream factor domains are fail-closed. Durable V7 customer/card/export consumption remains open.
 - **B20 partial:** verified shared-root-cause grouping requires explicit versioned same-cause evidence, actual string root-cause/surface/reference identifiers, and literal exact producer scan identity. Family similarity or structured/coercible identity cannot establish trust. Durable customer projection remains open.
-- **B21 partial:** signed Review has exact unique affected-page / observation / known-population / displayed-sample counts and ranks all eligible B19 candidates before truncation. Malformed or impossible B19 numeric evidence stays unknown/deferred. Durable customer/card/export proof remains open.
+- **B21 partial:** signed Review has exact unique affected-page / observation / known-population / displayed-sample counts and ranks all eligible B19 candidates before truncation. Malformed numeric count evidence remains unknown; a supplied known population smaller than the exact affected-page union now also fails closed to unknown. Durable customer/card/export proof remains open.
 - **B22 partial:** signed evidence-led preview source prefers verified impact-4/5 findings with a two-item cap and otherwise one best verified fallback; good-shape requires explicit sufficient coverage and fixed controller wording. Impossible B19 factor values cannot manufacture high impact. Fresh independent review and durable exact-owner/exact-scan V7 customer proof remain open.
 - **B23 partial:** only explicit verified B20 root-cause evidence can contribute documented score caps; conflicting/unverified/cross-scan or malformed evidence fails closed and stricter access/sample/incomplete ceilings remain authoritative. Durable customer-visible adjusted-score consumption remains open.
-- **B24 partial:** signed handoff-v2 requires literal trusted exact scan identity and verified B20 root-cause mapping; historical v1 reader compatibility remains preserved; `suppressed_findings` requires literal `operator_authorized is True`. Customer-safe scan/fix/B19-factor projection is positive-allowlisted, type-checked and range-checked. Durable V7 persistence/read/customer/operator/export proof and fresh independent review remain open.
+- **B24 partial:** signed handoff-v2 requires literal trusted exact scan identity and verified B20 root-cause mapping; historical v1 reader compatibility remains preserved; `suppressed_findings` requires literal `operator_authorized is True`. Customer-safe scan/fix/B19-factor projection is positive-allowlisted, type-checked and range-checked; contradictory B21 population denominators cannot be signed as known. Durable V7 persistence/read/customer/operator/export proof and fresh independent review remain open.
 
-## Latest serialized slice — B19 factor-range fail-closed
+## Latest serialized slice — B21 population denominator fail-closed
 
-Fresh source inspection found `scanner-api/app/stage3_delivery.py` accepted actual numeric values without enforcing B19's documented ranges at B21/B22/B24 delivery boundaries. Impossible values could therefore be treated as trusted evidence after the B19 producer boundary.
+Fresh source inspection found `scanner-api/app/stage3_delivery.py::summarize_candidate_counts()` accepted a non-negative `known_population_count` even when that denominator was smaller than the exact unique affected-page union. This could report impossible B21 evidence and then carry the same impossible denominator into B24 customer handoff counts.
 
 ### RED
 
-Commit `fd12cd307987587ac99246bec93914724c9e1f9b` added `scanner-api/tests/test_stage3_b19_factor_range_fail_closed.py`.
+Commit `3d4b15d1ba486bb97283c528001ca007b3094a04` added `scanner-api/tests/test_stage3_b21_population_truthfulness.py`.
 
-FixList CI `35563364990` proved the defect:
+FixList CI `35567099549` proved the defect:
 
 - immutable checkout matched the RED commit;
 - root scanner regressions: `115 passed`;
-- scanner-api: `2 failed, 2084 passed, 18 skipped`;
-- both failures were exactly the new negative regressions: B22 selected an impossible impact-99 candidate as high impact, and B24 serialized out-of-range B19 factors instead of projecting them unknown;
-- the positive valid-boundary regression passed;
+- scanner-api: `2 failed, 2087 passed, 18 skipped`;
+- both failures were exactly the two new negative regressions: the contradictory denominator remained `1` with 2 exact affected pages, both in B21 count summary and B24 handoff output;
+- the positive equal-population regression passed;
 - independent lint/typecheck/generated-release-contract/frontend-contract/build job passed;
 - corpus/frozen-revision/image steps were skipped after the intentional scanner-suite RED failure.
 
 ### GREEN
 
-Implementation commit `c8e88394e32421b7706197750da618e105fe2a6b` adds bounded B19 delivery validators:
+Implementation commit `ebd83739b49da4a7aabd3fef3c171da23cdd8dd8` keeps the contradictory population unknown:
 
-- impact: exact integer `0..5`;
-- reach/page value/confidence: finite actual numeric `0..1`;
-- four-factor product score: finite actual numeric `0..5`;
-- B21 defers out-of-range product evidence as unknown;
-- B22 high-impact selection and projection use bounded impact, and preview product-score ordering is bounded;
-- B24 positive factor projection emits `None` for impossible values while preserving valid boundaries.
+- existing non-coercive non-negative integer validation is unchanged;
+- after exact affected-page union construction, a known population smaller than that union is set to `None`;
+- B24 handoff construction reuses the same count helper, so there is no second denominator implementation and no impossible signed population;
+- valid equal/larger known populations remain known.
 
-RED→GREEN compare changes exactly `scanner-api/app/stage3_delivery.py`: 42 additions / 22 deletions. Historical-v1 reading and literal operator-only suppressed findings remain unchanged.
+RED→GREEN compare changes exactly `scanner-api/app/stage3_delivery.py`: 6 additions / 0 deletions.
 
-Exact-head FixList CI `35563424610` passed both jobs on `c8e88394e32421b7706197750da618e105fe2a6b`:
+Exact-head FixList CI `35567449548` passed both jobs on `ebd83739b49da4a7aabd3fef3c171da23cdd8dd8`:
 
 - root scanner regressions: `115 passed`;
-- scanner-api: `2086 passed, 18 skipped`;
-- all three new factor-range regressions passed;
+- scanner-api: `2089 passed, 18 skipped`;
+- all three new B21 population regressions passed;
 - labelled synthetic Stage-1 corpus: `14 cases / 55 assertions`, `full_30_site_gate=not_assessed`;
 - frozen beta revision: `01ebe8e90df1e6bd`;
-- scanner image: `sha256:dc2f58206b7f754c8d31fafbaf12f27f603c156e3d07456b159f3cd5c2f5ac27`;
+- scanner image: `sha256:04782550e621a58e28d9c59be13a9efed5e14d566149f2b28fa500f28e03aeb3`;
 - lint, typecheck, generated release-contract verification, frontend contracts and production build passed.
 
 Runtime note: setup requested Node 20 but resolved Node `20.20.2`; exact Node 20.19.5 evidence is not claimed. GitHub Actions also emitted the Node-20 action-runtime deprecation warning.
 
-Detailed checkpoint: `docs/superpowers/plans/2026-09-21-stage3-b19-factor-range-fail-closed.md`.
+Detailed checkpoint: `docs/superpowers/plans/2026-09-21-stage3-b21-population-denominator-fail-closed.md`.
+
+Prior B19 range-hardening remains certified at `c8e88394e32421b7706197750da618e105fe2a6b`, CI `35563424610`; detailed evidence remains in `docs/superpowers/plans/2026-09-21-stage3-b19-factor-range-fail-closed.md`.
 
 ## What remains before Stage 3 can be complete
 
 1. Certify this run's final persisted documentation/checkpoint branch head with exact-head FixList CI.
-2. Obtain one genuinely fresh independent review of the corrected B22/B24 shared authority/privacy boundary, including upstream B19/B20/B23 evidence feeding signed delivery. Current CodeRabbit state says automatic review is skipped because the repository has fewer than 10 stars; a skip is not approval.
+2. Obtain one genuinely fresh independent review of the corrected B22/B24 shared authority/privacy boundary, including upstream B19/B20/B21/B23 evidence feeding signed delivery. A skipped automatic review is not approval.
 3. The separate Stage-1 release operator must record exact-source production publication and fresh non-owner acceptance.
 4. Reconcile this integration branch onto then-current accepted `main`, preserve V7/#308, and run fresh exact integrated-head CI.
 5. Prove actual V7 B19/B21/B22/B23/B24 producer -> signed authority -> persisted rows -> exact-owner/exact-scan read/reload/history -> customer card/export/preview paths, including suppressed/operator privacy and historical-v1 compatibility.
 6. Persist exact source SHAs, regressions/failures, CI and independent-review evidence before declaring Stage 3 complete.
 
-Stage 3 is **not complete**. Latest executable source GREEN is `c8e88394e32421b7706197750da618e105fe2a6b`, FixList CI `35563424610`. The final documentation head still requires its own exact-head CI before being called the stable checkpoint.
+Stage 3 is **not complete**. Latest executable source GREEN is `ebd83739b49da4a7aabd3fef3c171da23cdd8dd8`, FixList CI `35567449548`. The final documentation head still requires its own exact-head CI before being called the stable checkpoint.
 
 ## Stage 4 handoff — held
 

@@ -1,0 +1,15 @@
+{
+  "inspectionResult": {
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://example.test/technical-seo",
+      "userCanonical": "https://example.test/technical-seo",
+      "lastCrawlTime": "2026-09-20T09:00:00Z",
+      "crawledAs": "DESKTOP"
+    }
+  }
+}

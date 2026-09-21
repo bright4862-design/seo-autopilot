@@ -280,3 +280,68 @@ def test_sanitized_connector_fixtures_normalize_without_network_io():
         retrieved_at=NOW,
         stale_after_days=None,
     )["state"] == "verified"
+
+
+def test_gsc_date_less_observation_fails_closed_when_freshness_is_required():
+    result = normalize_gsc_search_analytics(
+        {"rows": [{"keys": ["technical seo"], "clicks": 1, "impressions": 10, "ctr": 0.1, "position": 5}]},
+        dimensions=["query"],
+        property_uri="sc-domain:getfixlist.com",
+        retrieved_at=NOW,
+        stale_after_days=7,
+    )
+    assert result["state"] == "not_verified"
+    assert result["records"] == []
+    assert result["observed_at"] is None
+    assert "freshness could not be verified" in result["reason"]
+
+
+def test_bing_date_less_observation_fails_closed_when_freshness_is_required():
+    result = normalize_bing_ai_performance_rows(
+        [{"URL": "https://getfixlist.com/a", "Citations": 2}],
+        site_url="https://getfixlist.com",
+        retrieved_at=NOW,
+        stale_after_days=7,
+    )
+    assert result["state"] == "not_verified"
+    assert result["records"] == []
+    assert result["observed_at"] is None
+    assert "freshness could not be verified" in result["reason"]
+
+
+def test_ga4_date_less_observation_fails_closed_when_freshness_is_required():
+    result = normalize_ga4_ai_referral_rows(
+        [{"sessionSource": "chatgpt.com", "sessions": 3}],
+        property_id="properties/123",
+        retrieved_at=NOW,
+        stale_after_days=7,
+    )
+    assert result["state"] == "not_verified"
+    assert result["records"] == []
+    assert result["observed_at"] is None
+    assert "freshness could not be verified" in result["reason"]
+
+
+def test_date_less_observation_can_be_retained_when_freshness_check_is_explicitly_disabled():
+    result = normalize_bing_ai_performance_rows(
+        [{"URL": "https://getfixlist.com/a", "Citations": 2}],
+        site_url="https://getfixlist.com",
+        retrieved_at=NOW,
+        stale_after_days=None,
+    )
+    assert result["state"] == "verified"
+    assert len(result["records"]) == 1
+    assert result["observed_at"] is None
+
+
+def test_future_observation_timestamp_fails_closed_instead_of_becoming_verified():
+    result = normalize_bing_ai_performance_rows(
+        [{"URL": "https://getfixlist.com/a", "Citations": 2}],
+        site_url="https://getfixlist.com",
+        retrieved_at=NOW,
+        source_observed_at="2026-09-22T21:30:00Z",
+        stale_after_days=7,
+    )
+    assert result["state"] == "not_verified"
+    assert result["records"] == []
+    assert result["observed_at"] is None

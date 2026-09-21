@@ -160,8 +160,10 @@ def _freshness_state(
     retrieved = _parse_datetime(retrieved_at)
     observed = _parse_datetime(source_observed_at)
     if retrieved is None or observed is None:
-        return "verified"
+        return "not_verified"
     age_seconds = (retrieved - observed).total_seconds()
+    if age_seconds < 0:
+        return "not_verified"
     return "stale" if age_seconds > stale_after_days * 86400 else "verified"
 
 
@@ -383,6 +385,17 @@ def normalize_gsc_search_analytics(
         source_observed_at=period_end,
         stale_after_days=stale_after_days,
     )
+    if state == "not_verified":
+        return unavailable_evidence(
+            provider="google_search_console",
+            source_kind="search_analytics",
+            state="not_verified",
+            reason="freshness could not be verified because period_end was unavailable, invalid, or later than retrieval",
+            retrieved_at=retrieved_at,
+            surface="google_search_console.search_analytics",
+            method="api_response_normalization",
+            provenance=provenance,
+        )
     return _envelope(
         provider="google_search_console",
         source_kind="search_analytics",
@@ -479,6 +492,17 @@ def normalize_google_url_inspection(
         source_observed_at=source_observed_at or retrieved_at,
         stale_after_days=stale_after_days,
     )
+    if state == "not_verified":
+        return unavailable_evidence(
+            provider="google_search_console",
+            source_kind="url_inspection",
+            state="not_verified",
+            reason="freshness could not be verified because retrieval/observation time was invalid",
+            retrieved_at=retrieved_at,
+            surface="google_search_console.url_inspection",
+            method="api_response_normalization",
+            provenance=provenance,
+        )
     return _envelope(
         provider="google_search_console",
         source_kind="url_inspection",
@@ -631,6 +655,17 @@ def normalize_bing_ai_performance_rows(
         source_observed_at=observed,
         stale_after_days=stale_after_days,
     )
+    if state == "not_verified":
+        return unavailable_evidence(
+            provider="microsoft_bing_webmaster_tools",
+            source_kind="ai_performance_export",
+            state="not_verified",
+            reason="freshness could not be verified because the export observation date was unavailable, invalid, or later than retrieval",
+            retrieved_at=retrieved_at,
+            surface="bing_webmaster_tools.ai_performance",
+            method="manual_export_normalization",
+            provenance=provenance,
+        )
     warnings = []
     if rejected:
         warnings.append(f"{rejected} row(s) rejected during normalization")
@@ -819,6 +854,17 @@ def normalize_ga4_ai_referral_rows(
         source_observed_at=observed,
         stale_after_days=stale_after_days,
     )
+    if state == "not_verified":
+        return unavailable_evidence(
+            provider="google_analytics_4",
+            source_kind="ai_assistant_referrals",
+            state="not_verified",
+            reason="freshness could not be verified because the analytics observation date was unavailable, invalid, or later than retrieval",
+            retrieved_at=retrieved_at,
+            surface="google_analytics_4.referral_traffic",
+            method="aggregate_row_normalization",
+            provenance=provenance,
+        )
     warnings = []
     if unmatched:
         warnings.append(f"{unmatched} non-AI or unrecognized referral row(s) excluded")

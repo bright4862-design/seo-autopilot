@@ -29,13 +29,17 @@ const PROJECT_ID = "project-stage3-v7";
 const OWNER_ID = "owner-stage3-v7";
 const SEALED_AT = "2026-09-21T10:15:00.000Z";
 
-function signedPythonCompletion() {
-  const result = spawnSync("python", ["tests/helpers/emitStage3SignedCompletion.py"], {
+function runPythonFixture(path) {
+  const result = spawnSync("python", [path], {
     cwd: process.cwd(),
     encoding: "utf8",
   });
-  assert.equal(result.status, 0, `Python signed-completion fixture failed to execute:\n${result.stderr}`);
+  assert.equal(result.status, 0, `Python signed-completion fixture failed to execute (${path}):\n${result.stderr}`);
   return JSON.parse(result.stdout);
+}
+
+function signedPythonCompletion() {
+  return runPythonFixture("tests/helpers/emitStage3SignedCompletion.py");
 }
 
 function authorityOptions(envelope, emitted) {
@@ -188,4 +192,92 @@ test("B27 unsigned Stage-3 markers cannot upgrade an otherwise valid historical 
   }));
   const injectedSnapshot = authoritySnapshotFromRows(injected);
   assert.equal(await verifyAuthoritySeal(injectedSnapshot, emitted.secret, legacyProof, webcrypto), false);
+});
+
+test("B19/B21 >36 candidates rank before truncation and preserve known zero versus unknown through signed V7 customer delivery", async () => {
+  const emitted = runPythonFixture("tests/helpers/emitStage3RankedCompletion.py");
+  const { envelope } = emitted;
+  const signed = {
+    version: envelope.version,
+    identity: envelope.identity,
+    scan: envelope.scan,
+    review: envelope.review,
+  };
+  assert.equal(await verifyAuthoritySeal(signed, emitted.secret, envelope.proof, webcrypto), true);
+
+  const delivery = envelope.review.stage3_delivery;
+  assert.equal(delivery.eligible_candidate_count, 40);
+  assert.equal(delivery.displayed_candidate_count, 36);
+  assert.equal(delivery.presentation_truncated, true);
+  assert.equal(delivery.presentation_omitted_count, 4);
+  assert.equal(delivery.displayed_fix_ids.length, 36);
+  assert.equal(delivery.displayed_fix_ids[0], "zz-soft404");
+
+  const repairs = new Map(envelope.review.canonical_repairs.map((fix) => [fix.fix_id, fix]));
+  const zero = repairs.get("zero-reach")?.stage3_priority_factors;
+  const unknown = repairs.get("unknown-reach")?.stage3_priority_factors;
+  assert.equal(zero?.reach, 0);
+  assert.equal(zero?.priority_factor_score, 0);
+  assert.ok(Number.isInteger(zero?.reach_observed_indexable_family) && zero.reach_observed_indexable_family > 0);
+  assert.equal(unknown?.reach, null);
+  assert.equal(unknown?.reach_observed_indexable_family, null);
+  assert.equal(unknown?.priority_factor_score, null);
+
+  const options = {
+    scan: envelope.scan,
+    review: envelope.review,
+    identity: {
+      scan_id: emitted.scan_id,
+      project_id: emitted.project_id,
+      normalized_domain: "example.com",
+    },
+    userId: emitted.owner_id,
+    now: SEALED_AT,
+    identityVersion: emitted.identity_version,
+  };
+  const snapshot = buildAuthoritySnapshot(options);
+  assert.equal(snapshot.version, PUBLISHED_AUTHORITY_VERSION);
+  const proof = await createAuthoritySeal(snapshot, emitted.secret, webcrypto);
+  const rows = authorityRowsFromSnapshot(snapshot, {
+    fixListId: "fix-stage3-v7-ranked",
+    ownerUserId: emitted.owner_id,
+    proof,
+  });
+  const data = {
+    run: { ...rows.scanRun, id: emitted.scan_id, project_id: emitted.project_id },
+    fixList: { ...rows.fixList, id: "fix-stage3-v7-ranked" },
+    fixItems: rows.fixItems.map((item, index) => ({ ...item, id: `ranked-fix-row-${index + 1}` })),
+    userId: emitted.owner_id,
+  };
+  const rebuilt = authoritySnapshotFromRows(data);
+  assert.equal(await verifyAuthoritySeal(rebuilt, emitted.secret, proof, webcrypto), true);
+
+  const persistedUnknown = data.fixItems.find((item) => item.fix_id === "unknown-reach")?.raw_finding?.stage3_delivery?.priority_factors;
+  const persistedZero = data.fixItems.find((item) => item.fix_id === "zero-reach")?.raw_finding?.stage3_delivery?.priority_factors;
+  assert.equal(persistedUnknown?.reach, null);
+  assert.equal(persistedUnknown?.priority_factor_score, null);
+  assert.equal(persistedZero?.reach, 0);
+  assert.equal(persistedZero?.priority_factor_score, 0);
+
+  const customer = buildCustomerProjection({ ...data, fullAccess: true, authorityVerified: true });
+  assert.deepEqual(customer.fixItems.map((item) => item.fix_id), delivery.displayed_fix_ids);
+  assert.equal(customer.fixItems.length, 36);
+  assert.equal(customer.fixItems[0].fix_id, "zz-soft404");
+  const cards = buildRepairCards(customer.fixItems);
+  assert.equal(cards.length, 36);
+  assert.equal(cards[0].priorityFactors.impact, 5);
+
+  const exported = buildScanHandoff({ scanRecord: customer.run, cards, healthScore: customer.run.health_score });
+  assert.deepEqual(exported, envelope.review.stage3_handoff_v2_source);
+  assert.equal(exported.fix_count, 40);
+
+  const previewPayload = buildCustomerPreviewPayload({
+    ...data,
+    ownerUserId: emitted.owner_id,
+    fullAuthorityProof: proof,
+  });
+  assert.deepEqual(
+    previewPayload.fixItems.map((item) => item.fix_id),
+    envelope.review.stage3_private_preview_source.findings.map((finding) => finding.rule_id),
+  );
 });

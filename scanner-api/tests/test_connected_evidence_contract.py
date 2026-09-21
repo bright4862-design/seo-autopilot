@@ -117,5 +117,45 @@ def test_validation_does_not_mutate_evidence():
 
 def test_record_must_be_json_serializable():
     evidence = _evidence(records=[{"bad": object()}])
-    with pytest.raises(ValueError, match="JSON-serializable"):
+    with pytest.raises(ValueError, match="strict JSON-serializable"):
+        validate_connected_evidence(evidence)
+
+
+def test_record_rejects_non_finite_json_number():
+    evidence = _evidence(records=[{"metric": float("nan")}])
+    with pytest.raises(ValueError, match="strict JSON-serializable"):
+        validate_connected_evidence(evidence)
+
+
+def test_metadata_mappings_must_be_strict_json_serializable():
+    evidence = _evidence()
+    evidence["coverage"]["bad"] = float("inf")
+    with pytest.raises(ValueError, match="coverage must be strict JSON-serializable"):
+        validate_connected_evidence(evidence)
+
+
+def test_provenance_requires_explicit_transport():
+    evidence = _evidence()
+    del evidence["provenance"]["transport"]
+    with pytest.raises(ValueError, match="provenance.transport"):
+        validate_connected_evidence(evidence)
+
+
+def test_unavailable_state_cannot_claim_observation_timestamp():
+    evidence = _evidence(state="not_verified")
+    evidence["observed_at"] = "2026-09-20T00:00:00Z"
+    with pytest.raises(ValueError, match="cannot claim observed_at"):
+        validate_connected_evidence(evidence)
+
+
+def test_stale_observation_must_predate_retrieval():
+    evidence = _evidence(state="stale", observed_at="2026-09-21T20:30:00Z")
+    with pytest.raises(ValueError, match="must predate retrieved_at"):
+        validate_connected_evidence(evidence)
+
+
+def test_metadata_mapping_size_is_bounded():
+    evidence = _evidence()
+    evidence["provenance"]["blob"] = "x" * 140_000
+    with pytest.raises(ValueError, match="provenance exceeds its size bound"):
         validate_connected_evidence(evidence)

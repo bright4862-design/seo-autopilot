@@ -1,15 +1,15 @@
 # Full blueprint progress
 
-Authoritative design: `docs/superpowers/specs/2026-09-19-full-scanner-blueprint-design.md`. The approved spec's exact B01–B28 semantics control over older handoff paraphrases. Detailed RED/GREEN history is retained in the executable plans under `docs/superpowers/plans/`; this file is the concise current state ledger.
+Authoritative design: `docs/superpowers/specs/2026-09-19-full-scanner-blueprint-design.md`. The approved spec's exact B01–B28 semantics control over older handoff paraphrases. Detailed RED/GREEN history is retained in executable plans under `docs/superpowers/plans/`; this file is the concise current state ledger.
 
 ## Release sequencing / freeze
 
-- `main` refreshed during the 2026-09-21 integration slice and remains `2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad`, containing the six V7 runtime/public-build changes and durable ownership-before-admission fix #308.
+- `main` refreshed during the 2026-09-21 serialized slice and remains `2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad`, containing the six V7 runtime/public-build changes and durable ownership-before-admission fix #308.
 - Current-main `docs/stage-one-evidence-acceptance.md` still records Stage-1 exact-source production publication and fresh non-owner acceptance as pending.
-- Worker candidate `fixlist-standard150-worker-00091-bdr` and cutover-pause run `35462502364` remain historical checkpoints only. No later-stage branch work authorizes promotion, admission mutation, a production scan, or a rebuild.
+- Worker candidate `fixlist-standard150-worker-00091-bdr` and cutover-pause run `35462502364` are historical checkpoints only. They are not permission to promote, mutate admission/queues/scheduler, launch a production scan, or rebuild.
 - Serialized later-stage integration remains on `agent/full-blueprint-stage2-coverage-b06-20260919`, PR #303.
-- Keep all later-stage work off `main` until the separate Stage-1 release operator records exact-source publication and fresh non-owner acceptance. After that, reconcile onto the then-current accepted `main` without reverting V7/#308 and require fresh exact integrated-head FixList CI before durable customer-path work.
-- No Premium/Grok enablement, schema/RLS broadening, secret rotation, provider fabrication, production deployment, worker promotion, queue/scheduler mutation, or competing live scan is permitted from this branch.
+- Keep all later-stage work off `main` until the separate Stage-1 release operator records exact-source publication and fresh non-owner acceptance. Then reconcile onto the accepted `main` without reverting V7/#308 and require exact integrated-head FixList CI before durable customer-path work.
+- No Premium/Grok enablement, schema/RLS broadening, secret rotation, fabricated provider connection, production deployment, worker promotion, or competing live scan is authorized from this branch.
 
 The labelled Stage-1 corpus remains explicitly synthetic: 14 cases / 55 assertions; frozen scanner revision `01ebe8e90df1e6bd`. Synthetic fixtures or historical summaries never satisfy B25's genuine provenance-labelled 30-site gate.
 
@@ -41,44 +41,46 @@ Existing isolated lanes were integrated serially, never merged directly to `main
 
 ### B19 — partial
 
-Canonical signed Review carries the exact versioned factor model **impact × reach × page value × confidence**, truthful unknown denominators, and versioned explanations. Repair leverage is not a substitute fourth factor or an extra fifth factor. RED `ac6ce27b3c492649537d80788f7b02b86ec39e5e` / CI `35501924104`; GREEN `7ba2df83d848fd643bb510374b7da5a18ac749f1` / CI `35501983203`. Durable V7 FixItem/card/export consumption remains release-gated.
+Canonical signed Review carries the exact versioned factor model **impact × reach × page value × confidence**, truthful unknown denominators, and versioned explanations. Repair leverage is not a substitute fourth factor. Signed-source RED/GREEN history is in the executable plans; durable V7 FixItem/card/export consumption remains release-gated.
+
+The 2026-09-21 numeric-evidence slice additionally proved malformed numeric strings, booleans, fractions where integers are required, NaN and infinities fail closed across B21/B22/B23. RED `e64279094167c175141c309113ae8a58b90d7044`; GREEN `70ad5bda63b59b9e887a7b88cf26e306933a6750`; exact-head FixList CI `35543922420` passed both jobs.
 
 ### B20 — partial
 
-Verified shared root-cause grouping requires explicit versioned same-cause evidence and trusted enclosing `scan_id == scan_run_id`; family similarity and repair-local identity alone cannot establish trust. Scan-isolation RED `6f1e2cc3ae519bbb494cab599579758f9efe427a` / CI `35503985665`; corrected through `56a9362ceb9ec1b06b88e26a0fd7db8fff97e92c` and `cbfd2b1f4a696c209dfab90e3981f42b0cbaa481`; CI `35504200573`; follow-up `5749166024` found no unresolved material issue. Durable customer projection remains release-gated.
+Verified shared root-cause grouping requires explicit versioned same-cause evidence and trusted enclosing `scan_id == scan_run_id`; family similarity and repair-local identity alone cannot establish trust. Scan-isolation correction is review-clean. Durable customer projection remains release-gated.
 
 ### B21 — partial
 
-Signed Review carries exact unique affected-page, observation, known-population and displayed-sample counts, with exact unions before sampling and all eligible B19 candidates ranked before presentation truncation. Known numeric zero stays known; unknown composite priority cannot borrow impact. Stable checkpoint `7236c36cd65fe441a9a90c6a52db9a6c2342125a`, CI `35513093636`; follow-up `5750062094` clean. Durable persistence/card/export proof remains open.
+Signed Review carries exact unique affected-page, observation, known-population and displayed-sample counts, with exact unions before sampling and all eligible B19 candidates ranked before presentation truncation. Known numeric zero stays known; unknown composite priority cannot borrow impact. Durable persistence/card/export proof remains open.
 
-### B22 — partial; latest preview projection privacy correction GREEN
+### B22 — partial
 
-The signed evidence-led preview source requires verified evidence and trusted exact identity, prefers verified impact-4/5 findings with a two-item cap, otherwise exactly one best verified fallback, and emits controller-owned sufficient-coverage wording only when coverage is explicitly sufficient. Arbitrary coverage prose and private producer evidence are excluded from signed/customer preview boundaries.
-
-Prior hardening includes completion-Review positive allowlisting, authority fail-closed behavior, and malformed `coverage_assessment` shape rejection. The newest serialized slice found a separate type-hygiene defect in the final B22 customer projection:
-
-- **RED `b58478e456bc67bef293d8d84223e896201891bc`, FixList CI `35540737270`:** `scanner-api/tests/test_stage3_preview_projection_privacy.py` injected a private URL/sentinel inside dict/list values for allowlisted `rule_id`, `title`, and `evidence_summary`. The scanner suite failed exactly the new behavior: `1 failed, 2049 passed, 18 skipped`; root regressions were `115 passed`. The separate lint/typecheck/generated-release-contract/frontend-contract/build job passed. The failure diff proved structured values crossed the preview projection unchanged.
-- **GREEN `c5cab5b7ef437c1fa847b8cc28558fb6ca4c4af5`, exact-head FixList CI `35541044424`:** `_preview_projection()` now routes those customer text fields through `_preview_text()`; only real strings survive and structured/non-string producer values fail closed to `None`. Both CI jobs passed. Root regressions: `115 passed`; scanner-api: `2050 passed, 18 skipped`; both new privacy/type regressions passed; Stage-1 corpus remained `provenance=synthetic`, 14 cases / 55 assertions, `full_30_site_gate=not_assessed`; frozen revision `01ebe8e90df1e6bd` matched; production scanner image `sha256:deef044ec3e1a2c025d3e741bbed5d78bda57d5ceb8bd9d7199bd32efa65e37a`; lint, typecheck, generated release-contract verification, frontend contract tests and production build all passed.
-
-Detailed newest checkpoint: `docs/superpowers/plans/2026-09-21-stage3-b22-preview-projection-type-fail-closed.md`.
-
-B22 is **not complete**. A genuinely fresh independent review of the corrected shared B22/B24 boundary is still required. The current CodeRabbit summary says automatic review is skipped for this repository; a skipped review is not approval. After Stage-1 release acceptance, the real V7 exact-owner/exact-scan persistence/read/reload/history/preview/card/export seam must also be proven on reconciled accepted-main source.
+The signed evidence-led preview source requires verified evidence and trusted exact identity, prefers verified impact-4/5 findings with a two-item cap, otherwise exactly one best verified fallback, and emits controller-owned sufficient-coverage wording only when coverage is explicitly sufficient. Completion-HMAC coverage privacy, authority fail-closed behavior, malformed coverage shape, structured preview-text rejection and malformed numeric evidence are GREEN. A genuinely fresh independent review and durable exact-owner/exact-scan V7 preview proof remain open.
 
 ### B23 — partial
 
-Only explicit versioned verified B20 root-cause evidence may contribute a documented score cap. Conflicts, unverified/cross-scan evidence fail closed, and existing stricter access/sample/incomplete ceilings remain authoritative. Executable GREEN `23d28ddee804e9c20db4136f06aab879685d1942` / CI `35514416069`; stable checkpoint `4ee24691f46721ffe8112bb435f278e5dd810721` / CI `35514613656`; focused review `5750230877` found no unresolved material defect. Durable customer-visible adjusted-score persistence/card/export consumption remains open.
+Only explicit versioned verified B20 root-cause evidence may contribute a documented score cap. Conflicts, unverified/cross-scan evidence fail closed, and existing stricter access/sample/incomplete ceilings remain authoritative. Malformed numeric caps now fail closed without coercion. Durable customer-visible adjusted-score persistence/card/export consumption remains open.
 
-### B24 — partial
+### B24 — partial; latest customer-safe handoff projection correction GREEN
 
-Signed handoff-v2 source requires trusted exact scan identity and accepts root-cause identity only from exact-scan verified B20 groups. It carries family IDs, B19 factors, B21 counts, evidenced indexable counts, evidence refs, verification/dependency/vendor metadata and scanner UA; ambiguous mapping fails closed; historical v1 reader compatibility remains preserved. `suppressed_findings` is included only when `operator_authorized is True` literally; truthy non-booleans fail closed. Durable V7 persistence/read/customer/operator/export proof and the same fresh independent review remain open.
+Signed handoff-v2 source requires trusted exact scan identity and accepts root-cause identity only from exact-scan verified B20 groups. It carries family IDs, B19 factors, B21 counts, evidenced indexable counts, evidence refs, verification/dependency/vendor metadata and scanner UA; historical v1 reader compatibility remains preserved. `suppressed_findings` is included only when `operator_authorized is True` literally.
+
+Fresh inspection found the signed handoff serializer still deep-copied or passed through structured values under allowed keys and arbitrary extra keys inside `scan_identity` / nested `priority_factors`.
+
+- **RED `083e3a0c1a649be8162c40ee0d85f6ed0c66773c`, FixList CI `35546672358`:** new `scanner-api/tests/test_stage3_b24_handoff_projection_privacy.py` proved the defect. Root regressions were `115 passed`; scanner-api was `2 failed, 2071 passed, 18 skipped`. One failure showed `scan_identity.operator_debug` reaching the customer handoff; the other showed malformed string numeric factor evidence surviving unchanged. The independent lint/typecheck/generated-release-contract/frontend-contract/build job passed.
+- **GREEN `ef0204b9a7851a53c040b334f99e1e541097d4b3`, exact-head FixList CI `35546802039`:** B24 now positive-allowlists scan identity and the exact public B19 factor schema, type-projects customer text fields, uses strict finite numeric/integer evidence rules, filters explanation items to strings, and drops unknown operator/debug keys. Root regressions: `115 passed`; scanner-api: `2073 passed, 18 skipped`; synthetic corpus: 14 cases / 55 assertions with `full_30_site_gate=not_assessed`; frozen revision `01ebe8e90df1e6bd` matched; production scanner image `sha256:9747d4e93d14e915ee07e4e86139fad22b7d7f8c7a2fd26185602a864f730a81`; lint, typecheck, generated release-contract verification, frontend contracts and production build passed.
+
+Detailed checkpoint: `docs/superpowers/plans/2026-09-21-stage3-b24-handoff-projection-privacy.md`.
+
+B24 is **not complete**. Durable V7 persistence/read/customer/operator/export proof and a genuinely fresh independent review of the corrected shared B22/B24 privacy boundary remain open.
 
 ## Stage 3 current gate
 
-Stage 3 is **not complete**. Latest executable GREEN is `c5cab5b7ef437c1fa847b8cc28558fb6ca4c4af5`, exact-head FixList CI `35541044424`. The current documentation/checkpoint commits must themselves be certified by exact-head FixList CI before this run ends.
+Stage 3 is **not complete**. Latest executable GREEN is `ef0204b9a7851a53c040b334f99e1e541097d4b3`, exact-head FixList CI `35546802039`. The final persisted documentation/checkpoint branch head from this run must itself receive exact-head FixList CI before the run is closed.
 
 Open gates:
 
-1. one genuinely fresh independent review of the latest corrected B22/B24 shared authority/privacy boundary; a skipped/requested/failed automated review is not approval;
+1. one genuinely fresh independent review of the latest corrected B22/B24 shared authority/privacy boundary; CodeRabbit automatic-review skip is not approval;
 2. separate Stage-1 operator records exact-source publication and fresh non-owner acceptance;
 3. reconcile this branch onto then-current accepted `main` without reverting V7/#308 and run exact integrated-head CI;
 4. prove real V7 B19/B21/B22/B23/B24 producer → signed authority → persisted rows → exact-owner/exact-scan read/reload/history → customer card/export/preview seams, including suppressed/operator privacy and historical-v1 compatibility.
@@ -97,7 +99,7 @@ Canonical isolated lane remains `agent/stage4-b25-b28-compat-release-20260919` a
 ## Next serialized action
 
 1. Certify the final persisted documentation/checkpoint head with exact-head FixList CI and record its result in PR #303 without mutating that certified source afterward.
-2. Refresh PR #303 review state. Require a genuinely fresh independent review of the corrected B22/B24 boundary; do not count CodeRabbit's automatic-review skip as approval.
+2. Refresh PR #303 review state. Require a genuinely fresh independent review of the corrected B22/B24 boundary; do not count an automatic-review skip as approval and do not repeatedly dispatch broken/skipped launchers.
 3. Keep V7 durable/customer mutation and shared Stage-4 integration held while Stage-1 publication/non-owner acceptance remains open.
 4. When that separate gate closes, reconcile onto accepted `main`, preserve V7/#308, run fresh exact integrated-head CI, and complete real B19–B24 persistence/customer seams before integrating the existing Stage-4 lane.
 5. Only then execute genuine B25 baseline/candidate and B28 live acceptance gates.

@@ -14,7 +14,7 @@ function acceptedVersions(source) {
 }
 
 for (const target of [
-  "base44/functions/getCustomerScanResultV6/entry.ts",
+  "base44/functions/getCustomerScanResultV7/entry.ts",
   "base44/functions/grokChat/index.ts",
 ]) {
   test(`${target} retains every historical seal plus the current identity seal`, () => {
@@ -27,8 +27,8 @@ for (const target of [
   });
 }
 
-test("customer V6 reader fail-closes before reconstructing an unaccepted seal", () => {
-  const source = fs.readFileSync("base44/functions/getCustomerScanResultV6/entry.ts", "utf8");
+test("customer V7 reader fail-closes before reconstructing an unaccepted seal", () => {
+  const source = fs.readFileSync("base44/functions/getCustomerScanResultV7/entry.ts", "utf8");
   assert.match(source, /!ACCEPTED_AUTHORITY_VERSIONS\.has\(cleanText\(run\.authority_seal_version, 160\)\)/);
 });
 

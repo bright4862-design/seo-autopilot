@@ -183,6 +183,13 @@ def main() -> int:
     }
     (args.output_dir / "pair-metadata.json").write_bytes(canonical_json(pair))
 
+    if baseline.get("capture_status") != "completed":
+        print(f"::error::baseline capture failed: {baseline.get('capture_status')}", file=sys.stderr)
+        return 3
+    if candidate.get("capture_status") != "completed":
+        print(f"::error::candidate capture failed: {candidate.get('capture_status')}", file=sys.stderr)
+        return 3
+
     if len(baseline.get("release_fingerprint", "")) != 16:
         print("::error::baseline release fingerprint is missing or invalid", file=sys.stderr)
         return 2

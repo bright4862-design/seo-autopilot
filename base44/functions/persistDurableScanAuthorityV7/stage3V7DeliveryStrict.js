@@ -5,6 +5,7 @@ import {
 import { PUBLISHED_REVIEW_ATTESTATION_VERSION } from "./publishedRepairEvidence.js";
 
 export const STAGE3_AUTHORITY_VERSION = "standard_review_snapshot_hmac_stage3_delivery_v1";
+export const STAGE3_AUTHORITY_CLAIM_VERSION = "stage3_authority_claim_v1";
 export const STAGE3_V7_DELIVERY_VERSION = "stage3_v7_delivery_v1";
 export const STAGE3_PRIORITY_VERSION = "repair_priority_v3_four_factor_v1";
 export const STAGE3_DELIVERY_SOURCE_VERSION = "stage3_delivery_v1_rank_before_truncate";
@@ -51,6 +52,7 @@ function textArray(value, limit, itemLimit = 2_000) {
 
 function stage3Attempted(review) {
   return [
+    "stage3_authority_claim",
     "stage3_delivery",
     "stage3_private_preview_source",
     "stage3_health_score_decision",
@@ -100,6 +102,20 @@ function normalizePriorityFactors(value) {
   };
   if ([output.impact_reason, output.reach_state, output.page_value_state, output.page_value_role, output.page_value_source, output.confidence_state, output.score_state, output.technical_base_severity, output.technical_severity_source].some((item) => item === null)) return null;
   return output;
+}
+
+function normalizeAuthorityClaim(value, scanId) {
+  const source = plainObject(value);
+  if (!source || cleanText(source.version, 120) !== STAGE3_AUTHORITY_CLAIM_VERSION) return null;
+  if (!scanId || cleanText(source.scan_id, 160) !== scanId) return null;
+  if (cleanText(source.delivery_version, 120) !== STAGE3_DELIVERY_SOURCE_VERSION) return null;
+  if (cleanText(source.score_version, 120) !== STAGE3_SCORE_CAP_VERSION) return null;
+  return {
+    version: STAGE3_AUTHORITY_CLAIM_VERSION,
+    scan_id: scanId,
+    delivery_version: STAGE3_DELIVERY_SOURCE_VERSION,
+    score_version: STAGE3_SCORE_CAP_VERSION,
+  };
 }
 
 function normalizeCounts(value) {
@@ -327,18 +343,22 @@ function normalizeStage3Sources(review, snapshot) {
     if (!id || !canonicalIds.has(id) || perFix.has(id) || !factors || !counts) return null;
     perFix.set(id, { version: STAGE3_V7_DELIVERY_VERSION, priority_factors: factors, counts });
   }
+  const claim = normalizeAuthorityClaim(review?.stage3_authority_claim, snapshot.scan_id);
   const delivery = normalizeDelivery(review?.stage3_delivery, canonicalIds);
-  const preview = normalizePreview(review?.stage3_private_preview_source, snapshot.scan_id, canonicalIds);
   const decision = normalizeScoreDecision(review?.stage3_health_score_decision);
-  const handoff = normalizeHandoff(review?.stage3_handoff_v2_source, snapshot.scan_id, canonicalIds);
-  if (!delivery || !preview || !decision || !handoff) return null;
+  const previewAttempted = review?.stage3_private_preview_source !== undefined;
+  const handoffAttempted = review?.stage3_handoff_v2_source !== undefined;
+  const preview = previewAttempted ? normalizePreview(review.stage3_private_preview_source, snapshot.scan_id, canonicalIds) : null;
+  const handoff = handoffAttempted ? normalizeHandoff(review.stage3_handoff_v2_source, snapshot.scan_id, canonicalIds) : null;
+  if (!claim || !delivery || !decision || (previewAttempted && !preview) || (handoffAttempted && !handoff)) return null;
   return {
     capsule: {
       version: STAGE3_V7_DELIVERY_VERSION,
+      authority_claim: claim,
       delivery,
-      private_preview_source: preview,
+      ...(preview ? { private_preview_source: preview } : {}),
       health_score_decision: decision,
-      handoff_v2_source: handoff,
+      ...(handoff ? { handoff_v2_source: handoff } : {}),
     },
     perFix,
   };
@@ -385,10 +405,11 @@ function persistedReviewForStage3(run, fixItems) {
   const capsule = plainObject(explanation?.stage3_delivery);
   if (!capsule) return null;
   return {
+    stage3_authority_claim: capsule.authority_claim,
     stage3_delivery: capsule.delivery,
-    stage3_private_preview_source: capsule.private_preview_source,
+    ...(capsule.private_preview_source ? { stage3_private_preview_source: capsule.private_preview_source } : {}),
     stage3_health_score_decision: capsule.health_score_decision,
-    stage3_handoff_v2_source: capsule.handoff_v2_source,
+    ...(capsule.handoff_v2_source ? { stage3_handoff_v2_source: capsule.handoff_v2_source } : {}),
     canonical_repairs: (Array.isArray(fixItems) ? fixItems : []).map((item) => {
       const raw = plainObject(item?.raw_finding) || {};
       const perFix = plainObject(raw.stage3_delivery) || {};
@@ -430,6 +451,7 @@ export function stage3CustomerFields(run, item) {
 export function stage3PreviewFixIds(run) {
   if (run?.authority_seal_version !== STAGE3_AUTHORITY_VERSION) return null;
   const preview = plainObject(plainObject(run?.health_score_explanation)?.stage3_delivery)?.private_preview_source;
+  if (preview === undefined) return [];
   if (!plainObject(preview) || preview.version !== STAGE3_PREVIEW_SOURCE_VERSION || preview.scan_id !== run?.id) return null;
   return Array.isArray(preview.findings) ? preview.findings.map((finding) => cleanText(finding?.rule_id, 160)).filter(Boolean) : null;
 }

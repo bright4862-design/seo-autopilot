@@ -905,30 +905,30 @@ function ScanExportControls({
 
   function handleDownloadJson() {
     setFailure("");
-    const handoff = buildHandoff();
     try {
+      const handoff = buildHandoff();
       downloadTextFile(serializeScanHandoff(handoff), scanHandoffFilename(scanRecord), "application/json;charset=utf-8");
+      recordExport("json", handoff.fix_count);
     } catch (error) {
       console.warn("Could not download the FixList export.", error);
       setFailure("That download could not start. Copying it to your clipboard still works.");
       return;
     }
-    recordExport("json", handoff.fix_count);
   }
 
   async function handleCopyJson() {
     setFailure("");
-    const handoff = buildHandoff();
     try {
+      const handoff = buildHandoff();
       await navigator.clipboard.writeText(serializeScanHandoff(handoff));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+      recordExport("json_clipboard", handoff.fix_count);
     } catch (error) {
       console.warn("Could not copy the FixList export.", error);
       setFailure("Your browser blocked the clipboard. Use the download instead.");
       return;
     }
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1800);
-    recordExport("json_clipboard", handoff.fix_count);
   }
 
   async function handleDownloadPdf() {

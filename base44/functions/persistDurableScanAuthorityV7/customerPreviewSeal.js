@@ -43,8 +43,16 @@ export function buildCustomerPreviewPayload(args = {}) {
   if (!hasPersistedStage3Delivery(args?.run)) {
     return legacy.buildCustomerPreviewPayload(args);
   }
-  return legacy.buildCustomerPreviewPayload({
+  const selected = stage3PreviewItems(args.run, args.fixItems);
+  const payload = legacy.buildCustomerPreviewPayload({
     ...args,
-    fixItems: stage3PreviewItems(args.run, args.fixItems),
+    fixItems: selected,
   });
+  if (!selected.length) return payload;
+  const order = new Map(selected.map((item, index) => [String(item?.fix_id || "").trim(), index]));
+  payload.fixItems = [...payload.fixItems].sort(
+    (left, right) => (order.get(String(left?.fix_id || "").trim()) ?? Number.MAX_SAFE_INTEGER)
+      - (order.get(String(right?.fix_id || "").trim()) ?? Number.MAX_SAFE_INTEGER),
+  );
+  return payload;
 }

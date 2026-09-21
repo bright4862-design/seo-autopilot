@@ -194,6 +194,100 @@ test("B27 unsigned Stage-3 markers cannot upgrade an otherwise valid historical 
   assert.equal(await verifyAuthoritySeal(injectedSnapshot, emitted.secret, legacyProof, webcrypto), false);
 });
 
+
+test("B19-B23 exact-scan authority survives when B22/B24 delivery sources are legitimately absent", async () => {
+  const emitted = signedPythonCompletion();
+  const review = structuredClone(emitted.envelope.review);
+  assert.equal(review.stage3_authority_claim?.version, "stage3_authority_claim_v1");
+  delete review.stage3_private_preview_source;
+  delete review.stage3_handoff_v2_source;
+
+  const snapshot = buildAuthoritySnapshot(authorityOptions({ ...emitted.envelope, review }, emitted));
+  assert.equal(snapshot.version, PUBLISHED_AUTHORITY_VERSION);
+  assert.equal(snapshot.scan.health_score_explanation.stage3_delivery.authority_claim.scan_id, SCAN_ID);
+  assert.equal(snapshot.scan.health_score_explanation.stage3_delivery.private_preview_source, undefined);
+  assert.equal(snapshot.scan.health_score_explanation.stage3_delivery.handoff_v2_source, undefined);
+  assert.equal(snapshot.scan.health_score, review.stage3_health_score_decision.adjusted_health_score);
+
+  const proof = await createAuthoritySeal(snapshot, emitted.secret, webcrypto);
+  const rows = authorityRowsFromSnapshot(snapshot, { fixListId: "fix-authority-only", ownerUserId: OWNER_ID, proof });
+  const data = {
+    run: { ...rows.scanRun, id: SCAN_ID, project_id: PROJECT_ID },
+    fixList: { ...rows.fixList, id: "fix-authority-only" },
+    fixItems: rows.fixItems.map((item, index) => ({ ...item, id: "authority-only-" + index })),
+    userId: OWNER_ID,
+  };
+  const customer = buildCustomerProjection({ ...data, fullAccess: true, authorityVerified: true });
+  assert.deepEqual(customer.run.stage3_health_score_decision, review.stage3_health_score_decision);
+  assert.equal(customer.run.stage3_handoff_v2, undefined);
+  assert.ok(customer.fixItems.every((item) => item.stage3_priority_factors?.version));
+  assert.ok(customer.fixItems.every((item) => item.stage3_counts));
+
+  const previewPayload = buildCustomerPreviewPayload({
+    ...data,
+    ownerUserId: OWNER_ID,
+    fullAuthorityProof: proof,
+  });
+  assert.deepEqual(previewPayload.fixItems, [], "no signed B22 source means no unpaid findings are exposed");
+});
+
+test("B22 preview preserves the exact signed finding order instead of re-sorting by legacy rank", async () => {
+  const emitted = runPythonFixture("tests/helpers/emitStage3RankedCompletion.py");
+  const envelope = emitted.envelope;
+  const snapshot = buildAuthoritySnapshot({
+    scan: envelope.scan,
+    review: envelope.review,
+    identity: {
+      scan_id: emitted.scan_id,
+      project_id: emitted.project_id,
+      normalized_domain: "example.com",
+    },
+    userId: emitted.owner_id,
+    now: SEALED_AT,
+    identityVersion: emitted.identity_version,
+  });
+  const proof = await createAuthoritySeal(snapshot, emitted.secret, webcrypto);
+  const rows = authorityRowsFromSnapshot(snapshot, {
+    fixListId: "fix-preview-order",
+    ownerUserId: emitted.owner_id,
+    proof,
+  });
+  assert.ok(rows.fixItems.length >= 2);
+  const run = { ...rows.scanRun, id: emitted.scan_id, project_id: emitted.project_id };
+  const first = rows.fixItems[0].fix_id;
+  const second = rows.fixItems[1].fix_id;
+  run.health_score_explanation = structuredClone(run.health_score_explanation);
+  run.health_score_explanation.stage3_delivery.private_preview_source.findings = [
+    { rule_id: second, title: "Second", impact: 5, evidence_summary: null },
+    { rule_id: first, title: "First", impact: 4, evidence_summary: null },
+  ];
+  const fixItems = rows.fixItems.map((item, index) => ({
+    ...item,
+    id: "preview-order-" + index,
+    canonical_action_rank: index + 1,
+    action_priority_score: 100 - index,
+  }));
+  const payload = buildCustomerPreviewPayload({
+    run,
+    fixList: { ...rows.fixList, id: "fix-preview-order" },
+    fixItems,
+    ownerUserId: emitted.owner_id,
+    fullAuthorityProof: proof,
+  });
+  assert.deepEqual(payload.fixItems.map((item) => item.fix_id), [second, first]);
+});
+
+test("B24 a claimed but malformed Stage3 v2 handoff fails closed instead of silently exporting historical v1", async () => {
+  const { data } = await liveWriterRows();
+  const customer = buildCustomerProjection({ ...data, fullAccess: true, authorityVerified: true });
+  const malformed = structuredClone(customer.run);
+  malformed.stage3_handoff_v2 = { handoff_version: "fixlist_handoff_v2", scan: { scan_id: malformed.id } };
+  assert.throws(
+    () => buildScanHandoff({ scanRecord: malformed, cards: [], healthScore: malformed.health_score }),
+    /Stage3 handoff/i,
+  );
+});
+
 test("B19/B21 >36 candidates rank before truncation and preserve known zero versus unknown through signed V7 customer delivery", async () => {
   const emitted = runPythonFixture("tests/helpers/emitStage3RankedCompletion.py");
   const { envelope } = emitted;

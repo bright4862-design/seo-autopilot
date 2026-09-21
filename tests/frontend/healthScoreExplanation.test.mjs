@@ -179,6 +179,78 @@ test("a record with no score at all is not legacy, it is unscored", () => {
   assert.equal(view.legacyNote, "");
 });
 
+
+test("a verified Stage3 root-cause cap explains the adjusted score without recomputing it", () => {
+  const view = healthScoreExplanation({
+    health_score: 72,
+    health_score_explanation: { ...SEALED, final_score: 88, total_deduction: 12, deductions: [{ category: "Search visibility", points: 12 }] },
+    stage3_health_score_decision: {
+      version: "stage3_health_score_caps_v1_verified_root_cause",
+      state: "decided",
+      base_health_score: 88,
+      coverage_state: "sufficient",
+      existing_score_ceiling: null,
+      root_cause_score_ceiling: 72,
+      effective_score_ceiling: 72,
+      adjusted_health_score: 72,
+      applied_root_cause_caps: [{ root_cause_id: "root:template", score_cap: 72 }],
+      ignored_root_cause_caps: [],
+    },
+  });
+  assert.equal(view.available, true);
+  assert.equal(view.finalScore, 72);
+  assert.match(view.ceilingNote, /same underlying cause|root cause/i);
+});
+
+test("a stricter existing evidence ceiling keeps its legacy explanation ahead of a looser root-cause cap", () => {
+  const view = healthScoreExplanation({
+    health_score: 55,
+    health_score_explanation: {
+      ...SEALED,
+      final_score: 55,
+      total_deduction: 45,
+      deductions: [{ category: "Search visibility", points: 45 }],
+      applied_ceiling: 55,
+      ceiling_reason: "sample_size",
+    },
+    stage3_health_score_decision: {
+      version: "stage3_health_score_caps_v1_verified_root_cause",
+      state: "decided",
+      base_health_score: 55,
+      coverage_state: "limited_coverage",
+      existing_score_ceiling: 55,
+      root_cause_score_ceiling: 72,
+      effective_score_ceiling: 55,
+      adjusted_health_score: 55,
+      applied_root_cause_caps: [{ root_cause_id: "root:template", score_cap: 72 }],
+      ignored_root_cause_caps: [],
+    },
+  });
+  assert.equal(view.available, true);
+  assert.match(view.ceilingNote, /sample|pages we checked/i);
+  assert.doesNotMatch(view.ceilingNote, /root cause|underlying cause/i);
+});
+
+test("a malformed Stage3 score decision is refused rather than used to explain a mismatched score", () => {
+  const view = healthScoreExplanation({
+    health_score: 72,
+    health_score_explanation: { ...SEALED, final_score: 88, total_deduction: 12, deductions: [{ category: "Search visibility", points: 12 }] },
+    stage3_health_score_decision: {
+      version: "stage3_health_score_caps_v1_verified_root_cause",
+      state: "decided",
+      base_health_score: 88,
+      coverage_state: "sufficient",
+      existing_score_ceiling: null,
+      root_cause_score_ceiling: 72,
+      effective_score_ceiling: 72,
+      adjusted_health_score: 73,
+      applied_root_cause_caps: [],
+      ignored_root_cause_caps: [],
+    },
+  });
+  assert.equal(view.available, false);
+});
+
 test("the reader never recomputes a score of its own", () => {
   const source = fs.readFileSync(new URL("../../src/lib/healthScoreExplanation.js", import.meta.url), "utf8");
   assert.doesNotMatch(source, /100 - |penalt|severity|bucket_caps/i,

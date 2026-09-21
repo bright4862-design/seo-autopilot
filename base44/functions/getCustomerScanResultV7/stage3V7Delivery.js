@@ -5,6 +5,7 @@ import {
 import { PUBLISHED_REVIEW_ATTESTATION_VERSION } from "./publishedRepairEvidence.js";
 
 export const STAGE3_AUTHORITY_VERSION = "standard_review_snapshot_hmac_stage3_delivery_v1";
+export const STAGE3_AUTHORITY_CLAIM_VERSION = "stage3_authority_claim_v1";
 export const STAGE3_V7_DELIVERY_VERSION = "stage3_v7_delivery_v1";
 export const STAGE3_PRIORITY_VERSION = "repair_priority_v3_four_factor_v1";
 export const STAGE3_PREVIEW_SOURCE_VERSION = "stage3_preview_source_v1_verified_evidence";
@@ -77,13 +78,14 @@ function validCapsule(run, fixItems) {
   const explanation = object(run?.health_score_explanation);
   const capsule = object(explanation?.stage3_delivery);
   if (!capsule || capsule.version !== STAGE3_V7_DELIVERY_VERSION) return null;
-  const preview = object(capsule.private_preview_source);
+  const claim = object(capsule.authority_claim);
+  const preview = capsule.private_preview_source === undefined ? null : object(capsule.private_preview_source);
   const decision = object(capsule.health_score_decision);
-  const handoff = object(capsule.handoff_v2_source);
-  if (!preview || preview.version !== STAGE3_PREVIEW_SOURCE_VERSION || text(preview.scan_id, 160) !== text(run?.id, 160) || preview.entitlement_state !== "requires_authenticated_customer_gate") return null;
-  if (!Array.isArray(preview.findings) || preview.findings.length > 2) return null;
+  const handoff = capsule.handoff_v2_source === undefined ? null : object(capsule.handoff_v2_source);
+  if (!claim || claim.version !== STAGE3_AUTHORITY_CLAIM_VERSION || text(claim.scan_id, 160) !== text(run?.id, 160) || claim.delivery_version !== "stage3_delivery_v1_rank_before_truncate" || claim.score_version !== STAGE3_SCORE_CAP_VERSION) return null;
+  if (capsule.private_preview_source !== undefined && (!preview || preview.version !== STAGE3_PREVIEW_SOURCE_VERSION || text(preview.scan_id, 160) !== text(run?.id, 160) || preview.entitlement_state !== "requires_authenticated_customer_gate" || !Array.isArray(preview.findings) || preview.findings.length > 2)) return null;
   if (!decision || decision.version !== STAGE3_SCORE_CAP_VERSION || decision.state !== "decided" || !Number.isInteger(decision.adjusted_health_score) || decision.adjusted_health_score < 0 || decision.adjusted_health_score > 100 || decision.adjusted_health_score !== run?.health_score) return null;
-  if (!handoff || handoff.handoff_version !== STAGE3_HANDOFF_VERSION || handoff.suppressed_findings !== undefined || !object(handoff.scan) || text(handoff.scan.scan_id, 160) !== text(run?.id, 160) || text(handoff.scan.scan_run_id, 160) !== text(run?.id, 160)) return null;
+  if (capsule.handoff_v2_source !== undefined && (!handoff || handoff.handoff_version !== STAGE3_HANDOFF_VERSION || handoff.suppressed_findings !== undefined || !object(handoff.scan) || text(handoff.scan.scan_id, 160) !== text(run?.id, 160) || text(handoff.scan.scan_run_id, 160) !== text(run?.id, 160))) return null;
   const ids = new Set();
   for (const item of Array.isArray(fixItems) ? fixItems : []) {
     const id = text(item?.fix_id, 160);
@@ -93,8 +95,8 @@ function validCapsule(run, fixItems) {
   }
   const delivery = validDelivery(capsule.delivery, ids);
   if (!delivery) return null;
-  if (preview.findings.some((finding) => !ids.has(text(finding?.rule_id, 160)))) return null;
-  if (!Array.isArray(handoff.fixes) || handoff.fixes.length !== handoff.fix_count || handoff.fixes.some((fix) => !ids.has(text(fix?.rule_id, 160)) || fix?.suppressed_findings !== undefined)) return null;
+  if (preview && preview.findings.some((finding) => !ids.has(text(finding?.rule_id, 160)))) return null;
+  if (handoff && (!Array.isArray(handoff.fixes) || handoff.fixes.length !== handoff.fix_count || handoff.fixes.some((fix) => !ids.has(text(fix?.rule_id, 160)) || fix?.suppressed_findings !== undefined))) return null;
   return { ...capsule, delivery };
 }
 
@@ -132,7 +134,7 @@ export function buildCustomerProjectionStage3(args) {
   const capsule = validCapsule(args.run, args.fixItems);
   if (!capsule) throw new Error("Verified Stage3 customer payload is invalid");
   projection.run.stage3_health_score_decision = capsule.health_score_decision;
-  projection.run.stage3_handoff_v2 = capsule.handoff_v2_source;
+  if (capsule.handoff_v2_source) projection.run.stage3_handoff_v2 = capsule.handoff_v2_source;
   const rowById = new Map((Array.isArray(args.fixItems) ? args.fixItems : []).map((item) => [text(item?.fix_id, 160), item]));
   const projectedById = new Map(projection.fixItems.map((item) => [text(item?.fix_id, 160), item]));
   projection.fixItems = capsule.delivery.displayed_fix_ids.map((id) => {

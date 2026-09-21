@@ -1,7 +1,7 @@
 """Pure, shadow-only helpers for adaptive crawl planning and selection.
 
 Nothing in this module performs network I/O or changes the production Standard 150
-budget.  The serialized integrator may later wire these helpers behind an opt-in
+budget. The serialized integrator may later wire these helpers behind an opt-in
 next-generation mode.
 """
 
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
+
 from .sampling import MONEY_FAMILIES, is_trust_path, route_signature, select_balanced_urls
 
 ADAPTIVE_CRAWL_VERSION = "adaptive_crawl_v1_shadow"
@@ -16,6 +17,7 @@ ADAPTIVE_SCORE_VERSION = "adaptive_candidate_score_v1"
 ADAPTIVE_TELEMETRY_VERSION = "adaptive_tranche_yield_v1"
 ADAPTIVE_BENCHMARK_VERSION = "adaptive_benchmark_v1"
 STANDARD_150_TARGET = 150
+MAX_ADAPTIVE_TARGET = 1000
 DEFAULT_TRANCHE_TARGETS = (150, 500, 1000)
 
 
@@ -45,26 +47,44 @@ def _bounded_unit(value: Any) -> float | None:
     return max(0.0, min(1.0, number))
 
 
+def _normalized_targets(candidate_targets: Sequence[int]) -> list[int]:
+    return sorted(
+        {
+            min(MAX_ADAPTIVE_TARGET, int(target))
+            for target in candidate_targets
+            if int(target) > 0
+        }
+    )
+
+
 def plan_tranche_targets(
     discovered_urls: int,
     *,
-    ceiling: int = 1000,
+    ceiling: int = MAX_ADAPTIVE_TARGET,
     candidate_targets: Sequence[int] = DEFAULT_TRANCHE_TARGETS,
 ) -> dict[str, Any]:
-    """Return bounded assessment targets without claiming discovery is complete."""
+    """Return bounded assessment targets without claiming discovery is complete.
+
+    The caller may request a smaller ceiling, but this pure lane deliberately cannot
+    authorize more than ``MAX_ADAPTIVE_TARGET`` pages. A future higher cap would need
+    an explicit contract/version change plus serialized-integrator budget review.
+    """
     discovered = max(0, int(discovered_urls or 0))
-    hard_ceiling = max(0, int(ceiling or 0))
+    requested_ceiling = max(0, int(ceiling or 0))
+    hard_ceiling = min(requested_ceiling, MAX_ADAPTIVE_TARGET)
     bound = min(discovered, hard_ceiling)
+    normalized = _normalized_targets(candidate_targets)
     if bound <= 0:
         targets: list[int] = []
     else:
-        targets = sorted({min(bound, max(1, int(target))) for target in candidate_targets if int(target) > 0})
+        targets = sorted({min(bound, target) for target in normalized if target > 0})
         if bound not in targets:
             targets.append(bound)
             targets.sort()
     return {
         "version": ADAPTIVE_CRAWL_VERSION,
         "discovered_urls": discovered,
+        "requested_ceiling": requested_ceiling,
         "assessment_ceiling": hard_ceiling,
         "targets": targets,
         "discovery_scope_complete": False,
@@ -135,7 +155,7 @@ def select_adaptive_urls(
 ) -> list[str]:
     """Preserve Standard 150 exactly, then greedily diversify later tranches."""
     ordered = _unique_urls(urls)
-    budget = max(0, min(len(ordered), int(target or 0)))
+    budget = max(0, min(len(ordered), int(target or 0), MAX_ADAPTIVE_TARGET))
     if budget <= 0:
         return []
 
@@ -219,10 +239,12 @@ def build_tranche_yield_telemetry(
     *,
     discovered_urls: int,
 ) -> dict[str, Any]:
-    """Describe marginal assessed-page yield; missing signals remain unknown."""
+    """Describe marginal assessed-page yield; missing/invalid signals remain unknown."""
     previous_assessed = max(0, int(previous.get("assessed_count") or 0))
     assessed = max(0, int(current.get("assessed_count") or 0))
+    discovered = max(0, int(discovered_urls or 0))
     pages_added = max(0, assessed - previous_assessed)
+    counts_valid = assessed >= previous_assessed and assessed <= discovered
     signal_keys = {
         "new_route_signatures": "route_signatures",
         "new_template_keys": "template_keys",
@@ -233,13 +255,19 @@ def build_tranche_yield_telemetry(
     }
     deltas = {name: _new_count(previous, current, key) for name, key in signal_keys.items()}
     rates = {f"{name}_per_100": _per_100(value, pages_added) for name, value in deltas.items()}
-    signal_state = "observed" if pages_added > 0 and all(value is not None for value in deltas.values()) else "insufficient_evidence"
+    if not counts_valid:
+        signal_state = "invalid_counts"
+    elif pages_added > 0 and all(value is not None for value in deltas.values()):
+        signal_state = "observed"
+    else:
+        signal_state = "insufficient_evidence"
     return {
         "version": ADAPTIVE_TELEMETRY_VERSION,
-        "discovered_urls": max(0, int(discovered_urls or 0)),
+        "discovered_urls": discovered,
         "previous_assessed_count": previous_assessed,
         "assessed_count": assessed,
         "pages_added": pages_added,
+        "counts_valid": counts_valid,
         "signal_state": signal_state,
         **deltas,
         **rates,
@@ -254,11 +282,25 @@ def continuation_decision(
     """Choose whether another bounded tranche is justified by observed novelty."""
     assessed = max(0, int(telemetry.get("assessed_count") or 0))
     discovered = max(0, int(telemetry.get("discovered_urls") or 0))
-    targets = sorted({int(target) for target in tranche_targets if int(target) > assessed})
-    next_target = min((target for target in targets if target <= discovered), default=None)
-    if next_target is None and discovered > assessed:
-        next_target = discovered
+    normalized_targets = _normalized_targets(tranche_targets)
+    max_target = max(normalized_targets, default=0)
 
+    if not normalized_targets:
+        return {
+            "version": ADAPTIVE_CRAWL_VERSION,
+            "decision": "hold",
+            "next_target": None,
+            "reason": "no_tranche_targets_configured",
+            "site_fully_understood": False,
+        }
+    if assessed >= max_target:
+        return {
+            "version": ADAPTIVE_CRAWL_VERSION,
+            "decision": "hold",
+            "next_target": None,
+            "reason": "adaptive_ceiling_reached",
+            "site_fully_understood": False,
+        }
     if discovered <= assessed:
         return {
             "version": ADAPTIVE_CRAWL_VERSION,
@@ -267,12 +309,26 @@ def continuation_decision(
             "reason": "all_currently_discovered_urls_assessed",
             "site_fully_understood": False,
         }
+
+    bounded_discovered = min(discovered, max_target)
+    next_target = min(
+        (target for target in normalized_targets if assessed < target <= bounded_discovered),
+        default=None,
+    )
+    if next_target is None and assessed < bounded_discovered:
+        next_target = bounded_discovered
+
     if telemetry.get("signal_state") != "observed":
+        reason = (
+            "invalid_tranche_counts"
+            if telemetry.get("signal_state") == "invalid_counts"
+            else "marginal_yield_signals_incomplete"
+        )
         return {
             "version": ADAPTIVE_CRAWL_VERSION,
             "decision": "insufficient_evidence",
             "next_target": next_target,
-            "reason": "marginal_yield_signals_incomplete",
+            "reason": reason,
             "site_fully_understood": False,
         }
 
@@ -302,6 +358,18 @@ def continuation_decision(
     }
 
 
+def _finding_set(
+    selected: Sequence[str],
+    finding_fingerprints_by_url: Mapping[str, Iterable[str]],
+) -> set[str]:
+    return {
+        str(fingerprint)
+        for url in selected
+        for fingerprint in finding_fingerprints_by_url.get(url, ())
+        if str(fingerprint)
+    }
+
+
 def _benchmark_summary(
     selected: Sequence[str],
     family_of: Callable[[str], str],
@@ -310,12 +378,7 @@ def _benchmark_summary(
     finding_fingerprints_by_url: Mapping[str, Iterable[str]],
     template_key_by_url: Mapping[str, str] | None,
 ) -> dict[str, Any]:
-    findings = {
-        str(fingerprint)
-        for url in selected
-        for fingerprint in finding_fingerprints_by_url.get(url, ())
-        if str(fingerprint)
-    }
+    findings = _finding_set(selected, finding_fingerprints_by_url)
     templates = {
         str((template_key_by_url or {}).get(url) or family_of(url) or "unknown")
         for url in selected
@@ -351,7 +414,7 @@ def benchmark_smart_500_vs_blind_1000(
         min(500, len(ordered)),
         metadata_by_url=metadata_by_url,
     )
-    blind = ordered[: min(1000, len(ordered))]
+    blind = ordered[: min(MAX_ADAPTIVE_TARGET, len(ordered))]
     smart_summary = _benchmark_summary(
         smart,
         family_of,
@@ -366,14 +429,29 @@ def benchmark_smart_500_vs_blind_1000(
         finding_fingerprints_by_url=finding_fingerprints_by_url,
         template_key_by_url=template_key_by_url,
     )
-    blind_findings = max(1, blind_summary["finding_fingerprints"])
+    smart_findings = _finding_set(smart, finding_fingerprints_by_url)
+    blind_findings = _finding_set(blind, finding_fingerprints_by_url)
+    shared_findings = smart_findings & blind_findings
+    blind_yield = float(blind_summary["finding_yield_per_100"])
+    efficiency_ratio = (
+        round(float(smart_summary["finding_yield_per_100"]) / blind_yield, 4)
+        if blind_yield > 0
+        else None
+    )
+    coverage_ratio = (
+        round(len(smart_findings) / len(blind_findings), 4)
+        if blind_findings
+        else None
+    )
     return {
         "version": ADAPTIVE_BENCHMARK_VERSION,
         "smart_500": smart_summary,
         "blind_1000": blind_summary,
-        "smart_finding_coverage_vs_blind": round(smart_summary["finding_fingerprints"] / blind_findings, 4),
-        "smart_efficiency_vs_blind": round(
-            smart_summary["finding_yield_per_100"] / max(0.0001, blind_summary["finding_yield_per_100"]),
-            4,
-        ),
+        "smart_finding_coverage_vs_blind": coverage_ratio,
+        "smart_efficiency_vs_blind": efficiency_ratio,
+        "finding_comparison_state": "observed" if blind_findings else "no_blind_findings",
+        "shared_finding_fingerprints": len(shared_findings),
+        "smart_only_finding_fingerprints": len(smart_findings - blind_findings),
+        "blind_only_finding_fingerprints": len(blind_findings - smart_findings),
+        "pages_saved_by_smart": max(0, len(blind) - len(smart)),
     }

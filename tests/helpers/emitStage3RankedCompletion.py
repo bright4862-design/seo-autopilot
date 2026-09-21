@@ -33,7 +33,15 @@ def page(url: str, *, family: str = "product_page", indexable: bool = True, role
     }
 
 
-def fix(fix_id: str, url: str, *, rule: str = "missing_meta_description", category: str = "meta_description", family: str = "product_page") -> dict:
+def fix(
+    fix_id: str,
+    url: str,
+    *,
+    rule: str = "missing_meta_description",
+    category: str = "meta_description",
+    family: str = "product_page",
+    indexable_affected: int = 1,
+) -> dict:
     return {
         "fix_id": fix_id,
         "rule": rule,
@@ -46,7 +54,7 @@ def fix(fix_id: str, url: str, *, rule: str = "missing_meta_description", catego
         "affected_observed": 1,
         "affected_eligible": 1,
         "checked_eligible": 1,
-        "indexable_affected": 1,
+        "indexable_affected": indexable_affected,
         "indexable_checked_eligible": 1,
         "confidence_score": 95,
         "verification_state": "verified",
@@ -78,7 +86,7 @@ def main() -> None:
 
     fixes = [fix(f"meta-{index:02d}", product_urls[index]) for index in range(37)]
     fixes.append(fix("zz-soft404", product_urls[37], rule="soft_404_active", category="correctness"))
-    fixes.append(fix("zero-reach", zero_url))
+    fixes.append(fix("zero-reach", zero_url, indexable_affected=0))
     fixes.append(fix("unknown-reach", unknown_url, family="standard"))
 
     review = {

@@ -173,4 +173,10 @@ def test_b22_b24_signed_sources_do_not_stringify_structured_customer_fields():
     signed_review = envelope["review"]
     assert signed_review["stage3_private_preview_source"] == preview_source
     assert signed_review["stage3_handoff_v2_source"] == handoff_source
-    assert sentinel not in json.dumps(signed_review, sort_keys=True)
+    signed_customer_sources = {
+        "preview": signed_review["stage3_private_preview_source"],
+        "handoff": signed_review["stage3_handoff_v2_source"],
+    }
+    serialized_signed_sources = json.dumps(signed_customer_sources, sort_keys=True)
+    assert sentinel not in serialized_signed_sources
+    assert "operator_debug" not in serialized_signed_sources

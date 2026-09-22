@@ -4,11 +4,13 @@ Issue: #325
 Draft PR: #332  
 Lane branch: `agent/nextgen-evidence-connectors-20260921`
 
+> **Historical slice note:** this file records the record-semantics boundary as it was introduced. It is not the current integration gate. The authoritative final validation sequence, exact-head pytest/`py_compile` commands, and current focused-test total live in `docs/nextgen/lane-d-evidence-connectors.md`. A serialized integrator must not stop at the boundary documented here.
+
 ## Purpose
 
 `connected_evidence_v1` already validates generic envelope shape/chronology and `connected_evidence_source_profile_v1` validates provider/source attribution. This additive slice introduces a third pure boundary, `connected_evidence_record_semantics_v1`, so structurally valid, correctly attributed envelopes can still fail closed when their normalized records are internally contradictory, spoof-prone, or semantically impossible.
 
-The new module is `scanner-api/app/connected_evidence_record_contract.py`. It performs no network I/O, authentication, OAuth mutation, provider calls, persistence, scoring, customer projection, `run_scan` wiring, release, deployment, or production work.
+The module is `scanner-api/app/connected_evidence_record_contract.py`. It performs no network I/O, authentication, OAuth mutation, provider calls, persistence, scoring, customer projection, `run_scan` wiring, release, deployment, or production work.
 
 ## Contract
 
@@ -21,6 +23,7 @@ Call `validate_connected_evidence_record_semantics(evidence)` only after normali
 - clicks/impressions must be non-negative integers;
 - clicks cannot exceed impressions;
 - CTR must be finite and within `0..1`;
+- when clicks, impressions and CTR are all present, CTR must agree with clicks/impressions;
 - average position must be finite and non-negative.
 
 ### Google URL Inspection
@@ -50,48 +53,27 @@ The existing source contract continues to prove that cited-page URLs are absolut
 - when a source is present, its host must be an exact/subdomain match for a registered AI-assistant domain and must agree with the assistant identity;
 - substring lookalikes such as `notchatgpt.example` are rejected;
 - arbitrary explicit assistant labels are rejected rather than being treated as AI traffic;
-- sessions/engaged sessions/users are non-negative integers and key events/revenue are finite/non-negative.
+- sessions/engaged sessions/users are non-negative integers and key events/revenue are finite/non-negative;
+- engaged sessions cannot exceed sessions when both are present.
 
 This is deliberately evidence-honest: recognized GA4 referral evidence proves observed referral traffic only. It does not prove all AI mentions/citations, and an arbitrary caller label cannot create verified AI-assistant provenance.
 
-## Verification
+## Historical slice verification
 
-New deterministic suite:
+`scanner-api/tests/test_connected_evidence_record_contract.py` contains the deterministic record-semantics regressions for this boundary. The slice was verified independently when introduced. Those results remain useful regression history but are not the current exact-head integration gate because later Lane-D boundaries compose additional coverage, property-scope, logical-record-identity, and snapshot-bundle semantics.
 
-- `scanner-api/tests/test_connected_evidence_record_contract.py`: **13 tests**.
+## Current serialized-integrator requirement
 
-Coverage includes non-mutation/versioning, GA4 lookalike-host rejection, arbitrary assistant rejection, known explicit assistant support, source/assistant mismatch, URL Inspection URL-collection/canonical/future-crawl-time checks, GSC impossible metrics, Bing kind/share contradictions, and duplicate row identities.
-
-A hermetic execution of the new semantic logic (with the pre-existing source-identity boundary stubbed only because this runtime cannot materialize the GitHub checkout) passed **13/13 semantic scenarios**, and the new module passed `py_compile`. This is slice evidence only, not a substitute for repository-native pytest with the real upstream contracts.
-
-Expected focused Lane-D total after this slice: **77 tests**:
-
-- 23 adapter tests;
-- 24 generic contract tests;
-- 15 source-profile tests;
-- 2 timestamp-hardening tests;
-- 13 record-semantics tests.
-
-Required exact-head repository command from `scanner-api/` before serialized integration:
-
-`PYTHONPATH=. pytest -q tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py`
-
-and:
-
-`python -m py_compile app/connected_evidence.py app/connected_evidence_contract.py app/connected_evidence_source_contract.py app/connected_evidence_record_contract.py tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py`
-
-The exact-head repository run remains required because this runtime still cannot resolve `github.com` for a checkout and this draft PR targets the NextGen integration branch rather than `main`, so the normal PR workflow does not provide an exact-head certification run.
-
-## Integrator handoff
-
-For any later connected-evidence attachment, the serialized integrator should preserve the three proof layers in order:
+This boundary is necessary but no longer sufficient on its own. For any later connected-evidence attachment:
 
 1. normalize the already-authorized payload/import;
-2. `validate_connected_evidence(...)` — generic envelope proof;
-3. `validate_connected_evidence_source_identity(...)` — provider/source provenance proof;
-4. `validate_connected_evidence_record_semantics(...)` — normalized record semantic proof;
-5. only then attach as optional connected evidence, still separate from canonical crawl authority.
+2. validate the complete logical enrichment set with `validate_connected_evidence_snapshot_bundle(...)`;
+3. only then attach it as optional connected evidence, still separate from canonical crawl authority.
+
+`validate_connected_evidence_snapshot_bundle(...)` composes the current full Lane-D chain, including generic envelope proof, provider/source provenance, this record-semantic proof, coverage semantics, provider property/source scope, logical-record identity, canonical source/snapshot identity and cross-state coherence. Do not reproduce the historical three-layer sequence from this slice as an integration gate.
+
+For the authoritative exact-head pytest/`py_compile` gate and current focused-test count, use `docs/nextgen/lane-d-evidence-connectors.md` only.
 
 No Standard 150 behavior, B01–B28 authority, persistence, customer projection, repair priority, admission, release/deployment, schema/IAM/credentials, worker configuration, or production path is changed by this lane-local contract.
 
-Rollback is lane-local: omit this module, test file and handoff note from serialized integration. No durable state or customer data needs reversal.
+Rollback is lane-local: omit the Lane-D pure helpers/tests/docs from serialized integration. No durable state or customer data needs reversal.

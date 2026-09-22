@@ -13,7 +13,7 @@ The common envelope is versioned as `connected_evidence_v1`. Every envelope carr
 
 ## Validation stack
 
-Lane D now exposes four pure fail-closed validation boundaries.
+Lane D now exposes five pure fail-closed validation boundaries.
 
 1. `validate_connected_evidence(...)` / `connected_evidence_v1`
    - strict envelope shape, timestamps, state semantics, JSON bounds, confidence semantics and unavailable/stale invariants.
@@ -23,6 +23,8 @@ Lane D now exposes four pure fail-closed validation boundaries.
    - provider-specific record meaning: GSC metric relationships and row identity, URL Inspection URL/timestamp semantics, Bing kind/citation semantics, GA4 assistant/source spoof resistance and metric semantics.
 4. `validate_connected_evidence_coverage_semantics(...)` / `connected_evidence_coverage_semantics_v1`
    - binds sample/coverage metadata to the records actually carried by the envelope. It rejects forged row/URL counts, inconsistent import accounting, dimension-population drift, period/observation contradictions, and record dates later than the stated observation time.
+5. `validate_connected_evidence_snapshot_bundle(...)` / `connected_evidence_snapshot_bundle_v1`
+   - validates the bounded set of optional connected evidence attached to one logical enrichment snapshot, composes the full prior chain for every item, and rejects duplicate/contradictory source-window identities instead of allowing accidental double counting or caller-order winner selection.
 
 The producer itself fails closed before constructing an envelope when `retrieved_at` is not parseable. Timestamp parsing validates the full input rather than truncating malformed timestamp suffixes. Bing and GA4 observation dates are accumulated only after row acceptance, so rejected rows cannot advance freshness.
 
@@ -38,6 +40,18 @@ Freshness fails closed whenever freshness checking is enabled but the provider o
 
 Sanitized fixtures live under `scanner-api/tests/fixtures_connected_evidence/`. No deterministic test performs a live provider call.
 
+## Snapshot bundle semantics
+
+`connected_evidence_snapshot_bundle_v1` is a lane-local integrity boundary, not a persistence/history format and not an authority/signing contract. It is bounded to 64 evidence items and rejects duplicate logical observations for:
+
+- GSC Search Analytics: same property + dimensions + period/observation identity;
+- GSC URL Inspection: same property + inspected URL in one logical snapshot;
+- Bing AI Performance: same site + observation window even when an export filename changes;
+- GA4 AI referrals: same property + observation window;
+- unavailable GSC/Bing/GA4 states: contradictory duplicates for the same source scope.
+
+Distinct observation windows remain distinct. The helper does not merge, sum, rank, persist, choose winners, or alter customer-visible behavior. Historical repeated observations belong to serialized-integrator persistence/history work and are intentionally out of scope here.
+
 ## Unsupported / separately authorized future work
 
 1. GSC live retrieval requires an existing owner-authorized Search Console connection and documented API operations. No OAuth client, scope, token, property access or credential is created here.
@@ -51,15 +65,12 @@ Sanitized fixtures live under `scanner-api/tests/fixtures_connected_evidence/`. 
 For any later authorized payload/import, the integration layer must:
 
 1. normalize with the registered Lane-D adapter;
-2. run `validate_connected_evidence(...)`;
-3. run `validate_connected_evidence_source_identity(...)`;
-4. run `validate_connected_evidence_record_semantics(...)`;
-5. run `validate_connected_evidence_coverage_semantics(...)`;
-6. only then attach the evidence as optional connected evidence with provenance/coverage intact;
-7. keep connected evidence separate from canonical crawl authority;
-8. preserve Standard 150 behavior unchanged when connected evidence is absent.
+2. validate the complete set using `validate_connected_evidence_snapshot_bundle(...)`, which composes the existing envelope → source identity → record semantics → coverage semantics chain for every item;
+3. only then attach the evidence as optional connected evidence with provenance/coverage intact;
+4. keep connected evidence separate from canonical crawl authority;
+5. preserve Standard 150 behavior unchanged when connected evidence is absent.
 
-Any later influence on page value, repair priority, authority, persistence or customer projection belongs to the serialized integrator, not this lane.
+For single-envelope debugging, the underlying validators remain callable individually. Any later influence on page value, repair priority, authority, persistence, customer projection, historical time-series storage, or `run_scan` belongs to the serialized integrator, not this lane.
 
 ## Verification
 
@@ -70,11 +81,15 @@ Focused suites on this lane now contain:
 - `scanner-api/tests/test_connected_evidence_source_contract.py`: **17 source-profile tests**;
 - `scanner-api/tests/test_connected_evidence_timestamp_hardening.py`: **2 timestamp-hardening tests**;
 - `scanner-api/tests/test_connected_evidence_record_contract.py`: **15 record-semantics tests**;
-- `scanner-api/tests/test_connected_evidence_coverage_contract.py`: **13 coverage-semantics tests**.
+- `scanner-api/tests/test_connected_evidence_coverage_contract.py`: **13 coverage-semantics tests**;
+- `scanner-api/tests/test_connected_evidence_bundle_contract.py`: **13 snapshot-bundle tests**.
 
-Expected focused total: **94 tests**.
+Expected focused total: **107 tests**.
 
-The latest coverage/accounting slice passed **13/13** in a hermetic pure-function harness with the already-tested upstream record-semantic validator stubbed as pass-through. `py_compile` for the new coverage module/test also passed. These are slice checks only, not branch-native repository certification.
+Latest slice verification in this runtime:
+
+- snapshot-bundle hermetic direct harness: **8/8 scenarios passed**;
+- the harness used a stubbed upstream coverage validator, so this is slice evidence only, not branch-native repository certification.
 
 Previously executed repository checkpoint:
 
@@ -83,13 +98,13 @@ Previously executed repository checkpoint:
 
 Before serialized integration, run from `scanner-api/` on the exact lane head:
 
-`PYTHONPATH=. pytest -q tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py tests/test_connected_evidence_coverage_contract.py`
+`PYTHONPATH=. pytest -q tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py tests/test_connected_evidence_coverage_contract.py tests/test_connected_evidence_bundle_contract.py`
 
 and:
 
-`python -m py_compile app/connected_evidence.py app/connected_evidence_contract.py app/connected_evidence_source_contract.py app/connected_evidence_record_contract.py app/connected_evidence_coverage_contract.py tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py tests/test_connected_evidence_coverage_contract.py`
+`python -m py_compile app/connected_evidence.py app/connected_evidence_contract.py app/connected_evidence_source_contract.py app/connected_evidence_record_contract.py app/connected_evidence_coverage_contract.py app/connected_evidence_bundle_contract.py tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py tests/test_connected_evidence_coverage_contract.py tests/test_connected_evidence_bundle_contract.py`
 
-Do not mark Lane D integration-ready until the exact-head 94-test run is green and a fresh exact-head review has no unresolved material findings.
+Do not mark Lane D integration-ready until the exact-head 107-test run is green and a fresh exact-head review has no unresolved material findings.
 
 ## Known risks / truthful unsupported states
 
@@ -100,6 +115,7 @@ Do not mark Lane D integration-ready until the exact-head 94-test run is green a
 - GA4 referral classification cannot measure dark/direct AI traffic or uncited mentions.
 - Bing export columns can evolve; unknown/contradictory rows fail closed rather than being guessed.
 - Dedicated Google Gen-AI reporting remains unsupported/not verified until an official programmatic surface is established.
+- Snapshot bundle identities intentionally prevent duplicate source/window observations inside one logical scan snapshot; they are not a historical storage key.
 - Any future envelope/profile metadata expansion should be versioned rather than silently accepted.
 
 Rollback is lane-local: omit these pure modules/tests/docs from the serialized integration branch. No production state, credentials, schema, durable authority or customer data requires reversal.

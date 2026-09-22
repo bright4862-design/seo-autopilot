@@ -23,6 +23,8 @@ Lane D exposes seven pure fail-closed validation boundaries.
 2. `validate_connected_evidence_source_identity(...)` / `connected_evidence_source_profile_v1`
    - registered provider/source/surface/method/transport profiles and connector provenance;
    - provenance keys are allowlisted per registered provider/source profile so unversioned OAuth/API/credential claims cannot be smuggled into an otherwise valid envelope;
+   - Search Console `sc-domain:` provenance must now be a real DNS identity rather than an empty, IP-like, wildcard, scheme-bearing, or path-bearing token;
+   - path-scoped GSC/Bing source identities reject malformed hosts and embedded URL userinfo before any later scope check;
    - URL Inspection and Bing URL identities force valid HTTP(S) ports;
    - boolean provenance is type-strict;
    - ambiguous path-scoped GSC URL-prefix and Bing branch identities fail closed unless their non-root path uses the provider-style trailing `/` directory boundary. This prevents `/docs` from later being mistaken for the scope of `/docs-foreign/...`.
@@ -57,7 +59,8 @@ Sanitized fixtures live under `scanner-api/tests/fixtures_connected_evidence/`. 
 
 ## Source, record and snapshot integrity notes
 
-- Search Console `sc-domain:` properties accept their DNS domain/subdomains; malformed path/port/IP domain-property identities fail closed.
+- Search Console `sc-domain:` properties accept DNS domain identities only; empty values, URL/scheme/path syntax, wildcard hosts, and IP literals fail closed at the source-profile boundary rather than relying on the later scope validator.
+- Search Console URL-prefix and Bing path-scoped property identities reject URL userinfo and malformed host spellings before scope membership is evaluated.
 - Search Console URL-prefix and Bing path-scoped property identities use a trailing `/` directory boundary for non-root paths. The source-profile gate rejects an ambiguous `/docs` identity rather than allowing a later raw prefix check to interpret `/docs-foreign` as a descendant.
 - Registered provenance is closed-world per provider/source profile. Current optional provenance is only `import_name` for Bing manual exports and GA4 provided rows; new metadata requires an intentional profile/version change instead of being silently accepted.
 - Scope membership refuses ambiguous URL path forms whose meaning can change after ordinary URL normalization: raw/encoded dot segments, encoded path separators, raw backslashes, malformed escapes, controls, and semicolon path parameters. The semicolon rule applies to every path segment because `urllib.parse` exposes only terminal-segment parameters separately.
@@ -106,30 +109,32 @@ Focused suites on this lane now contain:
 - `scanner-api/tests/test_connected_evidence_record_url_identity.py`: **4 URL-record-identity tests**;
 - `scanner-api/tests/test_connected_evidence_prefix_provenance.py`: **4 path-prefix-provenance tests**;
 - `scanner-api/tests/test_connected_evidence_provenance_shape.py`: **6 closed-world provenance-profile tests**;
-- `scanner-api/tests/test_connected_evidence_ga4_landing_path_hardening.py`: **8 GA4 landing-path ambiguity tests**.
+- `scanner-api/tests/test_connected_evidence_ga4_landing_path_hardening.py`: **8 GA4 landing-path ambiguity tests**;
+- `scanner-api/tests/test_connected_evidence_source_identity_hardening.py`: **8 source-identity hardening tests**.
 
-Expected focused total: **188 tests**.
+Expected focused total: **196 tests**.
 
 Latest verified slice evidence in this runtime:
 
-- closed-world provenance + GA4 landing-path hardening passed **14/14** in a hermetic package; only the already-tested generic-envelope and coverage boundaries were stubbed so the changed source/scope logic was exercised directly;
-- `python -m py_compile app/connected_evidence_source_contract.py app/connected_evidence_scope_contract.py tests/test_connected_evidence_provenance_shape.py tests/test_connected_evidence_ga4_landing_path_hardening.py` passed for the changed candidate;
-- the first candidate exposed a real semicolon gap: `/docs;param/x` is not represented by `urlparse(...).params`; the final guard therefore rejects semicolons directly in the raw path before canonicalization;
-- immediately prior, ambiguous scope-path hardening passed **6/6** in a hermetic package with only the already-tested coverage boundary stubbed;
+- source-identity hardening passed **8/8** in a hermetic package with only the already-tested generic-envelope boundary stubbed, covering valid `sc-domain:` DNS identity plus empty/scheme-bearing/IP/wildcard domain rejection, malformed URL-prefix hosts, and GSC/Bing URL-userinfo rejection;
+- `python -m py_compile app/connected_evidence_source_contract.py tests/test_connected_evidence_source_identity_hardening.py` passed for the changed candidate;
+- immediately prior, closed-world provenance + GA4 landing-path hardening passed **14/14** in a hermetic package; only the already-tested generic-envelope and coverage boundaries were stubbed so the changed source/scope logic was exercised directly;
+- the first GA4 path candidate exposed a real semicolon gap: `/docs;param/x` is not represented by `urlparse(...).params`; the final guard therefore rejects semicolons directly in the raw path before canonicalization;
+- prior ambiguous scope-path hardening passed **6/6** in a hermetic package with only the already-tested coverage boundary stubbed;
 - prior path-prefix-provenance candidate logic passed **4/4** in a hermetic package with only the already-tested generic envelope boundary stubbed, and its changed source-contract/test passed `py_compile`;
 - prior URL-record identity hardening passed **4/4** in a hermetic package with only the already-tested scope boundary stubbed, and its changed module/test passed `py_compile`.
 
 Before serialized integration, run from `scanner-api/` on the exact lane head:
 
-`PYTHONPATH=. pytest -q tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py tests/test_connected_evidence_coverage_contract.py tests/test_connected_evidence_scope_contract.py tests/test_connected_evidence_record_identity_contract.py tests/test_connected_evidence_bundle_contract.py tests/test_connected_evidence_snapshot_observation_identity.py tests/test_connected_evidence_record_url_identity.py tests/test_connected_evidence_prefix_provenance.py tests/test_connected_evidence_provenance_shape.py tests/test_connected_evidence_ga4_landing_path_hardening.py`
+`PYTHONPATH=. pytest -q tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py tests/test_connected_evidence_coverage_contract.py tests/test_connected_evidence_scope_contract.py tests/test_connected_evidence_record_identity_contract.py tests/test_connected_evidence_bundle_contract.py tests/test_connected_evidence_snapshot_observation_identity.py tests/test_connected_evidence_record_url_identity.py tests/test_connected_evidence_prefix_provenance.py tests/test_connected_evidence_provenance_shape.py tests/test_connected_evidence_ga4_landing_path_hardening.py tests/test_connected_evidence_source_identity_hardening.py`
 
 and:
 
-`python -m py_compile app/connected_evidence.py app/connected_evidence_contract.py app/connected_evidence_source_contract.py app/connected_evidence_record_contract.py app/connected_evidence_coverage_contract.py app/connected_evidence_scope_contract.py app/connected_evidence_record_identity_contract.py app/connected_evidence_bundle_contract.py tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py tests/test_connected_evidence_coverage_contract.py tests/test_connected_evidence_scope_contract.py tests/test_connected_evidence_record_identity_contract.py tests/test_connected_evidence_bundle_contract.py tests/test_connected_evidence_snapshot_observation_identity.py tests/test_connected_evidence_record_url_identity.py tests/test_connected_evidence_prefix_provenance.py tests/test_connected_evidence_provenance_shape.py tests/test_connected_evidence_ga4_landing_path_hardening.py`
+`python -m py_compile app/connected_evidence.py app/connected_evidence_contract.py app/connected_evidence_source_contract.py app/connected_evidence_record_contract.py app/connected_evidence_coverage_contract.py app/connected_evidence_scope_contract.py app/connected_evidence_record_identity_contract.py app/connected_evidence_bundle_contract.py tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py tests/test_connected_evidence_coverage_contract.py tests/test_connected_evidence_scope_contract.py tests/test_connected_evidence_record_identity_contract.py tests/test_connected_evidence_bundle_contract.py tests/test_connected_evidence_snapshot_observation_identity.py tests/test_connected_evidence_record_url_identity.py tests/test_connected_evidence_prefix_provenance.py tests/test_connected_evidence_provenance_shape.py tests/test_connected_evidence_ga4_landing_path_hardening.py tests/test_connected_evidence_source_identity_hardening.py`
 
-Do not mark Lane D integration-ready until the exact-head **188-test** repository-native run is green and a fresh exact-head review has no unresolved material findings.
+Do not mark Lane D integration-ready until the exact-head **196-test** repository-native run is green and a fresh exact-head review has no unresolved material findings.
 
-The full repository-native exact-head 188-test run is **not yet claimed green** in this runtime. PR #332 intentionally targets `nextgen/integration-20260921`; do not retarget the PR or alter release workflows merely to manufacture CI.
+The full repository-native exact-head 196-test run is **not yet claimed green** in this runtime. PR #332 intentionally targets `nextgen/integration-20260921`; do not retarget the PR or alter release workflows merely to manufacture CI.
 
 ## Known risks / truthful unsupported states
 
@@ -144,6 +149,6 @@ The full repository-native exact-head 188-test run is **not yet claimed green** 
 - Unavailable states deliberately do not retain observational count/window metadata.
 - Any future envelope/profile metadata expansion should be versioned rather than silently accepted.
 
-The lane changes **33 Lane-D-owned files**: seven handoff/hardening docs, eight pure app modules, fourteen focused test modules, and four sanitized fixtures. No serialized-integrator-owned surface is modified.
+The lane changes **34 Lane-D-owned files**: seven handoff/hardening docs, eight pure app modules, fifteen focused test modules, and four sanitized fixtures. No serialized-integrator-owned surface is modified.
 
 Rollback is lane-local: omit these pure modules/tests/docs from the serialized integration branch. No production state, credentials, schema, durable authority, or customer data requires reversal.

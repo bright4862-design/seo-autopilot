@@ -143,6 +143,14 @@ def test_ga4_assistant_must_match_source_host():
         validate_connected_evidence_record_semantics(evidence)
 
 
+def test_ga4_source_rejects_out_of_range_port():
+    evidence = _ga4(
+        [{"assistant": "chatgpt", "source": "chatgpt.com:99999 / referral", "sessions": 1, "row_number": 1}]
+    )
+    with pytest.raises(ValueError, match="valid source host"):
+        validate_connected_evidence_record_semantics(evidence)
+
+
 def test_url_inspection_rejects_non_url_referring_values():
     evidence = _inspection(
         {
@@ -160,6 +168,19 @@ def test_url_inspection_rejects_relative_canonical():
         {
             "inspection_url": "https://getfixlist.com/a",
             "google_canonical": "/a",
+            "referring_urls": [],
+            "sitemap": [],
+        }
+    )
+    with pytest.raises(ValueError, match=r"google_canonical.*absolute HTTP\(S\) URL"):
+        validate_connected_evidence_record_semantics(evidence)
+
+
+def test_url_inspection_rejects_out_of_range_port_canonical():
+    evidence = _inspection(
+        {
+            "inspection_url": "https://getfixlist.com/a",
+            "google_canonical": "https://getfixlist.com:99999/a",
             "referring_urls": [],
             "sitemap": [],
         }

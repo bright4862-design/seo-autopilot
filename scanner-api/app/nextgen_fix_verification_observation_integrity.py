@@ -4,12 +4,13 @@ from typing import Any
 
 from .nextgen_fix_verification import (
     COULD_NOT_VERIFY,
+    REQUIRED_RECHECK_OBSERVATIONS,
     VERIFICATION_RESULT_VERSION,
     evaluate_verification_plan,
 )
 
 OBSERVATION_INPUT_INTEGRITY_VERSION = (
-    "fix_verification_observation_input_integrity_v1_exact_identity_and_versions"
+    "fix_verification_observation_input_integrity_v2_exact_plan_request_transport"
 )
 
 _HISTORICAL_VERSION_FIELDS = (
@@ -36,6 +37,12 @@ _CRITERION_IDENTITY_FIELDS = (
     "evidence_url_identity_version",
     "predicate",
 )
+_PLAN_REQUEST_IDENTITY_FIELDS = (
+    "url",
+    "evidence_key",
+    "criterion_id",
+    "rule",
+)
 _RULE_EVALUATION_IDENTITY_FIELDS = (
     "criterion_id",
     "repair_fingerprint",
@@ -53,6 +60,77 @@ def _first_invalid_exact_field(container: dict[str, Any], fields: tuple[str, ...
     for field in fields:
         if not _exact_nonempty_string(container.get(field)):
             return f"{prefix}_{field}_must_be_exact_nonempty_string"
+    return ""
+
+
+def _historical_evidence_transport_reason(previous_record: dict[str, Any]) -> str:
+    """Reject malformed historical evidence identities before tolerant compatibility logic.
+
+    Historical read compatibility may legitimately fall back from an absent/empty
+    ``affected_pages`` list to a representative page field. At the proving
+    boundary, however, any supplied affected-page identity must already be an
+    exact non-empty string. Non-null malformed ``affected_pages`` containers must
+    not be silently ignored in favor of a fallback URL.
+    """
+    affected = previous_record.get("affected_pages")
+    if affected is not None:
+        if not isinstance(affected, list):
+            return "historical_affected_pages_not_a_list"
+        for index, value in enumerate(affected):
+            if not _exact_nonempty_string(value):
+                return f"historical_affected_pages_{index}_must_be_exact_nonempty_string"
+        if affected:
+            return ""
+
+    for field in ("page_url", "representative_page_url"):
+        value = previous_record.get(field)
+        if value is None or value == "":
+            continue
+        if not _exact_nonempty_string(value):
+            return f"historical_{field}_must_be_exact_nonempty_string"
+        # The core historical population semantics use page_url first and only
+        # fall back to representative_page_url when page_url is absent.
+        if field == "page_url":
+            return ""
+    return ""
+
+
+def _plan_request_transport_reason(plan: dict[str, Any]) -> str:
+    """Require every recheck request to carry exact, non-coerced proving metadata."""
+    requests = plan.get("requests")
+    if not isinstance(requests, list):
+        return "plan_requests_not_a_list"
+    if not requests:
+        return "plan_requests_empty"
+
+    plan_criterion_id = plan.get("criterion_id")
+    plan_rule = plan.get("rule")
+    seen_evidence_keys: set[str] = set()
+    for index, request in enumerate(requests):
+        if not isinstance(request, dict):
+            return f"plan_request_{index}_not_an_object"
+
+        reason = _first_invalid_exact_field(
+            request,
+            _PLAN_REQUEST_IDENTITY_FIELDS,
+            f"plan_request_{index}",
+        )
+        if reason:
+            return reason
+
+        if request.get("criterion_id") != plan_criterion_id:
+            return f"plan_request_{index}_criterion_id_mismatch"
+        if request.get("rule") != plan_rule:
+            return f"plan_request_{index}_rule_mismatch"
+
+        evidence_key = request["evidence_key"]
+        if evidence_key in seen_evidence_keys:
+            return f"plan_request_{index}_duplicate_evidence_key"
+        seen_evidence_keys.add(evidence_key)
+
+        if request.get("required_observations") != list(REQUIRED_RECHECK_OBSERVATIONS):
+            return f"plan_request_{index}_required_observations_mismatch"
+
     return ""
 
 
@@ -101,9 +179,10 @@ def verification_observation_input_integrity(
 
     The legacy/current evaluators deliberately use tolerant text cleanup for
     historical compatibility. That is appropriate for read compatibility but is
-    too permissive at the new proof boundary: numeric version values or
-    whitespace-padded fingerprints/criterion/evidence identities must never be
-    normalized into apparently comparable proof.
+    too permissive at the new proof boundary: numeric version values,
+    whitespace-padded fingerprints/criterion/evidence identities, malformed
+    historical evidence transports, or normalized plan-request metadata must
+    never become apparently comparable proof.
 
     This helper is pure and intentionally does not perform URL resolution or
     network work. Existing verification-plan evaluation remains authoritative
@@ -139,6 +218,10 @@ def verification_observation_input_integrity(
     if reason:
         return {**base, "reason": reason}
 
+    reason = _historical_evidence_transport_reason(previous_record)
+    if reason:
+        return {**base, "reason": reason}
+
     reason = _first_invalid_exact_field(plan, _PLAN_IDENTITY_FIELDS, "plan")
     if reason:
         return {**base, "reason": reason}
@@ -151,6 +234,10 @@ def verification_observation_input_integrity(
         _CRITERION_IDENTITY_FIELDS,
         "criterion",
     )
+    if reason:
+        return {**base, "reason": reason}
+
+    reason = _plan_request_transport_reason(plan)
     if reason:
         return {**base, "reason": reason}
 
@@ -200,7 +287,8 @@ def verification_observation_input_integrity(
     return {
         **base,
         "valid": True,
-        "reason": "exact_identity_and_version_transport_metadata_proven",
+        "reason": "exact_identity_version_and_plan_request_transport_metadata_proven",
+        "checked_plan_requests": len(plan.get("requests") or []),
         "checked_rule_evaluations": len(rule_evaluations),
     }
 

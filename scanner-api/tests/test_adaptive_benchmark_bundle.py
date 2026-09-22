@@ -125,7 +125,9 @@ def test_bundle_validator_rejects_population_fingerprint_tampering():
 def test_bundle_validator_rejects_selected_population_tampering():
     result = _bundle()
     tampered = deepcopy(result)
-    tampered["smart_selected"] = tuple(tampered["smart_selected"]) + ("https://foreign.test/page",)
+    selected = list(tampered["smart_selected"])
+    selected[-1] = "https://foreign.test/page"
+    tampered["smart_selected"] = tuple(selected)
     integrity = validate_adaptive_benchmark_bundle(tampered)
     assert integrity["valid"] is False
     assert integrity["reason"] == "smart_population_fingerprint_mismatch"

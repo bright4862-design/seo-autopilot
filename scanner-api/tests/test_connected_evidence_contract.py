@@ -36,6 +36,7 @@ def _evidence(*, state="verified", records=None, observed_at="2026-09-20T00:00:0
 
 def test_verified_contract_accepts_provenance_bearing_observations():
     evidence = _evidence()
+    evidence["confidence"]["limitations"] = ["observational evidence only"]
     assert validate_connected_evidence(evidence) is evidence
 
 
@@ -120,6 +121,21 @@ def test_confidence_must_not_masquerade_as_statistical_probability():
     evidence = _evidence()
     evidence["confidence"]["kind"] = "probability"
     with pytest.raises(ValueError, match="evidence quality"):
+        validate_connected_evidence(evidence)
+
+    evidence = _evidence()
+    evidence["confidence"]["probability"] = 0.99
+    with pytest.raises(ValueError, match="confidence has unknown fields"):
+        validate_connected_evidence(evidence)
+
+    evidence = _evidence()
+    evidence["confidence"]["level"] = "0.99"
+    with pytest.raises(ValueError, match="registered evidence-quality level"):
+        validate_connected_evidence(evidence)
+
+    evidence = _evidence()
+    evidence["confidence"]["limitations"] = "observational only"
+    with pytest.raises(ValueError, match="confidence.limitations must be a bounded list"):
         validate_connected_evidence(evidence)
 
 

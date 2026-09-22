@@ -187,8 +187,8 @@ def validate_connected_evidence(evidence: Mapping[str, Any]) -> Mapping[str, Any
     schema-version change instead of silently changing the authenticated shape.
     Confidence metadata is likewise closed-world and qualitative. Unavailable
     states may never carry observed records or observational sample/coverage
-    claims; observed states must identify when the source was observed, while
-    stale evidence must additionally predate retrieval.
+    claims; stale evidence retains records but must identify when the source was
+    observed.
     """
 
     top = _mapping(evidence, field="connected evidence")
@@ -267,8 +267,6 @@ def validate_connected_evidence(evidence: Mapping[str, Any]) -> Mapping[str, Any
                 "unavailable connected evidence cannot claim coverage observations"
             )
     else:
-        if observed_at is None:
-            raise ValueError("observed connected evidence requires observed_at")
         if level == "none":
             raise ValueError("observed connected evidence cannot use confidence.level=none")
 

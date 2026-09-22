@@ -3,84 +3,93 @@
 Issue: #324  
 Draft PR: #331  
 Lane branch: `agent/nextgen-browser-performance-20260921`  
-Latest code/test checkpoint: `13ab76bc97939f30b767f91e2e28a621e552b0f3`
+Latest implementation/test checkpoint before this handoff refresh: `9d0043ec8a448154e2908984fcc4de91fc647ade`
 
-## What this lane adds
+## Ownership boundary
 
-Pure, network-free browser/performance evidence helpers live in `scanner-api/app/nextgen_browser_performance.py`.
+This lane is limited to pure provider/browser evidence helpers, representative-page selection, integrity/binding helpers, deterministic tests, fixtures and documentation. It does **not** modify `scanner.py` / `run_scan`, global scan budgets, worker deployment configuration, repair priority/customer scoring, authority/persistence/projection, admission, release/deployment, schema/IAM/credentials, or production.
 
-The contract provides:
+No helper in this lane performs a live CrUX/PSI/browser call or creates credentials. New behavior is unwired and shadow/off until the serialized integrator explicitly adopts it.
+
+## Implemented contracts
+
+Lane C currently provides:
 
 - provider-neutral field-performance evidence with explicit `connected`, `disconnected`, `unavailable`, `rate_limited`, and `provider_error` states;
-- CrUX and PageSpeed Insights normalizers that keep CrUX field evidence and Lighthouse lab evidence in separate envelopes;
-- fail-closed provider semantics for invalid states and missing payloads, retaining truthful `provider_state_invalid` / `provider_payload_missing` reasons rather than silently reclassifying them;
-- bounded Lighthouse normalization for performance score, selected measurements, and an allowlisted opportunity set, rejecting out-of-range scores and preferring explicit `overallSavingsMs` when present;
-- deterministic representative-page selection across template families with high-value weighting and a hard ceiling of 12 candidates;
-- deterministic final-URL deduplication for representative sampling, with duplicate-observation telemetry and final URL preferred over redirect-entry URL;
-- raw-vs-rendered critical-content parity evidence for title/H1/canonical/indexability/main-content presence/important links/structured-data types/product+entity facts;
-- parity identity/useability guards: missing raw identity, missing rendered identity, mismatched normalized identity, raw fetch/status/evidence-class failure, and render fetch/status/evidence-class failure all return `not_verified` and cannot become a content delta;
-- scalar field-presence provenance (`raw_observed` / `rendered_observed`) so a missing extractor key is `not_verified`, while an explicitly observed empty value remains comparable to a non-empty observation;
-- normalized important-link comparison so relative-vs-absolute forms and URL fragments do not create false render deltas;
-- deterministic `verified_fields` / `changed_fields` summaries for downstream evidence consumers without creating customer Fixes or scores.
+- direct CrUX and PageSpeed Insights normalization with CrUX field evidence and Lighthouse lab evidence kept in separate envelopes;
+- documented CrUX `queryRecord` shape handling, URL/origin scope and coverage-period provenance;
+- strict PageSpeed URL-vs-origin field fallback behavior;
+- source-bound PSI provenance preserving requested/final identity, runtime-error behavior, origin fallback, analysis/fetch timestamps, Lighthouse version and strategy;
+- bounded Lighthouse normalization for an allowlisted metric/opportunity set;
+- deterministic representative template/high-value sampling, final-URL deduplication and a hard 12-candidate ceiling;
+- `nextgen_performance_sample_binding_v1`, which recomputes the deterministic sample from the authoritative candidate population and fails closed on stale/forged/reordered selections, population drift, invalid requested limits, or non-absolute HTTP(S) selected identities;
+- raw-vs-rendered critical-content parity evidence for title/H1/canonical/indexability/main-content presence/important links/schema/product+entity facts;
+- raw/render identity, usability and extractor-presence fail-closed semantics;
+- aggregate parity coverage that distinguishes completed, failed/unverifiable and unassessed selected URLs;
+- fail-closed integrity validation for Lane-C field, lab, composite, sample and parity dictionaries.
 
-No function in the module performs provider or browser network I/O.
+## Serialized integration hook
 
-## Future serialized integration hook
+The integrator, not this lane, owns execution and shared orchestration.
 
-The integrator, not this lane, owns shared orchestration.
+1. After accepted retained-page/template evidence exists, call `select_representative_performance_pages(...)` only to produce bounded candidates. This does not change Standard 150 selection or the assessed-page denominator.
+2. Before trusting that sample, call `validate_representative_sample_binding(authoritative_pages, sample)`. The caller must provide the authoritative retained-page/template population. A valid binding proves deterministic selection only; it is **not** permission to execute all selected pages.
+3. Feed only an integrator-budget-approved subset into the existing safe browser/render path, preserving existing DNS/SSRF/redirect/body/deadline/cancellation controls. Do not create a second renderer or hidden fetch budget.
+4. Build raw/rendered parity only from successful same-identity observations. Failed, skipped, challenged, deadline-exhausted, partial-identity or unusable observations remain `not_verified`.
+5. After per-page parity construction, call `summarize_critical_parity_coverage(...)` over the original selected sample plus available parity rows so execution failures remain failed and candidates never executed remain unassessed.
+6. For direct CrUX `queryRecord` payloads, prefer `normalize_crux_query_record_evidence(...)`. For PSI payloads, prefer `normalize_pagespeed_insights_evidence_bound(...)` so requested/final identity, runtime error, origin fallback and provider provenance remain explicit.
+7. Keep field and lab envelopes separate through any future persistence/authority/customer logic. Repair priority/customer scoring remain integrator-owned.
 
-1. After accepted retained-page evidence and template-family classification are available, call `select_representative_performance_pages(...)` to produce candidate URLs. Do not replace Standard 150 selection and do not expand the assessed-page denominator.
-2. Feed only an integrator-approved subset of those candidates into the existing safe browser/render execution path. Prefer adapting the existing bounded render-followup seam rather than creating a second renderer or request budget.
-3. Call `compare_critical_content_parity(...)` only with raw/rendered observations that preserve final identity and extraction presence. The helper itself fails closed for missing/mismatched identity and explicitly unusable observations. Failed, skipped, deadline-exhausted, challenged, partial-identity, or unusable observations must remain `not_verified`.
-4. An authenticated provider layer may pass already-observed CrUX/PSI payloads into `normalize_crux_evidence(...)` or `normalize_pagespeed_insights_evidence(...)`. This lane does not create credentials, OAuth scopes, or provider calls.
-5. Keep field and lab envelopes distinct through authority/persistence and any later repair logic. Customer scoring/repair priority remains integrator-owned.
+A 500/1,000-page adaptive crawl must never imply 500/1,000 browser or Lighthouse executions.
 
-## Resource-budget expectations
+## Verification evidence
 
-- Candidate selection has a hard pure-code ceiling of 12 pages even if a caller asks for hundreds.
-- The hard ceiling is not permission to execute 12 browser/Lighthouse runs. Initial shadow integration should use a smaller global-budget-approved subset, typically 4–8 representative pages, and must obey the existing deadline, safe-request, cancellation, and renderer controls.
-- A 500- or 1,000-page adaptive crawl must not imply 500/1,000 Lighthouse executions.
-- Duplicate crawl observations resolving to the same normalized final URL count as one performance candidate.
-- Provider evidence may be absent, rate-limited, invalid, or unavailable without failing the scan.
+Executed checkpoints currently recorded for Lane C:
 
-## Verification
+- original focused repository checkpoint: `tests/test_nextgen_browser_performance.py` → **17 passed**; corresponding `py_compile` passed;
+- provider-shape hermetic checkpoint → **8/8 passed**; compile passed;
+- PSI provenance hermetic checkpoint → **10/10 passed**; compile passed;
+- parity-coverage hermetic checkpoint → **9/9 passed**; compile passed;
+- latest representative-sample binding checkpoint → **9/9 passed in 0.07s** in a hermetic package containing the exact current selector logic plus the new helper/tests; compile passed.
 
-Previous focused deterministic checkpoint `3e8dddccf22cf2fe2a3786e6c74160f4ac2b5a8e` was executed before this hardening:
+Lane C now contains **73 focused tests across six test files**. **73/73 exact-repository execution is not claimed.**
 
-`PYTHONPATH=. pytest -q tests/test_nextgen_browser_performance.py` → **17 passed**  
-`python -m py_compile app/nextgen_browser_performance.py tests/test_nextgen_browser_performance.py` → **passed**
+Required exact-head gate:
 
-Exact code/test checkpoint `13ab76bc97939f30b767f91e2e28a621e552b0f3` adds six regressions, so the focused test file now contains **23 tests**. The new regressions cover:
+```bash
+cd scanner-api
+PYTHONPATH=. pytest -q \
+  tests/test_nextgen_browser_performance.py \
+  tests/test_nextgen_browser_performance_contract.py \
+  tests/test_nextgen_browser_performance_provider.py \
+  tests/test_nextgen_browser_performance_psi_provenance.py \
+  tests/test_nextgen_browser_performance_coverage.py \
+  tests/test_nextgen_browser_performance_sample_binding.py
+python -m py_compile \
+  app/nextgen_browser_performance.py \
+  app/nextgen_browser_performance_contract.py \
+  app/nextgen_browser_performance_provider.py \
+  app/nextgen_browser_performance_psi_provenance.py \
+  app/nextgen_browser_performance_coverage.py \
+  app/nextgen_browser_performance_sample_binding.py \
+  tests/test_nextgen_browser_performance.py \
+  tests/test_nextgen_browser_performance_contract.py \
+  tests/test_nextgen_browser_performance_provider.py \
+  tests/test_nextgen_browser_performance_psi_provenance.py \
+  tests/test_nextgen_browser_performance_coverage.py \
+  tests/test_nextgen_browser_performance_sample_binding.py
+```
 
-- missing raw identity;
-- missing rendered identity;
-- explicitly unusable raw evidence;
-- an absent scalar extractor key on the raw side remaining `not_verified`;
-- an absent scalar extractor key on the rendered side remaining `not_verified`;
-- an explicitly observed empty scalar remaining comparable when both extractors observed the field.
+The current execution container still cannot resolve `github.com`, so it cannot materialize the complete branch. This integration-target draft also has no normal PR-triggered repository CI run. Until an approved repository runner executes the commands above, exact-head repository green remains a blocker for integration readiness.
 
-**Exact-head execution is not yet certified.** The available automation Python/container runners returned infrastructure `ClientError`; the remote sandbox required interactive authorization; this integration-target PR has no GitHub Actions run because repository CI triggers only for `main` pushes / `main`-targeted PRs; and CodeRabbit reports that its review sandbox prohibits running repository tests/builds. Do not infer a 23/23 result from the prior 17/17 checkpoint.
+## Risks
 
-CodeRabbit independently reviewed exact code/test checkpoint `13ab76bc97939f30b767f91e2e28a621e552b0f3` and reported **no material issues**. It explicitly confirmed that the prior P1 identity/useability and P2 one-sided-scalar findings are addressed. This is static review evidence, not execution evidence.
+The main evidence risk is treating unavailable/mismatched/partial provider or render observations as measured defects. Contracts therefore preserve truthful unavailable/not-verified states and keep field vs lab evidence separate.
 
-The tests use only the checked-in PSI/Lighthouse fixture; they contain no live provider calls and require no credentials.
+The main selection risk is trusting a stale or forged representative sample against the wrong page population. The sample-binding helper closes that gap only when the serialized integrator supplies the authoritative candidate population.
 
-## Files owned/changed
+The main resource risk is treating the 12-candidate selector ceiling as an execution entitlement. It is only a pure-code candidate bound; the integrator must impose the actual browser/Lighthouse budget.
 
-- `scanner-api/app/nextgen_browser_performance.py`
-- `scanner-api/tests/test_nextgen_browser_performance.py`
-- `scanner-api/tests/fixtures/nextgen_psi_sample.json`
-- `docs/nextgen/lane-c-browser-performance.md`
-- `docs/nextgen/lane-c-browser-performance-handoff.md`
+## Rollback
 
-No `scanner.py` / `run_scan`, global scan-budget, worker deployment, repair priority/customer scoring, authority/persistence/projection, admission, release, deployment, or production surface is modified.
-
-## Risks and rollback
-
-The main semantic risk is treating browser/provider absence, partial extraction, or a wrong paired render as a defect. The contracts intentionally fail closed, distinguish provider absence from measured performance, reject missing/mismatched render identity, reject explicitly unusable observations, and keep missing extractor fields out of confirmed deltas.
-
-The main resource risk is allowing representative selection to become an execution entitlement. The selector's 12-page cap is only an upper bound; the serialized integrator must impose the actual browser/Lighthouse budget.
-
-The sampler normalizes to final URL for execution identity. Integrator wiring should preserve the original crawl URL separately if customer-facing provenance needs both redirect entry and final target; this lane does not alter persistence/projection.
-
-Rollback is deletion of the lane-owned helper, focused test, fixture, and handoff/bootstrap docs. Because the implementation is not wired into shared orchestration, rollback does not require data migration or historical reconstruction changes.
+Because this lane remains unwired from shared orchestration, rollback is deletion of the Lane-C helper/test/docs/fixture files. No data migration, authority rewrite or historical reconstruction change is required.

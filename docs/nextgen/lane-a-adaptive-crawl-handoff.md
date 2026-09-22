@@ -6,118 +6,145 @@ Lane branch: `agent/nextgen-adaptive-crawl-20260921`
 
 ## Scope completed in this lane
 
-This lane adds a pure, shadow-only adaptive crawl foundation. It does not change `run_scan`, `SCAN_BUDGETS`, Standard 150, repair priority, authority/persistence, customer projection, admission, release or deployment behavior.
+This lane adds a pure, shadow-only adaptive crawl foundation. It does not change `run_scan`, `SCAN_BUDGETS`, Standard 150, repair priority, authority/persistence, customer projection, admission, release, deployment, or production behavior.
 
-The helper contracts are versioned and deterministic:
+Versioned contracts currently present:
 
 - `adaptive_crawl_v1_shadow` — tranche planning and continuation decisions.
-- `adaptive_candidate_score_v1` — per-candidate selection score/reasons.
+- `adaptive_candidate_score_v1` — per-candidate score/reasons.
 - `adaptive_tranche_yield_v1` — marginal assessed-page yield telemetry.
-- `adaptive_benchmark_v1` — smart-500 vs blind-1000 simulation output.
-- `adaptive_tranche_integrity_v1` — fail-closed integrity validation for transported/caller-supplied tranche telemetry.
-- `adaptive_benchmark_integrity_v1` — fail-closed validation for transported benchmark evidence.
-- `adaptive_benchmark_corpus_v1` — deterministic multi-site benchmark aggregation with explicit inventory-limited accounting.
+- `adaptive_tranche_integrity_v1` — fail-closed telemetry integrity validation.
+- `adaptive_benchmark_v1` — smart-500 vs blind-1000 finding/template/family/route benchmark output.
+- `adaptive_benchmark_integrity_v1` — fail-closed benchmark integrity validation.
+- `adaptive_benchmark_corpus_v1` — deterministic multi-site benchmark aggregation.
+- `adaptive_priority_benchmark_v1` — important/high-value page coverage for smart-500 vs blind-1000 experiments.
+- `adaptive_priority_benchmark_corpus_v1` — deterministic corpus aggregation of that priority-page coverage.
 
-## Selection contract
+## Selection and Standard 150 compatibility
 
-`select_adaptive_urls(...)` delegates the first 150 slots to the existing `select_balanced_urls(...)` implementation using the original discovered sequence, before adaptive deduplication. A target of 150 therefore preserves the existing Standard 150 selection order exactly, including the existing sampler's behavior if discovery ever contains duplicate URL identities. For deeper targets, the same exact Standard-150 result is retained as the prefix and only the later adaptive extension operates on a unique URL universe. This prevents pre-deduplication from changing existing bucket counts/quotas and silently drifting the Standard-150 baseline.
+`select_adaptive_urls(...)` delegates the first 150 slots to the existing `select_balanced_urls(...)` implementation using the original discovery sequence before adaptive deduplication. This preserves the existing Standard-150 selection order, including its current duplicate-input behavior, for the first 150 slots. Later adaptive selection deduplicates only the deeper candidate universe.
 
-Later-tranche ranking uses only evidence already supplied by the caller. It performs no network work. The deterministic score favors uncovered URL families, route signatures and locale-normalized top-level path prefixes, plus existing high-value/trust classification and optional bounded `template_novelty`, `graph_novelty` and `finding_affinity` hints. Locale normalization prevents translated market prefixes such as `/fr/...` and `/de/...` from being rewarded as distinct path-prefix novelty. Non-finite optional metadata (`NaN`, `+/-Infinity`) is ignored instead of affecting ranking. Ties preserve original discovery order before URL lexical order.
+Later-tranche ranking uses only caller-supplied evidence. It favors uncovered families, route signatures, locale-normalized path prefixes, high-value/trust classification, and optional bounded `template_novelty`, `graph_novelty`, and `finding_affinity` hints. Non-finite optional metadata is ignored. Ties preserve discovery order before URL lexical order.
 
-The selector is bounded by the number of already-discovered unique URLs available for deeper assessment, the requested target, and an explicit `MAX_ADAPTIVE_TARGET == 1000` safety ceiling. A caller asking for more than 1000 pages cannot make this lane authorize them. Raising that ceiling requires an explicit contract/version change and serialized-integrator budget review.
-
-The selector never claims that exhausting the discovered URL set means the whole site is understood.
+The selector is bounded by already-discovered inventory, requested target, and `MAX_ADAPTIVE_TARGET == 1000`. It performs no network work and never claims that exhausting discovered URLs means the whole site is understood.
 
 ## Tranche and telemetry contract
 
-`plan_tranche_targets(...)` defaults to 150 → 500 → 1000 and truncates targets to the current discovered inventory plus the hard 1000-page lane ceiling. It records both the requested ceiling and effective assessment ceiling. The candidate target sequence remains configurable so the integrator can shadow-test intermediate targets without changing selector semantics. An empty candidate-target configuration authorizes no tranche. Malformed optional candidate targets are ignored rather than raising or expanding the crawl.
+`plan_tranche_targets(...)` defaults to 150 → 500 → 1000, truncates targets to discovered inventory, and enforces the hard 1000-page Lane-A ceiling. Optional intermediate targets remain configurable for shadow experiments.
 
-`build_tranche_yield_telemetry(...)` separates discovered and assessed counts and records marginal novelty for route signatures, template keys, graph edges, finding fingerprints, high-impact finding fingerprints, and high-value families assessed.
+`build_tranche_yield_telemetry(...)` separates discovered and assessed counts and measures marginal novelty for route signatures, template keys, graph edges, finding fingerprints, high-impact finding fingerprints, and high-value families assessed. Missing signals remain unknown. Invalid count relationships or regressed cumulative evidence fail closed.
 
-Missing signals remain `None` and force `signal_state="insufficient_evidence"`; they are never coerced to zero. Impossible count relationships produce `signal_state="invalid_counts"` and fail closed. Cumulative evidence snapshots must remain monotonic: if a previously observed route/template/edge/finding/high-value-family disappears from the later cumulative snapshot, telemetry records the exact `regressed_signal_keys`, sets `signal_state="invalid_evidence"`, and continuation fails closed.
+`verified_continuation_decision(...)` is the recommended serialized-integrator boundary. It first verifies exact count/delta/rate integrity, then delegates to the Lane-A continuation policy. Invalid, stale, forged, non-finite, or incomplete evidence cannot authorize a deeper tranche. A large discovered inventory by itself never causes automatic expansion.
 
-`continuation_decision(...)` requires the current telemetry contract version and valid count/evidence invariants before it can consider expansion. Expansion can occur only when complete observed novelty/yield crosses the shadow thresholds. A large discovered inventory by itself is not enough. The helper never produces a next target above 1000, and once the 1000-page ceiling is reached the state is `hold` with reason `adaptive_ceiling_reached`. A hold decision always keeps `site_fully_understood=false`.
+## Finding-yield benchmark
 
-`finding_fingerprints` are pre-repair evidence identifiers only. They are not final customer Fixes and do not alter repair ranking.
+`benchmark_smart_500_vs_blind_1000(...)` compares adaptive selection of up to 500 pages with FIFO selection of up to 1000 already-discovered URLs. It reports assessed-page counts, unique finding fingerprints, finding yield per 100 pages, template/family/route coverage, page savings, and shared/smart-only/blind-only finding counts.
 
-## Telemetry integrity boundary
+`validate_adaptive_benchmark(...)` rejects wrong versions, page-count cap violations, impossible coverage counts, non-finite or forged yields, inconsistent finding partitions, forged page-savings totals, inconsistent comparison states, and forged coverage/efficiency ratios.
 
-`scanner-api/app/adaptive_crawl_integrity.py` adds a pure integrity layer for the boundary where telemetry may have been transported, persisted in a shadow store, or supplied by another component before continuation is considered.
+`summarize_benchmark_corpus(...)` accepts only non-empty string site identities and only integrity-valid member results. It reports aggregate site-scoped findings, weighted finding coverage/efficiency, median site coverage, pages saved, and separate full 500-vs-1000 versus inventory-limited site counts.
 
-`validate_tranche_telemetry(...)` fails closed unless:
+## Priority-page benchmark extension
 
-- the telemetry contract version is exact;
-- discovered/previous-assessed/current-assessed/pages-added counts are non-negative integers with `previous <= current <= discovered`;
-- `pages_added == assessed_count - previous_assessed_count`;
-- the builder's `counts_valid` and `evidence_monotonic` invariants are true;
-- no regressed evidence keys are present;
-- observed telemetry has every marginal delta;
-- every supplied delta is a non-negative integer;
-- every supplied per-100 rate is finite, non-negative, and exactly recomputable from the corresponding delta and `pages_added`.
+`scanner-api/app/adaptive_priority_benchmark.py` adds a second engineering-only benchmark dimension so the smart-500 experiment can measure commercially important coverage instead of judging success only by finding yield.
 
-This prevents forged, stale, malformed, `NaN`/`Infinity`, or internally inconsistent rates from authorizing a deeper crawl.
+`build_priority_page_benchmark(...)` consumes exact selected URL identities from the smart and blind samples plus caller-declared `important_urls` and optional `high_value_urls`. It intentionally does **no URL normalization**: `/x`, `/x/`, and `/X` remain distinct evidence identities. Empty, whitespace-padded, non-string, or duplicate identities fail closed.
 
-`verified_continuation_decision(...)` is the recommended serialized-integrator entry point for transported telemetry. It runs the integrity gate first; invalid telemetry returns `insufficient_evidence` with `next_target=None`. Valid telemetry delegates to the existing `continuation_decision(...)`, preserving the current Lane-A thresholds and behavior.
+The helper reports:
+
+- smart and blind assessed-page counts under explicit 500/1000 caps;
+- smart pages inside and outside the blind reference sample;
+- important-page coverage against priority pages actually present in the blind reference;
+- high-value-page coverage against the same reference principle;
+- smart-only important/high-value discoveries separately, so they cannot inflate the coverage ratio;
+- `None` rather than zero when the blind reference contains no priority pages;
+- `population_scope_complete=false` unconditionally, because this experiment is not proof of whole-site completeness.
+
+`validate_priority_page_benchmark(...)` recomputes count partitions and coverage ratios, enforces the 500/1000 caps, rejects a false sitewide-completeness claim, and fails closed on malformed transported results.
+
+`summarize_priority_benchmark_corpus(...)` deterministically aggregates only valid per-site results. It reports weighted important/high-value coverage, per-site median coverage, pages saved, and full 500-vs-1000 versus inventory-limited site counts. This is intended for the corpus experiment that decides whether smart 500 is sufficient for the default NextGen ceiling.
+
+These priority labels are benchmark inputs only. They do not change repair priority, customer ranking, or production crawl budgets.
 
 ## Serialized integrator hook required
 
 No shared integration surface was modified in this lane. The serialized integrator owns the only required wiring:
 
-1. Keep the current Standard 150 `run_scan` path and `SCAN_BUDGETS["advanced"]["max_pages"] == 150` untouched.
-2. Behind a new off-by-default/shadow next-generation flag, after existing discovery/classification has produced the bounded URL inventory, call `plan_tranche_targets(...)`.
-3. For the first 150 assessed pages, retain the current `select_balanced_urls(...)` selection and existing crawl/security/deadline behavior exactly.
-4. If shadow policy requests another tranche, call `select_adaptive_urls(...)` with already-discovered URLs and only already-available metadata. Do not pre-deduplicate the discovery sequence before calling it; the helper preserves the existing Standard-150 prefix itself.
-5. After a tranche has produced accepted retained evidence, construct cumulative snapshots from one stable evidence identity/version and call `build_tranche_yield_telemetry(...)` followed by `verified_continuation_decision(...)` before authorizing any later tranche.
-6. Charge all later network work to the integrator-owned global request/deadline/security/robots budgets. This lane deliberately does not create a second fetch loop or budget.
-7. Keep telemetry operator/shadow-only until corpus acceptance establishes thresholds and customer semantics.
+1. Keep the current Standard 150 `run_scan` path and production max-page budget untouched.
+2. Behind an off-by-default/shadow next-generation flag, call the tranche planner only after existing bounded discovery/classification.
+3. Preserve the existing first-150 selection and crawl/security/deadline behavior exactly.
+4. Use `select_adaptive_urls(...)` only for later shadow tranches and only with already-discovered URLs/evidence.
+5. Build cumulative telemetry from one stable evidence identity/version and call `verified_continuation_decision(...)` before any later tranche.
+6. Charge all later network work to integrator-owned global request/deadline/security/robots budgets. Lane A creates no independent fetch loop.
+7. For the smart-500 experiment, pass the actual smart and blind selected URL identities into `build_priority_page_benchmark(...)`; label important/high-value URLs only from evidence already owned by the integrator or connected lanes.
+8. Keep all adaptive outputs operator/shadow-only until corpus acceptance establishes thresholds and customer semantics.
 
-If the integrator cannot provide a complete or integrity-valid telemetry signal, the correct state is `insufficient_evidence`, not an automatic 1000-page crawl and not a claim of full understanding.
-
-## Benchmark helper and integrity
-
-`benchmark_smart_500_vs_blind_1000(...)` compares adaptive selection of up to 500 pages against FIFO selection of up to 1000 already-discovered URLs. It reports assessed-page count, unique finding fingerprints, finding yield per 100 assessed pages, template coverage, family coverage, route-signature coverage, page savings, and shared/smart-only/blind-only finding counts.
-
-`smart_finding_coverage_vs_blind` is a true coverage fraction: `shared findings / blind findings`, so smart-only discoveries cannot inflate the value above 1.0. `smart_efficiency_vs_blind` remains a yield-per-100 ratio. When the blind sample has zero findings, comparison ratios that require a blind denominator are `None` with `finding_comparison_state="no_blind_findings"`.
-
-`scanner-api/app/adaptive_benchmark_integrity.py` now validates each benchmark envelope before it is compared or aggregated. It rejects wrong benchmark versions, page counts over 500/1000, impossible coverage counts, non-finite or mismatched finding yields, forged shared/smart-only/blind-only partitions, forged page-savings totals, inconsistent comparison state, and forged coverage/efficiency ratios. Zero blind findings stay explicitly non-comparable rather than becoming zero or infinity.
-
-`summarize_benchmark_corpus(...)` accepts only non-empty string site identities and only integrity-valid member results. It deterministically sorts site IDs and reports site-scoped page/finding totals, aggregate smart-vs-blind coverage/efficiency, median per-site finding coverage, total page savings, and separate counts for full 500-vs-1000 sites versus inventory-limited sites. It intentionally does not de-duplicate finding fingerprints across different sites because cross-site fingerprint identity is outside Lane A.
-
-These helpers are engineering evidence only. They do not authorize crawl expansion and do not produce customer Fixes. Corpus results should decide eventual expansion thresholds.
+If the integrator cannot provide complete or integrity-valid signals, the correct result is `insufficient_evidence`, not an automatic 1000-page crawl and not a claim that the site is fully understood.
 
 ## Verification
 
-Last exact repository Lane-A checkpoint before the integrity, duplicate-compatibility and benchmark-integrity hardening:
+Last branch-native repository checkpoint available before later hardening:
 
 - `PYTHONPATH=. pytest -q tests/test_adaptive_crawl.py` → **21 passed**.
 - `PYTHONPATH=. python -m py_compile app/adaptive_crawl.py tests/test_adaptive_crawl.py` → **passed**.
 
-The tranche-integrity slice adds `tests/test_adaptive_crawl_integrity.py` with 10 deterministic regressions covering valid delegation, forged-rate rejection, non-finite rates, malformed count types, pages-added mismatch, missing observed deltas, rate-without-delta, honest incomplete evidence, forged monotonic flags, and non-mutation.
+Later targeted evidence already recorded on this lane:
 
-The duplicate-compatibility slice adds 2 regressions proving (a) a Standard-150 call is byte-for-byte identical to the existing sampler even when the supplied discovery sequence contains duplicates and (b) deeper adaptive selection retains the exact existing Standard-150 result as its prefix before deduplicating later-tranche candidates. A hermetic targeted harness for those two semantics passed **2/2**.
+- duplicate-compatibility targeted harness → **2/2 passed**;
+- benchmark-integrity/corpus exact source/test bytes → **11/11 passed** hermetically;
+- corresponding `py_compile` → **passed**.
 
-The benchmark-integrity/corpus slice adds `tests/test_adaptive_benchmark_integrity.py` with **11** deterministic regressions. A hermetic run of the exact new source/test bytes passed **11/11**, and `py_compile` passed. The committed blob SHAs match the locally verified bytes:
+Current priority-page benchmark slice:
 
-- `scanner-api/app/adaptive_benchmark_integrity.py` → `0bc6aa5749c7e6261ed6296387f5912d2d47fca7`
-- `scanner-api/tests/test_adaptive_benchmark_integrity.py` → `7cf2225fc59b3b10ff3df373ed9bb537f4d98332`
+- `PYTHONPATH=. pytest -q tests/test_adaptive_priority_benchmark.py` → **11/11 passed** in a hermetic pure-function checkout;
+- `python -m py_compile app/adaptive_priority_benchmark.py tests/test_adaptive_priority_benchmark.py` → **passed**;
+- verified local Git blob SHAs match the committed GitHub blobs exactly:
+  - `scanner-api/app/adaptive_priority_benchmark.py` → `8c399e530bca3be961f27a0f0b6c5a8aa6947e1e`
+  - `scanner-api/tests/test_adaptive_priority_benchmark.py` → `12b4d8bca0ace5b1beee993f5470457ba7da89ca`
 
-The branch now contains **23 adaptive-crawl tests + 10 tranche-integrity tests + 11 benchmark-integrity tests = 44 focused tests**. Exact-head repository commands still required:
+The branch now contains **55 focused tests**:
+
+- 23 adaptive-crawl tests;
+- 10 tranche-integrity tests;
+- 11 finding-benchmark-integrity tests;
+- 11 priority-page benchmark tests.
+
+Exact-head repository commands still required:
 
 ```text
-PYTHONPATH=. pytest -q tests/test_adaptive_crawl.py tests/test_adaptive_crawl_integrity.py tests/test_adaptive_benchmark_integrity.py
-PYTHONPATH=. python -m py_compile app/adaptive_crawl.py app/adaptive_crawl_integrity.py app/adaptive_benchmark_integrity.py tests/test_adaptive_crawl.py tests/test_adaptive_crawl_integrity.py tests/test_adaptive_benchmark_integrity.py
+PYTHONPATH=. pytest -q \
+  tests/test_adaptive_crawl.py \
+  tests/test_adaptive_crawl_integrity.py \
+  tests/test_adaptive_benchmark_integrity.py \
+  tests/test_adaptive_priority_benchmark.py
+
+PYTHONPATH=. python -m py_compile \
+  app/adaptive_crawl.py \
+  app/adaptive_crawl_integrity.py \
+  app/adaptive_benchmark_integrity.py \
+  app/adaptive_priority_benchmark.py \
+  tests/test_adaptive_crawl.py \
+  tests/test_adaptive_crawl_integrity.py \
+  tests/test_adaptive_benchmark_integrity.py \
+  tests/test_adaptive_priority_benchmark.py
 ```
 
-Exact blocker: this runtime's working container has no repository checkout and outbound DNS cannot resolve `github.com`, so it cannot clone/materialize the branch for the full repository pytest run. The draft PR currently has no exact-head PR-triggered test workflow. Therefore the new benchmark-integrity slice is hermetically verified, but the complete **44-test exact-head repository suite is not claimed green yet**. Full repository scanner regression remains a serialized-integrator gate.
+**Exact blocker:** the execution container still cannot resolve `github.com`, so it cannot clone/materialize the complete branch for the full 55-test exact-head repository run. This lane therefore does not claim the full 55/55 repository suite green. A PR-triggered workflow on the exact lane head, or an integrator checkout capable of running the commands above, remains required before integration.
+
+Full scanner regression also remains a serialized-integrator gate after Lane A is transplanted into `nextgen/integration-20260921`.
 
 ## Changed files owned by Lane A
+
+The PR now changes exactly ten Lane-A-owned helper/test/docs files:
 
 - `scanner-api/app/adaptive_crawl.py`
 - `scanner-api/app/adaptive_crawl_integrity.py`
 - `scanner-api/app/adaptive_benchmark_integrity.py`
+- `scanner-api/app/adaptive_priority_benchmark.py`
 - `scanner-api/tests/test_adaptive_crawl.py`
 - `scanner-api/tests/test_adaptive_crawl_integrity.py`
 - `scanner-api/tests/test_adaptive_benchmark_integrity.py`
+- `scanner-api/tests/test_adaptive_priority_benchmark.py`
 - `docs/nextgen/lane-a-adaptive-crawl-handoff.md`
 - `docs/nextgen/lane-a-adaptive-crawl.md`
 
@@ -125,4 +152,4 @@ No serialized-integrator-owned shared surface was changed.
 
 ## Rollback
 
-Before serialized integration, rollback is simply omitting the Lane-A commits. After integration, the feature must remain off/shadow by default; removing the integration hook returns behavior to the unchanged Standard 150 path because this lane changes no production budgets or durable data.
+Before serialized integration, rollback is simply omitting the Lane-A commits. After integration, the feature must remain off/shadow by default; removing the integration hook returns behavior to the unchanged Standard 150 path because this lane changes no production budget or durable data.

@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 from .connected_evidence_source_contract import validate_connected_evidence_source_identity
 
 RECORD_SEMANTICS_VERSION = "connected_evidence_record_semantics_v1"
+RECORD_SHAPE_VERSION = "connected_evidence_record_shape_v1"
 
 _GA4_ASSISTANT_DOMAINS: dict[str, tuple[str, ...]] = {
     "chatgpt": ("chatgpt.com", "chat.openai.com"),
@@ -50,6 +51,67 @@ _GA4_ASSISTANT_ALIASES: dict[str, str] = {
     "you": "you",
     "you_com": "you",
     "phind": "phind",
+}
+
+_REGISTERED_RECORD_FIELDS: dict[tuple[str, str], frozenset[str]] = {
+    ("google_search_console", "search_analytics"): frozenset(
+        {"dimensions", "clicks", "impressions", "ctr", "position", "row_number"}
+    ),
+    ("google_search_console", "url_inspection"): frozenset(
+        {
+            "inspection_url",
+            "inspection_result_link",
+            "verdict",
+            "coverage_state",
+            "robots_txt_state",
+            "indexing_state",
+            "page_fetch_state",
+            "google_canonical",
+            "user_canonical",
+            "last_crawl_time",
+            "crawled_as",
+            "referring_urls",
+            "sitemap",
+        }
+    ),
+    ("microsoft_bing_webmaster_tools", "ai_performance_export"): frozenset(
+        {
+            "kind",
+            "date",
+            "url",
+            "grounding_query",
+            "citations",
+            "average_cited_pages",
+            "topic",
+            "intent",
+            "citation_share",
+            "geography",
+            "country",
+            "region",
+            "market",
+            "surface",
+            "row_number",
+        }
+    ),
+    ("google_analytics_4", "ai_assistant_referrals"): frozenset(
+        {
+            "assistant",
+            "date",
+            "source",
+            "medium",
+            "landing_page",
+            "geography",
+            "country",
+            "region",
+            "device_category",
+            "sessions",
+            "engaged_sessions",
+            "users",
+            "key_events",
+            "revenue",
+            "row_number",
+        }
+    ),
 }
 
 
@@ -130,7 +192,9 @@ def _parse_timestamp(value: Any, *, field: str) -> datetime:
 
 def _normalize_assistant_token(value: Any, *, field: str) -> str:
     text = _bounded_text(value, field=field, max_length=128).lower()
-    normalized = "_".join(part for part in "".join(char if char.isalnum() else " " for char in text).split())
+    normalized = "_".join(
+        part for part in "".join(char if char.isalnum() else " " for char in text).split()
+    )
     canonical = _GA4_ASSISTANT_ALIASES.get(normalized)
     if canonical is None:
         raise ValueError(f"{field} is not a registered AI assistant")
@@ -158,6 +222,22 @@ def _assistant_for_source(value: Any, *, field: str) -> str | None:
         if any(host == domain or host.endswith(f".{domain}") for domain in domains):
             return assistant
     return None
+
+
+def _validate_registered_record_shape(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    profile_key: tuple[str, str],
+) -> None:
+    """Reject unversioned provider claims hidden in otherwise valid records."""
+
+    allowed = _REGISTERED_RECORD_FIELDS.get(profile_key)
+    if allowed is None:
+        raise ValueError("unsupported connected-evidence provider/source_kind profile")
+    for index, record in enumerate(records):
+        unknown = sorted(set(record) - allowed)
+        if unknown:
+            raise ValueError(f"records[{index}] has unregistered fields: {unknown}")
 
 
 def _validate_gsc_search_analytics(records: Sequence[Mapping[str, Any]]) -> None:
@@ -293,9 +373,12 @@ def validate_connected_evidence_record_semantics(
     """Validate normalized provider records and return ``evidence`` unchanged.
 
     This function intentionally composes after source-identity validation.  It
-    fails closed when record semantics are contradictory, ambiguous, or rely on
-    spoof-prone source labels.  Unavailable evidence has no records under the
-    generic contract and therefore needs no record-level observation proof.
+    fails closed when record semantics are contradictory, ambiguous, rely on
+    spoof-prone source labels, or contain unregistered provider fields.  Unknown
+    record fields require an intentional version/profile change instead of
+    silently extending the trusted evidence shape.  Unavailable evidence has no
+    records under the generic contract and therefore needs no record-level
+    observation proof.
     """
 
     validate_connected_evidence_source_identity(evidence)
@@ -307,6 +390,7 @@ def validate_connected_evidence_record_semantics(
             raise ValueError(f"records[{index}] must be an object")
 
     profile_key = (evidence["provider"], evidence["source_kind"])
+    _validate_registered_record_shape(records, profile_key=profile_key)
     if profile_key == ("google_search_console", "search_analytics"):
         _validate_gsc_search_analytics(records)
     elif profile_key == ("google_search_console", "url_inspection"):

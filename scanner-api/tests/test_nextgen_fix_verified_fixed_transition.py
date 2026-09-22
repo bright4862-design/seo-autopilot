@@ -1,3 +1,5 @@
+import pytest
+
 from app.nextgen_fix_verification import (
     PARTIAL,
     PASS,
@@ -265,3 +267,23 @@ def test_legacy_compatible_is_rejected_for_versioned_nextgen_transition():
     )
     assert decision["allowed"] is False
     assert decision["reason"] == "legacy_comparison_not_proven:legacy_comparison_not_versioned_compatible"
+
+
+@pytest.mark.parametrize(
+    ("malformed_scope", "expected_reason"),
+    [
+        ([" https://example.com/a ", "https://example.com/b"], "scope_identity_has_surrounding_whitespace"),
+        ([{"evidence_key": "https://example.com/a"}, "https://example.com/b"], "scope_contains_non_string_identity"),
+        ([123, "https://example.com/b"], "scope_contains_non_string_identity"),
+    ],
+)
+def test_malformed_scope_identity_cannot_prove_verified_fixed_transition(malformed_scope, expected_reason):
+    historical = previous()
+    current = result(historical, resolved=malformed_scope)
+    decision = strict_verified_fixed_transition_decision(historical, current, legacy())
+
+    assert decision["allowed"] is False
+    assert decision["result_binding"]["valid"] is False
+    assert decision["result_integrity"]["valid"] is False
+    assert decision["result_integrity"]["reason"] == expected_reason
+    assert decision["reason"] == f"nextgen_result_not_bound:result_integrity_invalid:{expected_reason}"

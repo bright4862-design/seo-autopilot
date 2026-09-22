@@ -3,13 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from .nextgen_fix_verification import COULD_NOT_VERIFY
-from .nextgen_fix_verification_historical_bound import (
-    evaluate_verification_observations_historical_bound,
+from .nextgen_fix_verification_origin_binding import (
+    evaluate_verification_observations_origin_bound,
 )
 from .nextgen_fix_verified_fixed_replay import strict_verified_fixed_transition_from_evidence
 
 STRICT_VERIFIED_FIXED_OBSERVATION_REPLAY_VERSION = (
-    "fix_verified_fixed_observation_replay_v4_exact_historical_repair_identity"
+    "fix_verified_fixed_observation_replay_v5_exact_scan_origin_binding"
 )
 
 
@@ -38,14 +38,14 @@ def strict_verified_fixed_transition_from_observations(
     previous_scan_origin: str = "",
     scan_origin: str = "",
 ) -> dict[str, Any]:
-    """Recompute both verification proofs from exact current observations.
+    """Recompute both verification proofs from exact source-bound observations.
 
     The lower-level replay helper already prevents a transported legacy comparator
-    from authorizing ``verified_fixed``. This boundary removes the analogous trust
-    in a transported NextGen PASS, rejects proving metadata that would require
-    coercion/normalization, requires every supplied current page/rule evaluation
-    identity alias to resolve to one exact evidence identity, and now also binds
-    the historical stable repair identity to exact source/persisted metadata.
+    from authorizing ``verified_fixed``. This boundary also refuses a transported
+    NextGen PASS and now binds historical, plan, page, and rule-evaluation URL
+    evidence to exact canonical caller-owned scan origins before either proof is
+    allowed to run. Relative evidence from another scan therefore cannot become
+    proof merely because a caller supplies the wrong origin.
 
     It recomputes the verification result from the exact historical repair,
     targeted plan, current page observations, rule evaluations, and comparison
@@ -74,18 +74,15 @@ def strict_verified_fixed_transition_from_observations(
         return _denied("rule_evaluations_contains_non_object")
     if any(not isinstance(item, dict) for item in current_fixes):
         return _denied("current_fixes_contains_non_object")
-    if not isinstance(previous_scan_origin, str) or previous_scan_origin != previous_scan_origin.strip():
-        return _denied("previous_scan_origin_invalid")
-    if not isinstance(scan_origin, str) or scan_origin != scan_origin.strip():
-        return _denied("scan_origin_invalid")
 
     try:
-        recomputed_result = evaluate_verification_observations_historical_bound(
+        recomputed_result = evaluate_verification_observations_origin_bound(
             plan,
             previous_record,
             current_pages,
             rule_evaluations,
             current_contract,
+            previous_scan_origin=previous_scan_origin,
             scan_origin=scan_origin,
         )
     except (KeyError, TypeError, ValueError) as exc:

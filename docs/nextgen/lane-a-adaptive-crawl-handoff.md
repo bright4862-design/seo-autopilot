@@ -18,11 +18,11 @@ The helper contracts are versioned and deterministic:
 
 ## Selection contract
 
-`select_adaptive_urls(...)` intentionally delegates the first 150 slots to the existing `select_balanced_urls(...)` implementation. A target of 150 therefore returns the existing Standard 150 selection order exactly. Only targets above 150 enter the new greedy extension logic.
+`select_adaptive_urls(...)` delegates the first 150 slots to the existing `select_balanced_urls(...)` implementation using the original discovered sequence, before adaptive deduplication. A target of 150 therefore preserves the existing Standard 150 selection order exactly, including the existing sampler's behavior if discovery ever contains duplicate URL identities. For deeper targets, the same exact Standard-150 result is retained as the prefix and only the later adaptive extension operates on a unique URL universe. This prevents pre-deduplication from changing existing bucket counts/quotas and silently drifting the Standard-150 baseline.
 
 Later-tranche ranking uses only evidence already supplied by the caller. It performs no network work. The deterministic score favors uncovered URL families, route signatures and locale-normalized top-level path prefixes, plus existing high-value/trust classification and optional bounded `template_novelty`, `graph_novelty` and `finding_affinity` hints. Locale normalization prevents translated market prefixes such as `/fr/...` and `/de/...` from being rewarded as distinct path-prefix novelty. Non-finite optional metadata (`NaN`, `+/-Infinity`) is ignored instead of affecting ranking. Ties preserve original discovery order before URL lexical order.
 
-The selector is bounded by the number of already-discovered URLs, the requested target, and an explicit `MAX_ADAPTIVE_TARGET == 1000` safety ceiling. A caller asking for more than 1000 pages cannot make this lane authorize them. Raising that ceiling requires an explicit contract/version change and serialized-integrator budget review.
+The selector is bounded by the number of already-discovered unique URLs available for deeper assessment, the requested target, and an explicit `MAX_ADAPTIVE_TARGET == 1000` safety ceiling. A caller asking for more than 1000 pages cannot make this lane authorize them. Raising that ceiling requires an explicit contract/version change and serialized-integrator budget review.
 
 The selector never claims that exhausting the discovered URL set means the whole site is understood.
 
@@ -64,7 +64,7 @@ No shared integration surface was modified in this lane. The serialized integrat
 1. Keep the current Standard 150 `run_scan` path and `SCAN_BUDGETS["advanced"]["max_pages"] == 150` untouched.
 2. Behind a new off-by-default/shadow next-generation flag, after existing discovery/classification has produced the bounded URL inventory, call `plan_tranche_targets(...)`.
 3. For the first 150 assessed pages, retain the current `select_balanced_urls(...)` selection and existing crawl/security/deadline behavior exactly.
-4. If shadow policy requests another tranche, call `select_adaptive_urls(...)` with already-discovered URLs and only already-available metadata. Do not let the helper schedule or fetch URLs itself.
+4. If shadow policy requests another tranche, call `select_adaptive_urls(...)` with already-discovered URLs and only already-available metadata. Do not pre-deduplicate the discovery sequence before calling it; the helper preserves the existing Standard-150 prefix itself.
 5. After a tranche has produced accepted retained evidence, construct cumulative snapshots from one stable evidence identity/version and call `build_tranche_yield_telemetry(...)` followed by `verified_continuation_decision(...)` before authorizing any later tranche.
 6. Charge all later network work to the integrator-owned global request/deadline/security/robots budgets. This lane deliberately does not create a second fetch loop or budget.
 7. Keep telemetry operator/shadow-only until corpus acceptance establishes thresholds and customer semantics.
@@ -81,21 +81,23 @@ The benchmark is a deterministic engineering instrument, not a production claim 
 
 ## Verification
 
-Last executed Lane-A checkpoint before the new integrity slice:
+Last exact repository Lane-A checkpoint before the integrity and duplicate-compatibility hardening:
 
 - `PYTHONPATH=. pytest -q tests/test_adaptive_crawl.py` → **21 passed**.
 - `PYTHONPATH=. python -m py_compile app/adaptive_crawl.py tests/test_adaptive_crawl.py` → **passed**.
 
-The new integrity slice adds `tests/test_adaptive_crawl_integrity.py` with 10 deterministic regressions covering valid delegation, forged-rate rejection, non-finite rates, malformed count types, pages-added mismatch, missing observed deltas, rate-without-delta, honest incomplete evidence, forged monotonic flags, and non-mutation.
+The integrity slice adds `tests/test_adaptive_crawl_integrity.py` with 10 deterministic regressions covering valid delegation, forged-rate rejection, non-finite rates, malformed count types, pages-added mismatch, missing observed deltas, rate-without-delta, honest incomplete evidence, forged monotonic flags, and non-mutation.
 
-Exact-head commands that still need to run:
+The duplicate-compatibility slice adds 2 regressions proving (a) a Standard-150 call is byte-for-byte identical to the existing sampler even when the supplied discovery sequence contains duplicates and (b) deeper adaptive selection retains the exact existing Standard-150 result as its prefix before deduplicating later-tranche candidates. A hermetic targeted harness for those two semantics passed **2/2** in this run.
+
+The branch now contains **23 adaptive-crawl tests + 10 integrity tests = 33 focused tests**. Exact-head repository commands still required:
 
 ```text
 PYTHONPATH=. pytest -q tests/test_adaptive_crawl.py tests/test_adaptive_crawl_integrity.py
 PYTHONPATH=. python -m py_compile app/adaptive_crawl.py app/adaptive_crawl_integrity.py tests/test_adaptive_crawl.py tests/test_adaptive_crawl_integrity.py
 ```
 
-Current automation-run blocker: the available local Python/container runner is returning infrastructure `ClientError`, and this draft PR targets `nextgen/integration-20260921`, so the repository's `main`-targeted PR workflow does not produce a GitHub Actions run for this head. Therefore the new 10-test integrity slice is committed but **not claimed green yet**. Full repository scanner regression remains a serialized-integrator gate.
+Exact blocker: this runtime's working container has no repository checkout and outbound DNS cannot resolve `github.com`, so it cannot clone/materialize the branch for the full repository pytest run. GitHub reports no Actions workflow run for this integration-target draft head. Therefore the two new semantics are targeted-harness verified, but the complete **33-test exact-head repository suite is not claimed green yet**. Full repository scanner regression remains a serialized-integrator gate.
 
 ## Changed files owned by Lane A
 

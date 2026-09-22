@@ -281,13 +281,25 @@ def vector_bound_semantic_analysis_evidence(
             "state": "not_verified",
             "reason": population_error,
             "vectorizer_version": None,
+            "input_page_count": len(pages),
             "assessed_page_identity_count": 0,
             "vectorized_pages": 0,
             "determinism_checked": False,
             "determinism_verified": False,
             "input_isolation_enforced": True,
             "semantic_vector_coverage_version": SEMANTIC_VECTOR_COVERAGE_VERSION,
-            **coverage,
+            "semantic_vector_coverage": coverage,
+            "page_identity_coverage_state": coverage["page_identity_coverage_state"],
+            "semantic_vector_coverage_state": coverage["semantic_vector_coverage_state"],
+            "unidentified_page_count": coverage["unidentified_page_count"],
+            "unvectorized_page_identity_count": coverage[
+                "unvectorized_page_identity_count"
+            ],
+            "semantic_pair_population_complete": coverage[
+                "semantic_pair_population_complete"
+            ],
+            "semantic_pair_scope": coverage["semantic_pair_scope"],
+            "sitewide_semantic_coverage_claim": False,
         }
         reason = f"semantic_vector_{population_error}"
         return _base_result(

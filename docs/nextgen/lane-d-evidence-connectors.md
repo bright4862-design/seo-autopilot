@@ -24,13 +24,14 @@ Lane D exposes seven pure fail-closed validation boundaries.
    - registered provider/source/surface/method/transport profiles and connector provenance;
    - URL Inspection and Bing URL identities force valid HTTP(S) ports;
    - boolean provenance is type-strict;
-   - ambiguous path-scoped GSC URL-prefix and Bing branch identities now fail closed unless their non-root path uses the provider-style trailing `/` directory boundary. This prevents `/docs` from later being mistaken for the scope of `/docs-foreign/...`.
+   - ambiguous path-scoped GSC URL-prefix and Bing branch identities fail closed unless their non-root path uses the provider-style trailing `/` directory boundary. This prevents `/docs` from later being mistaken for the scope of `/docs-foreign/...`.
 3. `validate_connected_evidence_record_semantics(...)` / `connected_evidence_record_semantics_v1`
    - provider-specific record meaning: GSC metric relationships, URL Inspection URL/timestamp semantics, Bing kind/citation semantics, GA4 assistant/source spoof resistance, and GA4 metric relationships.
 4. `validate_connected_evidence_coverage_semantics(...)` / `connected_evidence_coverage_semantics_v1`
    - binds sample/coverage metadata to transported records and rejects forged counts, inconsistent import accounting, dimension drift, period contradictions, and record dates later than observation.
 5. `validate_connected_evidence_scope_semantics(...)` / `connected_evidence_scope_semantics_v1`
-   - binds observed pages/landing paths to declared GSC, Bing, and GA4 source/property scopes.
+   - binds observed pages/landing paths to declared GSC, Bing, and GA4 source/property scopes;
+   - GSC/Bing HTTP scope paths fail closed on raw or percent-encoded dot-segment traversal, encoded `/` or `\\` separators, malformed percent escapes, control characters, raw backslashes, and semicolon path parameters that would otherwise be discarded during canonicalization.
 6. `validate_connected_evidence_record_identity_semantics(...)` / `connected_evidence_record_identity_v1`
    - rejects duplicate logical provider rows even when transport row numbers or metrics differ;
    - accepted GA4 assistant aliases are canonicalized for identity;
@@ -57,6 +58,7 @@ Sanitized fixtures live under `scanner-api/tests/fixtures_connected_evidence/`. 
 
 - Search Console `sc-domain:` properties accept their DNS domain/subdomains; malformed path/port/IP domain-property identities fail closed.
 - Search Console URL-prefix and Bing path-scoped property identities use a trailing `/` directory boundary for non-root paths. The source-profile gate rejects an ambiguous `/docs` identity rather than allowing a later raw prefix check to interpret `/docs-foreign` as a descendant.
+- Scope membership additionally refuses ambiguous URL path forms whose meaning can change after ordinary URL normalization: raw/encoded dot segments, encoded path separators, raw backslashes, malformed escapes, controls, and semicolon path parameters. Ordinary encoded leaf content such as `%20` remains valid.
 - Search Analytics page-scope validation applies only when `page` is an observed dimension.
 - URL Inspection `inspection_url` must belong to its declared Search Console property.
 - Bing cited-page URLs must remain inside the declared site scope.
@@ -95,20 +97,21 @@ Focused suites on this lane now contain:
 - `scanner-api/tests/test_connected_evidence_timestamp_hardening.py`: **2 timestamp-hardening tests**;
 - `scanner-api/tests/test_connected_evidence_record_contract.py`: **17 record-semantics tests**;
 - `scanner-api/tests/test_connected_evidence_coverage_contract.py`: **13 coverage-semantics tests**;
-- `scanner-api/tests/test_connected_evidence_scope_contract.py`: **19 source/property-scope tests**;
+- `scanner-api/tests/test_connected_evidence_scope_contract.py`: **25 source/property-scope tests**;
 - `scanner-api/tests/test_connected_evidence_record_identity_contract.py`: **12 logical-record-identity tests**;
 - `scanner-api/tests/test_connected_evidence_bundle_contract.py`: **24 snapshot-bundle/full-chain tests**;
 - `scanner-api/tests/test_connected_evidence_snapshot_observation_identity.py`: **6 snapshot-observation-identity tests**;
 - `scanner-api/tests/test_connected_evidence_record_url_identity.py`: **4 URL-record-identity tests**;
 - `scanner-api/tests/test_connected_evidence_prefix_provenance.py`: **4 path-prefix-provenance tests**.
 
-Expected focused total: **168 tests**.
+Expected focused total: **174 tests**.
 
 Latest verified slice evidence in this runtime:
 
-- the exact path-prefix-provenance candidate logic passed **4/4** in a hermetic package with only the already-tested generic envelope boundary stubbed;
-- `python -m py_compile app/connected_evidence_source_contract.py tests/test_connected_evidence_prefix_provenance.py` passed in the same hermetic package;
-- immediately prior, URL-record identity hardening passed **4/4** in a hermetic package with only the already-tested scope boundary stubbed, and its changed module/test passed `py_compile`.
+- the new ambiguous scope-path hardening passed **6/6** in a hermetic package with only the already-tested coverage boundary stubbed;
+- `python -m py_compile app/connected_evidence_scope_contract.py tests/test_connected_evidence_scope_contract.py` passed for the changed scope logic/test candidate in the same hermetic package;
+- immediately prior, path-prefix-provenance candidate logic passed **4/4** in a hermetic package with only the already-tested generic envelope boundary stubbed, and its changed source-contract/test passed `py_compile`;
+- immediately prior to that, URL-record identity hardening passed **4/4** in a hermetic package with only the already-tested scope boundary stubbed, and its changed module/test passed `py_compile`.
 
 Before serialized integration, run from `scanner-api/` on the exact lane head:
 
@@ -118,9 +121,9 @@ and:
 
 `python -m py_compile app/connected_evidence.py app/connected_evidence_contract.py app/connected_evidence_source_contract.py app/connected_evidence_record_contract.py app/connected_evidence_coverage_contract.py app/connected_evidence_scope_contract.py app/connected_evidence_record_identity_contract.py app/connected_evidence_bundle_contract.py tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py tests/test_connected_evidence_coverage_contract.py tests/test_connected_evidence_scope_contract.py tests/test_connected_evidence_record_identity_contract.py tests/test_connected_evidence_bundle_contract.py tests/test_connected_evidence_snapshot_observation_identity.py tests/test_connected_evidence_record_url_identity.py tests/test_connected_evidence_prefix_provenance.py`
 
-Do not mark Lane D integration-ready until the exact-head **168-test** repository-native run is green and a fresh exact-head review has no unresolved material findings.
+Do not mark Lane D integration-ready until the exact-head **174-test** repository-native run is green and a fresh exact-head review has no unresolved material findings.
 
-The full repository-native exact-head 168-test run is **not yet claimed green** in this runtime. PR #332 intentionally targets `nextgen/integration-20260921`; do not retarget the PR or alter release workflows merely to manufacture CI.
+The full repository-native exact-head 174-test run is **not yet claimed green** in this runtime. PR #332 intentionally targets `nextgen/integration-20260921`; do not retarget the PR or alter release workflows merely to manufacture CI.
 
 ## Known risks / truthful unsupported states
 
@@ -135,6 +138,6 @@ The full repository-native exact-head 168-test run is **not yet claimed green** 
 - Unavailable states deliberately do not retain observational count/window metadata.
 - Any future envelope/profile metadata expansion should be versioned rather than silently accepted.
 
-The lane now changes **31 Lane-D-owned files**: seven handoff/hardening docs, eight pure app modules, twelve focused test modules, and four sanitized fixtures. No serialized-integrator-owned surface is modified.
+The lane changes **31 Lane-D-owned files**: seven handoff/hardening docs, eight pure app modules, twelve focused test modules, and four sanitized fixtures. No serialized-integrator-owned surface is modified.
 
 Rollback is lane-local: omit these pure modules/tests/docs from the serialized integration branch. No production state, credentials, schema, durable authority, or customer data requires reversal.

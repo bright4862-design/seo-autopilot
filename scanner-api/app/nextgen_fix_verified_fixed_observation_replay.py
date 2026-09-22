@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from .nextgen_fix_verification import COULD_NOT_VERIFY, evaluate_verification_plan
+from .nextgen_fix_verification import COULD_NOT_VERIFY
+from .nextgen_fix_verification_observation_integrity import (
+    evaluate_verification_observations_strict,
+)
 from .nextgen_fix_verified_fixed_replay import strict_verified_fixed_transition_from_evidence
 
 STRICT_VERIFIED_FIXED_OBSERVATION_REPLAY_VERSION = (
-    "fix_verified_fixed_observation_replay_v1_recomputed_nextgen_and_legacy"
+    "fix_verified_fixed_observation_replay_v2_exact_proving_metadata"
 )
 
 
@@ -35,14 +38,17 @@ def strict_verified_fixed_transition_from_observations(
     previous_scan_origin: str = "",
     scan_origin: str = "",
 ) -> dict[str, Any]:
-    """Recompute both verification proofs from current observations.
+    """Recompute both verification proofs from exact current observations.
 
     The lower-level replay helper already prevents a transported legacy comparator
     from authorizing ``verified_fixed``. This boundary removes the analogous trust
-    in a transported NextGen PASS: it recomputes the verification result from the
-    exact plan, current page observations, rule evaluations, and comparison
-    contract before recomputing the historical comparator over the same current
-    page/fix evidence.
+    in a transported NextGen PASS and now also rejects transport metadata that
+    would require string coercion or whitespace normalization before it could be
+    treated as proving identity/version evidence.
+
+    It recomputes the verification result from the exact plan, current page
+    observations, rule evaluations, and comparison contract, then recomputes the
+    historical comparator over the same current page/fix evidence.
 
     The function is pure. It performs no network work and does not mutate durable
     workflow, authority, persistence, customer projection, admission, or release
@@ -72,7 +78,7 @@ def strict_verified_fixed_transition_from_observations(
         return _denied("scan_origin_invalid")
 
     try:
-        recomputed_result = evaluate_verification_plan(
+        recomputed_result = evaluate_verification_observations_strict(
             plan,
             previous_record,
             current_pages,

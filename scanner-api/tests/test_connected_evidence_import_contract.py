@@ -64,18 +64,27 @@ def test_unknown_extra_columns_remain_ignored_by_ambiguity_guard():
 
 def test_bing_strict_row_wrapper_preflights_then_delegates():
     row = {"Cited Page": "https://example.com/a", "Citation Count": "2"}
-    result = normalize_bing_ai_performance_import_rows([row], site_url="https://example.com")
-    assert result["provider"] == "bing"
-    assert result["rows"] == [row]
+    result = normalize_bing_ai_performance_import_rows(
+        [row],
+        site_url="https://example.com",
+        retrieved_at="2026-09-23T00:00:00Z",
+        stale_after_days=None,
+    )
+    assert result["provider"] == "microsoft_bing_webmaster_tools"
+    assert result["state"] == "verified"
+    assert result["records"][0]["url"] == "https://example.com/a"
 
 
 def test_bing_strict_csv_wrapper_preflights_then_delegates():
     result = normalize_bing_ai_performance_import_csv(
         "Cited Page,Citation Count\nhttps://example.com/a,2\n",
         site_url="https://example.com",
+        retrieved_at="2026-09-23T00:00:00Z",
+        stale_after_days=None,
     )
-    assert result["provider"] == "bing"
-    assert result["rows"][0]["Citation Count"] == "2"
+    assert result["provider"] == "microsoft_bing_webmaster_tools"
+    assert result["state"] == "verified"
+    assert result["records"][0]["citations"] == 2
 
 
 def test_ga4_strict_row_wrapper_blocks_conflict_before_delegate():

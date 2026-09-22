@@ -179,3 +179,95 @@ def test_contextual_opportunities_are_deterministic_across_page_order():
     )
 
     assert forward == reverse
+
+
+def _linked_graph():
+    left = "https://e.test/a"
+    right = "https://e.test/b"
+    pages = [page(left), page(right)]
+    graph = build_weighted_internal_link_graph(
+        pages,
+        [
+            {
+                "source_url": left,
+                "target_url": right,
+                "anchor_text": "Products",
+                "ancestor_tags": ["a", "nav"],
+                "ancestor_roles": ["navigation"],
+            }
+        ],
+    )
+    return left, right, pages, graph
+
+
+def _node(graph, url):
+    return next(row for row in graph["nodes"] if row["url"] == url)
+
+
+def test_forged_weighted_in_fails_closed():
+    left, right, pages, graph = _linked_graph()
+    forged = deepcopy(graph)
+    _node(forged, right)["weighted_in"] += 10.0
+
+    result = contextual_internal_link_opportunities(
+        pages,
+        forged,
+        semantic_threshold=0.99,
+        vectorizer=MappingVectorizer(),
+    )
+
+    assert result["state"] == "not_verified"
+    assert result["graph_integrity_state"] == "not_verified"
+    assert result["reason"] == "graph_node_weight_mismatch"
+    assert result["candidate_count"] == 0
+
+
+def test_forged_weighted_out_fails_closed():
+    left, right, pages, graph = _linked_graph()
+    forged = deepcopy(graph)
+    _node(forged, left)["weighted_out"] += 10.0
+
+    result = contextual_internal_link_opportunities(
+        pages,
+        forged,
+        semantic_threshold=0.99,
+        vectorizer=MappingVectorizer(),
+    )
+
+    assert result["state"] == "not_verified"
+    assert result["reason"] == "graph_node_weight_mismatch"
+    assert result["candidate_count"] == 0
+
+
+def test_forged_observed_in_edge_count_fails_closed():
+    left, right, pages, graph = _linked_graph()
+    forged = deepcopy(graph)
+    _node(forged, right)["observed_in_edge_count"] += 1
+
+    result = contextual_internal_link_opportunities(
+        pages,
+        forged,
+        semantic_threshold=0.99,
+        vectorizer=MappingVectorizer(),
+    )
+
+    assert result["state"] == "not_verified"
+    assert result["reason"] == "graph_node_edge_count_mismatch"
+    assert result["candidate_count"] == 0
+
+
+def test_forged_observed_out_edge_count_fails_closed():
+    left, right, pages, graph = _linked_graph()
+    forged = deepcopy(graph)
+    _node(forged, left)["observed_out_edge_count"] += 1
+
+    result = contextual_internal_link_opportunities(
+        pages,
+        forged,
+        semantic_threshold=0.99,
+        vectorizer=MappingVectorizer(),
+    )
+
+    assert result["state"] == "not_verified"
+    assert result["reason"] == "graph_node_edge_count_mismatch"
+    assert result["candidate_count"] == 0

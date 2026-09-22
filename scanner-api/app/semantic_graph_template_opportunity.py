@@ -70,6 +70,8 @@ def _validated_contextual_candidates(
         return [], 0, False, "contextual_opportunity_scope_mismatch"
     if contextual.get("graph_integrity_state") != "verified":
         return [], 0, False, "contextual_opportunity_graph_not_verified"
+    if contextual.get("semantic_pair_scan_complete") is not True:
+        return [], 0, False, "contextual_opportunity_scan_incomplete"
     if contextual.get("sitewide_link_absence_claim") is not False:
         return [], 0, False, "contextual_opportunity_sitewide_claim_invalid"
 
@@ -80,15 +82,14 @@ def _validated_contextual_candidates(
         return [], 0, False, "contextual_opportunity_shape_invalid"
     if candidate_count < len(candidates):
         return [], 0, False, "contextual_opportunity_count_invalid"
-    if not truncated and candidate_count != len(candidates):
-        return [], 0, False, "contextual_opportunity_count_mismatch"
+    if truncated != (candidate_count > len(candidates)):
+        return [], 0, False, "contextual_opportunity_truncation_mismatch"
 
     state = str(contextual.get("state") or "")
     if state == "not_verified":
         return [], 0, False, "contextual_opportunity_not_verified"
-    if candidates and state != "candidate":
-        return [], 0, False, "contextual_opportunity_state_mismatch"
-    if not candidates and state not in {"no_candidate_observed", "candidate"}:
+    expected_state = "candidate" if candidates else "no_candidate_observed"
+    if state != expected_state:
         return [], 0, False, "contextual_opportunity_state_mismatch"
 
     seen: set[tuple[str, str]] = set()
@@ -121,6 +122,8 @@ def _validated_contextual_candidates(
             return [], 0, False, "contextual_candidate_proposed_zone_invalid"
         if candidate.get("observed_contextual_edge_present") is not False:
             return [], 0, False, "contextual_candidate_contextual_edge_invalid"
+        if "existing_strongest_zone" not in candidate:
+            return [], 0, False, "contextual_candidate_existing_zone_missing"
 
         actual_edge = edges.get(pair)
         actual_present = actual_edge is not None
@@ -135,6 +138,14 @@ def _validated_contextual_candidates(
             return [], 0, False, "contextual_candidate_already_contextual"
         if candidate.get("existing_strongest_zone") != actual_zone:
             return [], 0, False, "contextual_candidate_existing_zone_mismatch"
+
+        expected_reason = (
+            "existing_non_contextual_edge_contextual_upgrade"
+            if actual_present
+            else "no_observed_edge_in_assessed_sample"
+        )
+        if candidate.get("reason") != expected_reason:
+            return [], 0, False, "contextual_candidate_reason_mismatch"
         validated.append(candidate)
 
     return validated, candidate_count, truncated, None

@@ -201,3 +201,55 @@ def test_ga4_rejects_absolute_or_scheme_relative_landing_page():
 def test_ga4_allows_provider_not_set_landing_page_without_inventing_url_identity():
     evidence = _ga4(landing_page="(not set)")
     assert scope_contract.validate_connected_evidence_scope_semantics(evidence) is evidence
+
+
+def test_gsc_url_prefix_rejects_raw_dot_segment_traversal():
+    with pytest.raises(ValueError, match="dot-segment traversal"):
+        scope_contract.validate_connected_evidence_scope_semantics(
+            _gsc_search(
+                property_uri="https://example.test/docs/",
+                page="https://example.test/docs/../private",
+            )
+        )
+
+
+def test_gsc_url_prefix_rejects_percent_encoded_dot_segment_traversal():
+    with pytest.raises(ValueError, match="dot-segment traversal"):
+        scope_contract.validate_connected_evidence_scope_semantics(
+            _gsc_search(
+                property_uri="https://example.test/docs/",
+                page="https://example.test/docs/%2e%2e/private",
+            )
+        )
+
+
+def test_bing_scope_rejects_percent_encoded_path_separator():
+    with pytest.raises(ValueError, match="encoded path separator"):
+        scope_contract.validate_connected_evidence_scope_semantics(
+            _bing(url="https://example.test/docs/%2Fprivate")
+        )
+
+
+def test_scope_provenance_rejects_dot_segment_traversal():
+    with pytest.raises(ValueError, match="dot-segment traversal"):
+        scope_contract.validate_connected_evidence_scope_semantics(
+            _bing(
+                site_url="https://example.test/docs/../",
+                url="https://example.test/docs/a",
+            )
+        )
+
+
+def test_scope_rejects_semicolon_path_parameters_that_would_be_dropped():
+    with pytest.raises(ValueError, match="path parameters"):
+        scope_contract.validate_connected_evidence_scope_semantics(
+            _gsc_search(property_uri="https://example.test/docs/;variant")
+        )
+
+
+def test_scope_allows_unambiguous_percent_encoded_leaf_content():
+    evidence = _gsc_search(
+        property_uri="https://example.test/docs/",
+        page="https://example.test/docs/seo%20guide",
+    )
+    assert scope_contract.validate_connected_evidence_scope_semantics(evidence) is evidence

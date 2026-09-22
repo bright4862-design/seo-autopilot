@@ -151,6 +151,22 @@ def test_ga4_source_rejects_out_of_range_port():
         validate_connected_evidence_record_semantics(evidence)
 
 
+def test_ga4_engaged_sessions_cannot_exceed_sessions():
+    evidence = _ga4(
+        [
+            {
+                "assistant": "chatgpt",
+                "source": "chatgpt.com",
+                "sessions": 2,
+                "engaged_sessions": 3,
+                "row_number": 1,
+            }
+        ]
+    )
+    with pytest.raises(ValueError, match="engaged_sessions cannot exceed sessions"):
+        validate_connected_evidence_record_semantics(evidence)
+
+
 def test_url_inspection_rejects_non_url_referring_values():
     evidence = _inspection(
         {
@@ -214,6 +230,21 @@ def test_gsc_rejects_clicks_greater_than_impressions():
         }
     )
     with pytest.raises(ValueError, match="clicks cannot exceed impressions"):
+        validate_connected_evidence_record_semantics(evidence)
+
+
+def test_gsc_rejects_ctr_that_contradicts_clicks_and_impressions():
+    evidence = _gsc(
+        {
+            "dimensions": {"query": "technical seo"},
+            "clicks": 1,
+            "impressions": 10,
+            "ctr": 0.9,
+            "position": 2.0,
+            "row_number": 1,
+        }
+    )
+    with pytest.raises(ValueError, match="ctr contradicts clicks/impressions"):
         validate_connected_evidence_record_semantics(evidence)
 
 

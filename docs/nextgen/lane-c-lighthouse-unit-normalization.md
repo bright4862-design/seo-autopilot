@@ -3,7 +3,7 @@
 Issue: #324  
 Draft PR: #331  
 Branch: `agent/nextgen-browser-performance-20260921`  
-Code/test checkpoint: `f4af80ca05e798f5107e1dda19710faace5e8493`
+Code/test checkpoint: `64d80deaae3ced4e10e019a60bd4013068b4610b`
 
 ## Why this slice exists
 
@@ -30,6 +30,8 @@ existing Lighthouse envelope or provenance contract and it does not make provide
   score/opportunity-only evidence);
 - explicit `not_verified` for non-connected input, wrong source version, wrong evidence kind or when
   all metric units are unverifiable;
+- contract-valid fail-closed artifacts for malformed/non-object source input and invalid provider
+  states, while reason/state contradictions are rejected by the integrity validator;
 - source immutability: normalization operates on copies and never rewrites the input Lighthouse
   evidence dictionary.
 
@@ -54,7 +56,7 @@ sample policy.
 
 ## Deterministic regressions
 
-`scanner-api/tests/test_nextgen_browser_performance_lighthouse_units.py` adds 10 tests covering:
+`scanner-api/tests/test_nextgen_browser_performance_lighthouse_units.py` adds 12 tests covering:
 
 - millisecond/unitless provider units normalized to `ms`/`score`;
 - already-canonical aliases remaining deterministic;
@@ -65,16 +67,19 @@ sample policy.
 - non-connected states never becoming normalized measurements;
 - field evidence being rejected rather than laundered into lab-unit evidence;
 - source-evidence immutability;
-- integrity rejection of forged non-canonical units and source-version tampering.
+- integrity rejection of forged non-canonical units and source-version tampering;
+- non-object source input emitting a contract-valid `not_verified` artifact with no measurements;
+- invalid source state emitting a contract-valid fail-closed artifact while forged reason/state
+  combinations remain invalid.
 
 Hermetic verification of the exact new module/test contents:
 
 ```text
-10 passed in 0.07s
+12 passed in 0.04s
 python -m py_compile: passed
 ```
 
-Lane C now contains 154 focused tests across fourteen test files. Exact-repository `154/154` is not
+Lane C now contains 156 focused tests across fourteen test files. Exact-repository `156/156` is not
 claimed until the recorded Lane-C suite runs against the branch head in an approved repository
 runner.
 
@@ -91,7 +96,8 @@ No live CrUX/PSI/Lighthouse call and no credential are used by the deterministic
 
 The risk being addressed is unit laundering: retaining a numeric Lighthouse measurement under a
 semantically incompatible unit. The helper fails that metric closed while preserving other
-independently valid lab metrics.
+independently valid lab metrics. The integrity validator also distinguishes a truthful fail-closed
+artifact from a forged reason/state combination so malformed input cannot become trusted evidence.
 
 Rollback is deletion of this helper, test and note. Because the slice is not wired into shared
 orchestration or persistence, rollback requires no data migration or production change.

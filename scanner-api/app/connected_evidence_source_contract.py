@@ -8,6 +8,8 @@ persistence, scoring, or customer projection.
 
 from __future__ import annotations
 
+import ipaddress
+import re
 from typing import Any, Mapping
 from urllib.parse import urlparse
 
@@ -75,6 +77,43 @@ def _absolute_url(value: Any, *, field: str) -> str:
     return text
 
 
+def _validate_host_identity(
+    value: Any,
+    *,
+    field: str,
+    allow_ip: bool,
+) -> str:
+    """Validate one DNS/IP host used as provider provenance identity."""
+
+    host = _bounded_text(value, field=field, max_length=253).rstrip(".")
+    if not host or any(char.isspace() for char in host):
+        raise ValueError(f"{field} contained an invalid host")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        try:
+            ascii_host = host.encode("idna").decode("ascii").lower()
+        except UnicodeError:
+            raise ValueError(f"{field} contained an invalid host") from None
+        labels = ascii_host.split(".")
+        if (
+            len(ascii_host) > 253
+            or any(
+                not label
+                or len(label) > 63
+                or label.startswith("-")
+                or label.endswith("-")
+                or not re.fullmatch(r"[a-z0-9-]+", label)
+                for label in labels
+            )
+        ):
+            raise ValueError(f"{field} contained an invalid host")
+        return ascii_host
+    if not allow_ip:
+        raise ValueError(f"{field} must identify a DNS domain, not an IP address")
+    return address.compressed.lower()
+
+
 def _validate_path_prefix_identity(
     value: Any,
     *,
@@ -87,14 +126,24 @@ def _validate_path_prefix_identity(
     directory-like scopes. A non-root path that omits its trailing slash makes a
     later textual prefix check ambiguous (`/docs` versus `/docs-foreign`).
     Require the provider-style directory form instead of guessing membership.
+    Search Console domain properties are validated as DNS identities here so an
+    invalid or IP-like ``sc-domain:`` token cannot pass the source-profile guard
+    and rely on a later scope validator to catch it.
     """
 
     text = _bounded_text(value, field=field)
     if allow_sc_domain and text.lower().startswith("sc-domain:"):
+        domain = text[len("sc-domain:") :].strip()
+        if any(token in domain for token in ("/", "?", "#", "@", ":")):
+            raise ValueError(f"{field} contained an invalid sc-domain property")
+        _validate_host_identity(domain, field=field, allow_ip=False)
         return text
 
     text = _absolute_url(text, field=field)
     parsed = urlparse(text)
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(f"{field} must not contain URL userinfo")
+    _validate_host_identity(parsed.hostname, field=field, allow_ip=True)
     if parsed.query or parsed.fragment:
         raise ValueError(f"{field} must not contain a query or fragment")
     path = parsed.path or "/"

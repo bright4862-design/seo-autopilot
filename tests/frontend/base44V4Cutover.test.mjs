@@ -19,7 +19,7 @@ test("V4 remains a complete historical Base44 generation after the V7 cutover", 
   assert.equal(contract.generation, "v8");
   assert.deepEqual(Object.keys(contract.routes).sort(), [...expectedCanonicals].sort());
   for (const canonical of expectedCanonicals) {
-    assert.equal(contract.routes[canonical], `${canonical}V7`);
+    assert.equal(contract.routes[canonical], `${canonical}V8`);
     assert.equal(contract.historical_routes.v4[canonical], `${canonical}V4`);
     assert.equal(contract.historical_routes.v3[canonical], `${canonical}V3`);
     assert.equal(contract.historical_routes.v2[canonical], `${canonical}V2`);

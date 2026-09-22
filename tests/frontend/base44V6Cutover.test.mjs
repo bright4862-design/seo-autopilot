@@ -18,7 +18,7 @@ test("V6 remains available as the immediately historical Base44 generation after
   assert.equal(contract.generation, "v8");
   for (const canonical of canonicals) {
     assert.equal(contract.historical_routes.v6[canonical], canonical + "V6");
-    assert.equal(contract.routes[canonical], canonical + "V7");
+    assert.equal(contract.routes[canonical], canonical + "V8");
     assert.ok(fs.existsSync("base44/functions/" + canonical + "V6/entry.ts"));
     assert.match(
       source("base44/functions/" + canonical + "V6/function.jsonc"),

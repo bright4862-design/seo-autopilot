@@ -5,6 +5,24 @@ import pytest
 import app.connected_evidence_scope_contract as scope_contract
 
 
+@pytest.fixture(autouse=True)
+def bypass_upstream(monkeypatch):
+    """Exercise the scope boundary in isolation from the already-tested stack."""
+
+    seen = []
+
+    def _accept(evidence):
+        seen.append(evidence)
+        return evidence
+
+    monkeypatch.setattr(
+        scope_contract,
+        "validate_connected_evidence_coverage_semantics",
+        _accept,
+    )
+    return seen
+
+
 def _gsc_search(*, property_uri="sc-domain:example.test", page="https://www.example.test/a"):
     return {
         "provider": "google_search_console",
@@ -52,6 +70,12 @@ def _ga4(*, property_id="properties/123", landing_page="/a?src=chatgpt"):
         "coverage": {},
         "records": [{"landing_page": landing_page}],
     }
+
+
+def test_scope_contract_invokes_coverage_boundary(bypass_upstream):
+    evidence = _gsc_search()
+    assert scope_contract.validate_connected_evidence_scope_semantics(evidence) is evidence
+    assert bypass_upstream == [evidence]
 
 
 def test_scope_contract_version_is_explicit():

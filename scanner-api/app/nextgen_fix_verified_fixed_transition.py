@@ -6,7 +6,7 @@ from .nextgen_fix_verification import PASS
 from .nextgen_fix_verification_integrity import verification_result_historical_binding
 from .repair_identity import REPAIR_VERIFICATION_VERSION, build_repair_identity
 
-STRICT_VERIFIED_FIXED_TRANSITION_VERSION = "fix_verified_fixed_transition_v4_population_bound"
+STRICT_VERIFIED_FIXED_TRANSITION_VERSION = "fix_verified_fixed_transition_v5_exact_scope_identity"
 
 
 def _clean(value: Any) -> str:

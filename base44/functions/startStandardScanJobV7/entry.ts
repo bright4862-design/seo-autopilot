@@ -20,7 +20,7 @@ import {
 } from "./admissionClient.js";
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "startStandardScanJobV7-stage1-runtime-20260919-v1";
+const BASE44_RUNTIME_ACTIVATION_ID = "startStandardScanJobV7-r0-runtime-20260922-v2";
 
 const CORS_HEADERS = Object.freeze({
   "Access-Control-Allow-Origin": "*",

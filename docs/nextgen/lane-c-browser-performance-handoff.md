@@ -3,7 +3,7 @@
 Issue: #324  
 Draft PR: #331  
 Lane branch: `agent/nextgen-browser-performance-20260921`  
-Latest code/test checkpoint before this handoff refresh: `3c654af451bef0b43b1dc6055f3c8778f598abee`
+Latest code/test checkpoint before this handoff refresh: `d6ea7998f370a6f191bcb346472edda70e1abfad`
 
 ## Ownership boundary
 
@@ -33,8 +33,11 @@ Lane C currently provides:
 - `nextgen_lighthouse_lab_context_v1` + integrity for provider-neutral lab execution context;
 - deterministic representative template/high-value sampling, final-URL deduplication,
   hard 12-candidate ceiling, deterministic population binding, authoritative-site-origin
-  binding, and **bound representativeness coverage**;
-- field/lab performance observation coverage and source binding;
+  binding, and bound representativeness coverage;
+- field/lab performance observation coverage and request/source binding;
+- `nextgen_performance_observation_provider_binding_v1`, proving transported field/lab
+  components came from already-valid bound CrUX/PSI/Lighthouse provider envelopes for the
+  same sampled request before aggregate coverage may trust them;
 - raw-vs-rendered critical-content parity for title/H1/canonical/indexability/main content,
   important links, structured data and product/entity facts;
 - resolved-canonical parity, contract-bound parity coverage, critical-parity sufficiency,
@@ -74,40 +77,50 @@ The serialized integrator, not this lane, owns execution and shared orchestratio
     `normalize_direct_lighthouse_lab_context(raw_lighthouse, bound_lighthouse)` or
     `normalize_psi_lighthouse_lab_context(raw_psi, bound_psi)`, then require
     `validate_lighthouse_lab_context_contract(...)`.
-11. Bind sampled observation sources before trusting aggregate performance coverage.
-12. Keep field and lab envelopes, distributions, device contexts, and lab execution contexts
-    separate through any future persistence/authority/customer logic. Repair priority/customer
-    scoring remain integrator-owned.
+11. Before trusting transported sampled observations, require
+    `validate_performance_observation_source_binding(sample, observations)` and then
+    `validate_performance_observation_provider_binding(sample, observations)`. The first proves
+    sampled-request/source relationships; the second proves each field/lab component exactly
+    matches an already-valid bound CrUX/PSI/Lighthouse provider envelope for that request.
+12. Only after those binding gates succeed should
+    `summarize_performance_evidence_coverage(sample, observations)` be trusted. Missing components
+    stay unassessed; explicit non-connected states remain attempted-but-unmeasured.
+13. Keep field and lab envelopes, distributions, device contexts, lab execution contexts and
+    coverage separate through any future persistence/authority/customer logic. Repair priority/
+    customer scoring remain integrator-owned.
 
 A 500/1,000-page adaptive crawl must never imply 500/1,000 browser or Lighthouse executions.
 
-## Latest representative-sample coverage slice
+## Latest provider-binding slice
 
-`scanner-api/app/nextgen_browser_performance_sample_coverage.py` adds
-`nextgen_performance_sample_coverage_v1` plus an integrity contract. It first requires the
-existing deterministic sample/population binding. Only then does it report template-family
-coverage and positive sampler-weight coverage separately, including total/selected weight and
-the highest unselected weight.
+`scanner-api/app/nextgen_browser_performance_observation_provider_binding.py` adds
+`nextgen_performance_observation_provider_binding_v1`. It closes a transport gap between the
+existing sampled request/source-binding layer and the provider-specific bound contracts. A base
+field or lab dictionary can no longer be accepted merely because it is structurally valid and
+points at a sampled URL: it must exactly match the corresponding base component contained in an
+already-valid bound CrUX, PSI or Lighthouse envelope for that sampled request.
 
-This closes an interpretation gap where a bounded sample could truthfully cover every template
-family while still representing only part of the weighted high-value page population. Empty or
-forged/unbound populations fail closed as `not_verified`. The sampler weight remains selection
-metadata only: it is not repair priority, customer scoring, a performance result, or browser/
-provider execution entitlement.
+The helper preserves the evidence boundary deliberately: direct CrUX can satisfy field evidence
+only, direct Lighthouse can satisfy lab evidence only, and PSI can carry both while the field and
+lab component comparisons remain independent. Foreign/malformed requested identities,
+credential-bearing selected identities, invalid provider-bound contracts, duplicate provider
+kinds, cross-kind laundering, component tampering, duplicate observations and unused misleading
+provider bindings fail closed. An empty observation set remains valid without claiming coverage;
+coverage accounting is responsible for marking sampled pages unassessed.
 
-`scanner-api/tests/test_nextgen_browser_performance_sample_coverage.py` adds **14 deterministic
-regressions** covering partial/full template and weighted coverage, high-value fill behavior,
-role-based sampler weighting, zero-weight populations, final-URL deduplication, forged sample
-fail-closed semantics, empty eligible populations, source population drift, coverage tampering,
-truthful fail-closed integrity, non-authoritative transport metadata, hard-cap truthfulness, and
-input immutability.
+`scanner-api/tests/test_nextgen_browser_performance_observation_provider_binding.py` adds **19
+deterministic regressions** covering direct CrUX + Lighthouse binding, PSI dual-component
+binding, origin-scoped CrUX, empty observations, credential-bearing identities, unknown/duplicate
+provider kinds, invalid bound contracts, requested-identity mismatches, foreign CrUX evidence,
+field/lab tampering, field↔lab laundering prevention, unused provider bindings, duplicate
+observations, truthful rate-limited PSI state, and input immutability.
 
-Repository-shaped hermetic result for this slice: **14/14 passed**. The new source and test file
-also passed `py_compile` in the same isolated harness. This is not a claim that the complete
-repository suite or exact PR head CI is green.
+Isolated contract-boundary verification for this slice: **19/19 passed**; the new source and test
+file also passed `py_compile`. This is not a claim that the complete repository suite or exact PR
+head CI is green.
 
-Prior Lane-C checkpoints recorded **269 focused tests across 22 test files**. Lane C therefore
-records **283 focused tests across 23 test files**.
+Prior Lane-C checkpoints recorded **283 focused tests across 23 test files**. Lane C therefore
+records **302 focused tests across 24 test files**.
 
 ## Required exact-head gate
 
@@ -129,6 +142,7 @@ PYTHONPATH=. pytest -q \
   tests/test_nextgen_browser_performance_sample_coverage.py \
   tests/test_nextgen_browser_performance_evidence_coverage.py \
   tests/test_nextgen_browser_performance_source_binding.py \
+  tests/test_nextgen_browser_performance_observation_provider_binding.py \
   tests/test_nextgen_browser_performance_parity_hardening.py \
   tests/test_nextgen_browser_performance_parity_source_binding.py \
   tests/test_nextgen_browser_performance_lighthouse_provenance.py \
@@ -154,6 +168,7 @@ python -m py_compile \
   app/nextgen_browser_performance_sample_coverage.py \
   app/nextgen_browser_performance_evidence_coverage.py \
   app/nextgen_browser_performance_source_binding.py \
+  app/nextgen_browser_performance_observation_provider_binding.py \
   app/nextgen_browser_performance_parity_hardening.py \
   app/nextgen_browser_performance_parity_source_binding.py \
   app/nextgen_browser_performance_lighthouse_provenance.py \
@@ -177,6 +192,7 @@ python -m py_compile \
   tests/test_nextgen_browser_performance_sample_coverage.py \
   tests/test_nextgen_browser_performance_evidence_coverage.py \
   tests/test_nextgen_browser_performance_source_binding.py \
+  tests/test_nextgen_browser_performance_observation_provider_binding.py \
   tests/test_nextgen_browser_performance_parity_hardening.py \
   tests/test_nextgen_browser_performance_parity_source_binding.py \
   tests/test_nextgen_browser_performance_lighthouse_provenance.py \
@@ -189,7 +205,7 @@ python -m py_compile \
   tests/test_nextgen_browser_performance_lab_context.py
 ```
 
-**283/283 exact-repository execution is not claimed.** The execution environment cannot
+**302/302 exact-repository execution is not claimed.** The execution environment cannot
 materialize the full branch from GitHub, and this integration-target draft does not receive the
 normal main-target PR CI workflow.
 
@@ -203,6 +219,10 @@ Representative sample coverage is descriptive, not execution authorization. A hi
 coverage ratio or high selected sampler-weight ratio must never expand the integrator-owned
 browser/Lighthouse budget. The sample still requires both deterministic population binding and
 site-origin binding before later execution can trust candidate identities.
+
+Sample/request source binding is necessary but not sufficient for provider evidence. A
+structurally valid field/lab component can still be forged or detached from the bound provider
+envelope that produced it. Require the provider-binding validator before aggregate coverage.
 
 Resolved parity must remain bound to the exact retained raw/rendered observations and render
 outcome. A structurally valid transported parity envelope is insufficient on its own.

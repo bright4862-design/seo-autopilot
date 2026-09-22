@@ -151,6 +151,22 @@ def test_ga4_source_rejects_out_of_range_port():
         validate_connected_evidence_record_semantics(evidence)
 
 
+def test_ga4_source_rejects_userinfo_without_scheme():
+    evidence = _ga4(
+        [{"assistant": "chatgpt", "source": "user:secret@chatgpt.com / referral", "sessions": 1, "row_number": 1}]
+    )
+    with pytest.raises(ValueError, match="valid source host"):
+        validate_connected_evidence_record_semantics(evidence)
+
+
+def test_ga4_source_rejects_userinfo_with_scheme():
+    evidence = _ga4(
+        [{"assistant": "chatgpt", "source": "https://user@chatgpt.com / referral", "sessions": 1, "row_number": 1}]
+    )
+    with pytest.raises(ValueError, match="valid source host"):
+        validate_connected_evidence_record_semantics(evidence)
+
+
 def test_ga4_engaged_sessions_cannot_exceed_sessions():
     evidence = _ga4(
         [

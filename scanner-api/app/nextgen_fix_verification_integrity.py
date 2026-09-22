@@ -15,9 +15,9 @@ from .nextgen_fix_verification import (
 from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION, repair_evidence_key_function
 from .repair_identity import build_repair_identity
 
-VERIFICATION_RESULT_INTEGRITY_VERSION = "fix_verification_result_integrity_v1"
-VERIFICATION_RESULT_BINDING_VERSION = "fix_verification_result_binding_v2_population_bound"
-STRICT_REGRESSION_REOPEN_VERSION = "fix_regression_reopen_v4_population_bound"
+VERIFICATION_RESULT_INTEGRITY_VERSION = "fix_verification_result_integrity_v2_exact_scope_identity"
+VERIFICATION_RESULT_BINDING_VERSION = "fix_verification_result_binding_v3_exact_scope_identity"
+STRICT_REGRESSION_REOPEN_VERSION = "fix_regression_reopen_v5_exact_scope_identity"
 
 
 def _clean(value: Any) -> str:
@@ -31,14 +31,29 @@ def _strict_count(value: Any) -> int | None:
 
 
 def _scope(value: Any) -> tuple[list[str], str]:
+    """Validate proving evidence keys without coercion or normalization.
+
+    A proving scope is an exact transport identity set. Accepting values after
+    ``str(...)`` coercion or ``strip()`` normalization would let malformed or
+    foreign transport data bind to a historical evidence population. Preserve
+    each raw string exactly after proving it is already canonical-shaped.
+    """
     if not isinstance(value, list):
         return [], "scope_not_a_list"
-    cleaned = [_clean(item) for item in value]
-    if any(not item for item in cleaned):
-        return [], "scope_contains_empty_identity"
-    if len(set(cleaned)) != len(cleaned):
+
+    validated: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            return [], "scope_contains_non_string_identity"
+        if not item.strip():
+            return [], "scope_contains_empty_identity"
+        if item != item.strip():
+            return [], "scope_identity_has_surrounding_whitespace"
+        validated.append(item)
+
+    if len(set(validated)) != len(validated):
         return [], "scope_contains_duplicate_identity"
-    return cleaned, ""
+    return validated, ""
 
 
 def _historical_evidence_population(
@@ -257,7 +272,7 @@ def verification_result_historical_binding(
             }
         resolved = current_result.get("resolved_scope") if isinstance(current_result.get("resolved_scope"), list) else []
         unresolved = current_result.get("unresolved_scope") if isinstance(current_result.get("unresolved_scope"), list) else []
-        transported_scope = {_clean(item) for item in [*resolved, *unresolved]}
+        transported_scope = set([*resolved, *unresolved])
         if transported_scope != set(historical_population):
             return {
                 **base,

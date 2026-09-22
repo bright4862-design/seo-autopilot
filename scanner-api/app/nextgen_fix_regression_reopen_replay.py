@@ -4,12 +4,12 @@ from typing import Any
 
 from .nextgen_fix_verification import COULD_NOT_VERIFY
 from .nextgen_fix_verification_integrity import strict_regression_reopen_decision
-from .nextgen_fix_verification_observation_integrity import (
-    evaluate_verification_observations_strict,
+from .nextgen_fix_verification_observation_identity import (
+    evaluate_verification_observations_identity_bound,
 )
 
 STRICT_REGRESSION_REOPEN_OBSERVATION_REPLAY_VERSION = (
-    "fix_regression_reopen_observation_replay_v1_recomputed_current_result"
+    "fix_regression_reopen_observation_replay_v2_exact_observation_identity"
 )
 
 
@@ -53,12 +53,13 @@ def strict_regression_reopen_from_observations(
     verification result so it can validate historical binding and state-machine
     semantics in isolation. A final serialized integration boundary should not
     let a caller fabricate a structurally valid FAIL/PARTIAL result and use it as
-    proof of regression, however.
+    proof of regression.
 
     This helper therefore rebuilds the current PASS/PARTIAL/FAIL/
     COULD_NOT_VERIFY result from the exact targeted plan and current observation
-    evidence first, then passes only that recomputed result into the existing
-    fail-closed historical binding/reopen decision.
+    evidence first. The observation evidence must also prove one exact identity
+    across every supplied page/evaluation URL alias before the existing
+    fail-closed historical binding/reopen decision is allowed to run.
 
     The function is pure. It performs no network work and does not mutate
     workflow state, durable authority, persistence, customer projection,
@@ -84,7 +85,7 @@ def strict_regression_reopen_from_observations(
         return _denied("scan_origin_invalid")
 
     try:
-        recomputed_result = evaluate_verification_observations_strict(
+        recomputed_result = evaluate_verification_observations_identity_bound(
             plan,
             previous_record,
             current_pages,

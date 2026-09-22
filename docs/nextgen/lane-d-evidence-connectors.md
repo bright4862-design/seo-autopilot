@@ -11,12 +11,15 @@ This lane owns only pure, provider-neutral connected-evidence contracts, import/
 
 The common envelope is versioned as `connected_evidence_v1`. Every envelope carries provider, surface, method, source kind, retrieval/observation timestamps, sample/coverage disclosure, evidence-quality confidence, provenance, explicit state, and bounded records. States are `verified`, `stale`, `not_connected`, `not_supported`, `not_verified`, and `provider_error`. Connected evidence remains optional enrichment and never becomes canonical crawl authority.
 
+This file is the **authoritative Lane-D integration handoff**. Per-slice hardening notes under `docs/nextgen/lane-d-*-hardening.md` are historical design/regression records only; they must not be used as standalone integration gates or exact-head test manifests.
+
 ## Validation stack
 
-Lane D now exposes seven pure fail-closed validation boundaries.
+Lane D exposes seven pure fail-closed validation boundaries.
 
 1. `validate_connected_evidence(...)` / `connected_evidence_v1`
-   - strict envelope shape, timestamps, state semantics, JSON bounds, confidence semantics and unavailable/stale invariants.
+   - strict envelope shape, timestamps, state semantics, JSON bounds, confidence semantics and unavailable/stale invariants;
+   - unavailable states cannot carry observed records, `observed_at`, observational sample metadata, or coverage metadata. Their sample shape is limited to `{"coverage_complete_claim": false}` and coverage must remain empty, preventing `not_connected`, `not_supported`, `not_verified`, or `provider_error` evidence from smuggling row counts, periods, or completeness claims.
 2. `validate_connected_evidence_source_identity(...)` / `connected_evidence_source_profile_v1`
    - exact registered provider/source/surface/method/transport profiles, connector provenance, strict boolean provenance, URL Inspection identities, Bing same-host evidence and invalid-port rejection.
 3. `validate_connected_evidence_record_semantics(...)` / `connected_evidence_record_semantics_v1`
@@ -69,7 +72,7 @@ Sanitized fixtures live under `scanner-api/tests/fixtures_connected_evidence/`. 
 - GA4 AI referrals: same canonical property + observation window, including `properties/<id>` versus bare numeric aliases;
 - unavailable GSC/Bing/GA4 states: contradictory duplicates for the same canonical source scope.
 
-Snapshot source identities now canonicalize GSC domain case/trailing-dot aliases, HTTP(S) host case/default ports/root slash, and GA4 property resource aliases before duplicate detection. In addition, a canonical GSC Search Analytics, Bing AI Performance, or GA4 source scope cannot be both observed (`verified`/`stale`) and unavailable (`not_connected`/`not_supported`/`not_verified`/`provider_error`) in the same logical enrichment snapshot. Distinct observed windows remain distinct. The helper does not merge, sum, rank, persist, choose winners, or alter customer-visible behavior. Historical repeated observations belong to serialized-integrator persistence/history work and are intentionally out of scope here.
+Snapshot source identities canonicalize GSC domain case/trailing-dot aliases, HTTP(S) host case/default ports/root slash, and GA4 property resource aliases before duplicate detection. In addition, a canonical GSC Search Analytics, Bing AI Performance, or GA4 source scope cannot be both observed (`verified`/`stale`) and unavailable (`not_connected`/`not_supported`/`not_verified`/`provider_error`) in the same logical enrichment snapshot. Distinct observed windows remain distinct. The helper does not merge, sum, rank, persist, choose winners, or alter customer-visible behavior. Historical repeated observations belong to serialized-integrator persistence/history work and are intentionally out of scope here.
 
 ## Unsupported / separately authorized future work
 
@@ -96,7 +99,7 @@ For single-envelope debugging, the underlying validators remain callable individ
 Focused suites on this lane now contain:
 
 - `scanner-api/tests/test_connected_evidence.py`: **23 adapter tests**;
-- `scanner-api/tests/test_connected_evidence_contract.py`: **24 generic contract tests**;
+- `scanner-api/tests/test_connected_evidence_contract.py`: **27 generic contract tests**;
 - `scanner-api/tests/test_connected_evidence_source_contract.py`: **17 source-profile tests**;
 - `scanner-api/tests/test_connected_evidence_timestamp_hardening.py`: **2 timestamp-hardening tests**;
 - `scanner-api/tests/test_connected_evidence_record_contract.py`: **17 record-semantics tests**;
@@ -105,18 +108,19 @@ Focused suites on this lane now contain:
 - `scanner-api/tests/test_connected_evidence_record_identity_contract.py`: **12 logical-record-identity tests**;
 - `scanner-api/tests/test_connected_evidence_bundle_contract.py`: **21 snapshot-bundle tests**.
 
-Expected focused total: **147 tests**.
+Expected focused total: **150 tests**.
 
 Latest slice verification in this runtime:
 
+- `PYTHONPATH=. pytest -q tests/test_connected_evidence_contract.py` against the unavailable-metadata hardening candidate → **27/27 passed**;
+- `python -m py_compile app/connected_evidence_contract.py tests/test_connected_evidence_contract.py` → passed;
+- the tests prove that all four unavailable states retain their explicit state while failing closed on records, observed timestamps, sample row/completeness claims, or non-empty coverage metadata;
+- this is focused slice evidence only and does not replace repository-native exact-head certification.
+
+Earlier focused bundle verification:
+
 - `test_connected_evidence_bundle_contract.py` candidate logic: **21/21 passed** in a hermetic package with the already-tested upstream record-identity boundary stubbed;
-- `python -m py_compile app/connected_evidence_bundle_contract.py` → passed in the same hermetic package;
-- this is slice evidence only and does not replace repository-native exact-head certification.
-
-Previously executed repository checkpoint:
-
-- `PYTHONPATH=. pytest -q tests/test_connected_evidence_contract.py` → **24 passed**;
-- `python -m py_compile app/connected_evidence_contract.py` → passed.
+- `python -m py_compile app/connected_evidence_bundle_contract.py` → passed in the same hermetic package.
 
 Before serialized integration, run from `scanner-api/` on the exact lane head:
 
@@ -126,7 +130,7 @@ and:
 
 `python -m py_compile app/connected_evidence.py app/connected_evidence_contract.py app/connected_evidence_source_contract.py app/connected_evidence_record_contract.py app/connected_evidence_coverage_contract.py app/connected_evidence_scope_contract.py app/connected_evidence_record_identity_contract.py app/connected_evidence_bundle_contract.py tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py tests/test_connected_evidence_coverage_contract.py tests/test_connected_evidence_scope_contract.py tests/test_connected_evidence_record_identity_contract.py tests/test_connected_evidence_bundle_contract.py`
 
-Do not mark Lane D integration-ready until the exact-head **147-test** run is green and a fresh exact-head review has no unresolved material findings.
+Do not mark Lane D integration-ready until the exact-head **150-test** run is green and a fresh exact-head review has no unresolved material findings.
 
 ## Known risks / truthful unsupported states
 
@@ -141,6 +145,7 @@ Do not mark Lane D integration-ready until the exact-head **147-test** run is gr
 - Snapshot bundle identities prevent equivalent source aliases and duplicate source/window observations inside one logical scan snapshot; they are not a historical storage key.
 - One source scope cannot claim both observed and unavailable evidence in one logical snapshot; historical state changes belong in serialized persistence/history, not a single bundle.
 - Accepted GA4 assistant aliases are canonicalized only for evidence identity; this does not infer unobserved AI traffic or expand the assistant registry beyond explicitly supported aliases.
+- Unavailable states deliberately do not retain observation-count/window metadata; if later product requirements need diagnostic rejection counters for unavailable imports, that must be introduced as a separately versioned non-observational diagnostic contract rather than smuggled into `sample`/`coverage`.
 - Any future envelope/profile metadata expansion should be versioned rather than silently accepted.
 
 The lane still changes **28 Lane-D-owned files**: seven handoff/hardening docs, eight pure app modules, nine focused test modules, and four sanitized fixtures. No serialized-integrator-owned surface is modified.

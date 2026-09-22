@@ -3,13 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from .nextgen_fix_verification import COULD_NOT_VERIFY
-from .nextgen_fix_verification_observation_integrity import (
-    evaluate_verification_observations_strict,
+from .nextgen_fix_verification_observation_identity import (
+    evaluate_verification_observations_identity_bound,
 )
 from .nextgen_fix_verified_fixed_replay import strict_verified_fixed_transition_from_evidence
 
 STRICT_VERIFIED_FIXED_OBSERVATION_REPLAY_VERSION = (
-    "fix_verified_fixed_observation_replay_v2_exact_proving_metadata"
+    "fix_verified_fixed_observation_replay_v3_exact_observation_identity"
 )
 
 
@@ -42,9 +42,9 @@ def strict_verified_fixed_transition_from_observations(
 
     The lower-level replay helper already prevents a transported legacy comparator
     from authorizing ``verified_fixed``. This boundary removes the analogous trust
-    in a transported NextGen PASS and now also rejects transport metadata that
-    would require string coercion or whitespace normalization before it could be
-    treated as proving identity/version evidence.
+    in a transported NextGen PASS, rejects proving metadata that would require
+    coercion/normalization, and now requires every supplied current page/rule
+    evaluation identity alias to resolve to one exact evidence identity.
 
     It recomputes the verification result from the exact plan, current page
     observations, rule evaluations, and comparison contract, then recomputes the
@@ -78,7 +78,7 @@ def strict_verified_fixed_transition_from_observations(
         return _denied("scan_origin_invalid")
 
     try:
-        recomputed_result = evaluate_verification_observations_strict(
+        recomputed_result = evaluate_verification_observations_identity_bound(
             plan,
             previous_record,
             current_pages,

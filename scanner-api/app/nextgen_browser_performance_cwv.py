@@ -101,6 +101,9 @@ def assess_core_web_vitals_field_evidence(field_evidence: Any) -> dict[str, Any]
         "provider_rating_mismatches": mismatches,
     })
 
+    if mismatches:
+        result["reason"] = "field_metric_rating_mismatch"
+        return result
     if non_good:
         result["state"] = "failed"
         result["reason"] = "required_metric_not_good"

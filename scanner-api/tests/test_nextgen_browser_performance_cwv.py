@@ -114,14 +114,15 @@ def test_invalid_field_contract_fails_closed_before_threshold_assessment():
     assert "metric_unit_mismatch" in result["contract_reasons"]
 
 
-def test_provider_rating_disagreement_is_preserved_without_overriding_numeric_assessment():
+def test_provider_rating_disagreement_fails_closed_instead_of_claiming_cwv_pass():
     evidence = field({
         "lcp": metric(1800, "ms", "poor"),
         "inp": metric(150, "ms", "good"),
         "cls": metric(0.05, "score", "good"),
     })
     result = assess_core_web_vitals_field_evidence(evidence)
-    assert result["state"] == "passed"
+    assert result["state"] == "not_verified"
+    assert result["reason"] == "field_metric_rating_mismatch"
     assert result["provider_rating_mismatches"] == ["lcp"]
     assert result["metrics"]["lcp"]["derived_rating"] == "good"
 

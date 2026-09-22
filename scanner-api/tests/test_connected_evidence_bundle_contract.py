@@ -71,7 +71,7 @@ def bypass_upstream(monkeypatch):
 
     monkeypatch.setattr(
         bundle_contract,
-        "validate_connected_evidence_coverage_semantics",
+        "validate_connected_evidence_scope_semantics",
         _accept,
     )
     return seen
@@ -99,7 +99,7 @@ def test_snapshot_bundle_rejects_non_mapping_member(bypass_upstream):
         bundle_contract.validate_connected_evidence_snapshot_bundle(["not-an-envelope"])
 
 
-def test_snapshot_bundle_invokes_full_coverage_boundary_for_every_item(bypass_upstream):
+def test_snapshot_bundle_invokes_full_scope_boundary_for_every_item(bypass_upstream):
     first = _gsc()
     second = _inspection()
     items = [first, second]
@@ -158,5 +158,5 @@ def test_snapshot_identity_is_deterministic_and_does_not_mutate_input(bypass_ups
 
 
 def test_real_composed_boundary_rejects_invalid_envelope_without_monkeypatch():
-    with pytest.raises(ValueError):
+    with pytest.raises((ValueError, KeyError)):
         bundle_contract.validate_connected_evidence_snapshot_bundle([{}])

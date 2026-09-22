@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from .nextgen_fix_verification import COULD_NOT_VERIFY, VERIFICATION_RESULT_VERSION
+from .nextgen_fix_verification_historical_evidence_aliases import (
+    verification_historical_evidence_alias_integrity,
+)
 from .nextgen_fix_verification_historical_identity import (
     verification_historical_identity_integrity,
 )
@@ -11,7 +14,7 @@ from .nextgen_fix_verification_observation_values import (
 )
 
 HISTORICAL_BOUND_OBSERVATION_VERSION = (
-    "fix_verification_historical_bound_observation_v2_exact_repair_identity_and_observation_values"
+    "fix_verification_historical_bound_observation_v3_exact_historical_evidence_aliases"
 )
 
 
@@ -36,6 +39,7 @@ def _could_not_verify(
     reason: str,
     *,
     identity_integrity: dict[str, Any],
+    evidence_alias_integrity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "version": VERIFICATION_RESULT_VERSION,
@@ -50,6 +54,9 @@ def _could_not_verify(
         "unresolved_scope": [],
         "unverifiable_scope": [],
         "historical_identity_integrity": identity_integrity,
+        "historical_evidence_alias_integrity": (
+            evidence_alias_integrity if isinstance(evidence_alias_integrity, dict) else {}
+        ),
         "historical_bound_observation_version": HISTORICAL_BOUND_OBSERVATION_VERSION,
     }
 
@@ -63,14 +70,15 @@ def evaluate_verification_observations_historical_bound(
     *,
     scan_origin: str = "",
 ) -> dict[str, Any]:
-    """Require exact historical identity and exact current proving values.
+    """Require exact historical identity, evidence aliases, and proving values.
 
     Historical repair reconstruction and page comparability remain intentionally
     tolerant for legacy read compatibility. This final pure observation boundary
-    prevents either tolerance from becoming proof: the historical stable repair
-    identity must be exact, current observation identities must be exact, and
-    proof-bearing status/content/indexability/predicate values must arrive in
-    their machine-typed form without coercion before PASS/PARTIAL/FAIL may be
+    prevents that tolerance from becoming proof: the historical stable repair
+    identity must be exact, populated historical evidence aliases must agree with
+    the selected historical population, current observation identities must be
+    exact, and proof-bearing status/content/indexability/predicate values must
+    arrive in machine-typed form without coercion before PASS/PARTIAL/FAIL may be
     produced.
     """
     identity_integrity = verification_historical_identity_integrity(previous_record)
@@ -80,6 +88,19 @@ def evaluate_verification_observations_historical_bound(
             "Historical repair identity integrity failed: "
             f"{identity_integrity.get('reason') or 'not_proven'}",
             identity_integrity=identity_integrity,
+        )
+
+    evidence_alias_integrity = verification_historical_evidence_alias_integrity(
+        previous_record,
+        scan_origin=scan_origin,
+    )
+    if evidence_alias_integrity.get("valid") is not True:
+        return _could_not_verify(
+            plan if isinstance(plan, dict) else {},
+            "Historical evidence alias integrity failed: "
+            f"{evidence_alias_integrity.get('reason') or 'not_proven'}",
+            identity_integrity=identity_integrity,
+            evidence_alias_integrity=evidence_alias_integrity,
         )
 
     result = evaluate_verification_observations_value_bound(
@@ -95,9 +116,11 @@ def evaluate_verification_observations_historical_bound(
             plan if isinstance(plan, dict) else {},
             "Value-bound verification evaluator returned non-object evidence.",
             identity_integrity=identity_integrity,
+            evidence_alias_integrity=evidence_alias_integrity,
         )
     return {
         **result,
         "historical_identity_integrity": identity_integrity,
+        "historical_evidence_alias_integrity": evidence_alias_integrity,
         "historical_bound_observation_version": HISTORICAL_BOUND_OBSERVATION_VERSION,
     }

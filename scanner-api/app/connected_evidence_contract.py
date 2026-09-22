@@ -45,6 +45,18 @@ _REQUIRED_TOP_LEVEL = frozenset(
     }
 )
 _OPTIONAL_TOP_LEVEL = frozenset({"reason", "warnings"})
+_CONFIDENCE_REQUIRED_FIELDS = frozenset({"kind", "level"})
+_CONFIDENCE_OPTIONAL_FIELDS = frozenset({"limitations"})
+_CONFIDENCE_LEVELS = frozenset(
+    {
+        "none",
+        "provider_observed",
+        "first_party_provider_observed",
+        "first_party_analytics_observed",
+    }
+)
+_MAX_CONFIDENCE_LIMITATIONS = 32
+_MAX_CONFIDENCE_LIMITATION_LENGTH = 1_000
 _MAX_RECORDS = 50_000
 _MAX_KEYS_PER_MAPPING = 256
 _MAX_STRING_LENGTH = 16_384
@@ -116,6 +128,42 @@ def _json_mapping(
     return mapping
 
 
+def _validate_confidence(value: Any) -> tuple[Mapping[str, Any], str]:
+    """Validate the versioned evidence-quality metadata shape.
+
+    Confidence is deliberately qualitative rather than probabilistic. Keeping
+    this mapping closed-world prevents callers from smuggling numeric scores,
+    OAuth/provider claims, or other unversioned assertions into an otherwise
+    valid connected-evidence envelope.
+    """
+
+    confidence = _json_mapping(value, field="confidence")
+    keys = frozenset(confidence)
+    missing = _CONFIDENCE_REQUIRED_FIELDS - keys
+    unknown = keys - _CONFIDENCE_REQUIRED_FIELDS - _CONFIDENCE_OPTIONAL_FIELDS
+    if missing:
+        raise ValueError(f"confidence missing fields: {sorted(missing)}")
+    if unknown:
+        raise ValueError(f"confidence has unknown fields: {sorted(unknown)}")
+    if confidence.get("kind") != "evidence_quality_not_statistical_probability":
+        raise ValueError("confidence.kind must describe evidence quality, not probability")
+    level = _bounded_string(confidence.get("level"), field="confidence.level", max_length=200)
+    if level not in _CONFIDENCE_LEVELS:
+        raise ValueError("confidence.level is not a registered evidence-quality level")
+
+    limitations = confidence.get("limitations")
+    if limitations is not None:
+        if not isinstance(limitations, list) or len(limitations) > _MAX_CONFIDENCE_LIMITATIONS:
+            raise ValueError("confidence.limitations must be a bounded list")
+        for index, limitation in enumerate(limitations):
+            _bounded_string(
+                limitation,
+                field=f"confidence.limitations[{index}]",
+                max_length=_MAX_CONFIDENCE_LIMITATION_LENGTH,
+            )
+    return confidence, level
+
+
 def _validate_record(record: Any, *, index: int) -> None:
     mapping = _mapping(record, field=f"records[{index}]")
     try:
@@ -136,10 +184,11 @@ def validate_connected_evidence(evidence: Mapping[str, Any]) -> Mapping[str, Any
     """Validate one ``connected_evidence_v1`` envelope and return it unchanged.
 
     Validation is intentionally strict. Unknown top-level fields require a
-    schema-version change instead of silently changing the authenticated shape
-    later. Unavailable states may never carry observed records or observational
-    sample/coverage claims; stale evidence retains records but must identify
-    when the source was observed.
+    schema-version change instead of silently changing the authenticated shape.
+    Confidence metadata is likewise closed-world and qualitative. Unavailable
+    states may never carry observed records or observational sample/coverage
+    claims; stale evidence retains records but must identify when the source was
+    observed.
     """
 
     top = _mapping(evidence, field="connected evidence")
@@ -171,10 +220,7 @@ def validate_connected_evidence(evidence: Mapping[str, Any]) -> Mapping[str, Any
     if type(sample.get("coverage_complete_claim")) is not bool:
         raise ValueError("sample.coverage_complete_claim must be an explicit boolean")
 
-    confidence = _json_mapping(top["confidence"], field="confidence")
-    if confidence.get("kind") != "evidence_quality_not_statistical_probability":
-        raise ValueError("confidence.kind must describe evidence quality, not probability")
-    level = _bounded_string(confidence.get("level"), field="confidence.level", max_length=200)
+    confidence, level = _validate_confidence(top["confidence"])
 
     provenance = _json_mapping(top["provenance"], field="provenance")
     transport = provenance.get("transport")

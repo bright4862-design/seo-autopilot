@@ -93,11 +93,12 @@ def test_rejects_underfilled_checkpoint_population_that_base_arithmetic_allows()
 
 def test_rejects_discovery_cardinality_greater_than_pages():
     forged = copy.deepcopy(_build())
-    first = forged["blind"][0]
-    first["cumulative_template_keys"] = 151
-    first["new_template_keys"] = 151
-    second = forged["blind"][1]
-    second["new_template_keys"] = second["cumulative_template_keys"] - 151
+    final = forged["blind"][-1]
+    previous = forged["blind"][-2]
+    final["cumulative_template_keys"] = final["pages_assessed"] + 1
+    final["new_template_keys"] = (
+        final["cumulative_template_keys"] - previous["cumulative_template_keys"]
+    )
     assert validate_marginal_yield_benchmark(forged)["valid"] is True
     check = validate_marginal_population_integrity(forged)
     assert check["valid"] is False

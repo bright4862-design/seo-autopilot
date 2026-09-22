@@ -73,6 +73,10 @@ def strict_regression_reopen_from_observations(
         return _denied("current_pages_contains_non_object")
     if any(not isinstance(item, dict) for item in rule_evaluations):
         return _denied("rule_evaluations_contains_non_object")
+    if not isinstance(previous_scan_origin, str) or previous_scan_origin != previous_scan_origin.strip():
+        return _denied("previous_scan_origin_invalid")
+    if not isinstance(scan_origin, str) or scan_origin != scan_origin.strip():
+        return _denied("scan_origin_invalid")
 
     try:
         recomputed_result = evaluate_verification_observations_origin_bound(

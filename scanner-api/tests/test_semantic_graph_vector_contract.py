@@ -74,6 +74,26 @@ def test_valid_vectors_are_verified_copied_and_deterministic():
     assert payload["https://e.test/b"] == {"beta": 2, "alpha": -1.5}
 
 
+def test_page_identity_uses_shared_internal_whitespace_normalization():
+    pages = [
+        {"url": "https://e.test/a   b"},
+        {"url": "https://e.test/c"},
+    ]
+    evidence = semantic_vector_contract_evidence(
+        pages,
+        MappingVectorizer({
+            "https://e.test/a b": {"topic": 1.0},
+            "https://e.test/c": {"topic": 1.0},
+        }),
+    )
+
+    assert evidence["state"] == "verified"
+    assert evidence["reason"] == "validated"
+    assert evidence["assessed_page_identity_count"] == 2
+    assert evidence["semantic_vector_coverage_state"] == "complete"
+    assert list(evidence["vectors"]) == ["https://e.test/a b", "https://e.test/c"]
+
+
 def test_foreign_vector_url_fails_closed():
     evidence = semantic_vector_contract_evidence(
         PAGES,

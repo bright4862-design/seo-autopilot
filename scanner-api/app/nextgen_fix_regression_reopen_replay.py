@@ -3,13 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from .nextgen_fix_verification import COULD_NOT_VERIFY
-from .nextgen_fix_verification_historical_bound import (
-    evaluate_verification_observations_historical_bound,
+from .nextgen_fix_verification_origin_binding import (
+    evaluate_verification_observations_origin_bound,
 )
 from .nextgen_fix_verification_integrity import strict_regression_reopen_decision
 
 STRICT_REGRESSION_REOPEN_OBSERVATION_REPLAY_VERSION = (
-    "fix_regression_reopen_observation_replay_v3_exact_historical_repair_identity"
+    "fix_regression_reopen_observation_replay_v4_exact_scan_origin_binding"
 )
 
 
@@ -47,21 +47,13 @@ def strict_regression_reopen_from_observations(
     previous_scan_origin: str = "",
     scan_origin: str = "",
 ) -> dict[str, Any]:
-    """Recompute current verification before considering regression reopening.
+    """Recompute current verification from exact source-bound observations.
 
-    ``strict_regression_reopen_decision`` deliberately accepts a transported
-    verification result so it can validate historical binding and state-machine
-    semantics in isolation. A final serialized integration boundary should not
-    let a caller fabricate a structurally valid FAIL/PARTIAL result and use it as
-    proof of regression.
-
-    This helper therefore rebuilds the current PASS/PARTIAL/FAIL/
-    COULD_NOT_VERIFY result from the exact historical repair, targeted plan, and
-    current observation evidence first. The observation evidence must prove one
-    exact identity across every supplied page/evaluation URL alias, and the
-    historical stable repair identity must be bound to exact source/persisted
-    metadata before the existing fail-closed historical binding/reopen decision
-    is allowed to run.
+    ``strict_regression_reopen_decision`` accepts a transported verification
+    result so it can validate historical binding and state-machine semantics in
+    isolation. This final pure replay path recomputes that result and now binds
+    historical, plan, page, and rule-evaluation URL evidence to exact canonical
+    caller-owned scan origins before FAIL/PARTIAL may prove a regression reopen.
 
     The function is pure. It performs no network work and does not mutate
     workflow state, durable authority, persistence, customer projection,
@@ -81,18 +73,15 @@ def strict_regression_reopen_from_observations(
         return _denied("current_pages_contains_non_object")
     if any(not isinstance(item, dict) for item in rule_evaluations):
         return _denied("rule_evaluations_contains_non_object")
-    if not isinstance(previous_scan_origin, str) or previous_scan_origin != previous_scan_origin.strip():
-        return _denied("previous_scan_origin_invalid")
-    if not isinstance(scan_origin, str) or scan_origin != scan_origin.strip():
-        return _denied("scan_origin_invalid")
 
     try:
-        recomputed_result = evaluate_verification_observations_historical_bound(
+        recomputed_result = evaluate_verification_observations_origin_bound(
             plan,
             previous_record,
             current_pages,
             rule_evaluations,
             current_contract,
+            previous_scan_origin=previous_scan_origin,
             scan_origin=scan_origin,
         )
     except (KeyError, TypeError, ValueError) as exc:

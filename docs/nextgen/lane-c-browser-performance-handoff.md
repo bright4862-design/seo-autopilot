@@ -3,7 +3,7 @@
 Issue: #324  
 Draft PR: #331  
 Lane branch: `agent/nextgen-browser-performance-20260921`  
-Latest implementation/test checkpoint before this handoff refresh: `9d0043ec8a448154e2908984fcc4de91fc647ade`
+Latest lane checkpoint before this handoff refresh: `b155d919efc76afb693cbfe3c5d5452d8ba780f1`
 
 ## Ownership boundary
 
@@ -23,6 +23,7 @@ Lane C currently provides:
 - bounded Lighthouse normalization for an allowlisted metric/opportunity set;
 - deterministic representative template/high-value sampling, final-URL deduplication and a hard 12-candidate ceiling;
 - `nextgen_performance_sample_binding_v1`, which recomputes the deterministic sample from the authoritative candidate population and fails closed on stale/forged/reordered selections, population drift, invalid requested limits, or non-absolute HTTP(S) selected identities;
+- `nextgen_performance_evidence_coverage_v1`, which binds already-observed provider evidence back to the selected request population and reports field and lab attempted/connected/unassessed coverage independently;
 - raw-vs-rendered critical-content parity evidence for title/H1/canonical/indexability/main-content presence/important links/schema/product+entity facts;
 - raw/render identity, usability and extractor-presence fail-closed semantics;
 - aggregate parity coverage that distinguishes completed, failed/unverifiable and unassessed selected URLs;
@@ -38,7 +39,8 @@ The integrator, not this lane, owns execution and shared orchestration.
 4. Build raw/rendered parity only from successful same-identity observations. Failed, skipped, challenged, deadline-exhausted, partial-identity or unusable observations remain `not_verified`.
 5. After per-page parity construction, call `summarize_critical_parity_coverage(...)` over the original selected sample plus available parity rows so execution failures remain failed and candidates never executed remain unassessed.
 6. For direct CrUX `queryRecord` payloads, prefer `normalize_crux_query_record_evidence(...)`. For PSI payloads, prefer `normalize_pagespeed_insights_evidence_bound(...)` so requested/final identity, runtime error, origin fallback and provider provenance remain explicit.
-7. Keep field and lab envelopes separate through any future persistence/authority/customer logic. Repair priority/customer scoring remain integrator-owned.
+7. Bind each already-observed provider result to the sampled request identity and call `summarize_performance_evidence_coverage(...)`. Missing field/lab components remain unassessed, while explicit unavailable/rate-limited/provider-error states count as attempts but never as connected measurements.
+8. Keep field and lab envelopes separate through any future persistence/authority/customer logic. Repair priority/customer scoring remain integrator-owned.
 
 A 500/1,000-page adaptive crawl must never imply 500/1,000 browser or Lighthouse executions.
 
@@ -50,9 +52,10 @@ Executed checkpoints currently recorded for Lane C:
 - provider-shape hermetic checkpoint → **8/8 passed**; compile passed;
 - PSI provenance hermetic checkpoint → **10/10 passed**; compile passed;
 - parity-coverage hermetic checkpoint → **9/9 passed**; compile passed;
-- latest representative-sample binding checkpoint → **9/9 passed in 0.07s** in a hermetic package containing the exact current selector logic plus the new helper/tests; compile passed.
+- representative-sample binding checkpoint → **9/9 passed in 0.07s** in a hermetic package containing the exact current selector logic plus the new helper/tests; compile passed;
+- field/lab performance-coverage checkpoint → **9/9 passed in 0.04s** in a hermetic helper/contract-boundary harness; compile passed.
 
-Lane C now contains **73 focused tests across six test files**. **73/73 exact-repository execution is not claimed.**
+Lane C now contains **82 focused tests across seven test files**. **82/82 exact-repository execution is not claimed.**
 
 Required exact-head gate:
 
@@ -64,7 +67,8 @@ PYTHONPATH=. pytest -q \
   tests/test_nextgen_browser_performance_provider.py \
   tests/test_nextgen_browser_performance_psi_provenance.py \
   tests/test_nextgen_browser_performance_coverage.py \
-  tests/test_nextgen_browser_performance_sample_binding.py
+  tests/test_nextgen_browser_performance_sample_binding.py \
+  tests/test_nextgen_browser_performance_evidence_coverage.py
 python -m py_compile \
   app/nextgen_browser_performance.py \
   app/nextgen_browser_performance_contract.py \
@@ -72,19 +76,21 @@ python -m py_compile \
   app/nextgen_browser_performance_psi_provenance.py \
   app/nextgen_browser_performance_coverage.py \
   app/nextgen_browser_performance_sample_binding.py \
+  app/nextgen_browser_performance_evidence_coverage.py \
   tests/test_nextgen_browser_performance.py \
   tests/test_nextgen_browser_performance_contract.py \
   tests/test_nextgen_browser_performance_provider.py \
   tests/test_nextgen_browser_performance_psi_provenance.py \
   tests/test_nextgen_browser_performance_coverage.py \
-  tests/test_nextgen_browser_performance_sample_binding.py
+  tests/test_nextgen_browser_performance_sample_binding.py \
+  tests/test_nextgen_browser_performance_evidence_coverage.py
 ```
 
 The current execution container still cannot resolve `github.com`, so it cannot materialize the complete branch. This integration-target draft also has no normal PR-triggered repository CI run. Until an approved repository runner executes the commands above, exact-head repository green remains a blocker for integration readiness.
 
 ## Risks
 
-The main evidence risk is treating unavailable/mismatched/partial provider or render observations as measured defects. Contracts therefore preserve truthful unavailable/not-verified states and keep field vs lab evidence separate.
+The main evidence risk is treating unavailable/mismatched/partial provider or render observations as measured defects. Contracts therefore preserve truthful unavailable/not-verified states and keep field vs lab evidence separate. The new performance-coverage helper additionally prevents field coverage on one subset from being silently presented as lab coverage on the same population.
 
 The main selection risk is trusting a stale or forged representative sample against the wrong page population. The sample-binding helper closes that gap only when the serialized integrator supplies the authoritative candidate population.
 

@@ -9,7 +9,7 @@ from .nextgen_fix_verification_origin_binding import (
 from .nextgen_fix_verified_fixed_replay import strict_verified_fixed_transition_from_evidence
 
 STRICT_VERIFIED_FIXED_OBSERVATION_REPLAY_VERSION = (
-    "fix_verified_fixed_observation_replay_v5_exact_scan_origin_binding"
+    "fix_verified_fixed_observation_replay_v6_exact_historical_evidence_alias_binding"
 )
 
 
@@ -42,10 +42,11 @@ def strict_verified_fixed_transition_from_observations(
 
     The lower-level replay helper already prevents a transported legacy comparator
     from authorizing ``verified_fixed``. This boundary also refuses a transported
-    NextGen PASS and now binds historical, plan, page, and rule-evaluation URL
-    evidence to exact canonical caller-owned scan origins before either proof is
-    allowed to run. Relative evidence from another scan therefore cannot become
-    proof merely because a caller supplies the wrong origin.
+    NextGen PASS and binds historical, plan, page, and rule-evaluation URL evidence
+    to exact canonical caller-owned scan origins before either proof is allowed to
+    run. The historical-bound evaluator additionally requires every populated
+    historical evidence alias to agree with the selected affected-page population,
+    so an ignored contradictory fallback URL cannot become proof.
 
     It recomputes the verification result from the exact historical repair,
     targeted plan, current page observations, rule evaluations, and comparison

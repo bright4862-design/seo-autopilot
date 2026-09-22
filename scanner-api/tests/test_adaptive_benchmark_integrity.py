@@ -145,3 +145,15 @@ def test_corpus_summary_requires_evidence_and_keeps_zero_blind_yield_unknown():
     assert summary["smart_finding_coverage_vs_blind"] is None
     assert summary["smart_efficiency_vs_blind"] is None
     assert summary["median_site_finding_coverage_vs_blind"] is None
+
+
+def test_corpus_summary_rejects_ambiguous_site_identity():
+    result = _benchmark()
+    summary = summarize_benchmark_corpus({"": result})
+    assert summary["valid"] is False
+    assert summary["state"] == "invalid_benchmark"
+    assert summary["reason"] == "invalid_site_identity"
+
+    summary = summarize_benchmark_corpus({1: result})
+    assert summary["valid"] is False
+    assert summary["reason"] == "invalid_site_identity"

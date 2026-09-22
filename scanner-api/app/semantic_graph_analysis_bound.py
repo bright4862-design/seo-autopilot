@@ -7,6 +7,11 @@ of that same validated snapshot. This prevents clusters, cannibalization evidenc
 and contextual source-to-target opportunities from observing different semantic
 worlds when a buggy or stateful adapter changes between calls.
 
+The helper also carries explicit semantic population coverage. A valid adapter may
+vectorize only a subset of assessed page identities; downstream pair analysis then
+remains truthful about being complete only for that vectorized subset rather than
+claiming full assessed-population coverage.
+
 The helper is pure: it performs no network/provider work, creates no customer Fix,
 and does not mutate scanner authority, persistence, repair priority, or orchestration.
 """
@@ -31,13 +36,17 @@ from .semantic_graph_contextual import (
     _page_population,
     contextual_internal_link_opportunities,
 )
+from .semantic_graph_coverage import (
+    SEMANTIC_VECTOR_COVERAGE_VERSION,
+    semantic_vector_coverage_evidence,
+)
 from .semantic_graph_vector_contract import (
     SEMANTIC_VECTOR_CONTRACT_VERSION,
     semantic_vector_contract_evidence,
 )
 
 
-VECTOR_BOUND_SEMANTIC_ANALYSIS_VERSION = "semantic_analysis_bundle_v1_vector_bound"
+VECTOR_BOUND_SEMANTIC_ANALYSIS_VERSION = "semantic_analysis_bundle_v2_semantic_coverage_bound"
 VECTOR_BOUND_CLUSTER_VERSION = "semantic_cluster_evidence_v1_vector_bound"
 EVIDENCE_SCOPE = "observed_assessed_pages_only"
 
@@ -118,6 +127,44 @@ def _contextual_not_verified(reason: str) -> dict[str, Any]:
     return result
 
 
+def _semantic_coverage_fields(semantic_evidence: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "semantic_vector_coverage_version": semantic_evidence.get(
+            "semantic_vector_coverage_version",
+            SEMANTIC_VECTOR_COVERAGE_VERSION,
+        ),
+        "semantic_vector_coverage_state": semantic_evidence.get(
+            "semantic_vector_coverage_state",
+            "not_verified",
+        ),
+        "page_identity_coverage_state": semantic_evidence.get(
+            "page_identity_coverage_state",
+            "not_verified",
+        ),
+        "unidentified_page_count": semantic_evidence.get("unidentified_page_count"),
+        "unvectorized_page_identity_count": semantic_evidence.get(
+            "unvectorized_page_identity_count"
+        ),
+        "semantic_pair_population_complete": bool(
+            semantic_evidence.get("semantic_pair_population_complete")
+        ),
+        "semantic_pair_scope": semantic_evidence.get(
+            "semantic_pair_scope",
+            "not_verified",
+        ),
+        "sitewide_semantic_coverage_claim": False,
+    }
+
+
+def _bind_semantic_coverage(
+    result: dict[str, Any],
+    semantic_evidence: dict[str, Any],
+) -> dict[str, Any]:
+    bound = dict(result)
+    bound.update(_semantic_coverage_fields(semantic_evidence))
+    return bound
+
+
 def _base_result(
     *,
     semantic_evidence: dict[str, Any],
@@ -132,6 +179,7 @@ def _base_result(
         if graph_state in {"verified", "not_evaluated"}
         else str(contextual.get("reason") or "graph_not_verified")
     )
+    coverage_fields = _semantic_coverage_fields(semantic_evidence)
     return {
         "version": VECTOR_BOUND_SEMANTIC_ANALYSIS_VERSION,
         "scope": EVIDENCE_SCOPE,
@@ -139,6 +187,10 @@ def _base_result(
         "semantic_vector_integrity_state": semantic_evidence.get("state"),
         "semantic_vector_integrity_reason": semantic_evidence.get("reason"),
         "semantic_vectorizer_version": semantic_evidence.get("vectorizer_version"),
+        "semantic_assessed_page_identity_count": semantic_evidence.get(
+            "assessed_page_identity_count",
+            0,
+        ),
         "semantic_vectorized_pages": semantic_evidence.get("vectorized_pages", 0),
         "semantic_vector_determinism_checked": bool(
             semantic_evidence.get("determinism_checked")
@@ -149,12 +201,19 @@ def _base_result(
         "semantic_vector_input_isolation_enforced": bool(
             semantic_evidence.get("input_isolation_enforced")
         ),
+        **coverage_fields,
         "graph_integrity_state": graph_state,
         "graph_integrity_reason": graph_reason,
-        "semantic_clusters": clusters,
+        "semantic_clusters": _bind_semantic_coverage(clusters, semantic_evidence),
         "near_duplicate_candidates": near_duplicates,
-        "cannibalization_candidates": cannibalization,
-        "contextual_internal_link_opportunities": contextual,
+        "cannibalization_candidates": _bind_semantic_coverage(
+            cannibalization,
+            semantic_evidence,
+        ),
+        "contextual_internal_link_opportunities": _bind_semantic_coverage(
+            contextual,
+            semantic_evidence,
+        ),
         "customer_fix_created": False,
     }
 
@@ -178,6 +237,11 @@ def vector_bound_semantic_analysis_evidence(
     enabled. If that contract fails, no semantic-dependent analyzer executes.
     Near-duplicate B10 evidence remains available because it does not depend on
     semantic vectors.
+
+    Semantic population coverage is transported separately from adapter integrity.
+    A partial vector population can still yield valid subset-scoped candidates,
+    but every semantic-dependent output records that the pair population is not
+    complete for all assessed page identities.
 
     A graph-integrity failure is isolated to contextual link-opportunity evidence:
     semantic clusters and cannibalization evidence may still be valid because they
@@ -207,14 +271,23 @@ def vector_bound_semantic_analysis_evidence(
 
     _, population_error = _page_population(pages)
     if population_error:
+        coverage = semantic_vector_coverage_evidence(
+            input_page_count=len(pages),
+            assessed_page_identity_count=0,
+            vectorized_pages=0,
+            semantic_vector_integrity_state="not_verified",
+        )
         semantic_evidence = {
             "state": "not_verified",
             "reason": population_error,
             "vectorizer_version": None,
+            "assessed_page_identity_count": 0,
             "vectorized_pages": 0,
             "determinism_checked": False,
             "determinism_verified": False,
             "input_isolation_enforced": True,
+            "semantic_vector_coverage_version": SEMANTIC_VECTOR_COVERAGE_VERSION,
+            **coverage,
         }
         reason = f"semantic_vector_{population_error}"
         return _base_result(

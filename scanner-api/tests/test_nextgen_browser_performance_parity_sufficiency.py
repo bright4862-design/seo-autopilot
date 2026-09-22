@@ -132,6 +132,21 @@ def test_invalid_source_contract_fails_closed():
     assert result["source_contract_reasons"]
 
 
+def test_integrity_accepts_truthful_fail_closed_invalid_source():
+    parity = _full_match()
+    parity["version"] = "forged_parity_v0"
+    result = assess_critical_parity_sufficiency(parity)
+
+    integrity = validate_critical_parity_sufficiency(parity, result)
+
+    assert result["reason"] == "source_contract_invalid"
+    assert integrity == {
+        "version": PARITY_SUFFICIENCY_INTEGRITY_VERSION,
+        "valid": True,
+        "reasons": [],
+    }
+
+
 def test_relative_canonical_match_counts_as_required_field_coverage():
     raw = _page(canonical="/products/a")
     rendered = _page(canonical="https://example.com/products/a")

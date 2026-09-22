@@ -22,6 +22,7 @@ from .connected_evidence_record_identity_contract import (
 SNAPSHOT_BUNDLE_VERSION = "connected_evidence_snapshot_bundle_v1"
 SNAPSHOT_SOURCE_IDENTITY_VERSION = "connected_evidence_snapshot_source_identity_v1"
 SNAPSHOT_OBSERVATION_IDENTITY_VERSION = "connected_evidence_snapshot_observation_identity_v1"
+SNAPSHOT_WINDOW_COHERENCE_VERSION = "connected_evidence_snapshot_window_coherence_v1"
 MAX_SNAPSHOT_ITEMS = 64
 
 _UNAVAILABLE_STATES = frozenset(
@@ -55,6 +56,22 @@ def _canonical_temporal_identity(
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _canonical_temporal_datetime(
+    value: Any,
+    *,
+    field: str,
+    allow_none: bool = True,
+) -> datetime | None:
+    canonical = _canonical_temporal_identity(
+        value,
+        field=field,
+        allow_none=allow_none,
+    )
+    if canonical is None:
+        return None
+    return datetime.fromisoformat(canonical[:-1] + "+00:00")
 
 
 def _canonical_dimension_identity(value: Any) -> tuple[str, ...]:
@@ -258,6 +275,71 @@ def _profile_snapshot_identity(evidence: Mapping[str, Any]) -> tuple[Any, ...]:
     raise ValueError("unsupported connected-evidence provider/source_kind profile")
 
 
+def _profile_observation_series_identity(
+    evidence: Mapping[str, Any],
+) -> tuple[Any, ...] | None:
+    """Return the series whose windows must not overlap inside one snapshot.
+
+    GSC Search Analytics dimension sets are distinct aggregate series and may
+    legitimately cover the same period. Bing and GA4 exports do not currently
+    carry a separate provider filter identity, so overlapping windows for one
+    source scope are ambiguous and fail closed. URL Inspection is already
+    unique per inspected URL at the snapshot-identity layer.
+    """
+
+    provider = evidence["provider"]
+    source_kind = evidence["source_kind"]
+    source_scope = _profile_source_scope_identity(evidence)
+
+    if (provider, source_kind) == ("google_search_console", "search_analytics"):
+        dimensions = _canonical_dimension_identity(evidence["coverage"].get("dimensions"))
+        return source_scope + (dimensions,)
+    if (provider, source_kind) == ("google_search_console", "url_inspection"):
+        return None
+    if (provider, source_kind) in {
+        ("microsoft_bing_webmaster_tools", "ai_performance_export"),
+        ("google_analytics_4", "ai_assistant_referrals"),
+    }:
+        return source_scope
+    raise ValueError("unsupported connected-evidence provider/source_kind profile")
+
+
+def _profile_observation_window(
+    evidence: Mapping[str, Any],
+) -> tuple[datetime, datetime] | None:
+    """Return a provable closed observation interval, or ``None`` if unknown.
+
+    Missing start dates are not invented. That keeps date-less exports truthful:
+    exact duplicate identity and availability coherence still apply, but the
+    bundle does not pretend it can prove overlap without a bounded start.
+    """
+
+    start_identity = _record_period_start(evidence)
+    coverage = evidence["coverage"]
+    end_value = coverage.get("period_end")
+    end_field = "coverage.period_end"
+    if end_value in (None, ""):
+        end_value = evidence.get("observed_at")
+        end_field = "observed_at"
+    if start_identity is None or end_value in (None, ""):
+        return None
+
+    start = _canonical_temporal_datetime(
+        start_identity,
+        field="observation_window.start",
+        allow_none=False,
+    )
+    end = _canonical_temporal_datetime(
+        end_value,
+        field=end_field,
+        allow_none=False,
+    )
+    assert start is not None and end is not None
+    if start > end:
+        raise ValueError("connected-evidence observation window start cannot exceed end")
+    return start, end
+
+
 def _state_class(state: Any) -> str:
     if state in _OBSERVED_STATES:
         return "observed"
@@ -292,6 +374,8 @@ def validate_connected_evidence_snapshot_bundle(
     source/window identities fail closed instead of being silently summed or
     allowing caller order to choose which observation wins. A source scope also
     cannot be both observed and unavailable inside one logical snapshot.
+    Observed rows from the same semantic series must not claim overlapping
+    provider windows when both interval bounds are provable.
     """
 
     if isinstance(evidence_items, (str, bytes, bytearray)) or not isinstance(
@@ -303,6 +387,7 @@ def validate_connected_evidence_snapshot_bundle(
 
     seen: dict[str, int] = {}
     source_states: dict[str, tuple[str, int]] = {}
+    series_windows: dict[str, list[tuple[datetime, datetime, int]]] = {}
     for index, evidence in enumerate(evidence_items):
         if not isinstance(evidence, Mapping):
             raise ValueError(f"evidence_items[{index}] must be an object")
@@ -331,5 +416,24 @@ def validate_connected_evidence_snapshot_bundle(
                 f"evidence_items[{previous_state[1]}] and evidence_items[{index}]"
             )
         source_states[source_scope] = (state_class, index)
+
+        if state_class == "observed":
+            series_identity = _profile_observation_series_identity(evidence)
+            window = _profile_observation_window(evidence)
+            if series_identity is not None and window is not None:
+                series_key = json.dumps(
+                    series_identity,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
+                start, end = window
+                previous_windows = series_windows.setdefault(series_key, [])
+                for previous_start, previous_end, previous_index in previous_windows:
+                    if start <= previous_end and previous_start <= end:
+                        raise ValueError(
+                            "overlapping connected-evidence observation windows for one series at "
+                            f"evidence_items[{previous_index}] and evidence_items[{index}]"
+                        )
+                previous_windows.append((start, end, index))
 
     return evidence_items

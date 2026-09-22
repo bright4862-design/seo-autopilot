@@ -61,7 +61,7 @@ def _parse_datetime(value: Any) -> datetime | None:
             dt = datetime.fromisoformat(text)
         except ValueError:
             try:
-                parsed_date = date.fromisoformat(text[:10])
+                parsed_date = date.fromisoformat(text)
             except ValueError:
                 return None
             dt = datetime(parsed_date.year, parsed_date.month, parsed_date.day, tzinfo=timezone.utc)

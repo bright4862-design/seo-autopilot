@@ -10,11 +10,13 @@ from .nextgen_fix_verification import (
     REGRESSION_REOPEN_VERSION,
     VERIFICATION_RESULT_VERSION,
     VERIFICATION_STATES,
+    build_acceptance_criterion,
 )
 from .repair_identity import build_repair_identity
 
 VERIFICATION_RESULT_INTEGRITY_VERSION = "fix_verification_result_integrity_v1"
-STRICT_REGRESSION_REOPEN_VERSION = "fix_regression_reopen_v2_integrity"
+VERIFICATION_RESULT_BINDING_VERSION = "fix_verification_result_binding_v1"
+STRICT_REGRESSION_REOPEN_VERSION = "fix_regression_reopen_v3_criterion_bound"
 
 
 def _clean(value: Any) -> str:
@@ -109,20 +111,105 @@ def verification_result_integrity(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def strict_regression_reopen_decision(previous_record: dict[str, Any], current_result: dict[str, Any]) -> dict[str, Any]:
-    """Return a fail-closed pure-data regression decision for serialized integration.
+def verification_result_historical_binding(
+    previous_record: dict[str, Any],
+    current_result: dict[str, Any],
+) -> dict[str, Any]:
+    """Bind a transported verification result back to its historical criterion.
 
-    A forged or structurally incomplete PASS/PARTIAL/FAIL result is downgraded to
-    COULD_NOT_VERIFY for regression purposes. This prevents a matching fingerprint
-    plus a hand-constructed FAIL/PARTIAL object from reopening a previously fixed
-    repair without complete comparable evidence.
+    Structural integrity is not enough: a well-shaped PASS/FAIL/PARTIAL can still
+    carry a foreign criterion id or a fingerprint copied from another contract.
+    Recompute the criterion and stable repair identity from the historical repair
+    and require the transported result to match them exactly.
     """
     previous_record = previous_record if isinstance(previous_record, dict) else {}
     current_result = current_result if isinstance(current_result, dict) else {}
     integrity = verification_result_integrity(current_result)
+    base = {
+        "version": VERIFICATION_RESULT_BINDING_VERSION,
+        "valid": False,
+        "reason": "verification_result_not_bound",
+        "effective_state": _clean(integrity.get("effective_state")).upper() or COULD_NOT_VERIFY,
+        "repair_fingerprint": "",
+        "criterion_id": "",
+        "result_integrity": integrity,
+    }
+    if not integrity.get("valid"):
+        return {
+            **base,
+            "reason": f"result_integrity_invalid:{_clean(integrity.get('reason')) or 'invalid_verification_result'}",
+            "effective_state": COULD_NOT_VERIFY,
+        }
+
+    expected = build_acceptance_criterion(previous_record)
+    if expected.get("state") != "ready":
+        return {**base, "reason": "historical_acceptance_criterion_not_ready", "effective_state": COULD_NOT_VERIFY}
+
+    identity = build_repair_identity(previous_record)
+    expected_fingerprint = _clean(expected.get("repair_fingerprint"))
+    expected_identity_version = _clean(expected.get("repair_identity_version"))
+    expected_criterion_id = _clean(expected.get("criterion_id"))
+    base.update({
+        "repair_fingerprint": expected_fingerprint,
+        "criterion_id": expected_criterion_id,
+    })
+    if (
+        not identity.get("stable")
+        or not expected_fingerprint
+        or _clean(identity.get("fingerprint")) != expected_fingerprint
+        or _clean(identity.get("version")) != expected_identity_version
+    ):
+        return {**base, "reason": "historical_repair_identity_not_stable", "effective_state": COULD_NOT_VERIFY}
+
+    stored_fingerprint = _clean(previous_record.get("repair_fingerprint"))
+    if stored_fingerprint and stored_fingerprint != expected_fingerprint:
+        return {**base, "reason": "historical_stored_repair_fingerprint_mismatch", "effective_state": COULD_NOT_VERIFY}
+
+    stored_identity_version = _clean(previous_record.get("repair_identity_version"))
+    if stored_identity_version and stored_identity_version != expected_identity_version:
+        return {**base, "reason": "historical_stored_repair_identity_version_mismatch", "effective_state": COULD_NOT_VERIFY}
+
+    nested_identity = previous_record.get("repair_identity")
+    if nested_identity is not None:
+        if not isinstance(nested_identity, dict):
+            return {**base, "reason": "historical_repair_identity_claim_malformed", "effective_state": COULD_NOT_VERIFY}
+        nested_fingerprint = _clean(nested_identity.get("fingerprint"))
+        nested_version = _clean(nested_identity.get("version"))
+        if nested_fingerprint and nested_fingerprint != expected_fingerprint:
+            return {**base, "reason": "historical_nested_repair_fingerprint_mismatch", "effective_state": COULD_NOT_VERIFY}
+        if nested_version and nested_version != expected_identity_version:
+            return {**base, "reason": "historical_nested_repair_identity_version_mismatch", "effective_state": COULD_NOT_VERIFY}
+        if "stable" in nested_identity and nested_identity.get("stable") is not True:
+            return {**base, "reason": "historical_nested_repair_identity_not_stable", "effective_state": COULD_NOT_VERIFY}
+
+    if _clean(current_result.get("repair_fingerprint")) != expected_fingerprint:
+        return {**base, "reason": "repair_identity_missing_or_changed", "effective_state": COULD_NOT_VERIFY}
+    if _clean(current_result.get("criterion_id")) != expected_criterion_id:
+        return {**base, "reason": "acceptance_criterion_identity_mismatch", "effective_state": COULD_NOT_VERIFY}
+
+    return {
+        **base,
+        "valid": True,
+        "reason": "verification_result_bound_to_historical_contract",
+        "effective_state": _clean(integrity.get("effective_state")).upper() or COULD_NOT_VERIFY,
+    }
+
+
+def strict_regression_reopen_decision(previous_record: dict[str, Any], current_result: dict[str, Any]) -> dict[str, Any]:
+    """Return a fail-closed pure-data regression decision for serialized integration.
+
+    A proving result must be both structurally complete and cryptographically bound
+    to the criterion regenerated from the same historical repair record. Foreign
+    criterion ids, stale identity claims, or historical version drift therefore
+    become COULD_NOT_VERIFY rather than reopening a repair.
+    """
+    previous_record = previous_record if isinstance(previous_record, dict) else {}
+    current_result = current_result if isinstance(current_result, dict) else {}
+    binding = verification_result_historical_binding(previous_record, current_result)
+    integrity = binding.get("result_integrity") if isinstance(binding.get("result_integrity"), dict) else {}
 
     current_fingerprint = _clean(current_result.get("repair_fingerprint"))
-    previous_fingerprint = _clean(previous_record.get("repair_fingerprint"))
+    previous_fingerprint = _clean(binding.get("repair_fingerprint"))
     if not previous_fingerprint:
         identity = build_repair_identity(previous_record)
         previous_fingerprint = _clean(identity.get("fingerprint")) if identity.get("stable") else ""
@@ -134,15 +221,13 @@ def strict_regression_reopen_decision(previous_record: dict[str, Any], current_r
         or previous_record.get("status")
     )
     reported_state = _clean(current_result.get("state")).upper()
-    effective_state = _clean(integrity.get("effective_state")).upper() or COULD_NOT_VERIFY
+    effective_state = _clean(binding.get("effective_state")).upper() or COULD_NOT_VERIFY
     previously_resolved = previous_state.upper() == PASS or previous_state.lower() in {"verified_fixed", "fixed", "resolved"}
 
     should_reopen = False
     reason = "no_regression_reopen"
-    if not integrity.get("valid"):
-        reason = f"regression_not_proven:{_clean(integrity.get('reason')) or 'invalid_verification_result'}"
-    elif not previous_fingerprint or not current_fingerprint or previous_fingerprint != current_fingerprint:
-        reason = "repair_identity_missing_or_changed"
+    if not binding.get("valid"):
+        reason = f"regression_not_proven:{_clean(binding.get('reason')) or 'unbound_verification_result'}"
     elif not previously_resolved:
         reason = "previous_repair_was_not_verified_resolved"
     elif effective_state in {FAIL, PARTIAL}:
@@ -165,10 +250,11 @@ def strict_regression_reopen_decision(previous_record: dict[str, Any], current_r
         "legacy_contract_version": REGRESSION_REOPEN_VERSION,
         "should_reopen": should_reopen,
         "reason": reason,
-        "repair_fingerprint": current_fingerprint or previous_fingerprint,
+        "repair_fingerprint": previous_fingerprint or current_fingerprint,
         "reopen_scope": reopen_scope,
         "source_verification_state": previous_state,
         "reported_current_verification_state": reported_state,
         "current_verification_state": effective_state,
         "result_integrity": integrity,
+        "result_binding": binding,
     }

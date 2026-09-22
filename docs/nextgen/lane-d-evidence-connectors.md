@@ -17,12 +17,13 @@ This file is the **authoritative Lane-D integration handoff**. Per-slice hardeni
 
 Lane D exposes one strict pre-normalization import boundary plus seven post-normalization fail-closed validation boundaries.
 
-0. `validate_connected_evidence_import_rows(...)` / `connected_evidence_import_shape_v1`
+0. `validate_connected_evidence_import_rows(...)` / `connected_evidence_import_shape_v1`, plus `parse_connected_evidence_import_csv(...)` / `connected_evidence_csv_shape_v1`
    - protects Bing AI Performance and GA4 manual/aggregate row imports before tolerant provider alias lookup;
    - rejects registered-header collisions after normalization or underscore-insensitive matching;
    - rejects conflicting non-empty values carried by multiple aliases for the same semantic field while allowing equivalent duplicates;
    - preserves unrelated provider/export columns instead of turning them into evidence fields;
-   - cannot raise the existing global `MAX_IMPORT_ROWS` ceiling;
+   - strict CSV parsing rejects ragged rows instead of silently dropping overflow fields or accepting truncated rows;
+   - caller-supplied CSV byte/row limits may tighten but cannot raise the lane's existing 5 MB / `MAX_IMPORT_ROWS` ceilings;
    - strict Bing/GA4 row and CSV entrypoints preflight imports before delegating to the existing pure provider normalizers.
 1. `validate_connected_evidence(...)` / `connected_evidence_v1`
    - strict envelope shape, timestamps, state semantics, JSON bounds, evidence-quality confidence, and unavailable/stale invariants;
@@ -62,7 +63,7 @@ The producer fails closed before constructing an envelope when `retrieved_at` is
 - **Google Search Console URL Inspection:** `normalize_google_url_inspection(...)` accepts already-authorized `urlInspection.index.inspect` payloads and preserves verdict/indexing/fetch/canonical/last-crawl/referrer/sitemap evidence without treating it as a guarantee of current search visibility.
 - **Bing Webmaster Tools AI Performance:** low-level `normalize_bing_ai_performance_rows(...)` remains a pure translator for manual CSV/Excel-derived rows. Future manual/import integration should prefer `normalize_bing_ai_performance_import_rows(...)` or `normalize_bing_ai_performance_import_csv(...)`, which apply `connected_evidence_import_shape_v1` first. `api_used` is explicitly false; this lane does not claim that an AI Performance API exists.
 - **GA4 AI-assistant referrals:** low-level `normalize_ga4_ai_referral_rows(...)` remains a pure aggregate-row translator. Future manual/import integration should prefer `normalize_ga4_ai_referral_import_rows(...)` or `normalize_ga4_ai_referral_import_csv(...)`, which fail closed on ambiguous provider aliases before normalization. Referral evidence proves observed traffic only; it does not prove all AI mentions/citations.
-- **CSV import boundary:** bounded UTF-8 CSV parsing rejects oversized inputs, row sets, and duplicate normalized headers. The strict import-shape layer additionally protects direct Excel-derived mappings and semantic aliases that CSV header normalization alone cannot disambiguate.
+- **CSV import boundary:** bounded UTF-8 CSV parsing rejects oversized inputs, row sets, duplicate normalized headers, and ragged rows whose field count differs from the header. The strict import-shape layer additionally protects direct Excel-derived mappings and semantic aliases that CSV header normalization alone cannot disambiguate.
 
 Freshness fails closed when freshness checking is enabled but the observation time cannot be established, parsed, or is later than retrieval. `stale_after_days=None` is the explicit opt-out from a freshness claim.
 
@@ -85,6 +86,7 @@ Sanitized fixtures live under `scanner-api/tests/fixtures_connected_evidence/`. 
 - GA4 property identities must be numeric (`properties/<id>` or bare numeric import form), and landing-page evidence must be root-relative and unambiguous; `(not set)` remains explicit unknown identity.
 - Provider row numbers are transport positions, not semantic identities. Metrics are measurements, not identity fields.
 - Strict import preflight treats recognized alias ambiguity as a data-integrity error instead of letting dictionary/header order decide which provider value wins. Unrelated extra export columns remain tolerated and are not promoted into normalized evidence records.
+- Strict CSV import treats row/header cardinality as evidence integrity: extra fields are not silently discarded, truncated rows are not padded into apparently valid evidence, quoted commas remain valid CSV, and explicit empty trailing cells remain distinguishable from missing fields.
 - GSC page/Bing URL identity canonicalization is intentionally narrow: it does not lowercase paths, drop queries, resolve redirects, or invent provider canonicals.
 - Snapshot source identities canonicalize supported source aliases; dated Bing/GA4 evidence without an explicit start derives a conservative start only from accepted carried record dates.
 - Snapshot window coherence treats provider periods as closed intervals when both bounds are provable. Date-less evidence remains unknown rather than having a start inferred from retrieval time.
@@ -101,7 +103,7 @@ Sanitized fixtures live under `scanner-api/tests/fixtures_connected_evidence/`. 
 
 For any later authorized payload/import, the serialized integration layer must:
 
-1. use the registered Lane-D adapter; for manual/Excel-derived Bing or GA4 rows, prefer the strict `*_import_rows` / `*_import_csv` entrypoints so alias ambiguity is rejected before normalization;
+1. use the registered Lane-D adapter; for manual/Excel-derived Bing or GA4 rows, prefer the strict `*_import_rows` / `*_import_csv` entrypoints so alias ambiguity and malformed CSV row shape are rejected before normalization;
 2. validate the complete logical enrichment set using `validate_connected_evidence_snapshot_bundle(...)`, which composes envelope → source identity → record semantics/closed-world record shape → coverage semantics → source/property scope → logical record identity, then applies canonical snapshot source/window identity, cross-state coherence, and provable observation-window overlap rejection;
 3. only then attach evidence as optional connected evidence with provenance/coverage intact;
 4. keep connected evidence separate from canonical crawl authority;
@@ -130,13 +132,13 @@ Focused suites on this lane now contain:
 - `scanner-api/tests/test_connected_evidence_ga4_landing_path_hardening.py`: **8 GA4 landing-path ambiguity tests**;
 - `scanner-api/tests/test_connected_evidence_source_identity_hardening.py`: **11 source-identity hardening tests**;
 - `scanner-api/tests/test_connected_evidence_snapshot_window_coherence.py`: **9 snapshot-window-coherence tests**;
-- `scanner-api/tests/test_connected_evidence_import_contract.py`: **13 strict import-shape tests**.
+- `scanner-api/tests/test_connected_evidence_import_contract.py`: **18 strict import-shape/CSV-shape tests**.
 
-Expected focused total: **236 tests**.
+Expected focused total: **241 tests**.
 
 Latest verified slice evidence in this runtime:
 
-- strict import-shape hardening exercised **13/13** focused cases in a hermetic Python package: unambiguous Bing/GA4 rows remained accepted; normalized and underscore-insensitive registered-header collisions failed closed; conflicting Bing citation aliases, GA4 source aliases, and GA4 assistant aliases failed closed; equivalent duplicate values remained accepted; unrelated extra export columns remained tolerated; callers could not raise the global import-row ceiling; and strict wrapper preflight/delegation behavior was exercised;
+- strict import/CSV-shape hardening exercised **18/18** focused cases in a hermetic Python package: the prior alias-collision/conflict behaviors remained green; over-wide CSV rows failed closed instead of losing overflow fields; short rows failed closed instead of being padded; quoted commas and explicit empty trailing cells remained valid; byte/row bounds could be tightened but not raised above lane ceilings; and the GA4 strict CSV wrapper rejected malformed row shape before provider normalization;
 - `python -m py_compile app/connected_evidence_import_contract.py tests/test_connected_evidence_import_contract.py` passed for the candidate code;
 - the hermetic package stubbed only the already-existing low-level `connected_evidence` adapter dependency. Full repository-native exact-head certification is still required;
 - GA4 source-host userinfo hardening previously exercised **3/3** focused logic cases;
@@ -158,9 +160,9 @@ and:
 
 `python -m py_compile app/connected_evidence.py app/connected_evidence_import_contract.py app/connected_evidence_contract.py app/connected_evidence_source_contract.py app/connected_evidence_record_contract.py app/connected_evidence_coverage_contract.py app/connected_evidence_scope_contract.py app/connected_evidence_record_identity_contract.py app/connected_evidence_bundle_contract.py tests/test_connected_evidence.py tests/test_connected_evidence_import_contract.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py tests/test_connected_evidence_record_shape_hardening.py tests/test_connected_evidence_coverage_contract.py tests/test_connected_evidence_scope_contract.py tests/test_connected_evidence_record_identity_contract.py tests/test_connected_evidence_bundle_contract.py tests/test_connected_evidence_snapshot_observation_identity.py tests/test_connected_evidence_record_url_identity.py tests/test_connected_evidence_prefix_provenance.py tests/test_connected_evidence_provenance_shape.py tests/test_connected_evidence_ga4_landing_path_hardening.py tests/test_connected_evidence_source_identity_hardening.py tests/test_connected_evidence_snapshot_window_coherence.py`
 
-Do not mark Lane D integration-ready until the exact-head **236-test** repository-native run is green and a fresh exact-head review has no unresolved material findings.
+Do not mark Lane D integration-ready until the exact-head **241-test** repository-native run is green and a fresh exact-head review has no unresolved material findings.
 
-The full repository-native exact-head 236-test run is **not yet claimed green** in this runtime. PR #332 intentionally targets `nextgen/integration-20260921`; do not retarget the PR or alter release workflows merely to manufacture CI.
+The full repository-native exact-head 241-test run is **not yet claimed green** in this runtime. PR #332 intentionally targets `nextgen/integration-20260921`; do not retarget the PR or alter release workflows merely to manufacture CI.
 
 ## Known risks / truthful unsupported states
 

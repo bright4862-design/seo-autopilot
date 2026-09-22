@@ -78,8 +78,10 @@ def build_vector_bound_semantic_graph_evidence(
     """Build the preferred Lane-B evidence envelope from one semantic snapshot.
 
     Duplicate assessed-page identities are rejected before any caller-provided
-    vectorizer executes. Template inference and graph construction remain purely
-    local. Semantic-dependent clustering, cannibalization, and contextual-link
+    vectorizer executes. Missing page identities remain explicit as incomplete
+    page-identity coverage rather than silently disappearing from the envelope.
+    Template inference and graph construction remain purely local.
+    Semantic-dependent clustering, cannibalization, and contextual-link
     opportunity evidence are delegated to the vector-bound analysis contract,
     which validates adapter shape/population/determinism/input isolation and then
     replays one sealed vector snapshot to every downstream semantic analyzer.
@@ -93,6 +95,14 @@ def build_vector_bound_semantic_graph_evidence(
     population, population_error = _page_population(pages)
     if population_error:
         raise ValueError(population_error)
+
+    input_page_count = len(pages)
+    if len(population) == input_page_count:
+        page_identity_coverage_state = "complete"
+    elif population:
+        page_identity_coverage_state = "partial"
+    else:
+        page_identity_coverage_state = "not_verified"
 
     template_evidence = infer_template_groups(pages)
     graph = build_weighted_internal_link_graph(pages, links)
@@ -110,7 +120,10 @@ def build_vector_bound_semantic_graph_evidence(
         semantic_analysis.get("semantic_vector_integrity_state") or "not_verified"
     )
     graph_state = str(semantic_analysis.get("graph_integrity_state") or "not_verified")
-    if semantic_state != "verified":
+    if page_identity_coverage_state != "complete":
+        state = "not_verified"
+        reason = "page_identity_coverage_incomplete"
+    elif semantic_state != "verified":
         state = "not_verified"
         reason = str(
             semantic_analysis.get("semantic_vector_integrity_reason")
@@ -130,7 +143,9 @@ def build_vector_bound_semantic_graph_evidence(
         "scope": EVIDENCE_SCOPE,
         "state": state,
         "reason": reason,
+        "input_page_count": input_page_count,
         "assessed_page_identity_count": len(population),
+        "page_identity_coverage_state": page_identity_coverage_state,
         "template_evidence_version": TEMPLATE_EVIDENCE_VERSION,
         "graph_evidence_version": GRAPH_EVIDENCE_VERSION,
         "semantic_analysis_version": VECTOR_BOUND_SEMANTIC_ANALYSIS_VERSION,

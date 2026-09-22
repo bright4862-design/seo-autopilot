@@ -117,6 +117,23 @@ def test_template_link_flow_rejects_forged_group_counts():
     assert result["graph_integrity_state"] == "not_verified"
 
 
+def test_template_link_flow_rejects_forged_group_id_even_when_rows_and_groups_agree():
+    pages = [page("https://e.test/a", "article"), page("https://e.test/b", "article")]
+    templates = infer_template_groups(pages)
+    graph = build_weighted_internal_link_graph(pages, [])
+    forged = deepcopy(templates)
+    forged_group_id = "tmpl_deadbeefdead"
+    forged["groups"][0]["group_id"] = forged_group_id
+    for row in forged["pages"]:
+        row["group_id"] = forged_group_id
+
+    result = template_link_flow_evidence(forged, graph)
+
+    assert result["state"] == "not_verified"
+    assert result["reason"] == "template_group_id_mismatch"
+    assert result["flows"] == []
+
+
 def test_template_link_flow_fails_closed_when_template_page_identity_is_missing():
     pages = [page("https://e.test/a", "article"), {"status_code": 200}]
     templates = infer_template_groups(pages)

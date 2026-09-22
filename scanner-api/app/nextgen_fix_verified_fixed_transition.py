@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from .nextgen_fix_verification import PASS
-from .nextgen_fix_verification_integrity import verification_result_integrity
+from .nextgen_fix_verification_integrity import verification_result_historical_binding
 from .repair_identity import REPAIR_VERIFICATION_VERSION, build_repair_identity
 
-STRICT_VERIFIED_FIXED_TRANSITION_VERSION = "fix_verified_fixed_transition_v2_integrity"
+STRICT_VERIFIED_FIXED_TRANSITION_VERSION = "fix_verified_fixed_transition_v3_criterion_bound"
 
 
 def _clean(value: Any) -> str:
@@ -61,35 +61,37 @@ def strict_verified_fixed_transition_decision(
 ) -> dict[str, Any]:
     """Require dual complete proof before proposing a durable verified-fixed transition.
 
-    The NextGen result must be an integrity-valid PASS for the same stable repair
-    identity, and the existing repair comparator must independently report a
-    complete ``verified_fixed`` outcome over the same evidence-population size.
-    This function is pure data: it never mutates authority, persistence, customer
-    projection, workflow state, or production.
+    The NextGen result must be integrity-valid and bound to the criterion
+    regenerated from the same historical repair record. The existing repair
+    comparator must independently report a complete ``verified_fixed`` outcome
+    over the same evidence-population size. This function is pure data.
     """
     previous_record = previous_record if isinstance(previous_record, dict) else {}
     current_result = current_result if isinstance(current_result, dict) else {}
 
-    result_integrity = verification_result_integrity(current_result)
+    result_binding = verification_result_historical_binding(previous_record, current_result)
+    result_integrity = (
+        result_binding.get("result_integrity")
+        if isinstance(result_binding.get("result_integrity"), dict)
+        else {}
+    )
     legacy_integrity = _legacy_verified_fixed_integrity(legacy_comparison)
 
     current_fingerprint = _clean(current_result.get("repair_fingerprint"))
-    previous_fingerprint = _clean(previous_record.get("repair_fingerprint"))
-    if not previous_fingerprint:
+    bound_fingerprint = _clean(result_binding.get("repair_fingerprint"))
+    if not bound_fingerprint:
         identity = build_repair_identity(previous_record)
-        previous_fingerprint = _clean(identity.get("fingerprint")) if identity.get("stable") else ""
+        bound_fingerprint = _clean(identity.get("fingerprint")) if identity.get("stable") else ""
 
     allowed = False
     reason = "verified_fixed_transition_not_proven"
-    if not result_integrity.get("valid"):
+    if not result_binding.get("valid"):
         reason = (
-            "nextgen_result_not_proven:"
-            f"{_clean(result_integrity.get('reason')) or 'invalid_verification_result'}"
+            "nextgen_result_not_bound:"
+            f"{_clean(result_binding.get('reason')) or 'unbound_verification_result'}"
         )
-    elif _clean(result_integrity.get("effective_state")).upper() != PASS:
+    elif _clean(result_binding.get("effective_state")).upper() != PASS:
         reason = "nextgen_result_is_not_pass"
-    elif not previous_fingerprint or not current_fingerprint or previous_fingerprint != current_fingerprint:
-        reason = "repair_identity_missing_or_changed"
     elif not legacy_integrity.get("valid"):
         reason = (
             "legacy_comparison_not_proven:"
@@ -105,7 +107,8 @@ def strict_verified_fixed_transition_decision(
         "version": STRICT_VERIFIED_FIXED_TRANSITION_VERSION,
         "allowed": allowed,
         "reason": reason,
-        "repair_fingerprint": current_fingerprint or previous_fingerprint,
+        "repair_fingerprint": bound_fingerprint or current_fingerprint,
         "result_integrity": result_integrity,
+        "result_binding": result_binding,
         "legacy_comparison_integrity": legacy_integrity,
     }

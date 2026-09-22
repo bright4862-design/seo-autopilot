@@ -1,11 +1,11 @@
 """Snapshot-bundle integrity for FixList NextGen connected evidence.
 
-This lane-local pure contract composes after the existing envelope, source,
-record, coverage, and source-scope validators.  It prevents one scan/enrichment
-snapshot from silently carrying duplicate or contradictory observations for the
-same provider/source scope.  It performs no network I/O, authentication,
-persistence, scoring, customer projection, release, deployment, or production
-mutation.
+This lane-local pure contract composes after envelope, source, record, coverage,
+source-scope, and logical-record-identity validation. It prevents one
+scan/enrichment snapshot from silently carrying duplicate or contradictory
+observations for the same provider/source scope. It performs no network I/O,
+authentication, persistence, scoring, customer projection, release, deployment,
+or production mutation.
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping, Sequence
 
-from .connected_evidence_scope_contract import (
-    validate_connected_evidence_scope_semantics,
+from .connected_evidence_record_identity_contract import (
+    validate_connected_evidence_record_identity_semantics,
 )
 
 SNAPSHOT_BUNDLE_VERSION = "connected_evidence_snapshot_bundle_v1"
@@ -99,15 +99,13 @@ def _profile_snapshot_identity(evidence: Mapping[str, Any]) -> tuple[Any, ...]:
             evidence.get("observed_at"),
         )
 
-    # The upstream source-profile validator should reject unknown profiles before
-    # this branch is reachable.  Keep an explicit fail-closed guard anyway.
     raise ValueError("unsupported connected-evidence provider/source_kind profile")
 
 
 def connected_evidence_snapshot_identity(evidence: Mapping[str, Any]) -> str:
     """Validate one envelope fully and return a deterministic snapshot identity."""
 
-    validate_connected_evidence_scope_semantics(evidence)
+    validate_connected_evidence_record_identity_semantics(evidence)
     identity = _profile_snapshot_identity(evidence)
     return json.dumps(identity, separators=(",", ":"), ensure_ascii=False)
 
@@ -118,7 +116,7 @@ def validate_connected_evidence_snapshot_bundle(
     """Validate one bounded connected-evidence snapshot and return it unchanged.
 
     A bundle represents the optional connected evidence attached to one logical
-    scan/enrichment snapshot, not historical time-series storage.  Duplicate
+    scan/enrichment snapshot, not historical time-series storage. Duplicate
     source/window identities fail closed instead of being silently summed or
     allowing caller order to choose which observation wins.
     """

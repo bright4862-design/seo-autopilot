@@ -3,13 +3,16 @@
 This helper consumes already-validated Lane-B semantic vector evidence plus
 vector-bound semantic cluster evidence. It performs no network/model work and
 creates no customer Fix. Cluster membership is independently rebound to the
-validated vector population before representative/topic evidence is emitted.
+validated vector population and recomputed from the accepted semantic snapshot
+before representative/topic evidence is emitted.
 """
 from __future__ import annotations
 
 from hashlib import sha256
 from math import isfinite, sqrt
 from typing import Any
+
+from .semantic_graph import _semantic_pair_rows
 
 
 SEMANTIC_CLUSTER_PROFILE_VERSION = "semantic_cluster_profile_v1_vector_bound"
@@ -86,16 +89,57 @@ def _expected_cluster_id(urls: list[str]) -> str:
     return "sem_" + sha256("|".join(urls).encode("utf-8")).hexdigest()[:12]
 
 
+def _expected_cluster_partition(
+    vectors: dict[str, dict[str, float]],
+    threshold: float,
+) -> tuple[list[tuple[str, list[str]]], int]:
+    """Recompute the connected-component cluster partition from sealed vectors."""
+    urls = sorted(vectors)
+    parent = {url: url for url in urls}
+
+    def root(url: str) -> str:
+        while parent[url] != url:
+            parent[url] = parent[parent[url]]
+            url = parent[url]
+        return url
+
+    qualifying_pair_count = 0
+    for pair in _semantic_pair_rows(vectors, threshold):
+        qualifying_pair_count += 1
+        left_root = root(pair["left_url"])
+        right_root = root(pair["right_url"])
+        if left_root != right_root:
+            parent[right_root] = left_root
+
+    grouped: dict[str, list[str]] = {}
+    for url in urls:
+        grouped.setdefault(root(url), []).append(url)
+
+    clusters: list[tuple[str, list[str]]] = []
+    for members in grouped.values():
+        if len(members) < 2:
+            continue
+        ordered = sorted(members)
+        clusters.append((_expected_cluster_id(ordered), ordered))
+    clusters.sort(key=lambda item: item[0])
+    return clusters, qualifying_pair_count
+
+
 def semantic_cluster_profile_evidence(
     cluster_evidence: Any,
     semantic_vector_evidence: Any,
 ) -> dict[str, Any]:
-    """Bind cluster membership to one validated vector snapshot and profile it.
+    """Bind cluster derivation to one validated vector snapshot and profile it.
 
     The profile is descriptive evidence only. ``representative_url`` is the
     member nearest the deterministic cluster centroid, not a canonical-page or
     customer repair decision. ``top_terms`` are centroid-weight evidence, not a
     generated topic label or external-model assertion.
+
+    The transported cluster partition is not trusted merely because its members
+    exist in the accepted vector population. Its threshold, pair-scan metadata,
+    qualifying pair count, and connected-component membership are independently
+    recomputed from the exact sealed vector snapshot first.
     """
     if not isinstance(semantic_vector_evidence, dict):
         return _not_verified("semantic_vector_evidence_invalid")
@@ -131,6 +175,43 @@ def semantic_cluster_profile_evidence(
         return _not_verified("semantic_cluster_evidence_not_verified", coverage=coverage)
     if cluster_state not in {"candidate", "no_candidate_observed"}:
         return _not_verified("semantic_cluster_state_invalid", coverage=coverage)
+
+    threshold = cluster_evidence.get("threshold")
+    if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+        return _not_verified("semantic_cluster_threshold_invalid", coverage=coverage)
+    threshold = float(threshold)
+    if not isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+        return _not_verified("semantic_cluster_threshold_invalid", coverage=coverage)
+
+    vectorized_pages = cluster_evidence.get("vectorized_pages")
+    if (
+        isinstance(vectorized_pages, bool)
+        or not isinstance(vectorized_pages, int)
+        or vectorized_pages < 0
+    ):
+        return _not_verified("semantic_cluster_vectorized_page_count_invalid", coverage=coverage)
+    if vectorized_pages != len(vectors):
+        return _not_verified("semantic_cluster_vectorized_page_count_mismatch", coverage=coverage)
+
+    if cluster_evidence.get("pair_scan_complete") is not True:
+        return _not_verified("semantic_cluster_pair_scan_incomplete", coverage=coverage)
+
+    qualifying_pair_count = cluster_evidence.get("qualifying_pair_count")
+    if (
+        isinstance(qualifying_pair_count, bool)
+        or not isinstance(qualifying_pair_count, int)
+        or qualifying_pair_count < 0
+    ):
+        return _not_verified("semantic_cluster_qualifying_pair_count_invalid", coverage=coverage)
+
+    expected_clusters, expected_pair_count = _expected_cluster_partition(vectors, threshold)
+    if qualifying_pair_count != expected_pair_count:
+        return _not_verified("semantic_cluster_qualifying_pair_count_mismatch", coverage=coverage)
+
+    expected_state = "candidate" if expected_clusters else "no_candidate_observed"
+    if cluster_state != expected_state:
+        return _not_verified("semantic_cluster_state_inconsistent", coverage=coverage)
+
     if cluster_state == "no_candidate_observed":
         if raw_clusters:
             return _not_verified("semantic_cluster_state_inconsistent", coverage=coverage)
@@ -188,6 +269,9 @@ def semantic_cluster_profile_evidence(
         canonical_clusters.append((cluster_id, ordered))
 
     canonical_clusters.sort(key=lambda item: item[0])
+    if canonical_clusters != expected_clusters:
+        return _not_verified("semantic_cluster_derivation_mismatch", coverage=coverage)
+
     profiles: list[dict[str, Any]] = []
     unavailable_count = 0
     for cluster_id, members in canonical_clusters:

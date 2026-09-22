@@ -1,10 +1,11 @@
 """Snapshot-bundle integrity for FixList NextGen connected evidence.
 
 This lane-local pure contract composes after the existing envelope, source,
-record, and coverage validators.  It prevents one scan/enrichment snapshot from
-silently carrying duplicate or contradictory observations for the same
-provider/source scope.  It performs no network I/O, authentication, persistence,
-scoring, customer projection, release, deployment, or production mutation.
+record, coverage, and source-scope validators.  It prevents one scan/enrichment
+snapshot from silently carrying duplicate or contradictory observations for the
+same provider/source scope.  It performs no network I/O, authentication,
+persistence, scoring, customer projection, release, deployment, or production
+mutation.
 """
 
 from __future__ import annotations
@@ -12,8 +13,8 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping, Sequence
 
-from .connected_evidence_coverage_contract import (
-    validate_connected_evidence_coverage_semantics,
+from .connected_evidence_scope_contract import (
+    validate_connected_evidence_scope_semantics,
 )
 
 SNAPSHOT_BUNDLE_VERSION = "connected_evidence_snapshot_bundle_v1"
@@ -106,7 +107,7 @@ def _profile_snapshot_identity(evidence: Mapping[str, Any]) -> tuple[Any, ...]:
 def connected_evidence_snapshot_identity(evidence: Mapping[str, Any]) -> str:
     """Validate one envelope fully and return a deterministic snapshot identity."""
 
-    validate_connected_evidence_coverage_semantics(evidence)
+    validate_connected_evidence_scope_semantics(evidence)
     identity = _profile_snapshot_identity(evidence)
     return json.dumps(identity, separators=(",", ":"), ensure_ascii=False)
 

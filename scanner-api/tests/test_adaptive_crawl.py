@@ -68,6 +68,38 @@ def test_standard_150_selection_is_byte_for_byte_existing_sampling_order():
     assert actual == expected
 
 
+def test_standard_150_preserves_existing_sampler_when_discovery_contains_duplicates():
+    urls = [
+        "https://x.test/products/0",
+        "https://x.test/products/0",
+        "https://x.test/guides/0",
+        "https://x.test/guides/1",
+    ]
+    family = {
+        "https://x.test/products/0": "product_page",
+        "https://x.test/guides/0": "guide_article",
+        "https://x.test/guides/1": "guide_article",
+    }
+    expected = select_balanced_urls(urls, _family_of(family), _path_of, 150)
+    actual = select_adaptive_urls(urls, _family_of(family), _path_of, 150)
+    assert actual == expected
+
+
+def test_deeper_selection_keeps_exact_standard_150_prefix_before_adaptive_deduplication():
+    unique = [f"https://x.test/products/{i}" for i in range(180)] + [
+        f"https://x.test/guides/{i}" for i in range(80)
+    ]
+    urls = unique[:40] + unique[:20] + unique[40:]
+    family = {
+        url: ("product_page" if "/products/" in url else "guide_article")
+        for url in unique
+    }
+    expected_prefix = select_balanced_urls(urls, _family_of(family), _path_of, 150)
+    selected = select_adaptive_urls(urls, _family_of(family), _path_of, 500)
+    assert selected[:150] == expected_prefix
+    assert len(selected) == len(set(unique))
+
+
 def test_selection_is_bounded_deterministic_and_keeps_baseline_prefix():
     urls, family, _, _, metadata = _fixture()
     baseline = select_balanced_urls(urls, _family_of(family), _path_of, 150)

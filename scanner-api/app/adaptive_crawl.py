@@ -165,15 +165,26 @@ def select_adaptive_urls(
     *,
     metadata_by_url: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> list[str]:
-    """Preserve Standard 150 exactly, then greedily diversify later tranches."""
-    ordered = _unique_urls(urls)
-    budget = max(0, min(len(ordered), int(target or 0), MAX_ADAPTIVE_TARGET))
-    if budget <= 0:
+    """Preserve Standard 150 exactly, then greedily diversify later tranches.
+
+    The Standard-150 prefix is computed from the original discovered sequence before
+    adaptive deduplication. This matters because the existing sampler's bucket quotas
+    are a function of the supplied sequence; pre-deduplicating would subtly change the
+    baseline if discovery ever contains duplicate URL identities.
+    """
+    raw_urls = list(urls)
+    requested_budget = max(0, min(len(raw_urls), int(target or 0), MAX_ADAPTIVE_TARGET))
+    if requested_budget <= 0:
         return []
 
-    baseline_budget = min(STANDARD_150_TARGET, budget)
-    selected = select_balanced_urls(ordered, family_of, path_of, baseline_budget)
-    if budget <= STANDARD_150_TARGET or len(selected) >= budget:
+    baseline_budget = min(STANDARD_150_TARGET, requested_budget)
+    selected = select_balanced_urls(raw_urls, family_of, path_of, baseline_budget)
+    if requested_budget <= STANDARD_150_TARGET:
+        return selected[:requested_budget]
+
+    ordered = _unique_urls(raw_urls)
+    budget = min(len(ordered), requested_budget)
+    if len(selected) >= budget:
         return selected[:budget]
 
     metadata = metadata_by_url or {}

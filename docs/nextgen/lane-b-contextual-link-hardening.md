@@ -10,7 +10,7 @@ This checkpoint stays entirely inside the Agent-B ownership boundary from
 persistence, customer projection, admission, release, deployment, worker config,
 credentials, or production behavior.
 
-## Problem reproduced by code inspection
+## Problems reproduced by code inspection/review
 
 The original `internal_link_opportunities(...)` treats any observed directed edge
 as sufficient to suppress a source→target recommendation. That means a page pair
@@ -22,6 +22,14 @@ The same function accepts a transported graph after checking only the graph
 version. A same-version graph with a different node population or a foreign edge
 could therefore influence absence/opportunity evidence for the wrong assessed
 page set.
+
+Independent review of the first contextual hardening checkpoint found a further
+P1 integrity defect: `_validated_graph(...)` checked transported node weights only
+for finite/non-negative shape. A graph could therefore preserve valid edges while
+forging `weighted_in` or `weighted_out`, pass validation, and change opportunity
+score ordering. Because the producer derives node metrics from accepted edge rows,
+transported node metrics must agree with those rows before they can influence a
+candidate score.
 
 ## Added pure evidence helper
 
@@ -37,8 +45,14 @@ It:
   reason distinguishing an upgrade from no observed edge in the assessed sample;
 - never turns sample absence into a sitewide absence claim;
 - validates graph version, scope, exact page/node population, unique identities,
-  edge endpoints, zones, and finite non-negative graph weights before graph data
-  can influence a recommendation;
+  edge endpoints, zones, and finite non-negative six-decimal graph weights before
+  graph data can influence a recommendation;
+- independently recomputes each node's expected inbound/outbound unique-edge
+  counts and six-decimal inbound/outbound weight sums from the validated edge set;
+- rejects transported node counts or weights that disagree with those recomputed
+  metrics, rather than trusting caller-supplied score inputs;
+- rejects booleans/coercible non-integer node edge counts and non-finite or
+  over-precision graph weights;
 - fails closed to `not_verified` when graph identity/integrity is ambiguous;
 - continues to require a usable source/target and an explicitly indexable target;
 - remains deterministic, bounded by the existing Lane-B candidate limit, and
@@ -51,25 +65,34 @@ when wiring Lane B later.
 
 ## Regressions added
 
-`scanner-api/tests/test_semantic_graph_contextual.py` contains six deterministic
-regressions covering:
+`scanner-api/tests/test_semantic_graph_contextual.py` now contains ten
+deterministic regressions covering:
 
 1. a navigation-only edge remains eligible for a contextual upgrade;
 2. an already-contextual edge suppresses a duplicate contextual proposal;
 3. graph/page population mismatch fails closed;
 4. a foreign graph edge fails closed;
 5. a non-indexable target is never proposed;
-6. output is deterministic across page-order changes.
+6. output is deterministic across page-order changes;
+7. forged `weighted_in` fails closed;
+8. forged `weighted_out` fails closed;
+9. forged observed inbound-edge count fails closed;
+10. forged observed outbound-edge count fails closed.
+
+The four forged-metric cases were added before the implementation correction.
+A hermetic validator harness then confirmed a valid internally consistent graph is
+accepted and all four forged metric/count cases fail closed with the expected
+reason. This harness is useful evidence for the corrected pure logic, but it does
+not replace exact-head repository pytest.
 
 ## Exact-head verification blocker
 
 The implementation and regressions are committed, but the current automation
-execution environment still cannot execute the repository checkout: the available
-container/Python runner returns infrastructure `ClientError`. This PR targets the
-NextGen integration branch and therefore has no repository PR workflow run to use
-as a substitute.
+execution environment cannot clone the repository because outbound DNS cannot
+resolve `github.com`. This PR targets the NextGen integration branch and currently
+has no PR-triggered repository workflow run to use as a substitute.
 
-Do **not** claim these new tests green until the exact head executes:
+Do **not** claim the complete exact-head Lane-B suite green until this executes:
 
 ```text
 cd scanner-api
@@ -89,10 +112,11 @@ python -m py_compile \
   tests/test_semantic_graph_contextual.py
 ```
 
-The previously executed pre-cannibalization-hardening checkpoint remains 17/17
-focused tests green plus `py_compile` PASS. Neither the later cannibalization
-regressions nor this six-test contextual hardening file is claimed as executed in
-this environment.
+The branch now contains 29 focused Lane-B tests across those four test files. The
+previously executed pre-cannibalization/contextual checkpoint remains 17/17
+focused tests green plus `py_compile` PASS. The later two cannibalization evidence
+regressions and ten contextual regressions are committed but are not claimed as a
+fresh 29/29 repository run in this environment.
 
 ## Integration handoff
 
@@ -100,8 +124,9 @@ After Agent A is accepted and Lane B reaches exact-head green verification, the
 serialized integrator may transplant this additive module/test with the rest of
 Lane B. Prefer `contextual_internal_link_opportunities(...)` where the intended
 customer/root-cause evidence is specifically a body/contextual-link opportunity.
-Consumers must preserve `observed_edge_present`, `existing_strongest_zone`, and
-the assessed-sample scope; an existing navigation/footer edge is not equivalent
-to an observed contextual edge.
+Consumers must preserve `observed_edge_present`, `existing_strongest_zone`, the
+assessed-sample scope, and `graph_integrity_state`; an existing navigation/footer
+edge is not equivalent to an observed contextual edge, and an internally
+inconsistent transported graph is not verified evidence.
 
 No merge or deployment is authorized from this lane.

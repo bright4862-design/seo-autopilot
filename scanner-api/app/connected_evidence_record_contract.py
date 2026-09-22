@@ -64,9 +64,15 @@ def _bounded_text(value: Any, *, field: str, max_length: int = 4096) -> str:
 
 def _absolute_http_url(value: Any, *, field: str) -> str:
     text = _bounded_text(value, field=field)
-    parsed = urlparse(text)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise ValueError(f"{field} must be an absolute HTTP(S) URL")
+    try:
+        parsed = urlparse(text)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError
+        # urllib defers malformed/out-of-range port validation until ``port``
+        # is accessed, so an absolute-URL proof must force that check.
+        parsed.port
+    except ValueError:
+        raise ValueError(f"{field} must be an absolute HTTP(S) URL") from None
     return text
 
 
@@ -135,8 +141,12 @@ def _source_host(value: Any, *, field: str) -> str:
     text = _bounded_text(value, field=field, max_length=2048).lower()
     first = text.split(" / ", 1)[0].strip()
     candidate = first if "://" in first else f"https://{first}"
-    parsed = urlparse(candidate)
-    host = (parsed.hostname or "").lower().rstrip(".")
+    try:
+        parsed = urlparse(candidate)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        parsed.port
+    except ValueError:
+        raise ValueError(f"{field} did not contain a valid source host") from None
     if not host:
         raise ValueError(f"{field} did not contain a valid source host")
     return host

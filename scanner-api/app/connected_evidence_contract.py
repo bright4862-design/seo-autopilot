@@ -137,8 +137,9 @@ def validate_connected_evidence(evidence: Mapping[str, Any]) -> Mapping[str, Any
 
     Validation is intentionally strict. Unknown top-level fields require a
     schema-version change instead of silently changing the authenticated shape
-    later. Unavailable states may never carry observed records; stale evidence
-    retains records but must identify when the source was observed.
+    later. Unavailable states may never carry observed records or observational
+    sample/coverage claims; stale evidence retains records but must identify
+    when the source was observed.
     """
 
     top = _mapping(evidence, field="connected evidence")
@@ -182,7 +183,7 @@ def validate_connected_evidence(evidence: Mapping[str, Any]) -> Mapping[str, Any
             _bounded_string(transport, field="provenance.transport", max_length=200)
     else:
         _bounded_string(transport, field="provenance.transport", max_length=200)
-    _json_mapping(top["coverage"], field="coverage")
+    coverage = _json_mapping(top["coverage"], field="coverage")
 
     records = top["records"]
     if not isinstance(records, list):
@@ -211,6 +212,14 @@ def validate_connected_evidence(evidence: Mapping[str, Any]) -> Mapping[str, Any
             raise ValueError("unavailable connected evidence must use confidence.level=none")
         if reason is None:
             raise ValueError("unavailable connected evidence requires a reason")
+        if sample != {"coverage_complete_claim": False}:
+            raise ValueError(
+                "unavailable connected evidence cannot claim sample observations"
+            )
+        if coverage:
+            raise ValueError(
+                "unavailable connected evidence cannot claim coverage observations"
+            )
     else:
         if level == "none":
             raise ValueError("observed connected evidence cannot use confidence.level=none")

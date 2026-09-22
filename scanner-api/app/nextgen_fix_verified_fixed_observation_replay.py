@@ -3,13 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from .nextgen_fix_verification import COULD_NOT_VERIFY
-from .nextgen_fix_verification_observation_identity import (
-    evaluate_verification_observations_identity_bound,
+from .nextgen_fix_verification_historical_bound import (
+    evaluate_verification_observations_historical_bound,
 )
 from .nextgen_fix_verified_fixed_replay import strict_verified_fixed_transition_from_evidence
 
 STRICT_VERIFIED_FIXED_OBSERVATION_REPLAY_VERSION = (
-    "fix_verified_fixed_observation_replay_v3_exact_observation_identity"
+    "fix_verified_fixed_observation_replay_v4_exact_historical_repair_identity"
 )
 
 
@@ -43,12 +43,14 @@ def strict_verified_fixed_transition_from_observations(
     The lower-level replay helper already prevents a transported legacy comparator
     from authorizing ``verified_fixed``. This boundary removes the analogous trust
     in a transported NextGen PASS, rejects proving metadata that would require
-    coercion/normalization, and now requires every supplied current page/rule
-    evaluation identity alias to resolve to one exact evidence identity.
+    coercion/normalization, requires every supplied current page/rule evaluation
+    identity alias to resolve to one exact evidence identity, and now also binds
+    the historical stable repair identity to exact source/persisted metadata.
 
-    It recomputes the verification result from the exact plan, current page
-    observations, rule evaluations, and comparison contract, then recomputes the
-    historical comparator over the same current page/fix evidence.
+    It recomputes the verification result from the exact historical repair,
+    targeted plan, current page observations, rule evaluations, and comparison
+    contract, then recomputes the historical comparator over the same current
+    page/fix evidence.
 
     The function is pure. It performs no network work and does not mutate durable
     workflow, authority, persistence, customer projection, admission, or release
@@ -78,7 +80,7 @@ def strict_verified_fixed_transition_from_observations(
         return _denied("scan_origin_invalid")
 
     try:
-        recomputed_result = evaluate_verification_observations_identity_bound(
+        recomputed_result = evaluate_verification_observations_historical_bound(
             plan,
             previous_record,
             current_pages,

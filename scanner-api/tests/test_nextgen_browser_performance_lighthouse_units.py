@@ -137,3 +137,27 @@ def test_integrity_rejects_forged_noncanonical_unit_and_source_version():
     assert check["valid"] is False
     assert "metric_unit_not_canonical" in check["reasons"]
     assert "source_version_mismatch" in check["reasons"]
+
+
+def test_non_object_source_emits_contract_valid_not_verified_artifact():
+    result = normalize_lighthouse_metric_units(None)
+    assert result["state"] == "not_verified"
+    assert result["reason"] == "source_not_object"
+    assert result["source_version"] is None
+    assert result["source_state"] is None
+    assert validate_lighthouse_metric_unit_contract(result)["valid"] is True
+
+
+def test_invalid_source_state_emits_contract_valid_not_verified_artifact_but_reason_state_forgery_fails():
+    source = _lab({"lcp": {"value": 2100.0, "unit": "millisecond"}})
+    source["state"] = "mystery"
+    result = normalize_lighthouse_metric_units(source)
+    assert result["state"] == "not_verified"
+    assert result["reason"] == "source_state_invalid"
+    assert validate_lighthouse_metric_unit_contract(result)["valid"] is True
+
+    forged = deepcopy(normalize_lighthouse_metric_units(_lab(None, state="rate_limited")))
+    forged["reason"] = "source_unavailable"
+    check = validate_lighthouse_metric_unit_contract(forged)
+    assert check["valid"] is False
+    assert "source_failure_reason_state_mismatch" in check["reasons"]

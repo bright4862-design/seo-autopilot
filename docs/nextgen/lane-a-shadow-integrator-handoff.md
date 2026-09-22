@@ -18,7 +18,7 @@ The lane already has a positive joint evidence decision and an exact manifest-li
 - exact matching full blind-1000 comparison counts;
 - explicit Standard-150 preservation;
 - the unchanged 150 → 500 → 1000 tranche contract;
-- valid canonical SHA-256 lineage identities;
+- valid canonical SHA-256 lineage identities, including recomputation of the joint manifest-lineage certificate;
 - all shadow/authority flags remaining false.
 
 The output carries the exact Standard-150, Smart-500, and tail-1000 population fingerprints, per-site manifest-lineage fingerprints, the joint evidence identity, the Fix corpus identity, the joint lineage identity, and a deterministic `handoff_fingerprint`.
@@ -43,7 +43,7 @@ Exact helper/test bytes were exercised before commit:
 
 ```text
 PYTHONPATH=/tmp/lane_a_run12 pytest -q tests/test_adaptive_shadow_handoff.py
-16 passed
+17 passed
 
 python -m py_compile \
   app/adaptive_shadow_handoff.py \
@@ -51,4 +51,4 @@ python -m py_compile \
 passed
 ```
 
-Regression coverage includes positive exact handoff, deterministic output, JSON transport, same-count Smart-population transplantation, site-set drift, joint-evidence and Fix-corpus identity drift, full-comparison count drift, non-positive upstream decisions, Standard-150 drift, tranche-contract drift, forged authority flags, malformed lineage identity, exact Standard/tail population transport, and input immutability.
+Regression coverage includes positive exact handoff, deterministic output, JSON transport, same-count Smart-population transplantation, site-set drift, joint-evidence and Fix-corpus identity drift, full-comparison count drift, non-positive upstream decisions, Standard-150 drift, tranche-contract drift, forged authority flags, malformed lineage identity, stale lineage-certificate detection after population tampering, exact Standard/tail population transport, and input immutability.

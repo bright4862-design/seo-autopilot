@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 
 from app.adaptive_shadow_handoff import build_adaptive_shadow_handoff
@@ -8,6 +9,19 @@ from app.adaptive_shadow_handoff import build_adaptive_shadow_handoff
 
 def fp(char: str) -> str:
     return char * 64
+
+
+def lineage_certificate_fingerprint(lineage):
+    identity = {
+        "joint_evidence_fingerprint": lineage["joint_evidence_fingerprint"],
+        "fix_corpus_fingerprint": lineage["fix_corpus_fingerprint"],
+        "site_ids": lineage["site_ids"],
+        "full_comparison_sites": lineage["full_comparison_sites"],
+        "sites": lineage["sites"],
+    }
+    return hashlib.sha256(
+        json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 def joint_decision():
@@ -28,7 +42,7 @@ def joint_decision():
 
 
 def joint_lineage():
-    return {
+    lineage = {
         "version": "adaptive_joint_manifest_lineage_v1",
         "valid": True,
         "reason": "ok",
@@ -42,23 +56,36 @@ def joint_lineage():
         "sites": (
             {
                 "site_id": "a.example",
+                "candidate_count": 1200,
+                "selection_targets": (150, 500, 1000),
+                "standard_150_pages": 150,
+                "smart_500_pages": 500,
+                "tail_1000_pages": 1000,
                 "standard_150_population_fingerprint": fp("e"),
                 "smart_500_population_fingerprint": fp("a"),
                 "tail_1000_population_fingerprint": fp("f"),
+                "comparison_state": "full_blind_1000_reference",
                 "manifest_lineage_fingerprint": fp("1"),
             },
             {
                 "site_id": "b.example",
+                "candidate_count": 620,
+                "selection_targets": (150, 500, 620),
+                "standard_150_pages": 150,
+                "smart_500_pages": 500,
+                "tail_1000_pages": 620,
                 "standard_150_population_fingerprint": fp("2"),
                 "smart_500_population_fingerprint": fp("b"),
                 "tail_1000_population_fingerprint": fp("3"),
+                "comparison_state": "inventory_limited",
                 "manifest_lineage_fingerprint": fp("4"),
             },
         ),
-        "joint_manifest_lineage_fingerprint": fp("5"),
         "standard_150_preserved": True,
         "tranche_contract": (150, 500, 1000),
     }
+    lineage["joint_manifest_lineage_fingerprint"] = lineage_certificate_fingerprint(lineage)
+    return lineage
 
 
 def test_builds_valid_shadow_handoff():
@@ -162,6 +189,13 @@ def test_rejects_malformed_lineage_fingerprint():
     lineage["joint_manifest_lineage_fingerprint"] = "not-sha256"
     result = build_adaptive_shadow_handoff(joint_decision(), lineage)
     assert result["reason"] == "handoff_identity_invalid"
+
+
+def test_rejects_stale_joint_lineage_certificate_after_population_tamper():
+    lineage = joint_lineage()
+    lineage["sites"][0]["standard_150_population_fingerprint"] = fp("9")
+    result = build_adaptive_shadow_handoff(joint_decision(), lineage)
+    assert result["reason"] == "joint_manifest_lineage_fingerprint_mismatch"
 
 
 def test_does_not_mutate_inputs():

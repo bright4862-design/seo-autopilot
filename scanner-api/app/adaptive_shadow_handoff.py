@@ -58,6 +58,12 @@ def _positive_int(value: Any) -> int | None:
     return value
 
 
+def _nonnegative_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
 def _site_ids(value: Any) -> tuple[str, ...] | None:
     if isinstance(value, (str, bytes, Mapping)) or not isinstance(value, Sequence):
         return None
@@ -109,38 +115,86 @@ def _tranche_contract(value: Any) -> tuple[int, int, int] | None:
 
 def _lineage_sites(
     value: Any, site_ids: tuple[str, ...]
-) -> tuple[tuple[str, str, str, str, str], ...] | None:
+) -> tuple[dict[str, Any], ...] | None:
     if isinstance(value, (str, bytes, Mapping)) or not isinstance(value, Sequence):
         return None
     rows = tuple(value)
     if len(rows) != len(site_ids):
         return None
-    normalized: list[tuple[str, str, str, str, str]] = []
+    normalized: list[dict[str, Any]] = []
     seen: set[str] = set()
     for row in rows:
         if not isinstance(row, Mapping):
             return None
         site_id = row.get("site_id")
+        candidate_count = _nonnegative_int(row.get("candidate_count"))
+        selection_targets_raw = row.get("selection_targets")
+        standard_pages = _nonnegative_int(row.get("standard_150_pages"))
+        smart_pages = _nonnegative_int(row.get("smart_500_pages"))
+        tail_pages = _nonnegative_int(row.get("tail_1000_pages"))
         standard_fp = _sha256(row.get("standard_150_population_fingerprint"))
         smart_fp = _sha256(row.get("smart_500_population_fingerprint"))
         tail_fp = _sha256(row.get("tail_1000_population_fingerprint"))
         manifest_fp = _sha256(row.get("manifest_lineage_fingerprint"))
+        comparison_state = row.get("comparison_state")
         if (
             not isinstance(site_id, str)
             or site_id in seen
+            or candidate_count is None
+            or isinstance(selection_targets_raw, (str, bytes, Mapping))
+            or not isinstance(selection_targets_raw, Sequence)
+            or standard_pages is None
+            or smart_pages is None
+            or tail_pages is None
             or standard_fp is None
             or smart_fp is None
             or tail_fp is None
             or manifest_fp is None
+            or comparison_state not in {"full_blind_1000_reference", "inventory_limited"}
+        ):
+            return None
+        selection_targets = tuple(selection_targets_raw)
+        if (
+            not selection_targets
+            or any(
+                isinstance(target, bool) or not isinstance(target, int) or target <= 0 or target > 1000
+                for target in selection_targets
+            )
+            or selection_targets != tuple(sorted(set(selection_targets)))
         ):
             return None
         seen.add(site_id)
-        normalized.append((site_id, standard_fp, smart_fp, tail_fp, manifest_fp))
-    normalized.sort(key=lambda item: item[0])
+        normalized.append(
+            {
+                "site_id": site_id,
+                "candidate_count": candidate_count,
+                "selection_targets": selection_targets,
+                "standard_150_pages": standard_pages,
+                "smart_500_pages": smart_pages,
+                "tail_1000_pages": tail_pages,
+                "standard_150_population_fingerprint": standard_fp,
+                "smart_500_population_fingerprint": smart_fp,
+                "tail_1000_population_fingerprint": tail_fp,
+                "comparison_state": comparison_state,
+                "manifest_lineage_fingerprint": manifest_fp,
+            }
+        )
+    normalized.sort(key=lambda item: item["site_id"])
     result = tuple(normalized)
-    if tuple(site_id for site_id, *_ in result) != site_ids:
+    if tuple(row["site_id"] for row in result) != site_ids:
         return None
     return result
+
+
+def _fingerprint_lineage_identity(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def _fingerprint_json(value: Any) -> str:
@@ -202,7 +256,7 @@ def build_adaptive_shadow_handoff(
     lineage_rows = _lineage_sites(joint_lineage.get("sites"), decision_sites)
     if decision_smart is None or lineage_rows is None:
         return _result(False, "population_fingerprint_set_invalid")
-    lineage_smart = tuple((site_id, smart_fp) for site_id, _, smart_fp, _, _ in lineage_rows)
+    lineage_smart = tuple((row["site_id"], row["smart_500_population_fingerprint"]) for row in lineage_rows)
     if decision_smart != lineage_smart:
         return _result(False, "smart_500_population_mismatch")
 
@@ -231,13 +285,25 @@ def build_adaptive_shadow_handoff(
     if decision_fix_fp != lineage_fix_fp:
         return _result(False, "fix_corpus_fingerprint_mismatch")
 
+    lineage_identity = {
+        "joint_evidence_fingerprint": lineage_joint_fp,
+        "fix_corpus_fingerprint": lineage_fix_fp,
+        "site_ids": lineage_sites_ids,
+        "full_comparison_sites": lineage_full,
+        "sites": lineage_rows,
+    }
+    if _fingerprint_lineage_identity(lineage_identity) != lineage_certificate_fp:
+        return _result(False, "joint_manifest_lineage_fingerprint_mismatch")
+
     site_lineage_fingerprints = tuple(
-        (site_id, manifest_fp) for site_id, _, _, _, manifest_fp in lineage_rows
+        (row["site_id"], row["manifest_lineage_fingerprint"]) for row in lineage_rows
     )
     standard_populations = tuple(
-        (site_id, standard_fp) for site_id, standard_fp, _, _, _ in lineage_rows
+        (row["site_id"], row["standard_150_population_fingerprint"]) for row in lineage_rows
     )
-    tail_populations = tuple((site_id, tail_fp) for site_id, _, _, tail_fp, _ in lineage_rows)
+    tail_populations = tuple(
+        (row["site_id"], row["tail_1000_population_fingerprint"]) for row in lineage_rows
+    )
 
     identity = {
         "joint_evidence_fingerprint": decision_joint_fp,

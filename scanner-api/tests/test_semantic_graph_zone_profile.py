@@ -3,6 +3,7 @@ from copy import deepcopy
 from app.semantic_graph import build_weighted_internal_link_graph
 from app.semantic_graph_zone_profile import (
     LINK_ZONE_OBSERVATION_PROFILE_VERSION,
+    MAX_EDGE_PROFILES,
     graph_bound_link_zone_observation_profile,
 )
 
@@ -163,6 +164,34 @@ def test_zone_profile_is_deterministic_across_raw_link_input_order():
     )
 
     assert forward == reverse
+
+
+def test_zone_profile_bounds_edge_rows_without_hiding_total_coverage():
+    source = "https://e.test/source"
+    targets = [f"https://e.test/target-{index:03d}" for index in range(MAX_EDGE_PROFILES + 1)]
+    pages = [page(source)] + [page(target) for target in targets]
+    links = [link(source, target, zone="navigation") for target in targets]
+    graph = build_weighted_internal_link_graph(pages, links)
+
+    result = graph_bound_link_zone_observation_profile(pages, links, graph)
+
+    assert result["state"] == "verified"
+    assert result["observed_directed_edge_count"] == MAX_EDGE_PROFILES + 1
+    assert result["edge_profile_count"] == MAX_EDGE_PROFILES + 1
+    assert len(result["edge_profiles"]) == MAX_EDGE_PROFILES
+    assert result["edge_profiles_truncated"] is True
+    assert result["observed_assessed_link_occurrence_count"] == MAX_EDGE_PROFILES + 1
+
+
+def test_zone_profile_fails_closed_when_page_identity_coverage_is_incomplete():
+    pages = [page("https://e.test/a"), {"status_code": 200}]
+    graph = build_weighted_internal_link_graph(pages, [])
+
+    result = graph_bound_link_zone_observation_profile(pages, [], graph)
+
+    assert result["state"] == "not_verified"
+    assert result["reason"] == "page_identity_coverage_incomplete"
+    assert result["edge_profiles"] == []
 
 
 def test_zone_profile_does_not_mutate_inputs():

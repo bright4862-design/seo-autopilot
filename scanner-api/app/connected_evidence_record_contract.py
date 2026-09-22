@@ -207,6 +207,8 @@ def _source_host(value: Any, *, field: str) -> str:
     candidate = first if "://" in first else f"https://{first}"
     try:
         parsed = urlparse(candidate)
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError
         host = (parsed.hostname or "").lower().rstrip(".")
         parsed.port
     except ValueError:

@@ -12,6 +12,8 @@ Lane B already had deterministic template/link-zone evidence, weighted assessed-
 
 One integration footgun remained: the original `build_semantic_graph_evidence(...)` predates the vector-integrity work and independently calls semantic analyzers. A caller supplying a pluggable/stateful local vectorizer could therefore bypass the newer one-snapshot boundary when asking for a complete Lane-B envelope.
 
+A second coverage ambiguity existed at the envelope level: page rows without an observed URL identity could be silently excluded from graph/semantic population counts. The new envelope now reports input-page count, assessed-page-identity count, and explicit `complete` / `partial` / `not_verified` identity coverage. Incomplete identity coverage cannot be promoted to a fully verified envelope.
+
 ## Implementation
 
 New helper: `scanner-api/app/semantic_graph_evidence_bound.py`
@@ -24,6 +26,8 @@ The helper:
 
 - validates the bounded page/link inputs using the existing Lane-B limits;
 - rejects duplicate assessed-page identities before caller-provided vectorizer code can run;
+- keeps missing page identity explicit through `input_page_count`, `assessed_page_identity_count`, and `page_identity_coverage_state`;
+- refuses a top-level verified state when page identity coverage is incomplete;
 - builds deterministic template evidence locally;
 - builds the weighted assessed-page internal-link graph locally;
 - delegates all semantic-dependent clustering, cannibalization, and contextual link-opportunity evidence to `semantic_analysis_bundle_v1_vector_bound`;
@@ -36,9 +40,12 @@ The link-zone summary is intentionally scoped. It is a summary of the graph's st
 
 ## Focused regressions
 
-New suite: `scanner-api/tests/test_semantic_graph_evidence_bound.py`
+New suites:
 
-Seven focused cases cover:
+- `scanner-api/tests/test_semantic_graph_evidence_bound.py`
+- `scanner-api/tests/test_semantic_graph_evidence_bound_identity.py`
+
+Eight focused cases cover:
 
 1. complete template + graph + link-zone + semantic composition with a stable adapter;
 2. proof that a stateful adapter is never called after the two contract-verification calls;
@@ -46,15 +53,16 @@ Seven focused cases cover:
 4. nondeterministic-adapter fail-closed behavior;
 5. foreign semantic-vector population rejection;
 6. duplicate page identity rejection before adapter execution;
-7. strict threshold rejection before adapter execution.
+7. strict threshold rejection before adapter execution;
+8. missing page identity remaining explicit as partial coverage and preventing top-level verification while the local deterministic semantic path stays provider-free.
 
-Expected Lane-B focused total is now **69 tests across eight test files** (previously 62 across seven).
+Expected Lane-B focused total is now **70 tests across nine test files** (previously 62 across seven before this envelope slice).
 
-Local supplementary syntax verification passed for mirrors of the new module and new test suite with `python -m py_compile`. This is not a substitute for branch-native pytest.
+Local supplementary syntax verification passed for mirrors of the new envelope module and primary envelope test suite with `python -m py_compile`. This is not a substitute for branch-native pytest.
 
 ## Required exact-head verification
 
-The execution container still cannot resolve `github.com`, so an exact branch checkout is unavailable. The draft targets the NextGen integration branch rather than `main`, and no PR-triggered workflow currently substitutes for the branch-native gate. Do not claim 69/69 exact-head green until this runs from the committed head:
+The execution container still cannot resolve `github.com`, so an exact branch checkout is unavailable. The draft targets the NextGen integration branch rather than `main`, and no PR-triggered workflow currently substitutes for the branch-native gate. Do not claim 70/70 exact-head green until this runs from the committed head:
 
 ```text
 cd scanner-api
@@ -66,7 +74,8 @@ PYTHONPATH=. pytest -q \
   tests/test_semantic_graph_vector_contract.py \
   tests/test_semantic_graph_contextual_vector_bound.py \
   tests/test_semantic_graph_analysis_bound.py \
-  tests/test_semantic_graph_evidence_bound.py
+  tests/test_semantic_graph_evidence_bound.py \
+  tests/test_semantic_graph_evidence_bound_identity.py
 
 python -m py_compile \
   app/semantic_graph.py \
@@ -83,7 +92,8 @@ python -m py_compile \
   tests/test_semantic_graph_vector_contract.py \
   tests/test_semantic_graph_contextual_vector_bound.py \
   tests/test_semantic_graph_analysis_bound.py \
-  tests/test_semantic_graph_evidence_bound.py
+  tests/test_semantic_graph_evidence_bound.py \
+  tests/test_semantic_graph_evidence_bound_identity.py
 ```
 
 ## Integration handoff
@@ -93,6 +103,7 @@ The serialized integrator should prefer `build_vector_bound_semantic_graph_evide
 Preserve these boundaries independently:
 
 - template evidence is deterministic local classification evidence, not page identity;
+- missing page identities remain unknown coverage and cannot silently reduce the assessed population;
 - B10 near-duplicate evidence remains tied only to verified hashed main-content shingles, never common template/navigation similarity;
 - graph/link evidence remains assessed-sample scoped and must not become a sitewide orphan or absence claim;
 - semantic adapter evidence must retain semantic-vector integrity, determinism and input-isolation provenance;

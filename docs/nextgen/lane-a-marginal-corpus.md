@@ -27,9 +27,9 @@ Finding fingerprints are intentionally site-scoped when aggregated. The same tex
 
 ## Verification
 
-The new helper and test file both pass `py_compile`. An isolated pure-function harness exercised the 11 new regression scenarios with a stubbed strict source-integrity boundary and passed **11/11**. This is targeted evidence for the new corpus logic only; it is not a claim that the exact branch-native repository suite ran.
+The new helper and unit test file pass `py_compile`. An isolated pure-function harness exercised 11 corpus regressions with a stubbed strict source-integrity boundary and passed **11/11**. A separate repository test file now exercises the real `build_marginal_yield_benchmark(...)` → `adaptive_marginal_population_integrity_v1` → corpus path over a 1,000-page deterministic fixture; that exact integration test still requires a branch-native checkout to execute.
 
-The lane now contains **113 focused tests by file inventory**: the previous 102 plus 11 new marginal-corpus regressions.
+The lane now contains **114 focused tests by file inventory**: the previous 102 plus 11 marginal-corpus unit regressions plus 1 strict-source integration regression.
 
 Exact-head repository command still required from `scanner-api/`:
 
@@ -43,10 +43,11 @@ PYTHONPATH=. pytest -q \
   tests/test_adaptive_benchmark_acceptance.py \
   tests/test_adaptive_marginal_benchmark.py \
   tests/test_adaptive_marginal_integrity.py \
-  tests/test_adaptive_marginal_corpus.py
+  tests/test_adaptive_marginal_corpus.py \
+  tests/test_adaptive_marginal_corpus_integration.py
 ```
 
-plus `py_compile` for all nine Lane-A helper modules and nine focused test files.
+plus `py_compile` for all nine Lane-A helper modules and ten focused test files.
 
 ## Integration handoff
 
@@ -54,4 +55,4 @@ For the Smart-500 corpus experiment, the serialized integrator should use this c
 
 ## Blocker
 
-The current execution environment still cannot perform a complete exact-head repository checkout, and the lane PR does not have a PR-triggered exact-head workflow gate. Therefore the full **113/113** branch-native focused suite is not claimed green. Full scanner regression remains an integration-branch responsibility after selective transplant.
+The current execution environment still cannot perform a complete exact-head repository checkout, and the lane PR does not have a PR-triggered exact-head workflow gate. Therefore the full **114/114** branch-native focused suite is not claimed green. Full scanner regression remains an integration-branch responsibility after selective transplant.

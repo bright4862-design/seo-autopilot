@@ -158,5 +158,5 @@ def test_snapshot_identity_is_deterministic_and_does_not_mutate_input(bypass_ups
 
 
 def test_real_composed_boundary_rejects_invalid_envelope_without_monkeypatch():
-    with pytest.raises((ValueError, KeyError)):
+    with pytest.raises(ValueError):
         bundle_contract.validate_connected_evidence_snapshot_bundle([{}])

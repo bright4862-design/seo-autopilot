@@ -30,6 +30,20 @@ class MappingVectorizer:
         return {row["url"]: {"shared_intent": 1.0} for row in pages}
 
 
+class NormalizedIdentityVectorizer:
+    version = "normalized_identity_v1"
+
+    def __init__(self):
+        self.calls = 0
+
+    def vectors(self, pages):
+        self.calls += 1
+        return {
+            " ".join(str(row["url"]).split()): {"shared_intent": 1.0}
+            for row in pages
+        }
+
+
 class ThirdCallChangesVectorizer:
     version = "third_call_changes_v1"
 
@@ -119,6 +133,50 @@ def test_valid_bundle_uses_one_verified_snapshot_for_all_semantic_outputs():
     assert result["cannibalization_candidates"]["candidate_count"] == 1
     assert result["contextual_internal_link_opportunities"]["candidate_count"] == 2
     assert result["customer_fix_created"] is False
+
+
+def test_internal_whitespace_uses_one_identity_across_all_semantic_consumers():
+    raw_left = "https://e.test/a   b"
+    normalized_left = "https://e.test/a b"
+    right = "https://e.test/c"
+    pages = [page(raw_left), page(right)]
+    graph = build_weighted_internal_link_graph(pages, [])
+    vectorizer = NormalizedIdentityVectorizer()
+
+    result = vector_bound_semantic_analysis_evidence(
+        pages,
+        graph,
+        vectorizer=vectorizer,
+        cluster_threshold=0.99,
+        cannibalization_threshold=0.99,
+        contextual_threshold=0.99,
+    )
+
+    assert vectorizer.calls == 2
+    assert result["semantic_vector_integrity_state"] == "verified"
+    assert result["semantic_vector_coverage_state"] == "complete"
+    assert result["graph_integrity_state"] == "verified"
+
+    clusters = result["semantic_clusters"]["clusters"]
+    assert len(clusters) == 1
+    assert clusters[0]["urls"] == [normalized_left, right]
+
+    cannibalization = result["cannibalization_candidates"]["candidates"]
+    assert len(cannibalization) == 1
+    assert {cannibalization[0]["left_url"], cannibalization[0]["right_url"]} == {
+        normalized_left,
+        right,
+    }
+
+    opportunities = result["contextual_internal_link_opportunities"]["candidates"]
+    assert len(opportunities) == 2
+    assert {
+        (row["source_url"], row["target_url"])
+        for row in opportunities
+    } == {
+        (normalized_left, right),
+        (right, normalized_left),
+    }
 
 
 def test_underlying_adapter_is_never_called_after_contract_verification():

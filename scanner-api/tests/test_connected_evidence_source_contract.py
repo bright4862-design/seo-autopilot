@@ -134,6 +134,24 @@ def test_url_inspection_record_identity_must_be_absolute_http_url():
         validate_connected_evidence_source_identity(evidence)
 
 
+def test_url_inspection_provenance_rejects_out_of_range_port():
+    evidence = _envelope(
+        provider="google_search_console",
+        source_kind="url_inspection",
+        surface="google_search_console.url_inspection",
+        method="api_response_normalization",
+        provenance={
+            "transport": "provided_payload",
+            "provider_operation": "urlInspection.index.inspect",
+            "property_uri": "sc-domain:getfixlist.com",
+            "inspection_url": "https://getfixlist.com:99999/a",
+        },
+        records=[{"inspection_url": "https://getfixlist.com:99999/a"}],
+    )
+    with pytest.raises(ValueError, match=r"provenance\.inspection_url must be an absolute HTTP\(S\) URL"):
+        validate_connected_evidence_source_identity(evidence)
+
+
 def test_url_inspection_provider_error_still_preserves_source_provenance():
     evidence = _envelope(
         provider="google_search_console",
@@ -182,6 +200,24 @@ def test_bing_manual_export_rejects_integer_zero_as_false_boolean():
         },
     )
     with pytest.raises(ValueError, match="api_used must be an explicit boolean"):
+        validate_connected_evidence_source_identity(evidence)
+
+
+def test_bing_site_url_rejects_out_of_range_port():
+    evidence = _envelope(
+        provider="microsoft_bing_webmaster_tools",
+        source_kind="ai_performance_export",
+        surface="bing_webmaster_tools.ai_performance",
+        method="manual_export_normalization",
+        provenance={
+            "transport": "manual_export",
+            "provider_surface": "bing_webmaster_tools_ai_performance",
+            "site_url": "https://getfixlist.com:99999",
+            "api_used": False,
+        },
+        records=[{"url": "https://getfixlist.com/a", "row_number": 1}],
+    )
+    with pytest.raises(ValueError, match=r"provenance\.site_url must be an absolute HTTP\(S\) URL"):
         validate_connected_evidence_source_identity(evidence)
 
 

@@ -4,11 +4,13 @@ Branch: `agent/nextgen-evidence-connectors-20260921`
 Draft PR: #332  
 Issue: #325
 
+> **Historical slice note:** this file records the source/property-scope boundary as it was introduced. It is not the current integration gate. The authoritative final validation sequence, exact-head pytest/`py_compile` commands, and current focused-test total live in `docs/nextgen/lane-d-evidence-connectors.md`. A serialized integrator must not stop at the boundary documented here.
+
 ## Purpose
 
-The existing Lane-D stack already proves envelope shape, registered provider/source identity, record semantics, coverage/accounting consistency, and snapshot-level duplicate protection. A remaining integrity gap was source-property scope: a structurally valid evidence record could still name a page outside the declared provider property and survive until a later integration layer.
+The existing Lane-D stack already proves envelope shape, registered provider/source identity, record semantics and coverage/accounting consistency. A remaining integrity gap was source-property scope: a structurally valid evidence record could still name a page outside the declared provider property and survive until a later integration layer.
 
-This slice adds a sixth pure fail-closed boundary:
+This slice adds the pure fail-closed boundary:
 
 `connected_evidence_scope_semantics_v1`
 
@@ -39,44 +41,20 @@ It composes after `validate_connected_evidence_coverage_semantics(...)` and rema
 - `landing_page` evidence, when present, must be a root-relative GA4 landing-page path rather than an arbitrary absolute/external URL.
 - GA4's `(not set)` landing-page value remains observationally valid without inventing a URL identity.
 
-## Bundle composition
+## Current bundle composition
 
-`connected_evidence_snapshot_bundle_v1` now validates each item through the source-scope boundary before calculating its snapshot identity. The complete lane-local chain is now:
-
-1. generic envelope;
-2. registered provider/source identity;
-3. provider record semantics;
-4. sample/coverage semantics;
-5. provider property/source scope semantics;
-6. bounded snapshot-bundle duplicate/contradiction semantics.
+This boundary is composed by `validate_connected_evidence_snapshot_bundle(...)` before snapshot identity is calculated. The current full Lane-D chain is documented only in `docs/nextgen/lane-d-evidence-connectors.md`; later boundaries add logical-record identity plus canonical source/snapshot identity and cross-state coherence after this scope proof.
 
 This remains optional connected evidence only. It does not become crawl authority and does not alter Standard 150 behavior when no connected evidence is present.
 
-## Verification
+## Historical slice verification
 
-New deterministic suite:
+`scanner-api/tests/test_connected_evidence_scope_contract.py` contains the deterministic source/property-scope regressions for this boundary. The slice and bundle-composition tests were verified independently when introduced. Those historical results remain useful regression evidence but are not the current exact-head integration gate.
 
-`scanner-api/tests/test_connected_evidence_scope_contract.py`
+For the authoritative exact-head pytest/`py_compile` gate and current focused-test count, use `docs/nextgen/lane-d-evidence-connectors.md` only.
 
-contains **18 focused regressions** covering versioning/non-mutation, valid and foreign `sc-domain:` page scope, malformed domain-property syntax, URL-prefix sibling/host-confusion rejection, URL Inspection property binding, query-only Search Analytics behavior, Bing path-scope binding, GA4 property identifiers, root-relative landing pages, and `(not set)` handling.
+## Current serialized-integrator requirement
 
-The existing 13 snapshot-bundle tests were updated so their upstream seam is now the new source-scope validator.
+Normalize each already-authorized provider payload/import and validate the **complete logical enrichment set** with `validate_connected_evidence_snapshot_bundle(...)`. Only after that final bundle guard succeeds may serialized integration attach the optional connected evidence.
 
-Hermetic pure-function verification in this runtime:
-
-- scope + bundle focused suites: **31/31 passed**;
-- `py_compile` for the new scope module, bundle module, scope test, and bundle test: passed.
-
-The scope test uses a pass-through stub for the already-tested coverage validator, so this proves the new sixth-layer logic plus bundle composition in isolation. It is not a substitute for exact-head repository certification.
-
-Expected focused Lane-D total after this slice: **125 tests** (107 previous + 18 new scope regressions).
-
-Before serialized integration, run from `scanner-api/` on the exact lane head:
-
-`PYTHONPATH=. pytest -q tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py tests/test_connected_evidence_coverage_contract.py tests/test_connected_evidence_scope_contract.py tests/test_connected_evidence_bundle_contract.py`
-
-and:
-
-`python -m py_compile app/connected_evidence.py app/connected_evidence_contract.py app/connected_evidence_source_contract.py app/connected_evidence_record_contract.py app/connected_evidence_coverage_contract.py app/connected_evidence_scope_contract.py app/connected_evidence_bundle_contract.py tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py tests/test_connected_evidence_coverage_contract.py tests/test_connected_evidence_scope_contract.py tests/test_connected_evidence_bundle_contract.py`
-
-Do not mark Lane D integration-ready until that exact-head 125-test run is green and a fresh exact-head review has no unresolved material findings.
+Do not wire this scope helper directly into authority/persistence/customer projection, repair priority, `run_scan`, Base44 schema, release/deployment, admission, or production from the lane branch.

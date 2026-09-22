@@ -3,13 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from .nextgen_fix_verification import COULD_NOT_VERIFY
-from .nextgen_fix_verification_integrity import strict_regression_reopen_decision
-from .nextgen_fix_verification_observation_identity import (
-    evaluate_verification_observations_identity_bound,
+from .nextgen_fix_verification_historical_bound import (
+    evaluate_verification_observations_historical_bound,
 )
+from .nextgen_fix_verification_integrity import strict_regression_reopen_decision
 
 STRICT_REGRESSION_REOPEN_OBSERVATION_REPLAY_VERSION = (
-    "fix_regression_reopen_observation_replay_v2_exact_observation_identity"
+    "fix_regression_reopen_observation_replay_v3_exact_historical_repair_identity"
 )
 
 
@@ -56,10 +56,12 @@ def strict_regression_reopen_from_observations(
     proof of regression.
 
     This helper therefore rebuilds the current PASS/PARTIAL/FAIL/
-    COULD_NOT_VERIFY result from the exact targeted plan and current observation
-    evidence first. The observation evidence must also prove one exact identity
-    across every supplied page/evaluation URL alias before the existing
-    fail-closed historical binding/reopen decision is allowed to run.
+    COULD_NOT_VERIFY result from the exact historical repair, targeted plan, and
+    current observation evidence first. The observation evidence must prove one
+    exact identity across every supplied page/evaluation URL alias, and the
+    historical stable repair identity must be bound to exact source/persisted
+    metadata before the existing fail-closed historical binding/reopen decision
+    is allowed to run.
 
     The function is pure. It performs no network work and does not mutate
     workflow state, durable authority, persistence, customer projection,
@@ -85,7 +87,7 @@ def strict_regression_reopen_from_observations(
         return _denied("scan_origin_invalid")
 
     try:
-        recomputed_result = evaluate_verification_observations_identity_bound(
+        recomputed_result = evaluate_verification_observations_historical_bound(
             plan,
             previous_record,
             current_pages,

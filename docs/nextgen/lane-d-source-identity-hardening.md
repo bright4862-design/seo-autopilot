@@ -17,8 +17,8 @@ The validator first delegates to the existing strict `validate_connected_evidenc
 - exact transport provenance;
 - connector-specific operation/surface identifiers;
 - required property/site/inspection identity provenance;
-- explicit `api_used=false` for Bing AI Performance manual exports;
-- URL Inspection record identity matching the inspected URL in provenance;
+- explicit type-strict `api_used=false` for Bing AI Performance manual exports;
+- URL Inspection provenance and record identities being absolute HTTP(S) URLs before exact identity comparison;
 - Bing cited-page URLs being absolute HTTP(S) URLs on the same host as the imported Bing site property;
 - bounded optional import names;
 - fail-closed behavior for unregistered provider/source pairs, including speculative Google generative-AI report/API profiles.
@@ -27,7 +27,7 @@ The validator returns the original envelope unchanged and performs no network I/
 
 ## Why this slice exists
 
-The generic envelope contract proves shape, chronology, state, boundedness and provenance presence. It intentionally does not know connector-specific semantics. Without a second source-profile boundary, a caller could preserve a valid `connected_evidence_v1` shape while swapping a surface/method/provider operation, marking a Bing manual export as API-backed, or attaching a cited page from a different host to a Bing site property. Those are attribution errors rather than generic schema errors.
+The generic envelope contract proves shape, chronology, state, boundedness and provenance presence. It intentionally does not know connector-specific semantics. Without a second source-profile boundary, a caller could preserve a valid `connected_evidence_v1` shape while swapping a surface/method/provider operation, marking a Bing manual export as API-backed, treating integer `0` as boolean `False`, attaching matching non-URL strings as URL Inspection identities, or attaching a cited page from a different host to a Bing site property. Those are attribution errors rather than generic schema errors.
 
 This layer keeps those concerns separate: generic structural validation remains stable, while provider-specific identity rules are versioned independently.
 
@@ -50,7 +50,8 @@ This layer keeps those concerns separate: generic structural validation remains 
    - transport: `provided_payload`
    - operation: `urlInspection.index.inspect`
    - requires `property_uri` and `inspection_url`
-   - observed evidence must contain exactly one record whose `inspection_url` matches provenance
+   - `inspection_url` provenance must be an absolute HTTP(S) URL
+   - observed evidence must contain exactly one record whose `inspection_url` is also an absolute HTTP(S) URL and exactly matches provenance
 
 3. **Bing Webmaster Tools AI Performance manual export**
    - provider: `microsoft_bing_webmaster_tools`
@@ -60,7 +61,7 @@ This layer keeps those concerns separate: generic structural validation remains 
    - transport: `manual_export`
    - provider surface: `bing_webmaster_tools_ai_performance`
    - requires `site_url`
-   - requires `api_used=false`
+   - requires `api_used` to be the actual boolean `false`, not an equality-coercible numeric/string value
    - cited-page URLs, when present, must be absolute HTTP(S) URLs on the same host as `site_url`
 
 4. **GA4 AI-assistant referrals**
@@ -76,14 +77,17 @@ No Google generative-AI reporting/API profile is registered. A structurally vali
 
 ## Focused regressions
 
-`scanner-api/tests/test_connected_evidence_source_contract.py` contains **12 deterministic tests** covering:
+`scanner-api/tests/test_connected_evidence_source_contract.py` contains **15 deterministic tests** covering:
 
 - versioned source-profile contract acceptance for GSC Search Analytics;
 - wrong GSC provider operation rejection;
 - wrong surface rejection;
 - URL Inspection record/provenance identity mismatch rejection;
+- non-URL URL Inspection provenance rejection;
+- relative/non-absolute URL Inspection record rejection;
 - URL Inspection provider-error provenance acceptance;
 - Bing `api_used=true` rejection;
+- Bing integer `api_used=0` rejection rather than bool coercion;
 - Bing foreign-host cited-page rejection;
 - Bing relative cited-page rejection;
 - GA4 profile acceptance;
@@ -91,19 +95,19 @@ No Google generative-AI reporting/API profile is registered. A structurally vali
 - unregistered provider/source pair rejection;
 - non-mutation of evidence.
 
-A hermetic pure-function harness using the exact new module/test contents passed **12/12**, and `py_compile` passed for both new files. This is useful slice-level evidence only; it is **not** a substitute for the exact branch repository suite.
+The earlier 12-case source-profile slice passed in a hermetic pure-function harness. The three review-hardening regressions were added after that checkpoint; the combined exact-head repository suite remains the integration gate.
 
 ## Exact-head repository gate still required
 
 Before serialized integration, run from `scanner-api/` on the exact lane head:
 
-`PYTHONPATH=. pytest -q tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py`
+`PYTHONPATH=. pytest -q tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py`
 
 and:
 
-`python -m py_compile app/connected_evidence.py app/connected_evidence_contract.py app/connected_evidence_source_contract.py tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py`
+`python -m py_compile app/connected_evidence.py app/connected_evidence_contract.py app/connected_evidence_source_contract.py tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py`
 
-Expected focused total after this slice: **59 tests** (23 adapter + 24 generic contract + 12 source-profile contract).
+Expected focused total after the review-hardening slice: **64 tests** (23 adapter + 24 generic contract + 15 source-profile + 2 timestamp hardening).
 
 This runtime still cannot clone/download the GitHub checkout because outbound DNS resolution for `github.com` is unavailable, and the integration-target draft does not currently provide a PR-triggered Actions run. Do not mark Lane D integration-ready until the exact-head combined run is green and material review findings are resolved.
 

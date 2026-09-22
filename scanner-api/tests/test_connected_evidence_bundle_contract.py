@@ -1,11 +1,19 @@
 from copy import deepcopy
+from datetime import datetime, timezone
 
 import pytest
 
 import app.connected_evidence_bundle_contract as bundle_contract
+from app.connected_evidence import (
+    normalize_bing_ai_performance_rows,
+    normalize_ga4_ai_referral_rows,
+    normalize_google_url_inspection,
+    normalize_gsc_search_analytics,
+)
 
 
 UNAVAILABLE = {"not_connected", "not_supported", "not_verified", "provider_error"}
+NOW = datetime(2026, 9, 21, 20, 30, tzinfo=timezone.utc)
 
 
 def _gsc(*, period_end="2026-09-20", state="verified", property_uri="sc-domain:example.test"):
@@ -163,6 +171,109 @@ def test_snapshot_identity_is_deterministic_and_does_not_mutate_input(bypass_ups
 def test_real_composed_boundary_rejects_invalid_envelope_without_monkeypatch():
     with pytest.raises(ValueError):
         bundle_contract.validate_connected_evidence_snapshot_bundle([{}])
+
+
+def test_real_composed_boundary_accepts_all_registered_normalizer_outputs():
+    gsc = normalize_gsc_search_analytics(
+        {
+            "rows": [
+                {
+                    "keys": ["2026-09-20", "technical seo"],
+                    "clicks": 4,
+                    "impressions": 100,
+                    "ctr": 0.04,
+                    "position": 8.2,
+                }
+            ]
+        },
+        dimensions=["date", "query"],
+        property_uri="sc-domain:example.test",
+        retrieved_at=NOW,
+    )
+    inspection = normalize_google_url_inspection(
+        {
+            "inspectionResult": {
+                "inspectionResultLink": "https://search.google.com/search-console/inspect?x=1",
+                "indexStatusResult": {
+                    "verdict": "PASS",
+                    "coverageState": "Submitted and indexed",
+                    "robotsTxtState": "ALLOWED",
+                    "indexingState": "INDEXING_ALLOWED",
+                    "pageFetchState": "SUCCESSFUL",
+                    "googleCanonical": "https://example.test/a",
+                    "userCanonical": "https://example.test/a",
+                    "lastCrawlTime": "2026-09-20T10:00:00Z",
+                    "crawledAs": "DESKTOP",
+                    "referringUrls": ["https://example.test/"],
+                    "sitemap": ["https://example.test/sitemap.xml"],
+                },
+            }
+        },
+        inspection_url="https://example.test/a",
+        property_uri="sc-domain:example.test",
+        retrieved_at=NOW,
+    )
+    bing = normalize_bing_ai_performance_rows(
+        [
+            {
+                "Date": "2026-09-20",
+                "Grounding Query": "best technical seo audit",
+                "Cited Page": "https://example.test/a",
+                "Citation Count": "7",
+                "Topic": "technical seo",
+                "Intent": "commercial",
+                "Citation Share": "12.5%",
+                "Country": "FR",
+                "Surface": "Copilot",
+            }
+        ],
+        site_url="https://example.test",
+        retrieved_at=NOW,
+    )
+    ga4 = normalize_ga4_ai_referral_rows(
+        [
+            {
+                "date": "20260920",
+                "sessionSource": "chatgpt.com",
+                "sessionMedium": "referral",
+                "landingPagePlusQueryString": "/a?src=ai",
+                "sessions": "12",
+                "engagedSessions": "9",
+                "keyEvents": "2",
+                "country": "France",
+                "deviceCategory": "desktop",
+            }
+        ],
+        property_id="properties/123",
+        retrieved_at=NOW,
+        stale_after_days=None,
+    )
+    items = [gsc, inspection, bing, ga4]
+    assert bundle_contract.validate_connected_evidence_snapshot_bundle(items) is items
+
+
+def test_real_composed_boundary_accepts_registered_unavailable_provider_error():
+    evidence = normalize_gsc_search_analytics(
+        {"error": {"code": 403}},
+        dimensions=["query"],
+        property_uri="sc-domain:example.test",
+        retrieved_at=NOW,
+    )
+    assert evidence["state"] == "provider_error"
+    items = [evidence]
+    assert bundle_contract.validate_connected_evidence_snapshot_bundle(items) is items
+
+
+def test_real_composed_boundary_rejects_unavailable_observation_metadata_smuggling():
+    evidence = normalize_gsc_search_analytics(
+        {"error": {"code": 403}},
+        dimensions=["query"],
+        property_uri="sc-domain:example.test",
+        retrieved_at=NOW,
+    )
+    evidence["coverage"] = {"row_count": 0, "period_end": "2026-09-20"}
+    with pytest.raises(ValueError, match="cannot claim coverage observations"):
+        bundle_contract.validate_connected_evidence_snapshot_bundle([evidence])
 
 
 def test_snapshot_source_identity_version_is_explicit():

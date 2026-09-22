@@ -19,6 +19,7 @@ Lane D exposes seven pure fail-closed validation boundaries.
 
 1. `validate_connected_evidence(...)` / `connected_evidence_v1`
    - strict envelope shape, timestamps, state semantics, JSON bounds, evidence-quality confidence, and unavailable/stale invariants;
+   - confidence metadata is closed-world and qualitative: only `kind`, `level`, and optional bounded `limitations` are accepted, and the level must be one of the registered non-probabilistic evidence-quality levels already emitted by Lane-D adapters;
    - unavailable states cannot carry records, `observed_at`, observational sample metadata, or coverage metadata.
 2. `validate_connected_evidence_source_identity(...)` / `connected_evidence_source_profile_v1`
    - registered provider/source/surface/method/transport profiles and connector provenance;
@@ -65,6 +66,7 @@ Sanitized fixtures live under `scanner-api/tests/fixtures_connected_evidence/`. 
 - Search Console URL-prefix and Bing path-scoped property identities reject URL userinfo and malformed host spellings before scope membership is evaluated.
 - Search Console URL-prefix and Bing path-scoped property identities use a trailing `/` directory boundary for non-root paths. The source-profile gate rejects an ambiguous `/docs` identity rather than allowing a later raw prefix check to interpret `/docs-foreign` as a descendant.
 - Registered provenance is closed-world per provider/source profile. Current optional provenance is only `import_name` for Bing manual exports and GA4 provided rows; new metadata requires an intentional profile/version change instead of being silently accepted.
+- Evidence-quality confidence metadata is closed-world at the generic envelope boundary. It cannot carry arbitrary probability, score, API/OAuth, or provider claims; current registered levels are `none`, `provider_observed`, `first_party_provider_observed`, and `first_party_analytics_observed`, with only bounded textual `limitations` as optional metadata.
 - Registered provider record fields are also closed-world. The adapter-produced GSC Search Analytics, URL Inspection, Bing AI Performance, and GA4 AI-referral field sets are the only accepted record keys under `connected_evidence_record_shape_v1`; a new provider field must be deliberately reviewed and versioned instead of silently becoming trusted evidence.
 - Scope membership refuses ambiguous URL path forms whose meaning can change after ordinary URL normalization: raw/encoded dot segments, encoded path separators, raw backslashes, malformed escapes, controls, and semicolon path parameters. The semicolon rule applies to every path segment because `urllib.parse` exposes only terminal-segment parameters separately.
 - Search Analytics page-scope validation applies only when `page` is an observed dimension.
@@ -122,8 +124,9 @@ Expected focused total: **213 tests**.
 
 Latest verified slice evidence in this runtime:
 
-- closed-world provider record-shape hardening exercised **8/8** intended behaviors in a hermetic package: the registered GSC Search Analytics, URL Inspection, Bing AI Performance, and GA4 AI-referral record fields remained accepted, while an extra unregistered provider claim failed closed for each profile;
-- `python -m py_compile app/connected_evidence_record_contract.py tests/test_connected_evidence_record_shape_hardening.py` passed for the candidate logic used for this slice;
+- closed-world confidence metadata hardening exercised the updated generic-contract suite **27/27** in a hermetic package; valid bounded limitations remained accepted while unknown probability fields, unregistered confidence levels, malformed limitations, and probability-style confidence kinds failed closed;
+- an additional focused confidence-shape smoke slice exercised **6/6** intended behaviors, including canonical unavailable confidence; `python -m py_compile app/connected_evidence_contract.py tests/test_connected_evidence_contract.py` passed for the candidate code used for this slice;
+- closed-world provider record-shape hardening previously exercised **8/8** intended behaviors in a hermetic package: the registered GSC Search Analytics, URL Inspection, Bing AI Performance, and GA4 AI-referral record fields remained accepted, while an extra unregistered provider claim failed closed for each profile;
 - snapshot-window coherence previously exercised **9/9** intended behaviors in a hermetic logic harness: canonical GSC dimension-series overlap rejection, GSC/Bing/GA4 disjoint-window acceptance, GSC different-dimension overlap acceptance, Bing/GA4 same-series overlap rejection, and no invented start for date-less Bing evidence;
 - source-identity hardening previously passed **8/8** in a hermetic package with only the already-tested generic-envelope boundary stubbed, covering valid `sc-domain:` DNS identity plus empty/scheme-bearing/IP/wildcard domain rejection, malformed URL-prefix hosts, and GSC/Bing URL-userinfo rejection;
 - immediately prior, closed-world provenance + GA4 landing-path hardening passed **14/14** in a hermetic package; only the already-tested generic-envelope and coverage boundaries were stubbed so the changed source/scope logic was exercised directly;
@@ -156,7 +159,7 @@ The full repository-native exact-head 213-test run is **not yet claimed green** 
 - Snapshot identities and window-coherence checks prevent ambiguous duplicate/overlapping observations inside one logical snapshot; they are not historical storage keys.
 - Window overlap is enforced only when both bounds are provable; missing starts remain explicitly unknown rather than being inferred.
 - Unavailable states deliberately do not retain observational count/window metadata.
-- Any future envelope/profile/record metadata expansion should be versioned rather than silently accepted.
+- Any future envelope/profile/record/confidence metadata expansion should be versioned rather than silently accepted.
 
 The lane changes **36 Lane-D-owned files**: seven handoff/hardening docs, eight pure app modules, seventeen focused test modules, and four sanitized fixtures. No serialized-integrator-owned surface is modified.
 

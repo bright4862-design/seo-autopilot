@@ -62,6 +62,15 @@ def test_unknown_extra_columns_remain_ignored_by_ambiguity_guard():
     assert validate_connected_evidence_import_rows([row], profile=GA4_AI_REFERRAL_PROFILE) == [row]
 
 
+def test_import_guard_cannot_raise_global_row_bound():
+    with pytest.raises(ValueError, match="max_rows must be within"):
+        validate_connected_evidence_import_rows(
+            [],
+            profile=BING_AI_PERFORMANCE_PROFILE,
+            max_rows=50_001,
+        )
+
+
 def test_bing_strict_row_wrapper_preflights_then_delegates():
     row = {"Cited Page": "https://example.com/a", "Citation Count": "2"}
     result = normalize_bing_ai_performance_import_rows(

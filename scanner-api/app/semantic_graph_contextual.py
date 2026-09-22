@@ -57,6 +57,27 @@ def _page_population(pages: list[dict[str, Any]]) -> tuple[dict[str, dict[str, A
     return by_url, None
 
 
+def _strict_non_negative_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _strict_non_negative_weight(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not isfinite(parsed) or parsed < 0.0:
+        return None
+    # Producer graph metrics are serialized at six-decimal precision.
+    if parsed != round(parsed, 6):
+        return None
+    return parsed
+
+
 def _validated_graph(
     page_urls: set[str],
     graph: dict[str, Any],
@@ -72,24 +93,44 @@ def _validated_graph(
         return {}, {}, "graph_shape_invalid"
 
     nodes: dict[str, dict[str, Any]] = {}
+    declared_metrics: dict[str, dict[str, int | float]] = {}
     for row in raw_nodes:
         if not isinstance(row, dict):
             return {}, {}, "graph_node_invalid"
         url = _url(row.get("url"))
         if not url or url in nodes:
             return {}, {}, "graph_node_identity_invalid"
-        for field in ("weighted_in", "weighted_out"):
-            try:
-                value = float(row.get(field) or 0.0)
-            except (TypeError, ValueError):
-                return {}, {}, "graph_node_weight_invalid"
-            if not isfinite(value) or value < 0.0:
-                return {}, {}, "graph_node_weight_invalid"
+
+        weighted_in = _strict_non_negative_weight(row.get("weighted_in"))
+        weighted_out = _strict_non_negative_weight(row.get("weighted_out"))
+        if weighted_in is None or weighted_out is None:
+            return {}, {}, "graph_node_weight_invalid"
+
+        observed_in = _strict_non_negative_int(row.get("observed_in_edge_count"))
+        observed_out = _strict_non_negative_int(row.get("observed_out_edge_count"))
+        if observed_in is None or observed_out is None:
+            return {}, {}, "graph_node_edge_count_invalid"
+
         nodes[url] = row
+        declared_metrics[url] = {
+            "weighted_in": weighted_in,
+            "weighted_out": weighted_out,
+            "observed_in_edge_count": observed_in,
+            "observed_out_edge_count": observed_out,
+        }
 
     if set(nodes) != page_urls:
         return {}, {}, "graph_page_population_mismatch"
 
+    expected_metrics: dict[str, dict[str, int | float]] = {
+        url: {
+            "weighted_in": 0.0,
+            "weighted_out": 0.0,
+            "observed_in_edge_count": 0,
+            "observed_out_edge_count": 0,
+        }
+        for url in page_urls
+    }
     edges: dict[tuple[str, str], dict[str, Any]] = {}
     for row in raw_edges:
         if not isinstance(row, dict):
@@ -104,13 +145,28 @@ def _validated_graph(
         zone = str(row.get("strongest_zone") or "").strip().lower()
         if zone not in ZONE_WEIGHTS:
             return {}, {}, "graph_edge_zone_invalid"
-        try:
-            weight = float(row.get("weight") or 0.0)
-        except (TypeError, ValueError):
-            return {}, {}, "graph_edge_weight_invalid"
-        if not isfinite(weight) or weight < 0.0:
+        weight = _strict_non_negative_weight(row.get("weight"))
+        if weight is None:
             return {}, {}, "graph_edge_weight_invalid"
         edges[key] = row
+        expected_metrics[source]["observed_out_edge_count"] += 1
+        expected_metrics[target]["observed_in_edge_count"] += 1
+        expected_metrics[source]["weighted_out"] += weight
+        expected_metrics[target]["weighted_in"] += weight
+
+    for url in sorted(page_urls):
+        declared = declared_metrics[url]
+        expected = expected_metrics[url]
+        if (
+            declared["observed_in_edge_count"] != expected["observed_in_edge_count"]
+            or declared["observed_out_edge_count"] != expected["observed_out_edge_count"]
+        ):
+            return {}, {}, "graph_node_edge_count_mismatch"
+        if (
+            declared["weighted_in"] != round(float(expected["weighted_in"]), 6)
+            or declared["weighted_out"] != round(float(expected["weighted_out"]), 6)
+        ):
+            return {}, {}, "graph_node_weight_mismatch"
 
     return edges, nodes, None
 

@@ -61,9 +61,15 @@ def _bounded_text(value: Any, *, field: str, max_length: int = 2048) -> str:
 
 def _absolute_url(value: Any, *, field: str) -> str:
     text = _bounded_text(value, field=field)
-    parsed = urlparse(text)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise ValueError(f"{field} must be an absolute HTTP(S) URL")
+    try:
+        parsed = urlparse(text)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError
+        # Accessing ``port`` is part of URL validation: urllib parses an
+        # out-of-range/non-numeric port lazily and raises only here.
+        parsed.port
+    except ValueError:
+        raise ValueError(f"{field} must be an absolute HTTP(S) URL") from None
     return text
 
 

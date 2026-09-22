@@ -4,6 +4,8 @@ Issue: #325
 Draft PR: #332  
 Lane branch: `agent/nextgen-evidence-connectors-20260921`
 
+> **Historical slice note:** this file records the source-identity boundary as it was introduced. It is not the current integration gate. The authoritative final validation sequence, exact-head pytest/`py_compile` commands, and current focused-test total live in `docs/nextgen/lane-d-evidence-connectors.md`. A serialized integrator must not stop at the boundary documented here.
+
 ## Purpose
 
 `connected_evidence_v1` already validates the generic evidence envelope. This additive slice adds a second pure boundary for **connector/source attribution** so a structurally valid envelope cannot be relabelled as a different provider surface or transport without failing closed.
@@ -77,7 +79,7 @@ No Google generative-AI reporting/API profile is registered. A structurally vali
 
 ## Focused regressions
 
-`scanner-api/tests/test_connected_evidence_source_contract.py` contains **15 deterministic tests** covering:
+`scanner-api/tests/test_connected_evidence_source_contract.py` contains deterministic tests covering:
 
 - versioned source-profile contract acceptance for GSC Search Analytics;
 - wrong GSC provider operation rejection;
@@ -95,32 +97,21 @@ No Google generative-AI reporting/API profile is registered. A structurally vali
 - unregistered provider/source pair rejection;
 - non-mutation of evidence.
 
-The earlier 12-case source-profile slice passed in a hermetic pure-function harness. The three review-hardening regressions were added after that checkpoint; the combined exact-head repository suite remains the integration gate.
+The earlier source-profile slice was verified independently. Those slice results remain useful regression history but are not the current exact-head integration gate.
 
-## Exact-head repository gate still required
+## Current serialized-integrator requirement
 
-Before serialized integration, run from `scanner-api/` on the exact lane head:
-
-`PYTHONPATH=. pytest -q tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py`
-
-and:
-
-`python -m py_compile app/connected_evidence.py app/connected_evidence_contract.py app/connected_evidence_source_contract.py tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py`
-
-Expected focused total after the review-hardening slice: **64 tests** (23 adapter + 24 generic contract + 15 source-profile + 2 timestamp hardening).
-
-This runtime still cannot clone/download the GitHub checkout because outbound DNS resolution for `github.com` is unavailable, and the integration-target draft does not currently provide a PR-triggered Actions run. Do not mark Lane D integration-ready until the exact-head combined run is green and material review findings are resolved.
-
-## Serialized integrator hook
-
-For any future connected-evidence attachment, the safe order is:
+This boundary is necessary but no longer sufficient on its own. For any future connected-evidence attachment:
 
 1. obtain an already-authorized provider payload/import outside this lane;
-2. normalize with the Lane-D adapter;
-3. run `validate_connected_evidence(...)`;
-4. run `validate_connected_evidence_source_identity(...)`;
-5. only then allow the serialized integration layer to consider attaching the evidence as optional enrichment.
+2. normalize with the registered Lane-D adapter;
+3. validate the complete logical enrichment set with `validate_connected_evidence_snapshot_bundle(...)`;
+4. only then may the serialized integration layer consider attaching the evidence as optional enrichment.
+
+`validate_connected_evidence_snapshot_bundle(...)` composes the current full Lane-D chain, including this source-identity boundary plus later record, coverage, source/property-scope, logical-record-identity, canonical snapshot/source-identity, and cross-state-coherence checks. Do not reproduce an older partial chain from this historical slice document.
+
+For the authoritative exact-head pytest/`py_compile` gate and current focused-test count, use `docs/nextgen/lane-d-evidence-connectors.md` only.
 
 This does not alter canonical crawl authority, Standard 150, B01–B28 compatibility, repair priority, persistence, customer projection, admission, release, deployment, schema, IAM, credentials, or production.
 
-Rollback is lane-local: omit the new helper/test/doc from the serialized integration transplant.
+Rollback is lane-local: omit the Lane-D pure helpers/tests/docs from the serialized integration transplant.

@@ -92,11 +92,11 @@ test("function build identity changes when package source bytes change", (t) => 
 test("V7-only package bytes move the V7 build identity without relying on canonical changes", (t) => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "fixlist-build-id-v7-content-"));
   t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
-  const dir = copyFunction("getCustomerScanResultV7", tempRoot);
+  const dir = copyFunction("getCustomerScanResultV8", tempRoot);
 
-  const before = buildId("getCustomerScanResultV7", tempRoot);
+  const before = buildId("getCustomerScanResultV8", tempRoot);
   fs.appendFileSync(path.join(dir, "stage3V7Delivery.js"), "\n// v7 build-id mutation proof\n");
-  const after = buildId("getCustomerScanResultV7", tempRoot);
+  const after = buildId("getCustomerScanResultV8", tempRoot);
   const canonical = buildId("getCustomerScanResult", ROOT);
 
   assert.match(before, /^[0-9a-f]{64}$/);

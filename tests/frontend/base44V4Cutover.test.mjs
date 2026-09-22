@@ -16,7 +16,7 @@ const expectedCanonicals = [
 
 test("V4 remains a complete historical Base44 generation after the V7 cutover", () => {
   assert.equal(contract.schema_version, "base44_function_routes_v1");
-  assert.equal(contract.generation, "v7");
+  assert.equal(contract.generation, "v8");
   assert.deepEqual(Object.keys(contract.routes).sort(), [...expectedCanonicals].sort());
   for (const canonical of expectedCanonicals) {
     assert.equal(contract.routes[canonical], `${canonical}V7`);
@@ -74,13 +74,13 @@ test("V4 routes are retained for history but retired from active customer and wo
   const scanRuns = source("src/lib/scanRuns.js");
   const scanHistory = source("src/lib/scanHistory.js");
   const worker = source("scanner-api/app/scan_job.py");
-  assert.match(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV7"/);
+  assert.match(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV8"/);
   assert.doesNotMatch(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV4"/);
-  assert.match(scanRuns, /"getCustomerScanResultV7"/);
+  assert.match(scanRuns, /"getCustomerScanResultV8"/);
   assert.doesNotMatch(scanRuns, /"getCustomerScanResultV4"/);
-  assert.match(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV7"/);
+  assert.match(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV8"/);
   assert.doesNotMatch(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV4"/);
-  for (const name of ["durableScanWorkerControlV7", "persistDurableScanAuthorityV7", "persistLimitedScanResultV7"]) assert.ok(worker.includes(`"${name}"`), name);
+  for (const name of ["durableScanWorkerControlV8", "persistDurableScanAuthorityV8", "persistLimitedScanResultV8"]) assert.ok(worker.includes(`"${name}"`), name);
   for (const retired of ["durableScanWorkerControlV4", "persistDurableScanAuthorityV4", "persistLimitedScanResultV4"]) assert.ok(!worker.includes(`"${retired}"`), retired);
 });
 

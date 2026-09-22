@@ -12,11 +12,12 @@ from .nextgen_fix_verification import (
     VERIFICATION_STATES,
     build_acceptance_criterion,
 )
+from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION, repair_evidence_key_function
 from .repair_identity import build_repair_identity
 
 VERIFICATION_RESULT_INTEGRITY_VERSION = "fix_verification_result_integrity_v1"
-VERIFICATION_RESULT_BINDING_VERSION = "fix_verification_result_binding_v1"
-STRICT_REGRESSION_REOPEN_VERSION = "fix_regression_reopen_v3_criterion_bound"
+VERIFICATION_RESULT_BINDING_VERSION = "fix_verification_result_binding_v2_population_bound"
+STRICT_REGRESSION_REOPEN_VERSION = "fix_regression_reopen_v4_population_bound"
 
 
 def _clean(value: Any) -> str:
@@ -38,6 +39,52 @@ def _scope(value: Any) -> tuple[list[str], str]:
     if len(set(cleaned)) != len(cleaned):
         return [], "scope_contains_duplicate_identity"
     return cleaned, ""
+
+
+def _historical_evidence_population(
+    previous_record: dict[str, Any],
+    *,
+    previous_scan_origin: str = "",
+) -> tuple[list[str], str]:
+    """Rebuild the exact historical evidence-key population from trusted context.
+
+    Result objects are transport data, so their population counts/scopes are not
+    proof by themselves. Re-derive the historical evidence identities from the
+    repair record using the caller-owned historical scan origin. Root-relative
+    URLs therefore fail closed when that authoritative origin is unavailable.
+    """
+    previous_record = previous_record if isinstance(previous_record, dict) else {}
+    identity_version = _clean(previous_record.get("evidence_url_identity_version"))
+    if identity_version != PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION:
+        return [], "historical_evidence_url_identity_version_unsupported"
+
+    try:
+        key_for = repair_evidence_key_function(
+            scan_origin=previous_scan_origin,
+            identity_version=identity_version,
+        )
+    except (TypeError, ValueError):
+        return [], "historical_evidence_url_identity_context_invalid"
+
+    values = previous_record.get("affected_pages") if isinstance(previous_record.get("affected_pages"), list) else []
+    if not values:
+        fallback = previous_record.get("page_url") or previous_record.get("representative_page_url")
+        values = [fallback] if fallback else []
+    if not values:
+        return [], "historical_evidence_population_missing"
+
+    population: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        key = key_for(value)
+        if not key:
+            return [], "historical_evidence_identity_ambiguous_or_unresolvable"
+        if key not in seen:
+            seen.add(key)
+            population.append(key)
+    if not population:
+        return [], "historical_evidence_population_missing"
+    return population, ""
 
 
 def verification_result_integrity(result: dict[str, Any]) -> dict[str, Any]:
@@ -114,13 +161,15 @@ def verification_result_integrity(result: dict[str, Any]) -> dict[str, Any]:
 def verification_result_historical_binding(
     previous_record: dict[str, Any],
     current_result: dict[str, Any],
+    *,
+    previous_scan_origin: str = "",
 ) -> dict[str, Any]:
-    """Bind a transported verification result back to its historical criterion.
+    """Bind a transported verification result to criterion and evidence population.
 
-    Structural integrity is not enough: a well-shaped PASS/FAIL/PARTIAL can still
-    carry a foreign criterion id or a fingerprint copied from another contract.
-    Recompute the criterion and stable repair identity from the historical repair
-    and require the transported result to match them exactly.
+    Structural integrity is not enough: a well-shaped PASS/FAIL/PARTIAL can carry
+    a foreign criterion, copied fingerprint, or fabricated subset/foreign scope.
+    Recompute both the criterion and historical evidence-key population, then
+    require the transported proving result to match them exactly.
     """
     previous_record = previous_record if isinstance(previous_record, dict) else {}
     current_result = current_result if isinstance(current_result, dict) else {}
@@ -187,25 +236,63 @@ def verification_result_historical_binding(
     if _clean(current_result.get("criterion_id")) != expected_criterion_id:
         return {**base, "reason": "acceptance_criterion_identity_mismatch", "effective_state": COULD_NOT_VERIFY}
 
+    effective_state = _clean(integrity.get("effective_state")).upper() or COULD_NOT_VERIFY
+    if effective_state in {PASS, PARTIAL, FAIL}:
+        historical_population, population_error = _historical_evidence_population(
+            previous_record,
+            previous_scan_origin=previous_scan_origin,
+        )
+        if population_error:
+            return {
+                **base,
+                "reason": population_error,
+                "effective_state": COULD_NOT_VERIFY,
+            }
+        base["historical_population_count"] = len(historical_population)
+        if integrity.get("required_population_count") != len(historical_population):
+            return {
+                **base,
+                "reason": "historical_evidence_population_count_mismatch",
+                "effective_state": COULD_NOT_VERIFY,
+            }
+        resolved = current_result.get("resolved_scope") if isinstance(current_result.get("resolved_scope"), list) else []
+        unresolved = current_result.get("unresolved_scope") if isinstance(current_result.get("unresolved_scope"), list) else []
+        transported_scope = {_clean(item) for item in [*resolved, *unresolved]}
+        if transported_scope != set(historical_population):
+            return {
+                **base,
+                "reason": "verification_scope_not_bound_to_historical_evidence_population",
+                "effective_state": COULD_NOT_VERIFY,
+            }
+
     return {
         **base,
         "valid": True,
-        "reason": "verification_result_bound_to_historical_contract",
-        "effective_state": _clean(integrity.get("effective_state")).upper() or COULD_NOT_VERIFY,
+        "reason": "verification_result_bound_to_historical_contract_and_population",
+        "effective_state": effective_state,
     }
 
 
-def strict_regression_reopen_decision(previous_record: dict[str, Any], current_result: dict[str, Any]) -> dict[str, Any]:
+def strict_regression_reopen_decision(
+    previous_record: dict[str, Any],
+    current_result: dict[str, Any],
+    *,
+    previous_scan_origin: str = "",
+) -> dict[str, Any]:
     """Return a fail-closed pure-data regression decision for serialized integration.
 
-    A proving result must be both structurally complete and cryptographically bound
-    to the criterion regenerated from the same historical repair record. Foreign
-    criterion ids, stale identity claims, or historical version drift therefore
-    become COULD_NOT_VERIFY rather than reopening a repair.
+    A proving result must be structurally complete and bound to both the criterion
+    and exact evidence population regenerated from the historical repair record.
+    Foreign/subset scopes, stale identity claims, or historical version drift
+    therefore become COULD_NOT_VERIFY rather than reopening a repair.
     """
     previous_record = previous_record if isinstance(previous_record, dict) else {}
     current_result = current_result if isinstance(current_result, dict) else {}
-    binding = verification_result_historical_binding(previous_record, current_result)
+    binding = verification_result_historical_binding(
+        previous_record,
+        current_result,
+        previous_scan_origin=previous_scan_origin,
+    )
     integrity = binding.get("result_integrity") if isinstance(binding.get("result_integrity"), dict) else {}
 
     current_fingerprint = _clean(current_result.get("repair_fingerprint"))

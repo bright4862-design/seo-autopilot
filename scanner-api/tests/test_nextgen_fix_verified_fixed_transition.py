@@ -17,6 +17,7 @@ def previous():
         "rule_id": "missing_title",
         "repair_surface": "head.title",
         "remediation_family": "set_title",
+        "affected_pages": ["https://example.com/a", "https://example.com/b"],
         "rule_definition_version": "rule-v1",
         "comparison_profile_version": "profile-v1",
         "evidence_url_identity_version": PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION,
@@ -88,6 +89,7 @@ def test_strict_transition_allows_only_dual_complete_bound_proof():
     assert decision["allowed"] is True
     assert decision["reason"] == "nextgen_pass_and_legacy_verified_fixed"
     assert decision["result_binding"]["valid"] is True
+    assert decision["result_binding"]["historical_population_count"] == 2
 
 
 def test_malformed_pass_is_rejected():
@@ -223,3 +225,43 @@ def test_nested_historical_identity_version_mismatch_is_rejected():
     decision = strict_verified_fixed_transition_decision(historical, current, legacy())
     assert decision["allowed"] is False
     assert decision["reason"] == "nextgen_result_not_bound:historical_nested_repair_identity_version_mismatch"
+
+
+def test_foreign_scope_pass_is_rejected_even_when_shape_is_complete():
+    historical = previous()
+    current = result(
+        historical,
+        resolved=("https://example.com/c", "https://example.com/d"),
+    )
+    decision = strict_verified_fixed_transition_decision(historical, current, legacy())
+    assert decision["allowed"] is False
+    assert decision["reason"] == "nextgen_result_not_bound:verification_scope_not_bound_to_historical_evidence_population"
+
+
+def test_forged_subset_pass_and_matching_legacy_counts_are_rejected():
+    historical = previous()
+    current = result(
+        historical,
+        resolved=("https://example.com/a",),
+        required=1,
+        observed=1,
+        evaluated=1,
+    )
+    decision = strict_verified_fixed_transition_decision(
+        historical,
+        current,
+        legacy(previous_affected_pages=1, rechecked_pages=1, eligible_rechecked_pages=1),
+    )
+    assert decision["allowed"] is False
+    assert decision["reason"] == "nextgen_result_not_bound:historical_evidence_population_count_mismatch"
+
+
+def test_legacy_compatible_is_rejected_for_versioned_nextgen_transition():
+    historical = previous()
+    decision = strict_verified_fixed_transition_decision(
+        historical,
+        result(historical),
+        legacy(comparison_contract_state="legacy_compatible"),
+    )
+    assert decision["allowed"] is False
+    assert decision["reason"] == "legacy_comparison_not_proven:legacy_comparison_not_versioned_compatible"

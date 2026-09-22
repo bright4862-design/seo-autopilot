@@ -6,7 +6,7 @@ from .nextgen_fix_verification import PASS
 from .nextgen_fix_verification_integrity import verification_result_historical_binding
 from .repair_identity import REPAIR_VERIFICATION_VERSION, build_repair_identity
 
-STRICT_VERIFIED_FIXED_TRANSITION_VERSION = "fix_verified_fixed_transition_v3_criterion_bound"
+STRICT_VERIFIED_FIXED_TRANSITION_VERSION = "fix_verified_fixed_transition_v4_population_bound"
 
 
 def _clean(value: Any) -> str:
@@ -24,8 +24,9 @@ def _legacy_verified_fixed_integrity(legacy_comparison: dict[str, Any]) -> dict[
 
     This is deliberately a consumer-side integrity check. It does not replace or
     loosen compare_repair_runs; a serialized integrator must still obtain the
-    legacy comparison from that existing comparator. The helper only rejects
-    malformed, partial, foreign-version, or non-comparable transported objects.
+    legacy comparison from that existing comparator. Because a NextGen criterion
+    is ready only with explicit rule/profile versions, its companion legacy proof
+    must report the versioned ``compatible`` state, never ``legacy_compatible``.
     """
     if not isinstance(legacy_comparison, dict):
         return {"valid": False, "reason": "legacy_comparison_not_an_object"}
@@ -43,7 +44,9 @@ def _legacy_verified_fixed_integrity(legacy_comparison: dict[str, Any]) -> dict[
         return {"valid": False, "reason": "legacy_comparison_population_not_fully_rechecked"}
 
     contract_state = _clean(legacy_comparison.get("comparison_contract_state")).lower()
-    if contract_state not in {"compatible", "legacy_compatible"}:
+    if contract_state == "legacy_compatible":
+        return {"valid": False, "reason": "legacy_comparison_not_versioned_compatible"}
+    if contract_state != "compatible":
         return {"valid": False, "reason": "legacy_comparison_contract_not_comparable"}
 
     return {
@@ -58,18 +61,24 @@ def strict_verified_fixed_transition_decision(
     previous_record: dict[str, Any],
     current_result: dict[str, Any],
     legacy_comparison: dict[str, Any],
+    *,
+    previous_scan_origin: str = "",
 ) -> dict[str, Any]:
     """Require dual complete proof before proposing a durable verified-fixed transition.
 
-    The NextGen result must be integrity-valid and bound to the criterion
-    regenerated from the same historical repair record. The existing repair
-    comparator must independently report a complete ``verified_fixed`` outcome
-    over the same evidence-population size. This function is pure data.
+    The NextGen result must be integrity-valid and bound to the criterion plus
+    exact evidence population regenerated from the same historical repair. The
+    existing repair comparator must independently report a complete, explicitly
+    version-compatible ``verified_fixed`` outcome over that same population.
     """
     previous_record = previous_record if isinstance(previous_record, dict) else {}
     current_result = current_result if isinstance(current_result, dict) else {}
 
-    result_binding = verification_result_historical_binding(previous_record, current_result)
+    result_binding = verification_result_historical_binding(
+        previous_record,
+        current_result,
+        previous_scan_origin=previous_scan_origin,
+    )
     result_integrity = (
         result_binding.get("result_integrity")
         if isinstance(result_binding.get("result_integrity"), dict)
@@ -97,7 +106,7 @@ def strict_verified_fixed_transition_decision(
             "legacy_comparison_not_proven:"
             f"{_clean(legacy_integrity.get('reason')) or 'invalid_legacy_comparison'}"
         )
-    elif result_integrity.get("required_population_count") != legacy_integrity.get("previous_affected_pages"):
+    elif result_binding.get("historical_population_count") != legacy_integrity.get("previous_affected_pages"):
         reason = "verification_population_mismatch"
     else:
         allowed = True

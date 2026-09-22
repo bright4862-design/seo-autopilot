@@ -22,6 +22,7 @@ def previous():
         "rule_id": "missing_title",
         "repair_surface": "head.title",
         "remediation_family": "set_title",
+        "affected_pages": ["https://example.com/a", "https://example.com/b"],
         "rule_definition_version": "rule-v1",
         "comparison_profile_version": "profile-v1",
         "evidence_url_identity_version": PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION,
@@ -84,6 +85,7 @@ def test_complete_fail_is_integrity_valid_bound_and_reopens():
     assert integrity["valid"] is True
     assert binding["version"] == VERIFICATION_RESULT_BINDING_VERSION
     assert binding["valid"] is True
+    assert binding["historical_population_count"] == 2
     assert decision["version"] == STRICT_REGRESSION_REOPEN_VERSION
     assert decision["should_reopen"] is True
     assert decision["reopen_scope"] == ["https://example.com/a", "https://example.com/b"]
@@ -292,3 +294,78 @@ def test_malformed_nested_historical_identity_claim_fails_closed():
     assert binding["valid"] is False
     assert binding["reason"] == "historical_repair_identity_claim_malformed"
     assert decision["should_reopen"] is False
+
+
+def test_complete_foreign_scope_fails_historical_population_binding():
+    historical = previous()
+    current = result(
+        FAIL,
+        previous_record=historical,
+        unresolved=("https://example.com/c", "https://example.com/d"),
+    )
+    assert verification_result_integrity(current)["valid"] is True
+    binding = verification_result_historical_binding(historical, current)
+    decision = strict_regression_reopen_decision(historical, current)
+    assert binding["valid"] is False
+    assert binding["reason"] == "verification_scope_not_bound_to_historical_evidence_population"
+    assert decision["should_reopen"] is False
+    assert decision["current_verification_state"] == COULD_NOT_VERIFY
+
+
+def test_structurally_complete_subset_count_fails_historical_population_binding():
+    historical = previous()
+    current = result(
+        FAIL,
+        previous_record=historical,
+        unresolved=("https://example.com/a",),
+        required=1,
+        observed=1,
+        evaluated=1,
+    )
+    assert verification_result_integrity(current)["valid"] is True
+    binding = verification_result_historical_binding(historical, current)
+    decision = strict_regression_reopen_decision(historical, current)
+    assert binding["valid"] is False
+    assert binding["reason"] == "historical_evidence_population_count_mismatch"
+    assert decision["should_reopen"] is False
+
+
+def test_relative_historical_population_requires_authoritative_origin_for_binding():
+    historical = previous()
+    historical["affected_pages"] = ["/a", "/b"]
+    current = result(
+        FAIL,
+        previous_record=historical,
+        unresolved=("https://example.com/a", "https://example.com/b"),
+    )
+    without_origin = verification_result_historical_binding(historical, current)
+    with_origin = verification_result_historical_binding(
+        historical,
+        current,
+        previous_scan_origin="https://example.com",
+    )
+    decision = strict_regression_reopen_decision(
+        historical,
+        current,
+        previous_scan_origin="https://example.com",
+    )
+    assert without_origin["valid"] is False
+    assert without_origin["reason"] == "historical_evidence_identity_ambiguous_or_unresolvable"
+    assert with_origin["valid"] is True
+    assert decision["should_reopen"] is True
+
+
+def test_missing_historical_population_cannot_reopen_proving_result():
+    historical = previous()
+    historical.pop("affected_pages")
+    current = result(
+        FAIL,
+        previous_record=historical,
+        unresolved=("https://example.com/a", "https://example.com/b"),
+    )
+    binding = verification_result_historical_binding(historical, current)
+    decision = strict_regression_reopen_decision(historical, current)
+    assert binding["valid"] is False
+    assert binding["reason"] == "historical_evidence_population_missing"
+    assert decision["should_reopen"] is False
+    assert decision["current_verification_state"] == COULD_NOT_VERIFY

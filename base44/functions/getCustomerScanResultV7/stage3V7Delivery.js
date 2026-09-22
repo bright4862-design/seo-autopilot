@@ -137,16 +137,26 @@ export function buildCustomerProjectionStage3(args) {
   if (capsule.handoff_v2_source) projection.run.stage3_handoff_v2 = capsule.handoff_v2_source;
   const rowById = new Map((Array.isArray(args.fixItems) ? args.fixItems : []).map((item) => [text(item?.fix_id, 160), item]));
   const projectedById = new Map(projection.fixItems.map((item) => [text(item?.fix_id, 160), item]));
-  projection.fixItems = capsule.delivery.displayed_fix_ids.map((id) => {
+  const selected = capsule.delivery.displayed_fix_ids.map((id) => {
     const item = projectedById.get(id);
-    const raw = object(rowById.get(id)?.raw_finding);
+    const rawRow = rowById.get(id);
+    const raw = object(rawRow?.raw_finding);
     const perFix = object(raw?.stage3_delivery);
-    if (!item || !perFix) throw new Error("Verified Stage3 presentation references an unavailable fix");
+    const canonicalRank = Number(rawRow?.canonical_action_rank);
+    if (!item || !perFix || !Number.isInteger(canonicalRank) || canonicalRank <= 0) {
+      throw new Error("Verified Stage3 presentation references an unavailable or unranked fix");
+    }
     return {
       ...item,
+      canonical_action_rank: canonicalRank,
       stage3_priority_factors: perFix.priority_factors,
       stage3_counts: perFix.counts,
     };
   });
+  const ranks = new Set(selected.map((item) => item.canonical_action_rank));
+  if (ranks.size !== selected.length) {
+    throw new Error("Verified Stage3 presentation contains duplicate canonical action ranks");
+  }
+  projection.fixItems = selected.sort((left, right) => left.canonical_action_rank - right.canonical_action_rank);
   return projection;
 }

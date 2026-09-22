@@ -759,11 +759,24 @@ def _attach_stage3_decision_evidence(
         (_delivery_candidate(item) for item in annotated),
         presentation_limit=DEFAULT_PRESENTATION_LIMIT,
     )
-    displayed_fix_ids = [
+    # B21 ranking decides which repairs survive the presentation cap, but it
+    # must not replace the canonical customer order already sealed on each
+    # repair. Keep the ranked selection as a set, then emit the surviving IDs
+    # in canonical_items order (the same order represented by
+    # canonical_action_rank). This preserves Stage-3 selection while keeping
+    # the repair_contract_v2 action-band authority intact.
+    selected_fix_ids = {
         _stage3_text(item.get("fix_id"))
         for item in ranked.get("displayed_candidates", [])
         if isinstance(item, dict) and _stage3_text(item.get("fix_id"))
+    }
+    displayed_fix_ids = [
+        fix_id
+        for item in annotated
+        if (fix_id := _stage3_text(item.get("fix_id"))) in selected_fix_ids
     ]
+    if len(displayed_fix_ids) != ranked.get("displayed_candidate_count", 0):
+        raise CanonicalRepairContractError("Stage3 delivery selection did not map back to canonical repair order")
     delivery = {
         "version": STAGE3_DELIVERY_VERSION,
         "eligible_candidate_count": ranked.get("eligible_candidate_count", 0),

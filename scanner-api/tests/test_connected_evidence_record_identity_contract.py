@@ -166,6 +166,43 @@ def test_ga4_duplicate_dimension_population_fails_closed(bypass_upstream):
         validate_connected_evidence_record_identity_semantics(_ga4([first, second]))
 
 
+def test_ga4_registered_assistant_aliases_cannot_evade_duplicate_identity(bypass_upstream):
+    common = {
+        "date": "2026-09-20",
+        "source": "copilot.microsoft.com / referral",
+        "medium": "referral",
+        "landing_page": "/pricing",
+        "geography": None,
+        "country": "US",
+        "region": None,
+        "device_category": "desktop",
+    }
+    first = {**common, "assistant": "copilot", "sessions": 2, "row_number": 1}
+    second = {**common, "assistant": "Microsoft Copilot", "sessions": 8, "row_number": 2}
+    with pytest.raises(ValueError, match="duplicate connected-evidence logical record"):
+        validate_connected_evidence_record_identity_semantics(_ga4([first, second]))
+
+
+def test_ga4_unregistered_assistant_fails_closed_at_identity_boundary(bypass_upstream):
+    evidence = _ga4([
+        {
+            "assistant": "random bot",
+            "date": "2026-09-20",
+            "source": None,
+            "medium": "referral",
+            "landing_page": "/pricing",
+            "geography": None,
+            "country": "US",
+            "region": None,
+            "device_category": "desktop",
+            "sessions": 1,
+            "row_number": 1,
+        }
+    ])
+    with pytest.raises(ValueError, match="registered AI assistant"):
+        validate_connected_evidence_record_identity_semantics(evidence)
+
+
 def test_ga4_distinct_landing_page_is_allowed(bypass_upstream):
     first = {
         "assistant": "chatgpt",

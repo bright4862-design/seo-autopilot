@@ -1,16 +1,16 @@
 """Vector-bound Lane-B semantic-graph evidence envelope.
 
 This module composes Lane-B-owned template, weighted-link-graph, semantic,
-near-duplicate, cannibalization, contextual-link, and template-link-flow evidence
-without touching scanner orchestration, repair priority, authority/persistence,
-projection, or production. It is deliberately pure and performs no
-provider/network work.
+near-duplicate, cannibalization, contextual-link, template-link-flow, and
+source-to-target template-context evidence without touching scanner orchestration,
+repair priority, authority/persistence, projection, or production. It is
+deliberately pure and performs no provider/network work.
 
 The legacy ``build_semantic_graph_evidence`` helper predates the semantic-vector
 integrity contract and may invoke a pluggable vectorizer multiple times. New
 integration should prefer ``build_vector_bound_semantic_graph_evidence`` so all
 semantic-dependent outputs are derived from one validated, isolated, deterministic
-snapshot under ``semantic_vector_contract_v1`` and template/link-zone flow is
+snapshot under ``semantic_vector_contract_v1`` and template/link-zone evidence is
 bound to the same validated assessed-page graph population.
 """
 from __future__ import annotations
@@ -36,9 +36,13 @@ from .semantic_graph_template_flow import (
     TEMPLATE_LINK_FLOW_VERSION,
     template_link_flow_evidence,
 )
+from .semantic_graph_template_opportunity import (
+    TEMPLATE_CONTEXTUAL_OPPORTUNITY_VERSION,
+    template_contextual_internal_link_opportunities,
+)
 
 
-VECTOR_BOUND_GRAPH_ENVELOPE_VERSION = "semantic_graph_evidence_v3_template_flow_bound"
+VECTOR_BOUND_GRAPH_ENVELOPE_VERSION = "semantic_graph_evidence_v4_template_opportunity_bound"
 LINK_ZONE_SUMMARY_VERSION = "link_zone_summary_v1_graph_edge_bound"
 EVIDENCE_SCOPE = "observed_assessed_pages_only"
 
@@ -94,6 +98,9 @@ def build_vector_bound_semantic_graph_evidence(
     opportunity evidence are delegated to the vector-bound analysis contract,
     which validates adapter shape/population/determinism/input isolation and then
     replays one sealed vector snapshot to every downstream semantic analyzer.
+    Contextual source→target candidates are subsequently rebound to validated
+    template membership and observed template-flow evidence, with every missing
+    flow remaining explicitly scoped to the assessed sample.
 
     The result is evidence only. It creates no customer Fix and makes no sitewide
     orphan/link-absence/template-flow claim.
@@ -125,12 +132,20 @@ def build_vector_bound_semantic_graph_evidence(
         duplicate_threshold=duplicate_threshold,
         contextual_threshold=contextual_threshold,
     )
+    template_contextual_opportunities = template_contextual_internal_link_opportunities(
+        template_evidence,
+        graph,
+        semantic_analysis["contextual_internal_link_opportunities"],
+    )
 
     template_flow_state = str(template_link_flow.get("state") or "not_verified")
     semantic_state = str(
         semantic_analysis.get("semantic_vector_integrity_state") or "not_verified"
     )
     graph_state = str(semantic_analysis.get("graph_integrity_state") or "not_verified")
+    template_context_state = str(
+        template_contextual_opportunities.get("state") or "not_verified"
+    )
     if page_identity_coverage_state != "complete":
         state = "not_verified"
         reason = "page_identity_coverage_incomplete"
@@ -148,6 +163,12 @@ def build_vector_bound_semantic_graph_evidence(
         reason = str(
             semantic_analysis.get("graph_integrity_reason") or "graph_not_verified"
         )
+    elif template_context_state == "not_verified":
+        state = "not_verified"
+        reason = str(
+            template_contextual_opportunities.get("reason")
+            or "template_contextual_opportunities_not_verified"
+        )
     else:
         state = "verified"
         reason = "validated"
@@ -163,6 +184,7 @@ def build_vector_bound_semantic_graph_evidence(
         "template_evidence_version": TEMPLATE_EVIDENCE_VERSION,
         "graph_evidence_version": GRAPH_EVIDENCE_VERSION,
         "template_link_flow_version": TEMPLATE_LINK_FLOW_VERSION,
+        "template_contextual_opportunity_version": TEMPLATE_CONTEXTUAL_OPPORTUNITY_VERSION,
         "semantic_analysis_version": VECTOR_BOUND_SEMANTIC_ANALYSIS_VERSION,
         "template_evidence": template_evidence,
         "graph": graph,
@@ -175,6 +197,7 @@ def build_vector_bound_semantic_graph_evidence(
         "contextual_internal_link_opportunities": semantic_analysis[
             "contextual_internal_link_opportunities"
         ],
+        "template_contextual_internal_link_opportunities": template_contextual_opportunities,
         "sitewide_orphan_claim": False,
         "sitewide_link_absence_claim": False,
         "sitewide_template_flow_claim": False,

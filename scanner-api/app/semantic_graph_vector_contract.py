@@ -3,14 +3,19 @@
 Lane B is allowed to consume deterministic local semantic adapters, but candidate
 quality must not depend on trusting arbitrary transported vector dictionaries.
 This module validates adapter identity, assessed-page population, numeric shape,
-bounds, repeatability, and input purity without network calls or customer-facing
-decisions.
+bounds, repeatability, input purity, and explicit population coverage without
+network calls or customer-facing decisions.
 """
 from __future__ import annotations
 
 from copy import deepcopy
 from math import isfinite, sqrt
 from typing import Any
+
+from .semantic_graph_coverage import (
+    SEMANTIC_VECTOR_COVERAGE_VERSION,
+    semantic_vector_coverage_evidence,
+)
 
 
 SEMANTIC_VECTOR_CONTRACT_VERSION = "semantic_vector_contract_v1"
@@ -148,6 +153,12 @@ def semantic_vector_contract_evidence(
     mutation of either invocation is rejected as ``vectorizer_input_mutation``.
     With determinism verification enabled, the adapter is invoked twice against
     fresh equivalent snapshots and both canonical outputs must be exactly equal.
+
+    Adapter integrity is deliberately distinct from semantic population coverage.
+    A deterministic adapter may return vectors for only a subset of assessed page
+    identities; that subset remains valid evidence, but the returned coverage
+    contract makes it explicit that pair analysis is not complete for the whole
+    assessed population.
     """
     population, reason = _assessed_population(pages)
     version, version_reason = _version(vectorizer)
@@ -181,17 +192,36 @@ def semantic_vector_contract_evidence(
     if reason is not None:
         vectors = {}
 
+    integrity_state = "verified" if reason is None else "not_verified"
+    input_page_count = len(pages) if isinstance(pages, list) else 0
+    coverage = semantic_vector_coverage_evidence(
+        input_page_count=input_page_count,
+        assessed_page_identity_count=len(population),
+        vectorized_pages=len(vectors),
+        semantic_vector_integrity_state=integrity_state,
+    )
+
     return {
         "version": SEMANTIC_VECTOR_CONTRACT_VERSION,
         "scope": EVIDENCE_SCOPE,
-        "state": "verified" if reason is None else "not_verified",
+        "state": integrity_state,
         "reason": "validated" if reason is None else reason,
         "vectorizer_version": version or None,
+        "input_page_count": input_page_count,
         "assessed_page_identity_count": len(population),
         "vectorized_pages": len(vectors),
         "determinism_checked": bool(verify_determinism),
         "determinism_verified": bool(determinism_verified),
         "input_isolation_enforced": True,
+        "semantic_vector_coverage_version": SEMANTIC_VECTOR_COVERAGE_VERSION,
+        "semantic_vector_coverage": coverage,
+        "page_identity_coverage_state": coverage["page_identity_coverage_state"],
+        "semantic_vector_coverage_state": coverage["semantic_vector_coverage_state"],
+        "unidentified_page_count": coverage["unidentified_page_count"],
+        "unvectorized_page_identity_count": coverage["unvectorized_page_identity_count"],
+        "semantic_pair_population_complete": coverage["semantic_pair_population_complete"],
+        "semantic_pair_scope": coverage["semantic_pair_scope"],
+        "sitewide_semantic_coverage_claim": False,
         "vectors": vectors,
         "customer_fix_created": False,
     }

@@ -22,10 +22,11 @@ Before attaching template context it independently:
 
 1. revalidates template membership and deterministic `group_id` identity;
 2. revalidates the weighted graph population, edges, zones, counts, and weights;
-3. validates contextual candidate shape, candidate counts/truncation, assessed-page population, directed-pair uniqueness, evidence scope, proposed contextual zone, and sitewide-claim invariants;
-4. cross-checks every candidate's `observed_edge_present` and `existing_strongest_zone` against the validated graph;
-5. refuses any candidate whose exact directed edge is already contextual;
-6. regenerates template-to-template flow from the validated template evidence and graph instead of trusting transported flow rows.
+3. requires a complete semantic-pair scan and exact candidate-state/count/truncation consistency;
+4. validates contextual candidate shape, assessed-page population, directed-pair uniqueness, evidence scope, proposed contextual zone, and sitewide-claim invariants;
+5. cross-checks every candidate's `observed_edge_present`, explicit `existing_strongest_zone`, and reason against the validated graph;
+6. refuses any candidate whose exact directed edge is already contextual;
+7. regenerates template-to-template flow from the validated template evidence and graph instead of trusting transported flow rows.
 
 Each accepted candidate is enriched with:
 
@@ -54,7 +55,7 @@ The envelope still exposes the underlying contextual opportunity evidence unchan
 
 ## New regressions
 
-`tests/test_semantic_graph_template_opportunity.py` adds 8 focused cases covering:
+`tests/test_semantic_graph_template_opportunity.py` now adds 12 focused cases covering:
 
 - observed cross-template flow bound to a source→target candidate;
 - missing flow retained as assessed-sample-only evidence;
@@ -63,6 +64,10 @@ The envelope still exposes the underlying contextual opportunity evidence unchan
 - forged edge-presence rejection;
 - rejection when the directed edge is already contextual;
 - duplicate candidate-pair rejection;
+- incomplete semantic-pair-scan rejection;
+- inconsistent truncation-state rejection;
+- explicit existing-zone-field enforcement;
+- forged candidate-reason rejection;
 - deterministic, non-mutating behavior.
 
 `tests/test_semantic_graph_evidence_bound_template_opportunity.py` adds 3 envelope cases covering:
@@ -71,9 +76,9 @@ The envelope still exposes the underlying contextual opportunity evidence unchan
 - zero observed template flow without a sitewide absence claim;
 - no-candidate state when both directed pairs already have observed contextual edges.
 
-Expected focused Lane-B total after this checkpoint: **91 tests across 13 test files**.
+Expected focused Lane-B total after this checkpoint: **95 tests across 13 test files**.
 
-A supplementary hermetic behavior harness for the new template-opportunity logic passed 8/8 assertions. This is not a substitute for the repository-native exact-head gate.
+A supplementary hermetic behavior/integrity harness for the new template-opportunity logic passed 12/12 assertions. This is not a substitute for the repository-native exact-head gate.
 
 ## Required exact-head gate
 
@@ -120,7 +125,7 @@ python -m py_compile \
   tests/test_semantic_graph_evidence_bound_template_opportunity.py
 ```
 
-The current execution container still cannot resolve `github.com`, so a repository checkout and the exact-head native gate could not be run in this checkpoint. Do not claim 91/91 green until that command is executed against the exact lane head.
+The current execution container still cannot resolve `github.com`, so a repository checkout and the exact-head native gate could not be run in this checkpoint. Do not claim 95/95 green until that command is executed against the exact lane head.
 
 ## Integration guidance
 

@@ -94,7 +94,9 @@ def normalize_pagespeed_insights_evidence_bound(payload: dict[str, Any] | None, 
     """Bind a PSI response to its requested/final identities and runtime provenance.
 
     Caller ``source_url`` is the requested page identity. Redirects are allowed: the
-    provider's final document identity may differ, but a contradictory provider
+    provider's final document identity may differ, but connected evidence is retained
+    only when the provider supplies the corresponding requested identity and it
+    corroborates the caller. A contradictory or missing provider
     ``requestedUrl``/``initial_url`` fails only the affected evidence component
     closed. A Lighthouse ``runtimeError`` invalidates lab evidence without discarding
     otherwise valid CrUX field evidence.
@@ -154,8 +156,15 @@ def normalize_pagespeed_insights_evidence_bound(payload: dict[str, Any] | None, 
 
     # Bind lab evidence to the documented requested/final identities. Redirects are
     # valid, so only the requested identity must equal the caller's source identity.
+    # When the caller supplies a source identity, absence of the provider's requested
+    # identity is not sufficient provenance to keep lab evidence connected.
     if isinstance(lab, dict) and lab.get("state") == "connected":
-        if lh_requested_raw is not None and lh_requested is None:
+        if requested and lh_requested_raw is None:
+            lab = _component_unavailable(
+                kind="lab", reason="lighthouse_requested_identity_missing",
+                observed_at=analysis_timestamp, source_url=requested,
+            )
+        elif lh_requested_raw is not None and lh_requested is None:
             lab = _component_unavailable(
                 kind="lab", reason="lighthouse_requested_identity_invalid",
                 observed_at=analysis_timestamp, source_url=requested,
@@ -198,7 +207,16 @@ def normalize_pagespeed_insights_evidence_bound(payload: dict[str, Any] | None, 
     origin_fallback = origin_fallback if isinstance(origin_fallback, bool) else None
 
     if isinstance(field, dict) and field.get("state") == "connected":
-        if field_initial_raw is not None and field_initial is None:
+        # If the caller names the page whose PSI observation is being normalized,
+        # require the provider's documented initial request identity. The provider
+        # field ``id`` alone identifies the subject/final scope and cannot prove that
+        # this response was requested for the caller page.
+        if requested and field_initial_raw is None:
+            field = _component_unavailable(
+                kind="field", reason="psi_field_initial_identity_missing",
+                observed_at=analysis_timestamp, source_url=requested,
+            )
+        elif field_initial_raw is not None and field_initial is None:
             field = _component_unavailable(
                 kind="field", reason="psi_field_initial_identity_invalid",
                 observed_at=analysis_timestamp, source_url=requested,

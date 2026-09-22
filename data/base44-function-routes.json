@@ -1,15 +1,23 @@
 {
   "schema_version": "base44_function_routes_v1",
-  "generation": "v7",
+  "generation": "v8",
   "routes": {
-    "startStandardScanJob": "startStandardScanJobV7",
-    "durableScanWorkerControl": "durableScanWorkerControlV7",
-    "persistDurableScanAuthority": "persistDurableScanAuthorityV7",
-    "persistLimitedScanResult": "persistLimitedScanResultV7",
-    "getCustomerScanResult": "getCustomerScanResultV7",
-    "deleteCustomerScanData": "deleteCustomerScanDataV7"
+    "startStandardScanJob": "startStandardScanJobV8",
+    "durableScanWorkerControl": "durableScanWorkerControlV8",
+    "persistDurableScanAuthority": "persistDurableScanAuthorityV8",
+    "persistLimitedScanResult": "persistLimitedScanResultV8",
+    "getCustomerScanResult": "getCustomerScanResultV8",
+    "deleteCustomerScanData": "deleteCustomerScanDataV8"
   },
   "historical_routes": {
+    "v7": {
+      "startStandardScanJob": "startStandardScanJobV7",
+      "durableScanWorkerControl": "durableScanWorkerControlV7",
+      "persistDurableScanAuthority": "persistDurableScanAuthorityV7",
+      "persistLimitedScanResult": "persistLimitedScanResultV7",
+      "getCustomerScanResult": "getCustomerScanResultV7",
+      "deleteCustomerScanData": "deleteCustomerScanDataV7"
+    },
     "v6": {
       "startStandardScanJob": "startStandardScanJobV6",
       "durableScanWorkerControl": "durableScanWorkerControlV6",

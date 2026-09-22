@@ -49,30 +49,35 @@ const CONSUMERS = [
   "base44/functions/persistDurableScanAuthorityV5/generatedReleaseContract.js",
   "base44/functions/persistDurableScanAuthorityV6/generatedReleaseContract.js",
   "base44/functions/persistDurableScanAuthorityV7/generatedReleaseContract.js",
+  "base44/functions/persistDurableScanAuthorityV8/generatedReleaseContract.js",
   "base44/functions/persistLimitedScanResultV2/generatedReleaseContract.js",
   "base44/functions/persistLimitedScanResultV3/generatedReleaseContract.js",
   "base44/functions/persistLimitedScanResultV4/generatedReleaseContract.js",
   "base44/functions/persistLimitedScanResultV5/generatedReleaseContract.js",
   "base44/functions/persistLimitedScanResultV6/generatedReleaseContract.js",
   "base44/functions/persistLimitedScanResultV7/generatedReleaseContract.js",
+  "base44/functions/persistLimitedScanResultV8/generatedReleaseContract.js",
   "base44/functions/startStandardScanJobV2/generatedReleaseContract.js",
   "base44/functions/startStandardScanJobV3/generatedReleaseContract.js",
   "base44/functions/startStandardScanJobV4/generatedReleaseContract.js",
   "base44/functions/startStandardScanJobV5/generatedReleaseContract.js",
   "base44/functions/startStandardScanJobV6/generatedReleaseContract.js",
   "base44/functions/startStandardScanJobV7/generatedReleaseContract.js",
+  "base44/functions/startStandardScanJobV8/generatedReleaseContract.js",
   "base44/functions/durableScanWorkerControlV2/generatedReleaseContract.js",
   "base44/functions/durableScanWorkerControlV3/generatedReleaseContract.js",
   "base44/functions/durableScanWorkerControlV4/generatedReleaseContract.js",
   "base44/functions/durableScanWorkerControlV5/generatedReleaseContract.js",
   "base44/functions/durableScanWorkerControlV6/generatedReleaseContract.js",
   "base44/functions/durableScanWorkerControlV7/generatedReleaseContract.js",
+  "base44/functions/durableScanWorkerControlV8/generatedReleaseContract.js",
   "base44/functions/getCustomerScanResultV2/generatedReleaseContract.js",
   "base44/functions/getCustomerScanResultV3/generatedReleaseContract.js",
   "base44/functions/getCustomerScanResultV4/generatedReleaseContract.js",
   "base44/functions/getCustomerScanResultV5/generatedReleaseContract.js",
   "base44/functions/getCustomerScanResultV6/generatedReleaseContract.js",
   "base44/functions/getCustomerScanResultV7/generatedReleaseContract.js",
+  "base44/functions/getCustomerScanResultV8/generatedReleaseContract.js",
   // Not in RELEASE_FUNCTIONS and not reachable from the live app, but they must
   // not be able to ship a stale marker if they are ever republished.
   "base44/functions/aiReviewScan/generatedReleaseContract.js",
@@ -97,30 +102,35 @@ const ENTRY_IDENTITY_CONSUMERS = [
   "base44/functions/persistDurableScanAuthorityV5/entry.ts",
   "base44/functions/persistDurableScanAuthorityV6/entry.ts",
   "base44/functions/persistDurableScanAuthorityV7/entry.ts",
+  "base44/functions/persistDurableScanAuthorityV8/entry.ts",
   "base44/functions/persistLimitedScanResultV2/entry.ts",
   "base44/functions/persistLimitedScanResultV3/entry.ts",
   "base44/functions/persistLimitedScanResultV4/entry.ts",
   "base44/functions/persistLimitedScanResultV5/entry.ts",
   "base44/functions/persistLimitedScanResultV6/entry.ts",
   "base44/functions/persistLimitedScanResultV7/entry.ts",
+  "base44/functions/persistLimitedScanResultV8/entry.ts",
   "base44/functions/startStandardScanJobV2/entry.ts",
   "base44/functions/startStandardScanJobV3/entry.ts",
   "base44/functions/startStandardScanJobV4/entry.ts",
   "base44/functions/startStandardScanJobV5/entry.ts",
   "base44/functions/startStandardScanJobV6/entry.ts",
   "base44/functions/startStandardScanJobV7/entry.ts",
+  "base44/functions/startStandardScanJobV8/entry.ts",
   "base44/functions/durableScanWorkerControlV2/entry.ts",
   "base44/functions/durableScanWorkerControlV3/entry.ts",
   "base44/functions/durableScanWorkerControlV4/entry.ts",
   "base44/functions/durableScanWorkerControlV5/entry.ts",
   "base44/functions/durableScanWorkerControlV6/entry.ts",
   "base44/functions/durableScanWorkerControlV7/entry.ts",
+  "base44/functions/durableScanWorkerControlV8/entry.ts",
   "base44/functions/getCustomerScanResultV2/entry.ts",
   "base44/functions/getCustomerScanResultV3/entry.ts",
   "base44/functions/getCustomerScanResultV4/entry.ts",
   "base44/functions/getCustomerScanResultV5/entry.ts",
   "base44/functions/getCustomerScanResultV6/entry.ts",
   "base44/functions/getCustomerScanResultV7/entry.ts",
+  "base44/functions/getCustomerScanResultV8/entry.ts",
   "base44/functions/ownerScanDebugControl/entry.ts",
   "base44/functions/aiReviewScan/entry.ts",
 ];
@@ -142,16 +152,13 @@ const RELEASE_FUNCTIONS = [
   "ownerScanDebugControl",
 ];
 
-// The active routes are the packages Base44 actually executes. Each is a mirror of
-// a canonical package, and `base44FreshScannerRoutes` proves that by requiring
-// the alias to declare its canonical's build id -- the alias cannot hash its
-// own directory, because `function.jsonc` names the function and so always
-// differs.
-//
-// Only the canonical names were regenerated here, so any contract change
-// rewrote one side of the pair and left the other stamped with a superseded
-// identity. The invariant then failed on the next release rather than being
-// maintained by the generator that owns both files.
+// The routed packages Base44 actually executes have their own package identity.
+// V2-V7 started as copies of the canonical packages, but they have accumulated
+// route-specific entry bytes and, in V7, substantial delivery code. Hashing the
+// canonical directory for an alias therefore cannot prove which alias bytes are
+// running. Every routed package is hashed independently; function.jsonc is part
+// of that identity on purpose because the deployed function name is part of the
+// package Base44 executes.
 const ROUTE_CONTRACT = JSON.parse(
   fs.readFileSync(path.join(REPO_ROOT, "data/base44-function-routes.json"), "utf8"),
 );
@@ -159,6 +166,8 @@ const ROUTE_ALIASES = ROUTE_CONTRACT.routes;
 // Retired route generations remain resolvable for bounded historical recovery.
 const HISTORICAL_ROUTE_ALIASES = Object.values(ROUTE_CONTRACT.historical_routes || {}).flatMap((routes) => Object.entries(routes));
 const ALL_ROUTE_ALIASES = [...Object.entries(ROUTE_ALIASES), ...HISTORICAL_ROUTE_ALIASES];
+const ROUTED_FUNCTIONS = [...new Set(ALL_ROUTE_ALIASES.map(([, alias]) => alias))];
+const BUILD_ID_FUNCTIONS = new Set([...RELEASE_FUNCTIONS, ...ROUTED_FUNCTIONS]);
 const FUNCTION_BUILD_ID_FILE = "generatedBuildId.js";
 
 function functionBuildIdFiles(fnName) {
@@ -225,15 +234,16 @@ function writeFunctionBuildIds({ check = false } = {}) {
     fs.writeFileSync(target, expected);
   }
 
-  // Stamp each alias with the identity of the package it mirrors, so the two
-  // move together and a stale alias cannot survive a regeneration.
-  for (const [canonical, alias] of ALL_ROUTE_ALIASES) {
+  // Each routed alias identifies its own deployable package bytes. A V7-only
+  // change must move the V7 build id even when the canonical package is
+  // untouched; otherwise runtime verification can report a false green.
+  for (const [, alias] of ALL_ROUTE_ALIASES) {
     const aliasDir = path.join(ROOT, "base44/functions", alias);
-    if (!fs.existsSync(aliasDir) || !fs.existsSync(path.join(ROOT, "base44/functions", canonical))) continue;
+    if (!fs.existsSync(aliasDir)) continue;
     const relative = `base44/functions/${alias}/${FUNCTION_BUILD_ID_FILE}`;
     const target = path.join(ROOT, relative);
-    const buildId = computeFunctionBuildId(canonical);
-    const expected = functionBuildIdSource(canonical, buildId);
+    const buildId = computeFunctionBuildId(alias);
+    const expected = functionBuildIdSource(alias, buildId);
     const current = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
     if (current === expected) continue;
     if (check) {
@@ -338,19 +348,12 @@ function main() {
   }
   if (mode === "--build-id") {
     const requested = String(process.argv[3] || "");
-    // An active alias is stamped with the identity of the package it mirrors, so its
-    // expected build ID is the canonical's. Resolving that here keeps every
-    // caller asking one question -- "what build must this route serve?" --
-    // instead of each script reimplementing the alias table.
-    const aliasOf = ALL_ROUTE_ALIASES
-      .find(([, alias]) => alias === requested)?.[0];
-    const fnName = aliasOf || requested;
-    if (!RELEASE_FUNCTIONS.includes(fnName)) {
+    if (!BUILD_ID_FUNCTIONS.has(requested)) {
       process.stderr.write(`Unknown release Base44 function: ${requested || "(missing)"}\n`);
       return 2;
     }
     try {
-      process.stdout.write(`${computeFunctionBuildId(fnName)}\n`);
+      process.stdout.write(`${computeFunctionBuildId(requested)}\n`);
       return 0;
     } catch (error) {
       const message = String(error?.message || error || "");

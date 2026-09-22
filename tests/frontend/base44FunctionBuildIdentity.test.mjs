@@ -19,6 +19,12 @@ const RELEASE_FUNCTIONS = [
   "deleteCustomerScanData",
   "ownerScanDebugControl",
 ];
+const ROUTE_CONTRACT = JSON.parse(fs.readFileSync(path.join(ROOT, "data/base44-function-routes.json"), "utf8"));
+const ROUTED_FUNCTIONS = [...new Set([
+  ...Object.values(ROUTE_CONTRACT.routes || {}),
+  ...Object.values(ROUTE_CONTRACT.historical_routes || {}).flatMap((routes) => Object.values(routes)),
+])];
+const BUILD_ID_FUNCTIONS = [...new Set([...RELEASE_FUNCTIONS, ...ROUTED_FUNCTIONS])];
 
 function source(relative, root = ROOT) {
   return fs.readFileSync(path.join(root, relative), "utf8");
@@ -42,14 +48,14 @@ function copyFunction(fnName, root) {
 }
 
 test("every published Base44 function exposes its generated build id before auth", () => {
-  for (const fnName of RELEASE_FUNCTIONS) {
+  for (const fnName of BUILD_ID_FUNCTIONS) {
     const config = source(`base44/functions/${fnName}/function.jsonc`);
     const entry = config.match(/"entry"\s*:\s*"([^"]+)"/)?.[1];
     assert.ok(entry, `${fnName} must declare an entry`);
 
     const entrySource = source(`base44/functions/${fnName}/${entry}`);
-    const handlerSource = fnName === "deleteCustomerScanData"
-      ? source("base44/functions/deleteCustomerScanData/index.ts")
+    const handlerSource = fnName.startsWith("deleteCustomerScanData")
+      ? source(`base44/functions/${fnName}/index.ts`)
       : entrySource;
 
     assert.match(
@@ -81,6 +87,22 @@ test("function build identity changes when package source bytes change", (t) => 
   assert.match(before, /^[0-9a-f]{64}$/);
   assert.match(after, /^[0-9a-f]{64}$/);
   assert.notEqual(after, before, "source-byte mutation must move the build identity");
+});
+
+test("V7-only package bytes move the V7 build identity without relying on canonical changes", (t) => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "fixlist-build-id-v7-content-"));
+  t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
+  const dir = copyFunction("getCustomerScanResultV8", tempRoot);
+
+  const before = buildId("getCustomerScanResultV8", tempRoot);
+  fs.appendFileSync(path.join(dir, "stage3V7Delivery.js"), "\n// v7 build-id mutation proof\n");
+  const after = buildId("getCustomerScanResultV8", tempRoot);
+  const canonical = buildId("getCustomerScanResult", ROOT);
+
+  assert.match(before, /^[0-9a-f]{64}$/);
+  assert.match(after, /^[0-9a-f]{64}$/);
+  assert.notEqual(after, before, "V7-only source-byte mutation must move the V7 identity");
+  assert.notEqual(before, canonical, "V7 must identify its own package rather than the canonical package");
 });
 
 test("generatedBuildId.js is excluded from its own package hash", (t) => {

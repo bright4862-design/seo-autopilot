@@ -20,6 +20,8 @@ import {
 } from "../../base44/functions/persistDurableScanAuthorityV7/customerPreviewSeal.js";
 import { createAuthoritySeal, verifyAuthoritySeal } from "../../base44/functions/persistDurableScanAuthorityV7/authoritySeal.js";
 import { buildRepairCards } from "../../src/lib/repairCardModel.js";
+import { prepareCustomerFixes } from "../../src/lib/fixRanking.js";
+import { buildRepairWorkSurfacePresentation } from "../../src/lib/repairWorkSurfacePresentation.js";
 import { buildScanHandoff } from "../../src/lib/scanHandoff.js";
 
 const PUBLISHED_AUTHORITY_VERSION = "standard_review_snapshot_hmac_identity_v1";
@@ -155,6 +157,56 @@ test("B22/B23/B24 verified customer, preview, cards and export consume the authe
   assert.deepEqual(locked.fixItems, []);
   assert.equal(locked.run.stage3_handoff_v2, undefined);
   assert.equal(locked.run.stage3_health_score_decision, undefined);
+});
+
+test("V7 customer projection restores canonical action order when a sealed Stage-3 selection was factor-ranked", async () => {
+  const emitted = runPythonFixture("tests/helpers/emitStage3RankedCompletion.py");
+  const { envelope } = emitted;
+  const snapshot = buildAuthoritySnapshot({
+    scan: envelope.scan,
+    review: envelope.review,
+    identity: {
+      scan_id: emitted.scan_id,
+      project_id: emitted.project_id,
+      normalized_domain: "example.com",
+    },
+    userId: emitted.owner_id,
+    now: SEALED_AT,
+    identityVersion: emitted.identity_version,
+  });
+  const proof = await createAuthoritySeal(snapshot, emitted.secret, webcrypto);
+  const rows = authorityRowsFromSnapshot(snapshot, {
+    fixListId: "fix-stage3-order-recovery",
+    ownerUserId: emitted.owner_id,
+    proof,
+  });
+  const reordered = {
+    run: { ...rows.scanRun, id: emitted.scan_id, project_id: emitted.project_id },
+    fixList: { ...rows.fixList, id: "fix-stage3-order-recovery" },
+    fixItems: rows.fixItems.map((item, index) => ({ ...item, id: `order-recovery-${index + 1}` })),
+    userId: emitted.owner_id,
+  };
+  const delivery = reordered.run.health_score_explanation.stage3_delivery.delivery;
+  const selectedIds = [...delivery.displayed_fix_ids];
+  assert.ok(selectedIds.length > 1);
+  delivery.displayed_fix_ids = [...selectedIds].reverse();
+
+  const customer = buildCustomerProjection({ ...reordered, fullAccess: true, authorityVerified: true });
+  const ranks = customer.fixItems.map((item) => item.canonical_action_rank);
+  assert.deepEqual(ranks, [...ranks].sort((left, right) => left - right));
+  assert.deepEqual(
+    new Set(customer.fixItems.map((item) => item.fix_id)),
+    new Set(selectedIds),
+    "Stage-3 decides membership; canonical action rank decides customer order",
+  );
+
+  const prepared = prepareCustomerFixes(customer.fixItems);
+  const workSurface = buildRepairWorkSurfacePresentation({
+    snapshotItems: prepared,
+    visibleItems: prepared,
+  });
+  assert.equal(workSurface.presentation.unsupported, false);
+  assert.equal(workSurface.presentation.canonical, true);
 });
 
 test("B27 unsigned Stage-3 markers cannot upgrade an otherwise valid historical published-route authority row", async () => {

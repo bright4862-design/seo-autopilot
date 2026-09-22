@@ -108,9 +108,14 @@ def test_b21_ranked_delivery_and_counts_are_attached_before_signed_completion(mo
     assert delivery["displayed_candidate_count"] == DEFAULT_PRESENTATION_LIMIT
     assert delivery["presentation_truncated"] is True
     assert delivery["presentation_omitted_count"] == 4
-    assert delivery["displayed_fix_ids"][0] == "duplicate-39"
     assert "duplicate-39" in delivery["displayed_fix_ids"]
     assert len(delivery["displayed_fix_ids"]) == DEFAULT_PRESENTATION_LIMIT
+    selected_ids = set(delivery["displayed_fix_ids"])
+    assert delivery["displayed_fix_ids"] == [
+        item["fix_id"]
+        for item in integrated["canonical_repairs"]
+        if item["fix_id"] in selected_ids
+    ]
     assert "displayed_candidates" not in delivery
 
     duplicate = next(item for item in integrated["canonical_repairs"] if item["fix_id"] == "duplicate-39")

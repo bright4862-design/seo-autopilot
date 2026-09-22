@@ -1,3 +1,5 @@
+import copy
+
 import pytest
 
 from app.connected_evidence_source_contract import validate_connected_evidence_source_identity
@@ -54,6 +56,40 @@ def _bing(site_url):
     )
 
 
+def _inspection(
+    *,
+    provenance_url="https://getfixlist.com/a",
+    record_url="https://getfixlist.com/a",
+):
+    return {
+        "schema_version": "connected_evidence_v1",
+        "provider": "google_search_console",
+        "surface": "google_search_console.url_inspection",
+        "method": "api_response_normalization",
+        "source_kind": "url_inspection",
+        "state": "verified",
+        "retrieved_at": "2026-09-22T15:00:00Z",
+        "observed_at": "2026-09-22T14:00:00Z",
+        "sample": {
+            "kind": "single_url_inspection",
+            "coverage_complete_claim": False,
+            "url_count": 1,
+        },
+        "confidence": {
+            "kind": "evidence_quality_not_statistical_probability",
+            "level": "first_party_provider_observed",
+        },
+        "provenance": {
+            "transport": "provided_payload",
+            "provider_operation": "urlInspection.index.inspect",
+            "property_uri": "sc-domain:getfixlist.com",
+            "inspection_url": provenance_url,
+        },
+        "coverage": {"url_count": 1},
+        "records": [{"inspection_url": record_url}],
+    }
+
+
 def test_sc_domain_accepts_dns_identity_with_case_and_trailing_dot():
     evidence = _gsc("sc-domain:GetFixList.COM.")
     assert validate_connected_evidence_source_identity(evidence) is evidence
@@ -91,4 +127,34 @@ def test_bing_site_prefix_rejects_embedded_userinfo():
     with pytest.raises(ValueError, match="must not contain URL userinfo"):
         validate_connected_evidence_source_identity(
             _bing("https://user:password@getfixlist.com/docs/")
+        )
+
+
+def test_url_inspection_identity_without_userinfo_remains_valid_and_non_mutating():
+    evidence = _inspection()
+    before = copy.deepcopy(evidence)
+    assert validate_connected_evidence_source_identity(evidence) is evidence
+    assert evidence == before
+
+
+def test_url_inspection_provenance_rejects_embedded_userinfo():
+    with pytest.raises(
+        ValueError,
+        match="provenance.inspection_url must not contain URL userinfo",
+    ):
+        validate_connected_evidence_source_identity(
+            _inspection(
+                provenance_url="https://user:password@getfixlist.com/a",
+                record_url="https://user:password@getfixlist.com/a",
+            )
+        )
+
+
+def test_url_inspection_record_identity_rejects_embedded_userinfo():
+    with pytest.raises(
+        ValueError,
+        match=r"records\[0\]\.inspection_url must not contain URL userinfo",
+    ):
+        validate_connected_evidence_source_identity(
+            _inspection(record_url="https://user:password@getfixlist.com/a")
         )

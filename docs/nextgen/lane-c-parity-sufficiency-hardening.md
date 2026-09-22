@@ -32,7 +32,9 @@ other fields remain unobserved.
 - `not_verified` for partial matches, render/provider failures, or invalid source
   contracts;
 - exact source-binding validation by recomputing the expected assessment rather
-  than trusting a mutable derived state.
+  than trusting a mutable derived state;
+- truthful fail-closed assessments remain integrity-valid even when the rejected
+  source version itself is malformed, while any derived-state tampering still fails.
 
 Optional structured-data and business/entity fact fields remain useful parity
 evidence but are not universal prerequisites for a verified match.
@@ -50,7 +52,7 @@ repairs/customers, or alter authority/projection.
 
 ## Deterministic verification
 
-The focused slice adds 10 regressions covering:
+The focused slice adds 11 regressions covering:
 
 1. complete baseline match;
 2. partial match fail-closed behavior;
@@ -61,9 +63,10 @@ The focused slice adds 10 regressions covering:
 7. exact assessment/source binding;
 8. missing-field tampering;
 9. delta-to-match laundering;
-10. input immutability.
+10. input immutability;
+11. truthful fail-closed integrity for a source with an invalid parity version.
 
-A hermetic contract-shaped execution of the new logic passed 10/10 and both new
+A hermetic contract-shaped execution of the new logic passed 11/11 and both new
 files passed Python syntax compilation before publication. Exact full-repository
 Lane-C execution remains a separate integration-readiness gate.
 

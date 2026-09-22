@@ -77,6 +77,16 @@ def _absolute_url(value: Any, *, field: str) -> str:
     return text
 
 
+def _absolute_url_without_userinfo(value: Any, *, field: str) -> str:
+    """Validate an absolute HTTP(S) evidence identity without URL credentials."""
+
+    text = _absolute_url(value, field=field)
+    parsed = urlparse(text)
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(f"{field} must not contain URL userinfo")
+    return text
+
+
 def _validate_host_identity(
     value: Any,
     *,
@@ -196,13 +206,13 @@ def _validate_profile_records(
     if profile_key == ("google_search_console", "url_inspection"):
         if evidence["state"] in {"verified", "stale"} and len(records) != 1:
             raise ValueError("URL Inspection observed evidence must contain exactly one record")
-        expected_url = _absolute_url(
+        expected_url = _absolute_url_without_userinfo(
             provenance["inspection_url"], field="provenance.inspection_url"
         )
         for index, record in enumerate(records):
             if not isinstance(record, Mapping):
                 raise ValueError(f"records[{index}] must be an object")
-            record_url = _absolute_url(
+            record_url = _absolute_url_without_userinfo(
                 record.get("inspection_url"), field=f"records[{index}].inspection_url"
             )
             if record_url != expected_url:

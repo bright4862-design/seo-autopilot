@@ -35,7 +35,7 @@ const ACCEPTED_LIMITED_INTEGRITY_VERSIONS = new Set([
 ]);
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "getCustomerScanResultV7-stage1-runtime-20260919-v1";
+const BASE44_RUNTIME_ACTIVATION_ID = "getCustomerScanResultV7-r0-runtime-20260922-v2";
 import { isReadableAuthorityReleaseFingerprint } from "./releaseCompatibility.js";
 import {
   customerPreviewPayloadMatchesRun,

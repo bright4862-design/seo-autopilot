@@ -1,7 +1,7 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import { secrets } from "base44:runtime";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "persistDurableScanAuthorityV7-stage1-runtime-20260919-v1";
+const BASE44_RUNTIME_ACTIVATION_ID = "persistDurableScanAuthorityV7-r0-runtime-20260922-v2";
 import { createAuthoritySeal, verifyAuthoritySeal } from "./authoritySeal.js";
 import { authorityRowsFromSnapshot } from "./authorityRows.js";
 import { AUTHORITY_CONTRACT, buildAuthoritySnapshot, buildPersistedAuthoritySnapshot, firstFailedAuthorityPredicate, hasCompleteAcceptanceEvidence } from "./authoritySnapshot.js";

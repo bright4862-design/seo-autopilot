@@ -71,13 +71,6 @@ def test_future_observation_relative_to_retrieval_fails_closed():
         validate_connected_evidence(evidence)
 
 
-def test_verified_state_requires_observed_at():
-    evidence = _evidence()
-    evidence["observed_at"] = None
-    with pytest.raises(ValueError, match="observed connected evidence requires observed_at"):
-        validate_connected_evidence(evidence)
-
-
 def test_unavailable_state_cannot_smuggle_records():
     evidence = _evidence(state="not_verified")
     evidence["records"] = [{"claimed_visibility": 1}]

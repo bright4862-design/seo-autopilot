@@ -2,7 +2,8 @@
 
 Issue: #324  
 Draft PR: #331  
-Lane branch: `agent/nextgen-browser-performance-20260921`
+Lane branch: `agent/nextgen-browser-performance-20260921`  
+Latest code/test checkpoint: `1053b4f94fe8d5d44b28ad5780b11b3600efd47a`
 
 ## Purpose
 
@@ -28,9 +29,9 @@ all of those identities. A foreign/mismatched provider payload could therefore b
 well-shaped while referring to a different requested page, and a Lighthouse
 runtime error could still be mistaken for usable lab evidence.
 
-## New pure source-bound adapter
+## Pure source-bound adapter
 
-`scanner-api/app/nextgen_browser_performance_psi_provenance.py` adds:
+`scanner-api/app/nextgen_browser_performance_psi_provenance.py` provides:
 
 - `nextgen_pagespeed_bound_provider_v1`;
 - `nextgen_pagespeed_provenance_v1`;
@@ -49,26 +50,54 @@ runtime error could still be mistaken for usable lab evidence.
   strategy, requested/final identities, and field source identity;
 - no mutation of provider input dictionaries.
 
+### Fail-closed request-identity hardening
+
+CodeRabbit's review of exact head `3ad579754097d7fab81d8ec7c90820e28b23cf00`
+identified one material provenance gap: when the caller supplied `source_url`, the
+wrapper could retain connected PSI evidence even if the provider omitted the
+corresponding requested identity.
+
+That gap is closed at code/test checkpoint
+`1053b4f94fe8d5d44b28ad5780b11b3600efd47a`:
+
+- connected lab evidence now requires `lighthouseResult.requestedUrl` whenever a
+  caller `source_url` is supplied; absence fails only lab evidence closed with
+  `lighthouse_requested_identity_missing`;
+- connected field evidence now requires the selected loading experience's
+  `initial_url` whenever a caller `source_url` is supplied; absence fails only field
+  evidence closed with `psi_field_initial_identity_missing`;
+- an `id`/final subject alone is not accepted as proof that the provider observation
+  was requested for the caller page;
+- invalid and mismatched identities continue to fail only the affected component
+  closed;
+- redirect semantics remain unchanged when the provider supplies a matching request
+  identity and a different valid final identity.
+
 The existing provider-shape adapter remains unchanged. The serialized integrator
 may choose the source-bound adapter only after review and exact-head verification.
 
 ## Deterministic regressions
 
-`scanner-api/tests/test_nextgen_browser_performance_psi_provenance.py` adds 8 pure
-regressions covering:
+`scanner-api/tests/test_nextgen_browser_performance_psi_provenance.py` now contains
+10 pure regressions covering:
 
 1. requested/final redirect identity preservation;
 2. foreign Lighthouse requested identity failing lab evidence closed only;
-3. Lighthouse runtime error invalidating lab evidence while retaining field data;
-4. PSI `origin_fallback=true` preserving origin-level field truth;
-5. foreign field `initial_url` failing field evidence closed only;
-6. invalid caller source identity failing both components closed;
-7. provider analysis/fetch/version/strategy provenance;
-8. provider payload immutability.
+3. missing Lighthouse requested identity failing lab evidence closed when caller
+   source identity is known;
+4. Lighthouse runtime error invalidating lab evidence while retaining field data;
+5. PSI `origin_fallback=true` preserving origin-level field truth;
+6. foreign field `initial_url` failing field evidence closed only;
+7. missing field `initial_url` failing field evidence closed when caller source
+   identity is known;
+8. invalid caller source identity failing both components closed;
+9. provider analysis/fetch/version/strategy provenance;
+10. provider payload immutability.
 
-A hermetic wrapper harness using stubbed existing Lane-C normalizers passed 8/8,
-and both new files passed `py_compile`. This validates the new pure wrapper logic
-only; it is not a substitute for the repository suite.
+A hermetic wrapper harness using stubbed existing Lane-C normalizers passed
+**10/10**, and the modified wrapper/test files passed `py_compile`. This validates
+the changed pure wrapper logic only; it is not a substitute for the repository
+suite.
 
 ## Exact repository gate still required
 
@@ -90,17 +119,22 @@ python -m py_compile \
   tests/test_nextgen_browser_performance_psi_provenance.py
 ```
 
-With the prior 45 focused tests plus these 8 regressions, Lane C now contains 53
-focused tests. Exact-head 53/53 repository execution is not claimed until an
-approved repository runner executes the commands above.
+With the prior 45 focused tests plus the 10 provenance regressions, Lane C now
+contains **55 focused tests**. Exact-head 55/55 repository execution is not claimed
+until an approved repository runner executes the commands above.
 
 ## Integration handoff
 
 The serialized integrator should bind the PSI request URL to the exact candidate
-selected by the representative sampler. A redirect is valid when the provider
-reports the original request identity consistently and supplies a valid final URL.
-Downstream consumers should use the final lab identity for Lighthouse evidence and
-the field subject identity/scope for CrUX evidence.
+selected by the representative sampler. When it supplies that candidate as
+`source_url`, connected field/lab evidence must retain the provider request identity
+that corroborates the candidate. Missing provider request identity is unknown /
+unavailable provenance, not permission to infer a match.
+
+A redirect is valid when the provider reports the original request identity
+consistently and supplies a valid final URL. Downstream consumers should use the
+final lab identity for Lighthouse evidence and the field subject identity/scope for
+CrUX evidence.
 
 A Lighthouse runtime failure is not evidence of a site performance defect. It is a
 provider/lab observation failure. Likewise, origin fallback field data must never

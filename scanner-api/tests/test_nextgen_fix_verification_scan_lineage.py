@@ -1,5 +1,3 @@
-from copy import deepcopy
-
 from app.nextgen_fix_verification import (
     COULD_NOT_VERIFY,
     FAIL,
@@ -152,6 +150,22 @@ def test_scan_lineage_requires_current_contract_source_scan_claim():
     )
     assert result["valid"] is False
     assert result["reason"] == "current_contract_source_scan_id_missing"
+
+
+def test_scan_lineage_rejects_present_null_alias_even_when_another_alias_matches():
+    current_contract = contract(scan_id=CURRENT_SCAN_ID)
+    current_contract["source_scan_id"] = None
+    result = verification_scan_lineage_integrity(
+        fix(),
+        current_contract,
+        [],
+        [],
+        [],
+        previous_scan_id=PREVIOUS_SCAN_ID,
+        scan_id=CURRENT_SCAN_ID,
+    )
+    assert result["valid"] is False
+    assert result["reason"] == "current_contract_source_scan_id_must_be_exact_nonempty_string"
 
 
 def test_scan_lineage_requires_every_current_page_to_name_its_source_scan():

@@ -3,7 +3,7 @@
 Issue: #324  
 Draft PR: #331  
 Lane branch: `agent/nextgen-browser-performance-20260921`  
-Latest lane code/test checkpoint before this handoff refresh: `357d094bf191d36d4992da4393e5ec77ac6268bd`
+Latest lane code/test checkpoint before this handoff refresh: `5302e6991e7d85337dc7ad3c59f9f58036097c41`
 
 ## Ownership boundary
 
@@ -27,6 +27,13 @@ Lane C currently provides:
   lab evidence kept in separate envelopes;
 - documented CrUX `queryRecord` shape handling, URL/origin scope and coverage-period
   provenance;
+- `nextgen_crux_bound_provider_v1` / `nextgen_crux_provenance_v1`, which fail closed unless
+  a connected direct-CrUX observation has exactly one documented record identity, a true
+  origin for origin-scoped records, and a valid provider collection period; embedded URL
+  credentials, page-shaped origins, ambiguous raw keys, caller/record scope conflicts and
+  source conflicts do not become connected field measurements;
+- `nextgen_crux_bound_integrity_v1`, which re-validates source/scope/coverage provenance
+  before connected direct-CrUX evidence is trusted;
 - strict PageSpeed URL-vs-origin field fallback behavior;
 - source-bound PSI provenance preserving requested/final identity, runtime-error behavior,
   origin fallback, analysis/fetch timestamps, Lighthouse version and strategy;
@@ -80,7 +87,9 @@ The integrator, not this lane, owns execution and shared orchestration.
    validate each result with `validate_resolved_critical_parity_contract(...)`, then call
    `summarize_resolved_critical_parity_coverage(...)`.
 5. For direct CrUX `queryRecord` payloads, prefer
-   `normalize_crux_query_record_evidence(...)`.
+   `normalize_crux_query_record_evidence_bound(...)`, then require
+   `validate_bound_crux_contract(...).valid` before trusting connected field evidence.
+   The earlier provider adapter remains the compatibility normalization layer underneath.
 6. For PSI payloads, prefer `normalize_pagespeed_insights_evidence_bound(...)`.
 7. For direct Lighthouse lab payloads outside PSI, prefer
    `normalize_lighthouse_evidence_bound(...)`, then require
@@ -108,10 +117,11 @@ Recorded Lane-C checkpoints:
 - field/lab performance-coverage hermetic slice: 9/9 passed;
 - performance observation source-binding hermetic slice: 10/10 passed;
 - resolved-canonical/contract-bound parity hermetic slice: 10/10 passed;
-- direct Lighthouse provenance/integrity hermetic slice: **10/10 passed in 0.08s**;
-  new source/test `py_compile` passed.
+- direct Lighthouse provenance/integrity hermetic slice: 10/10 passed;
+- direct CrUX source/coverage provenance/integrity hermetic slice: **10/10 passed in 0.05s**
+  against the current weaker base adapter semantics; new source/test `py_compile` passed.
 
-Lane C now contains **112 focused tests across ten test files**. **112/112 exact-repository
+Lane C now contains **122 focused tests across eleven test files**. **122/122 exact-repository
 execution is not claimed.**
 
 Required exact-head gate:
@@ -128,7 +138,8 @@ PYTHONPATH=. pytest -q \
   tests/test_nextgen_browser_performance_evidence_coverage.py \
   tests/test_nextgen_browser_performance_source_binding.py \
   tests/test_nextgen_browser_performance_parity_hardening.py \
-  tests/test_nextgen_browser_performance_lighthouse_provenance.py
+  tests/test_nextgen_browser_performance_lighthouse_provenance.py \
+  tests/test_nextgen_browser_performance_crux_provenance.py
 
 python -m py_compile \
   app/nextgen_browser_performance.py \
@@ -141,6 +152,7 @@ python -m py_compile \
   app/nextgen_browser_performance_source_binding.py \
   app/nextgen_browser_performance_parity_hardening.py \
   app/nextgen_browser_performance_lighthouse_provenance.py \
+  app/nextgen_browser_performance_crux_provenance.py \
   tests/test_nextgen_browser_performance.py \
   tests/test_nextgen_browser_performance_contract.py \
   tests/test_nextgen_browser_performance_provider.py \
@@ -150,7 +162,8 @@ python -m py_compile \
   tests/test_nextgen_browser_performance_evidence_coverage.py \
   tests/test_nextgen_browser_performance_source_binding.py \
   tests/test_nextgen_browser_performance_parity_hardening.py \
-  tests/test_nextgen_browser_performance_lighthouse_provenance.py
+  tests/test_nextgen_browser_performance_lighthouse_provenance.py \
+  tests/test_nextgen_browser_performance_crux_provenance.py
 ```
 
 The available local execution path still cannot materialize the complete branch from
@@ -164,8 +177,14 @@ The main evidence risk remains treating unavailable/mismatched/partial provider 
 observations as measured defects. Contracts therefore preserve unavailable/not-verified
 states and keep field vs lab evidence separate.
 
-Direct Lighthouse evidence had an additional gap: a runtime-failed report or an audit
-explicitly marked as errored could still contain numeric remnants. The new bound direct-
+Direct CrUX had an additional source-laundering risk: a superficially usable record could
+carry ambiguous raw key material, a page-shaped `origin`, or missing/invalid collection
+coverage while still looking connected. The bound CrUX adapter now rejects those cases
+before measurements can be trusted, and the integrity contract rechecks transport-level
+scope/source/coverage consistency.
+
+Direct Lighthouse evidence has a parallel risk: a runtime-failed report or an audit
+explicitly marked as errored could still contain numeric remnants. The bound direct-
 Lighthouse adapter removes that ambiguity: runtime failure is `provider_error`; errored
 audits are excluded; caller/requested/final identity is explicit.
 

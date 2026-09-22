@@ -1,9 +1,27 @@
 from copy import deepcopy
 
+import pytest
+
+import app.adaptive_smart_500_decision as decision_module
 from app.adaptive_smart_500_decision import (
     ADAPTIVE_SMART_500_DECISION_VERSION,
     evaluate_population_bound_smart_500,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cross_corpus_decision_from_existing_marginal_validator(monkeypatch):
+    """Keep this suite focused on the new cross-corpus decision boundary.
+
+    `adaptive_marginal_corpus` has its own integrity suite. Here we provide only the
+    fields consumed by the new combiner and make validator acceptance explicit.
+    """
+
+    def _validate(corpus):
+        valid = corpus.get("valid") is True
+        return {"valid": valid, "reason": "ok" if valid else "corpus_not_valid"}
+
+    monkeypatch.setattr(decision_module, "validate_marginal_gap_corpus", _validate)
 
 
 def _fingerprint(char):

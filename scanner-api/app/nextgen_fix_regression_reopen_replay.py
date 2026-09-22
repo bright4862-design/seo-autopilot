@@ -12,7 +12,7 @@ from .nextgen_fix_verification_origin_binding import (
 from .nextgen_fix_verification_integrity import strict_regression_reopen_decision
 
 STRICT_REGRESSION_REOPEN_OBSERVATION_REPLAY_VERSION = (
-    "fix_regression_reopen_observation_replay_v5_exact_historical_resolution_state"
+    "fix_regression_reopen_observation_replay_v6_exact_historical_evidence_alias_binding"
 )
 
 
@@ -59,8 +59,9 @@ def strict_regression_reopen_from_observations(
     ``strict_regression_reopen_decision`` accepts a transported verification
     result so it can validate historical binding and state-machine semantics in
     isolation. This final pure replay path recomputes that result, binds
-    historical/plan/page/rule evidence to exact canonical scan origins, and now
-    also proves that historical resolution-state aliases are exact and
+    historical/plan/page/rule evidence to exact canonical scan origins, proves
+    populated historical evidence aliases agree with the selected historical
+    population, and proves historical resolution-state aliases are exact and
     non-conflicting before FAIL/PARTIAL may reopen a repair.
 
     The function is pure. It performs no network work and does not mutate

@@ -40,9 +40,13 @@ from .semantic_graph_template_opportunity import (
     TEMPLATE_CONTEXTUAL_OPPORTUNITY_VERSION,
     template_contextual_internal_link_opportunities,
 )
+from .semantic_graph_zone_profile import (
+    LINK_ZONE_OBSERVATION_PROFILE_VERSION,
+    graph_bound_link_zone_observation_profile,
+)
 
 
-VECTOR_BOUND_GRAPH_ENVELOPE_VERSION = "semantic_graph_evidence_v4_template_opportunity_bound"
+VECTOR_BOUND_GRAPH_ENVELOPE_VERSION = "semantic_graph_evidence_v5_raw_zone_profile_bound"
 LINK_ZONE_SUMMARY_VERSION = "link_zone_summary_v1_graph_edge_bound"
 EVIDENCE_SCOPE = "observed_assessed_pages_only"
 
@@ -92,7 +96,10 @@ def build_vector_bound_semantic_graph_evidence(
     page-identity coverage rather than silently disappearing from the envelope.
     Template inference and graph construction remain purely local. Observed
     template-to-template link flow is derived only after both the template-page
-    membership and graph population/metrics have been revalidated.
+    membership and graph population/metrics have been revalidated. Raw link-zone
+    observations are independently rebound to the graph so repeated zone evidence
+    is preserved and transported edge occurrence/zone/weight/anchor claims cannot
+    become trusted merely by keeping node totals self-consistent.
 
     Semantic-dependent clustering, cannibalization, and contextual-link
     opportunity evidence are delegated to the vector-bound analysis contract,
@@ -103,7 +110,7 @@ def build_vector_bound_semantic_graph_evidence(
     flow remaining explicitly scoped to the assessed sample.
 
     The result is evidence only. It creates no customer Fix and makes no sitewide
-    orphan/link-absence/template-flow claim.
+    orphan/link-absence/template-flow/link-distribution claim.
     """
     pages = _bounded_pages(pages)
     links = _bounded_links(links)
@@ -122,6 +129,11 @@ def build_vector_bound_semantic_graph_evidence(
 
     template_evidence = infer_template_groups(pages)
     graph = build_weighted_internal_link_graph(pages, links)
+    link_zone_observation_profile = graph_bound_link_zone_observation_profile(
+        pages,
+        links,
+        graph,
+    )
     template_link_flow = template_link_flow_evidence(template_evidence, graph)
     semantic_analysis = vector_bound_semantic_analysis_evidence(
         pages,
@@ -138,6 +150,7 @@ def build_vector_bound_semantic_graph_evidence(
         semantic_analysis["contextual_internal_link_opportunities"],
     )
 
+    zone_profile_state = str(link_zone_observation_profile.get("state") or "not_verified")
     template_flow_state = str(template_link_flow.get("state") or "not_verified")
     semantic_state = str(
         semantic_analysis.get("semantic_vector_integrity_state") or "not_verified"
@@ -149,6 +162,12 @@ def build_vector_bound_semantic_graph_evidence(
     if page_identity_coverage_state != "complete":
         state = "not_verified"
         reason = "page_identity_coverage_incomplete"
+    elif zone_profile_state != "verified":
+        state = "not_verified"
+        reason = str(
+            link_zone_observation_profile.get("reason")
+            or "link_zone_observation_profile_not_verified"
+        )
     elif template_flow_state != "verified":
         state = "not_verified"
         reason = str(template_link_flow.get("reason") or "template_link_flow_not_verified")
@@ -183,12 +202,14 @@ def build_vector_bound_semantic_graph_evidence(
         "page_identity_coverage_state": page_identity_coverage_state,
         "template_evidence_version": TEMPLATE_EVIDENCE_VERSION,
         "graph_evidence_version": GRAPH_EVIDENCE_VERSION,
+        "link_zone_observation_profile_version": LINK_ZONE_OBSERVATION_PROFILE_VERSION,
         "template_link_flow_version": TEMPLATE_LINK_FLOW_VERSION,
         "template_contextual_opportunity_version": TEMPLATE_CONTEXTUAL_OPPORTUNITY_VERSION,
         "semantic_analysis_version": VECTOR_BOUND_SEMANTIC_ANALYSIS_VERSION,
         "template_evidence": template_evidence,
         "graph": graph,
         "link_zone_summary": _graph_edge_zone_summary(graph),
+        "link_zone_observation_profile": link_zone_observation_profile,
         "template_link_flow": template_link_flow,
         "semantic_analysis": semantic_analysis,
         "semantic_clusters": semantic_analysis["semantic_clusters"],
@@ -201,5 +222,6 @@ def build_vector_bound_semantic_graph_evidence(
         "sitewide_orphan_claim": False,
         "sitewide_link_absence_claim": False,
         "sitewide_template_flow_claim": False,
+        "sitewide_link_distribution_claim": False,
         "customer_fix_created": False,
     }

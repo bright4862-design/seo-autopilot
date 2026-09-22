@@ -15,6 +15,8 @@ The helper contracts are versioned and deterministic:
 - `adaptive_tranche_yield_v1` — marginal assessed-page yield telemetry.
 - `adaptive_benchmark_v1` — smart-500 vs blind-1000 simulation output.
 - `adaptive_tranche_integrity_v1` — fail-closed integrity validation for transported/caller-supplied tranche telemetry.
+- `adaptive_benchmark_integrity_v1` — fail-closed validation for transported benchmark evidence.
+- `adaptive_benchmark_corpus_v1` — deterministic multi-site benchmark aggregation with explicit inventory-limited accounting.
 
 ## Selection contract
 
@@ -71,40 +73,51 @@ No shared integration surface was modified in this lane. The serialized integrat
 
 If the integrator cannot provide a complete or integrity-valid telemetry signal, the correct state is `insufficient_evidence`, not an automatic 1000-page crawl and not a claim of full understanding.
 
-## Benchmark helper
+## Benchmark helper and integrity
 
 `benchmark_smart_500_vs_blind_1000(...)` compares adaptive selection of up to 500 pages against FIFO selection of up to 1000 already-discovered URLs. It reports assessed-page count, unique finding fingerprints, finding yield per 100 assessed pages, template coverage, family coverage, route-signature coverage, page savings, and shared/smart-only/blind-only finding counts.
 
 `smart_finding_coverage_vs_blind` is a true coverage fraction: `shared findings / blind findings`, so smart-only discoveries cannot inflate the value above 1.0. `smart_efficiency_vs_blind` remains a yield-per-100 ratio. When the blind sample has zero findings, comparison ratios that require a blind denominator are `None` with `finding_comparison_state="no_blind_findings"`.
 
-The benchmark is a deterministic engineering instrument, not a production claim that 500 pages always outperform 1000. Corpus results should decide eventual expansion thresholds.
+`scanner-api/app/adaptive_benchmark_integrity.py` now validates each benchmark envelope before it is compared or aggregated. It rejects wrong benchmark versions, page counts over 500/1000, impossible coverage counts, non-finite or mismatched finding yields, forged shared/smart-only/blind-only partitions, forged page-savings totals, inconsistent comparison state, and forged coverage/efficiency ratios. Zero blind findings stay explicitly non-comparable rather than becoming zero or infinity.
+
+`summarize_benchmark_corpus(...)` accepts only non-empty string site identities and only integrity-valid member results. It deterministically sorts site IDs and reports site-scoped page/finding totals, aggregate smart-vs-blind coverage/efficiency, median per-site finding coverage, total page savings, and separate counts for full 500-vs-1000 sites versus inventory-limited sites. It intentionally does not de-duplicate finding fingerprints across different sites because cross-site fingerprint identity is outside Lane A.
+
+These helpers are engineering evidence only. They do not authorize crawl expansion and do not produce customer Fixes. Corpus results should decide eventual expansion thresholds.
 
 ## Verification
 
-Last exact repository Lane-A checkpoint before the integrity and duplicate-compatibility hardening:
+Last exact repository Lane-A checkpoint before the integrity, duplicate-compatibility and benchmark-integrity hardening:
 
 - `PYTHONPATH=. pytest -q tests/test_adaptive_crawl.py` → **21 passed**.
 - `PYTHONPATH=. python -m py_compile app/adaptive_crawl.py tests/test_adaptive_crawl.py` → **passed**.
 
-The integrity slice adds `tests/test_adaptive_crawl_integrity.py` with 10 deterministic regressions covering valid delegation, forged-rate rejection, non-finite rates, malformed count types, pages-added mismatch, missing observed deltas, rate-without-delta, honest incomplete evidence, forged monotonic flags, and non-mutation.
+The tranche-integrity slice adds `tests/test_adaptive_crawl_integrity.py` with 10 deterministic regressions covering valid delegation, forged-rate rejection, non-finite rates, malformed count types, pages-added mismatch, missing observed deltas, rate-without-delta, honest incomplete evidence, forged monotonic flags, and non-mutation.
 
-The duplicate-compatibility slice adds 2 regressions proving (a) a Standard-150 call is byte-for-byte identical to the existing sampler even when the supplied discovery sequence contains duplicates and (b) deeper adaptive selection retains the exact existing Standard-150 result as its prefix before deduplicating later-tranche candidates. A hermetic targeted harness for those two semantics passed **2/2** in this run.
+The duplicate-compatibility slice adds 2 regressions proving (a) a Standard-150 call is byte-for-byte identical to the existing sampler even when the supplied discovery sequence contains duplicates and (b) deeper adaptive selection retains the exact existing Standard-150 result as its prefix before deduplicating later-tranche candidates. A hermetic targeted harness for those two semantics passed **2/2**.
 
-The branch now contains **23 adaptive-crawl tests + 10 integrity tests = 33 focused tests**. Exact-head repository commands still required:
+The benchmark-integrity/corpus slice adds `tests/test_adaptive_benchmark_integrity.py` with **11** deterministic regressions. A hermetic run of the exact new source/test bytes passed **11/11**, and `py_compile` passed. The committed blob SHAs match the locally verified bytes:
+
+- `scanner-api/app/adaptive_benchmark_integrity.py` → `0bc6aa5749c7e6261ed6296387f5912d2d47fca7`
+- `scanner-api/tests/test_adaptive_benchmark_integrity.py` → `7cf2225fc59b3b10ff3df373ed9bb537f4d98332`
+
+The branch now contains **23 adaptive-crawl tests + 10 tranche-integrity tests + 11 benchmark-integrity tests = 44 focused tests**. Exact-head repository commands still required:
 
 ```text
-PYTHONPATH=. pytest -q tests/test_adaptive_crawl.py tests/test_adaptive_crawl_integrity.py
-PYTHONPATH=. python -m py_compile app/adaptive_crawl.py app/adaptive_crawl_integrity.py tests/test_adaptive_crawl.py tests/test_adaptive_crawl_integrity.py
+PYTHONPATH=. pytest -q tests/test_adaptive_crawl.py tests/test_adaptive_crawl_integrity.py tests/test_adaptive_benchmark_integrity.py
+PYTHONPATH=. python -m py_compile app/adaptive_crawl.py app/adaptive_crawl_integrity.py app/adaptive_benchmark_integrity.py tests/test_adaptive_crawl.py tests/test_adaptive_crawl_integrity.py tests/test_adaptive_benchmark_integrity.py
 ```
 
-Exact blocker: this runtime's working container has no repository checkout and outbound DNS cannot resolve `github.com`, so it cannot clone/materialize the branch for the full repository pytest run. GitHub reports no Actions workflow run for this integration-target draft head. Therefore the two new semantics are targeted-harness verified, but the complete **33-test exact-head repository suite is not claimed green yet**. Full repository scanner regression remains a serialized-integrator gate.
+Exact blocker: this runtime's working container has no repository checkout and outbound DNS cannot resolve `github.com`, so it cannot clone/materialize the branch for the full repository pytest run. The draft PR currently has no exact-head PR-triggered test workflow. Therefore the new benchmark-integrity slice is hermetically verified, but the complete **44-test exact-head repository suite is not claimed green yet**. Full repository scanner regression remains a serialized-integrator gate.
 
 ## Changed files owned by Lane A
 
 - `scanner-api/app/adaptive_crawl.py`
 - `scanner-api/app/adaptive_crawl_integrity.py`
+- `scanner-api/app/adaptive_benchmark_integrity.py`
 - `scanner-api/tests/test_adaptive_crawl.py`
 - `scanner-api/tests/test_adaptive_crawl_integrity.py`
+- `scanner-api/tests/test_adaptive_benchmark_integrity.py`
 - `docs/nextgen/lane-a-adaptive-crawl-handoff.md`
 - `docs/nextgen/lane-a-adaptive-crawl.md`
 

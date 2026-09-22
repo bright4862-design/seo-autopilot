@@ -1,0 +1,21 @@
+{
+  "loadingExperience": {
+    "metrics": {
+      "LARGEST_CONTENTFUL_PAINT_MS": {"percentile": 2400, "category": "FAST"},
+      "INTERACTION_TO_NEXT_PAINT": {"percentile": 180, "category": "FAST"},
+      "CUMULATIVE_LAYOUT_SHIFT_SCORE": {"percentile": 12, "category": "AVERAGE"}
+    }
+  },
+  "lighthouseResult": {
+    "categories": {"performance": {"score": 0.87}},
+    "audits": {
+      "largest-contentful-paint": {"numericValue": 2600, "numericUnit": "millisecond", "score": 0.8},
+      "cumulative-layout-shift": {"numericValue": 0.08, "numericUnit": "unitless", "score": 0.95},
+      "unused-javascript": {
+        "numericValue": 220,
+        "score": 0.45,
+        "details": {"overallSavingsBytes": 120000}
+      }
+    }
+  }
+}

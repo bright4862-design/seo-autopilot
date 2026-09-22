@@ -12,6 +12,7 @@ from copy import deepcopy
 from math import isfinite, sqrt
 from typing import Any
 
+from .semantic_graph import _url
 from .semantic_graph_coverage import (
     SEMANTIC_VECTOR_COVERAGE_VERSION,
     semantic_vector_coverage_evidence,
@@ -37,12 +38,17 @@ class SemanticVectorContractError(ValueError):
 
 
 def _page_url(page: dict[str, Any]) -> str:
+    """Use the same page-identity normalization as the semantic graph.
+
+    Every Lane-B boundary must agree on page identity before semantic evidence can
+    be transported. Reusing ``semantic_graph._url`` prevents the vector contract
+    from accepting a different identity string than graph/contextual analyzers for
+    values containing internal whitespace.
+    """
     for key in ("url", "final_url", "page_url"):
-        value = page.get(key)
-        if value is not None:
-            text = str(value).strip()
-            if text:
-                return text
+        text = _url(page.get(key))
+        if text:
+            return text
     return ""
 
 

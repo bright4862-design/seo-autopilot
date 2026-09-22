@@ -59,16 +59,22 @@ def _bounded_text(value: Any, *, field: str, max_length: int = 2048) -> str:
     return text
 
 
+def _absolute_url(value: Any, *, field: str) -> str:
+    text = _bounded_text(value, field=field)
+    parsed = urlparse(text)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError(f"{field} must be an absolute HTTP(S) URL")
+    return text
+
+
 def _require_exact(actual: Any, expected: Any, *, field: str) -> None:
     if actual != expected:
         raise ValueError(f"{field} did not match the registered source profile")
 
 
 def _http_host(value: Any, *, field: str) -> str:
-    text = _bounded_text(value, field=field)
+    text = _absolute_url(value, field=field)
     parsed = urlparse(text)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise ValueError(f"{field} must be an absolute HTTP(S) URL")
     return parsed.hostname.lower().rstrip(".")
 
 
@@ -89,11 +95,16 @@ def _validate_profile_records(
     if profile_key == ("google_search_console", "url_inspection"):
         if evidence["state"] in {"verified", "stale"} and len(records) != 1:
             raise ValueError("URL Inspection observed evidence must contain exactly one record")
-        expected_url = provenance["inspection_url"]
+        expected_url = _absolute_url(
+            provenance["inspection_url"], field="provenance.inspection_url"
+        )
         for index, record in enumerate(records):
             if not isinstance(record, Mapping):
                 raise ValueError(f"records[{index}] must be an object")
-            if record.get("inspection_url") != expected_url:
+            record_url = _absolute_url(
+                record.get("inspection_url"), field=f"records[{index}].inspection_url"
+            )
+            if record_url != expected_url:
                 raise ValueError("URL Inspection record identity did not match provenance.inspection_url")
 
     if profile_key == ("microsoft_bing_webmaster_tools", "ai_performance_export"):
@@ -136,7 +147,10 @@ def validate_connected_evidence_source_identity(
     _require_exact(provenance.get("transport"), profile["transport"], field="provenance.transport")
 
     for field, expected in profile["exact_provenance"].items():
-        _require_exact(provenance.get(field), expected, field=f"provenance.{field}")
+        actual = provenance.get(field)
+        if type(expected) is bool and type(actual) is not bool:
+            raise ValueError(f"provenance.{field} must be an explicit boolean")
+        _require_exact(actual, expected, field=f"provenance.{field}")
 
     for field in profile["required_provenance"]:
         _bounded_text(provenance.get(field), field=f"provenance.{field}")

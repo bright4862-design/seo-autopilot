@@ -3,7 +3,7 @@
 Issue: #324  
 Draft PR: #331  
 Lane branch: `agent/nextgen-browser-performance-20260921`  
-Latest lane code/test checkpoint before this handoff refresh: `3961d483c02603bd84079aeeeec6abed7d9e3c1b`
+Latest lane code/test checkpoint before this handoff refresh: `3e9ea388b6b8eeae624bb87709375cd739922319`
 
 ## Ownership boundary
 
@@ -74,7 +74,12 @@ Lane C currently provides:
 - aggregate parity coverage that distinguishes completed, failed/unverifiable and unassessed
   selected URLs;
 - fail-closed integrity validation for Lane-C field, lab, composite, sample and parity
-  dictionaries.
+  dictionaries;
+- `nextgen_cwv_field_assessment_v1`, a **field-only** Core Web Vitals assessment over trusted
+  `nextgen_field_performance_v1` evidence. It requires LCP/INP/CLS for a pass, can prove a
+  non-pass from any known non-good required metric, stays `not_verified` for incomplete
+  all-good coverage/non-connected input, rejects Lighthouse lab envelopes, and fails closed
+  when provider category metadata contradicts the normalized numeric value.
 
 ## Serialized integration hook
 
@@ -105,7 +110,10 @@ The integrator, not this lane, owns execution and shared orchestration.
    `validate_performance_observation_source_binding(sample, observations)`.
 9. Only after source binding succeeds, call
    `summarize_performance_evidence_coverage(...)`.
-10. Keep field and lab envelopes separate through any future persistence/authority/customer
+10. After a trusted direct-CrUX or PSI **field** component is available, optionally call
+    `assess_core_web_vitals_field_evidence(field)`. Never substitute Lighthouse lab metrics
+    for this field-only assessment.
+11. Keep field and lab envelopes separate through any future persistence/authority/customer
     logic. Repair priority/customer scoring remain integrator-owned.
 
 A 500/1,000-page adaptive crawl must never imply 500/1,000 browser or Lighthouse
@@ -125,10 +133,11 @@ Recorded Lane-C checkpoints:
 - resolved-canonical/contract-bound parity hermetic slice: 10/10 passed;
 - direct Lighthouse provenance/integrity hermetic slice: 10/10 passed;
 - direct CrUX source/coverage provenance/integrity hermetic slice: 10/10 passed in 0.05s;
-- PSI bound-integrity hermetic slice: **12/12 passed in 0.08s**; new source/test
+- PSI bound-integrity hermetic slice: 12/12 passed in 0.08s;
+- field-only Core Web Vitals assessment slice: **10/10 passed in 0.06s**; new source/test
   `py_compile` passed.
 
-Lane C now contains **134 focused tests across twelve test files**. **134/134 exact-repository
+Lane C now contains **144 focused tests across thirteen test files**. **144/144 exact-repository
 execution is not claimed.**
 
 Required exact-head gate:
@@ -147,7 +156,8 @@ PYTHONPATH=. pytest -q \
   tests/test_nextgen_browser_performance_source_binding.py \
   tests/test_nextgen_browser_performance_parity_hardening.py \
   tests/test_nextgen_browser_performance_lighthouse_provenance.py \
-  tests/test_nextgen_browser_performance_crux_provenance.py
+  tests/test_nextgen_browser_performance_crux_provenance.py \
+  tests/test_nextgen_browser_performance_cwv.py
 
 python -m py_compile \
   app/nextgen_browser_performance.py \
@@ -162,6 +172,7 @@ python -m py_compile \
   app/nextgen_browser_performance_parity_hardening.py \
   app/nextgen_browser_performance_lighthouse_provenance.py \
   app/nextgen_browser_performance_crux_provenance.py \
+  app/nextgen_browser_performance_cwv.py \
   tests/test_nextgen_browser_performance.py \
   tests/test_nextgen_browser_performance_contract.py \
   tests/test_nextgen_browser_performance_provider.py \
@@ -173,7 +184,8 @@ python -m py_compile \
   tests/test_nextgen_browser_performance_source_binding.py \
   tests/test_nextgen_browser_performance_parity_hardening.py \
   tests/test_nextgen_browser_performance_lighthouse_provenance.py \
-  tests/test_nextgen_browser_performance_crux_provenance.py
+  tests/test_nextgen_browser_performance_crux_provenance.py \
+  tests/test_nextgen_browser_performance_cwv.py
 ```
 
 The available local execution path still cannot materialize the complete branch from
@@ -187,13 +199,18 @@ The main evidence risk remains treating unavailable/mismatched/partial provider 
 observations as measured defects. Contracts therefore preserve unavailable/not-verified
 states and keep field vs lab evidence separate.
 
-Source-bound PSI had an additional transport-integrity gap: its additive requested/final,
+The CWV assessment adds another explicit guardrail: Lighthouse lab metrics cannot be
+laundered into field-CWV status, incomplete all-good field coverage cannot claim a pass,
+and contradictory provider rating metadata fails closed instead of producing a customer-
+visible pass/fail conclusion.
+
+Source-bound PSI has an additive transport-integrity risk: its requested/final,
 field-source and Lighthouse-source provenance could be mutated after normalization while
 the base field/lab dictionaries still looked structurally valid. The PSI bound-integrity
-validator now fails closed on those contradictions, including credential-bearing identities,
+validator fails closed on those contradictions, including credential-bearing identities,
 page-shaped origin evidence and cross-component requested-identity disagreement.
 
-Direct CrUX had a source-laundering risk: a superficially usable record could carry
+Direct CrUX has a source-laundering risk: a superficially usable record could carry
 ambiguous raw key material, a page-shaped `origin`, or missing/invalid collection coverage
 while still looking connected. The bound CrUX adapter rejects those cases before
 measurements can be trusted, and its integrity contract rechecks transport-level

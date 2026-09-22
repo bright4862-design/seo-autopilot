@@ -3,7 +3,7 @@
 Issue: #324  
 Draft PR: #331  
 Lane branch: `agent/nextgen-browser-performance-20260921`  
-Latest lane checkpoint before this handoff refresh: `b155d919efc76afb693cbfe3c5d5452d8ba780f1`
+Latest lane checkpoint before this handoff refresh: `23e2a8315fce278112834e78631a7506d52b233c`
 
 ## Ownership boundary
 
@@ -24,6 +24,7 @@ Lane C currently provides:
 - deterministic representative template/high-value sampling, final-URL deduplication and a hard 12-candidate ceiling;
 - `nextgen_performance_sample_binding_v1`, which recomputes the deterministic sample from the authoritative candidate population and fails closed on stale/forged/reordered selections, population drift, invalid requested limits, or non-absolute HTTP(S) selected identities;
 - `nextgen_performance_evidence_coverage_v1`, which binds already-observed provider evidence back to the selected request population and reports field and lab attempted/connected/unassessed coverage independently;
+- `nextgen_performance_observation_source_binding_v1`, which proves that connected CrUX/Lighthouse component sources belong to the sampled request, its origin, or an explicitly provenance-backed redirect final identity before connected coverage is trusted;
 - raw-vs-rendered critical-content parity evidence for title/H1/canonical/indexability/main-content presence/important links/schema/product+entity facts;
 - raw/render identity, usability and extractor-presence fail-closed semantics;
 - aggregate parity coverage that distinguishes completed, failed/unverifiable and unassessed selected URLs;
@@ -39,8 +40,9 @@ The integrator, not this lane, owns execution and shared orchestration.
 4. Build raw/rendered parity only from successful same-identity observations. Failed, skipped, challenged, deadline-exhausted, partial-identity or unusable observations remain `not_verified`.
 5. After per-page parity construction, call `summarize_critical_parity_coverage(...)` over the original selected sample plus available parity rows so execution failures remain failed and candidates never executed remain unassessed.
 6. For direct CrUX `queryRecord` payloads, prefer `normalize_crux_query_record_evidence(...)`. For PSI payloads, prefer `normalize_pagespeed_insights_evidence_bound(...)` so requested/final identity, runtime error, origin fallback and provider provenance remain explicit.
-7. Bind each already-observed provider result to the sampled request identity and call `summarize_performance_evidence_coverage(...)`. Missing field/lab components remain unassessed, while explicit unavailable/rate-limited/provider-error states count as attempts but never as connected measurements.
-8. Keep field and lab envelopes separate through any future persistence/authority/customer logic. Repair priority/customer scoring remain integrator-owned.
+7. Assemble each already-observed provider result under the sampled request identity. Before trusting connected coverage, call `validate_performance_observation_source_binding(sample, observations)`. Connected component sources that differ from the sampled request must have explicit matching redirect provenance; origin-scoped field evidence must be a true origin identity.
+8. Only after source binding succeeds, call `summarize_performance_evidence_coverage(...)`. Missing field/lab components remain unassessed, while explicit unavailable/rate-limited/provider-error states count as attempts but never as connected measurements.
+9. Keep field and lab envelopes separate through any future persistence/authority/customer logic. Repair priority/customer scoring remain integrator-owned.
 
 A 500/1,000-page adaptive crawl must never imply 500/1,000 browser or Lighthouse executions.
 
@@ -53,9 +55,10 @@ Executed checkpoints currently recorded for Lane C:
 - PSI provenance hermetic checkpoint → **10/10 passed**; compile passed;
 - parity-coverage hermetic checkpoint → **9/9 passed**; compile passed;
 - representative-sample binding checkpoint → **9/9 passed in 0.07s** in a hermetic package containing the exact current selector logic plus the new helper/tests; compile passed;
-- field/lab performance-coverage checkpoint → **9/9 passed in 0.04s** in a hermetic helper/contract-boundary harness; compile passed.
+- field/lab performance-coverage checkpoint → **9/9 passed in 0.04s** in a hermetic helper/contract-boundary harness; compile passed;
+- performance observation source-binding checkpoint → **10/10 passed in 0.07s** in a hermetic package exercising the exact new helper/test logic against contract-shaped field/lab/sample fixtures; `py_compile` passed.
 
-Lane C now contains **82 focused tests across seven test files**. **82/82 exact-repository execution is not claimed.**
+Lane C now contains **92 focused tests across eight test files**. **92/92 exact-repository execution is not claimed.**
 
 Required exact-head gate:
 
@@ -68,7 +71,8 @@ PYTHONPATH=. pytest -q \
   tests/test_nextgen_browser_performance_psi_provenance.py \
   tests/test_nextgen_browser_performance_coverage.py \
   tests/test_nextgen_browser_performance_sample_binding.py \
-  tests/test_nextgen_browser_performance_evidence_coverage.py
+  tests/test_nextgen_browser_performance_evidence_coverage.py \
+  tests/test_nextgen_browser_performance_source_binding.py
 python -m py_compile \
   app/nextgen_browser_performance.py \
   app/nextgen_browser_performance_contract.py \
@@ -77,20 +81,24 @@ python -m py_compile \
   app/nextgen_browser_performance_coverage.py \
   app/nextgen_browser_performance_sample_binding.py \
   app/nextgen_browser_performance_evidence_coverage.py \
+  app/nextgen_browser_performance_source_binding.py \
   tests/test_nextgen_browser_performance.py \
   tests/test_nextgen_browser_performance_contract.py \
   tests/test_nextgen_browser_performance_provider.py \
   tests/test_nextgen_browser_performance_psi_provenance.py \
   tests/test_nextgen_browser_performance_coverage.py \
   tests/test_nextgen_browser_performance_sample_binding.py \
-  tests/test_nextgen_browser_performance_evidence_coverage.py
+  tests/test_nextgen_browser_performance_evidence_coverage.py \
+  tests/test_nextgen_browser_performance_source_binding.py
 ```
 
-The current execution container still cannot resolve `github.com`, so it cannot materialize the complete branch. This integration-target draft also has no normal PR-triggered repository CI run. Until an approved repository runner executes the commands above, exact-head repository green remains a blocker for integration readiness.
+The available execution container still cannot materialize the complete branch from GitHub, and this integration-target draft has no normal PR-triggered repository CI run. Until an approved repository runner executes the commands above, exact-head repository green remains a blocker for integration readiness.
 
 ## Risks
 
-The main evidence risk is treating unavailable/mismatched/partial provider or render observations as measured defects. Contracts therefore preserve truthful unavailable/not-verified states and keep field vs lab evidence separate. The new performance-coverage helper additionally prevents field coverage on one subset from being silently presented as lab coverage on the same population.
+The main evidence risk is treating unavailable/mismatched/partial provider or render observations as measured defects. Contracts therefore preserve truthful unavailable/not-verified states and keep field vs lab evidence separate.
+
+A second evidence risk is **source laundering**: placing a structurally valid connected component under a selected page's top-level request identity even though the component itself belongs to another page or origin. `nextgen_performance_observation_source_binding_v1` closes that gap for connected evidence and allows redirects only with explicit matching PSI provenance.
 
 The main selection risk is trusting a stale or forged representative sample against the wrong page population. The sample-binding helper closes that gap only when the serialized integrator supplies the authoritative candidate population.
 

@@ -94,6 +94,42 @@ def test_contextual_edge_suppresses_duplicate_contextual_proposal():
     )
 
 
+def test_contextual_zone_normalization_matches_graph_validation_before_suppression():
+    left = "https://e.test/a"
+    right = "https://e.test/b"
+    pages = [page(left), page(right)]
+    graph = build_weighted_internal_link_graph(
+        pages,
+        [
+            {
+                "source_url": left,
+                "target_url": right,
+                "anchor_text": "Read more about shared intent",
+                "ancestor_tags": ["a", "article", "main"],
+                "ancestor_roles": ["article", "main"],
+            }
+        ],
+    )
+    graph["edges"][0]["strongest_zone"] = "  Contextual  "
+
+    result = contextual_internal_link_opportunities(
+        pages,
+        graph,
+        semantic_threshold=0.99,
+        vectorizer=MappingVectorizer(),
+    )
+
+    assert result["graph_integrity_state"] == "verified"
+    assert not any(
+        row["source_url"] == left and row["target_url"] == right
+        for row in result["candidates"]
+    )
+    assert any(
+        row["source_url"] == right and row["target_url"] == left
+        for row in result["candidates"]
+    )
+
+
 def test_graph_page_population_mismatch_fails_closed():
     left = "https://e.test/a"
     right = "https://e.test/b"

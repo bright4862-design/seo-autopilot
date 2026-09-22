@@ -10,8 +10,8 @@ The legacy ``build_semantic_graph_evidence`` helper predates the semantic-vector
 integrity contract and may invoke a pluggable vectorizer multiple times. New
 integration should prefer ``build_vector_bound_semantic_graph_evidence`` so all
 semantic-dependent outputs are derived from one validated, isolated, deterministic
-snapshot under ``semantic_vector_contract_v1`` and template/link-zone evidence is
-bound to the same validated assessed-page graph population.
+snapshot, semantic population coverage remains explicit, and template/link-zone
+evidence is bound to the same validated assessed-page graph population.
 """
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ from .semantic_graph_zone_profile import (
 )
 
 
-VECTOR_BOUND_GRAPH_ENVELOPE_VERSION = "semantic_graph_evidence_v5_raw_zone_profile_bound"
+VECTOR_BOUND_GRAPH_ENVELOPE_VERSION = "semantic_graph_evidence_v6_semantic_coverage_bound"
 LINK_ZONE_SUMMARY_VERSION = "link_zone_summary_v1_graph_edge_bound"
 EVIDENCE_SCOPE = "observed_assessed_pages_only"
 
@@ -104,13 +104,18 @@ def build_vector_bound_semantic_graph_evidence(
     Semantic-dependent clustering, cannibalization, and contextual-link
     opportunity evidence are delegated to the vector-bound analysis contract,
     which validates adapter shape/population/determinism/input isolation and then
-    replays one sealed vector snapshot to every downstream semantic analyzer.
+    replays one sealed vector snapshot to every downstream semantic analyzer. A
+    partial vector population remains usable only as subset-scoped evidence and
+    causes the envelope to report ``partial`` rather than ``verified``. Zero
+    semantic-vector coverage remains ``not_verified`` rather than a clean
+    no-candidate result.
+
     Contextual source→target candidates are subsequently rebound to validated
     template membership and observed template-flow evidence, with every missing
     flow remaining explicitly scoped to the assessed sample.
 
     The result is evidence only. It creates no customer Fix and makes no sitewide
-    orphan/link-absence/template-flow/link-distribution claim.
+    orphan/link-absence/template-flow/link-distribution/semantic-coverage claim.
     """
     pages = _bounded_pages(pages)
     links = _bounded_links(links)
@@ -155,6 +160,9 @@ def build_vector_bound_semantic_graph_evidence(
     semantic_state = str(
         semantic_analysis.get("semantic_vector_integrity_state") or "not_verified"
     )
+    semantic_coverage_state = str(
+        semantic_analysis.get("semantic_vector_coverage_state") or "not_verified"
+    )
     graph_state = str(semantic_analysis.get("graph_integrity_state") or "not_verified")
     template_context_state = str(
         template_contextual_opportunities.get("state") or "not_verified"
@@ -177,6 +185,12 @@ def build_vector_bound_semantic_graph_evidence(
             semantic_analysis.get("semantic_vector_integrity_reason")
             or "semantic_vector_not_verified"
         )
+    elif semantic_coverage_state == "none":
+        state = "not_verified"
+        reason = "semantic_vector_coverage_unavailable"
+    elif semantic_coverage_state != "complete" and semantic_coverage_state != "partial":
+        state = "not_verified"
+        reason = "semantic_vector_coverage_not_verified"
     elif graph_state != "verified":
         state = "not_verified"
         reason = str(
@@ -188,6 +202,9 @@ def build_vector_bound_semantic_graph_evidence(
             template_contextual_opportunities.get("reason")
             or "template_contextual_opportunities_not_verified"
         )
+    elif semantic_coverage_state == "partial":
+        state = "partial"
+        reason = "semantic_vector_coverage_partial"
     else:
         state = "verified"
         reason = "validated"
@@ -200,6 +217,26 @@ def build_vector_bound_semantic_graph_evidence(
         "input_page_count": input_page_count,
         "assessed_page_identity_count": len(population),
         "page_identity_coverage_state": page_identity_coverage_state,
+        "semantic_vector_coverage_version": semantic_analysis.get(
+            "semantic_vector_coverage_version"
+        ),
+        "semantic_vector_coverage_state": semantic_coverage_state,
+        "semantic_assessed_page_identity_count": semantic_analysis.get(
+            "semantic_assessed_page_identity_count",
+            0,
+        ),
+        "semantic_vectorized_pages": semantic_analysis.get("semantic_vectorized_pages", 0),
+        "unidentified_page_count": semantic_analysis.get("unidentified_page_count"),
+        "unvectorized_page_identity_count": semantic_analysis.get(
+            "unvectorized_page_identity_count"
+        ),
+        "semantic_pair_population_complete": bool(
+            semantic_analysis.get("semantic_pair_population_complete")
+        ),
+        "semantic_pair_scope": semantic_analysis.get(
+            "semantic_pair_scope",
+            "not_verified",
+        ),
         "template_evidence_version": TEMPLATE_EVIDENCE_VERSION,
         "graph_evidence_version": GRAPH_EVIDENCE_VERSION,
         "link_zone_observation_profile_version": LINK_ZONE_OBSERVATION_PROFILE_VERSION,
@@ -223,5 +260,6 @@ def build_vector_bound_semantic_graph_evidence(
         "sitewide_link_absence_claim": False,
         "sitewide_template_flow_claim": False,
         "sitewide_link_distribution_claim": False,
+        "sitewide_semantic_coverage_claim": False,
         "customer_fix_created": False,
     }

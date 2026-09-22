@@ -32,9 +32,11 @@ Lane D exposes seven pure fail-closed validation boundaries.
    - ambiguous path-scoped GSC URL-prefix and Bing branch identities fail closed unless their non-root path uses the provider-style trailing `/` directory boundary. This prevents `/docs` from later being mistaken for the scope of `/docs-foreign/...`.
 3. `validate_connected_evidence_record_semantics(...)` / `connected_evidence_record_semantics_v1`
    - provider-specific record meaning: GSC metric relationships, URL Inspection URL/timestamp semantics, Bing kind/citation semantics, GA4 assistant/source spoof resistance, and GA4 metric relationships;
+   - GA4 referral `source` host parsing rejects embedded URL userinfo before assistant-host classification, so credential-like authority spellings cannot be accepted as a registered AI-assistant source;
    - `connected_evidence_record_shape_v1` makes each registered provider record closed-world at the field-name boundary, so unversioned API/OAuth/ranking/quality claims cannot be hidden inside an otherwise valid observation. Provider record expansion requires an intentional contract change.
 4. `validate_connected_evidence_coverage_semantics(...)` / `connected_evidence_coverage_semantics_v1`
-   - binds sample/coverage metadata to transported records and rejects forged counts, inconsistent import accounting, dimension drift, period contradictions, and record dates later than observation.
+   - binds sample/coverage metadata to transported records and rejects forged counts, inconsistent import accounting, dimension drift, period contradictions, record dates later than observation, and dated coverage without the observation timestamp needed to support it;
+   - GSC date-dimension evidence requires explicit coverage bounds; URL Inspection observed coverage requires `observed_at`; Bing/GA4 dated evidence requires `observed_at`, while deliberately date-less evidence with freshness disabled may remain genuinely unbounded.
 5. `validate_connected_evidence_scope_semantics(...)` / `connected_evidence_scope_semantics_v1`
    - binds observed pages/landing paths to declared GSC, Bing, and GA4 source/property scopes;
    - GSC/Bing HTTP paths and GA4 landing-page paths fail closed on raw or percent-encoded dot-segment traversal, encoded `/` or `\\` separators, malformed percent escapes, control characters, raw backslashes, and semicolon path parameters. Semicolons are rejected anywhere in the path, not only in the terminal URL segment.
@@ -66,6 +68,7 @@ Sanitized fixtures live under `scanner-api/tests/fixtures_connected_evidence/`. 
 - Search Console `sc-domain:` properties accept DNS domain identities only; empty values, URL/scheme/path syntax, wildcard hosts, and IP literals fail closed at the source-profile boundary rather than relying on the later scope validator.
 - Search Console URL-prefix and Bing path-scoped property identities reject URL userinfo and malformed host spellings before scope membership is evaluated.
 - URL Inspection `provenance.inspection_url` and the carried record `inspection_url` reject URL userinfo before exact identity comparison; credentials in a URL authority are not valid evidence identity even when the two strings match.
+- GA4 referral `source` values may use host or host-plus-medium spellings, but embedded URL userinfo is invalid evidence identity even when the parsed hostname would otherwise match a registered assistant domain.
 - Search Console URL-prefix and Bing path-scoped property identities use a trailing `/` directory boundary for non-root paths. The source-profile gate rejects an ambiguous `/docs` identity rather than allowing a later raw prefix check to interpret `/docs-foreign` as a descendant.
 - Registered provenance is closed-world per provider/source profile. Current optional provenance is only `import_name` for Bing manual exports and GA4 provided rows; new metadata requires an intentional profile/version change instead of being silently accepted.
 - Evidence-quality confidence metadata is closed-world at the generic envelope boundary. It cannot carry arbitrary probability, score, API/OAuth, or provider claims; current registered levels are `none`, `provider_observed`, `first_party_provider_observed`, and `first_party_analytics_observed`, with only bounded textual `limitations` as optional metadata.
@@ -108,9 +111,9 @@ Focused suites on this lane now contain:
 - `scanner-api/tests/test_connected_evidence_contract.py`: **27 generic contract tests**;
 - `scanner-api/tests/test_connected_evidence_source_contract.py`: **17 source-profile tests**;
 - `scanner-api/tests/test_connected_evidence_timestamp_hardening.py`: **2 timestamp-hardening tests**;
-- `scanner-api/tests/test_connected_evidence_record_contract.py`: **17 record-semantics tests**;
+- `scanner-api/tests/test_connected_evidence_record_contract.py`: **19 record-semantics tests**;
 - `scanner-api/tests/test_connected_evidence_record_shape_hardening.py`: **8 closed-world record-shape tests**;
-- `scanner-api/tests/test_connected_evidence_coverage_contract.py`: **13 coverage-semantics tests**;
+- `scanner-api/tests/test_connected_evidence_coverage_contract.py`: **18 coverage-semantics tests**;
 - `scanner-api/tests/test_connected_evidence_scope_contract.py`: **25 source/property-scope tests**;
 - `scanner-api/tests/test_connected_evidence_record_identity_contract.py`: **12 logical-record-identity tests**;
 - `scanner-api/tests/test_connected_evidence_bundle_contract.py`: **24 snapshot-bundle/full-chain tests**;
@@ -122,11 +125,13 @@ Focused suites on this lane now contain:
 - `scanner-api/tests/test_connected_evidence_source_identity_hardening.py`: **11 source-identity hardening tests**;
 - `scanner-api/tests/test_connected_evidence_snapshot_window_coherence.py`: **9 snapshot-window-coherence tests**.
 
-Expected focused total: **216 tests**.
+Expected focused total: **223 tests**.
 
 Latest verified slice evidence in this runtime:
 
-- URL Inspection identity hardening exercised **3/3** focused cases in a hermetic package with only the already-tested generic-envelope boundary stubbed: a normal identity remained non-mutating, embedded userinfo in `provenance.inspection_url` failed closed, and embedded userinfo in the carried `inspection_url` failed closed; `python -m py_compile app/connected_evidence_source_contract.py tests/test_connected_evidence_source_identity_hardening.py` passed for the candidate code;
+- GA4 source-host userinfo hardening exercised **3/3** focused logic cases: a normal `chatgpt.com / referral` source remained accepted, while both schemeless `user:secret@chatgpt.com / referral` and absolute `https://user@chatgpt.com / referral` forms failed closed before assistant-host classification;
+- the previous coverage/observation-coherence slice exercised **18/18** focused coverage cases in a hermetic package with only the already-tested upstream record-semantics boundary stubbed; this included GSC date-window bounds, URL Inspection `observed_at`, Bing/GA4 dated-observation requirements, and preservation of the deliberately date-less unbounded path;
+- URL Inspection identity hardening previously exercised **3/3** focused cases in a hermetic package with only the already-tested generic-envelope boundary stubbed: a normal identity remained non-mutating, embedded userinfo in `provenance.inspection_url` failed closed, and embedded userinfo in the carried `inspection_url` failed closed; `python -m py_compile app/connected_evidence_source_contract.py tests/test_connected_evidence_source_identity_hardening.py` passed for that candidate code;
 - closed-world confidence metadata hardening previously exercised the updated generic-contract suite **27/27** in a hermetic package; valid bounded limitations remained accepted while unknown probability fields, unregistered confidence levels, malformed limitations, and probability-style confidence kinds failed closed;
 - an additional focused confidence-shape smoke slice previously exercised **6/6** intended behaviors, including canonical unavailable confidence; `python -m py_compile app/connected_evidence_contract.py tests/test_connected_evidence_contract.py` passed for that candidate code;
 - closed-world provider record-shape hardening previously exercised **8/8** intended behaviors in a hermetic package: the registered GSC Search Analytics, URL Inspection, Bing AI Performance, and GA4 AI-referral record fields remained accepted, while an extra unregistered provider claim failed closed for each profile;
@@ -146,9 +151,9 @@ and:
 
 `python -m py_compile app/connected_evidence.py app/connected_evidence_contract.py app/connected_evidence_source_contract.py app/connected_evidence_record_contract.py app/connected_evidence_coverage_contract.py app/connected_evidence_scope_contract.py app/connected_evidence_record_identity_contract.py app/connected_evidence_bundle_contract.py tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py tests/test_connected_evidence_record_shape_hardening.py tests/test_connected_evidence_coverage_contract.py tests/test_connected_evidence_scope_contract.py tests/test_connected_evidence_record_identity_contract.py tests/test_connected_evidence_bundle_contract.py tests/test_connected_evidence_snapshot_observation_identity.py tests/test_connected_evidence_record_url_identity.py tests/test_connected_evidence_prefix_provenance.py tests/test_connected_evidence_provenance_shape.py tests/test_connected_evidence_ga4_landing_path_hardening.py tests/test_connected_evidence_source_identity_hardening.py tests/test_connected_evidence_snapshot_window_coherence.py`
 
-Do not mark Lane D integration-ready until the exact-head **216-test** repository-native run is green and a fresh exact-head review has no unresolved material findings.
+Do not mark Lane D integration-ready until the exact-head **223-test** repository-native run is green and a fresh exact-head review has no unresolved material findings.
 
-The full repository-native exact-head 216-test run is **not yet claimed green** in this runtime. PR #332 intentionally targets `nextgen/integration-20260921`; do not retarget the PR or alter release workflows merely to manufacture CI.
+The full repository-native exact-head 223-test run is **not yet claimed green** in this runtime. PR #332 intentionally targets `nextgen/integration-20260921`; do not retarget the PR or alter release workflows merely to manufacture CI.
 
 ## Known risks / truthful unsupported states
 

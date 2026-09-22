@@ -1,3 +1,5 @@
+import pytest
+
 from app.nextgen_fix_verification import (
     COULD_NOT_VERIFY,
     FAIL,
@@ -369,3 +371,32 @@ def test_missing_historical_population_cannot_reopen_proving_result():
     assert binding["reason"] == "historical_evidence_population_missing"
     assert decision["should_reopen"] is False
     assert decision["current_verification_state"] == COULD_NOT_VERIFY
+
+
+@pytest.mark.parametrize(
+    ("malformed_scope", "expected_reason"),
+    [
+        ([" https://example.com/a ", "https://example.com/b"], "scope_identity_has_surrounding_whitespace"),
+        ([{"evidence_key": "https://example.com/a"}, "https://example.com/b"], "scope_contains_non_string_identity"),
+        ([123, "https://example.com/b"], "scope_contains_non_string_identity"),
+    ],
+)
+def test_malformed_scope_identity_fails_binding_and_cannot_reopen(malformed_scope, expected_reason):
+    historical = previous()
+    current = result(
+        FAIL,
+        previous_record=historical,
+        unresolved=malformed_scope,
+    )
+    integrity = verification_result_integrity(current)
+    binding = verification_result_historical_binding(historical, current)
+    decision = strict_regression_reopen_decision(historical, current)
+
+    assert integrity["valid"] is False
+    assert integrity["reason"] == expected_reason
+    assert integrity["effective_state"] == COULD_NOT_VERIFY
+    assert binding["valid"] is False
+    assert binding["reason"] == f"result_integrity_invalid:{expected_reason}"
+    assert decision["should_reopen"] is False
+    assert decision["current_verification_state"] == COULD_NOT_VERIFY
+    assert decision["reason"] == f"regression_not_proven:result_integrity_invalid:{expected_reason}"

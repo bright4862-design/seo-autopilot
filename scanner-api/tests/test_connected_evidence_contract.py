@@ -16,13 +16,17 @@ def _evidence(*, state="verified", records=None, observed_at="2026-09-20T00:00:0
         "state": state,
         "retrieved_at": "2026-09-21T20:30:00Z",
         "observed_at": None if unavailable else observed_at,
-        "sample": {"kind": "provider_rows", "coverage_complete_claim": False, "row_count": 1},
+        "sample": (
+            {"coverage_complete_claim": False}
+            if unavailable
+            else {"kind": "provider_rows", "coverage_complete_claim": False, "row_count": 1}
+        ),
         "confidence": {
             "kind": "evidence_quality_not_statistical_probability",
             "level": "none" if unavailable else "first_party_provider_observed",
         },
         "provenance": {"transport": "provided_payload"},
-        "coverage": {"row_count": 0 if unavailable else 1},
+        "coverage": {} if unavailable else {"row_count": 1},
         "records": [] if unavailable else (records if records is not None else [{"metric": 1}]),
     }
     if unavailable:
@@ -77,6 +81,31 @@ def test_unavailable_state_requires_reason():
     evidence = _evidence(state="not_connected")
     del evidence["reason"]
     with pytest.raises(ValueError, match="requires a reason"):
+        validate_connected_evidence(evidence)
+
+
+def test_unavailable_state_cannot_claim_sample_row_count():
+    evidence = _evidence(state="not_verified")
+    evidence["sample"]["row_count"] = 17
+    with pytest.raises(ValueError, match="cannot claim sample observations"):
+        validate_connected_evidence(evidence)
+
+
+def test_unavailable_state_cannot_claim_complete_sample_coverage():
+    evidence = _evidence(state="not_connected")
+    evidence["sample"]["coverage_complete_claim"] = True
+    with pytest.raises(ValueError, match="cannot claim sample observations"):
+        validate_connected_evidence(evidence)
+
+
+def test_unavailable_state_cannot_claim_coverage_window():
+    evidence = _evidence(state="provider_error")
+    evidence["coverage"] = {
+        "period_start": "2026-09-01",
+        "period_end": "2026-09-20",
+        "row_count": 0,
+    }
+    with pytest.raises(ValueError, match="cannot claim coverage observations"):
         validate_connected_evidence(evidence)
 
 

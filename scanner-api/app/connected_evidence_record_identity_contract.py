@@ -8,8 +8,10 @@ I/O, authentication, persistence, scoring, projection, or production mutation.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 from typing import Any, Mapping, Sequence
+from urllib.parse import urlparse, urlunparse
 
 from .connected_evidence_scope_contract import (
     validate_connected_evidence_scope_semantics,
@@ -56,6 +58,47 @@ def _identity_text(value: Any, *, field: str, allow_none: bool = True) -> str | 
     return text
 
 
+def _canonical_http_url_identity(value: Any, *, field: str) -> str:
+    """Canonicalize harmless HTTP(S) spelling aliases for record identity."""
+
+    text = _identity_text(value, field=field, allow_none=False)
+    assert text is not None
+    try:
+        parsed = urlparse(text)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            raise ValueError
+        if parsed.username is not None or parsed.password is not None or parsed.fragment:
+            raise ValueError
+        port = parsed.port
+    except ValueError:
+        raise ValueError(f"{field} must be a safe absolute HTTP(S) URL") from None
+
+    raw_host = parsed.hostname.rstrip(".")
+    try:
+        host = ipaddress.ip_address(raw_host).compressed.lower()
+    except ValueError:
+        try:
+            host = raw_host.encode("idna").decode("ascii").lower()
+        except UnicodeError:
+            raise ValueError(f"{field} contained an invalid host") from None
+
+    rendered_host = f"[{host}]" if ":" in host else host
+    default_port = (parsed.scheme.lower() == "http" and port == 80) or (
+        parsed.scheme.lower() == "https" and port == 443
+    )
+    netloc = rendered_host if port is None or default_port else f"{rendered_host}:{port}"
+    return urlunparse(
+        (
+            parsed.scheme.lower(),
+            netloc,
+            parsed.path or "/",
+            parsed.params,
+            parsed.query,
+            "",
+        )
+    )
+
+
 def _canonical_ga4_assistant_identity(value: Any, *, field: str) -> str:
     text = _identity_text(value, field=field, allow_none=False)
     assert text is not None
@@ -93,11 +136,18 @@ def _record_identity(
                 field=f"coverage.dimensions[{dimension_index}]",
                 allow_none=False,
             )
-            value = _identity_text(
-                record_dimensions.get(dimension_name),
-                field=f"records[{index}].dimensions.{dimension_name}",
-                allow_none=False,
-            )
+            raw_value = record_dimensions.get(dimension_name)
+            if dimension_name == "page":
+                value = _canonical_http_url_identity(
+                    raw_value,
+                    field=f"records[{index}].dimensions.{dimension_name}",
+                )
+            else:
+                value = _identity_text(
+                    raw_value,
+                    field=f"records[{index}].dimensions.{dimension_name}",
+                    allow_none=False,
+                )
             values.append(value)
         return profile_key + tuple(values)
 
@@ -127,14 +177,22 @@ def _record_identity(
             "market",
             "surface",
         )
-        return profile_key + tuple(
-            _identity_text(
-                record.get(field),
-                field=f"records[{index}].{field}",
-                allow_none=field != "kind",
-            )
-            for field in fields
-        )
+        values: list[str | None] = []
+        for field in fields:
+            raw_value = record.get(field)
+            if field == "url" and raw_value not in (None, ""):
+                value = _canonical_http_url_identity(
+                    raw_value,
+                    field=f"records[{index}].{field}",
+                )
+            else:
+                value = _identity_text(
+                    raw_value,
+                    field=f"records[{index}].{field}",
+                    allow_none=field != "kind",
+                )
+            values.append(value)
+        return profile_key + tuple(values)
 
     if profile_key == ("google_analytics_4", "ai_assistant_referrals"):
         assistant = _canonical_ga4_assistant_identity(
@@ -187,7 +245,8 @@ def validate_connected_evidence_record_identity_semantics(
     later aggregation order-dependent or double-count evidence, so they fail
     closed instead of being silently summed. Accepted GA4 assistant aliases are
     canonicalized for identity so spelling aliases cannot evade duplicate-row
-    detection.
+    detection. GSC page dimensions and Bing cited-page URLs canonicalize harmless
+    HTTP(S) spelling aliases before identity comparison as well.
     """
 
     validate_connected_evidence_scope_semantics(evidence)

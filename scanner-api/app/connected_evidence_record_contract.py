@@ -181,10 +181,15 @@ def _validate_gsc_search_analytics(records: Sequence[Mapping[str, Any]]) -> None
             _non_negative_integer(impressions, field=f"records[{index}].impressions")
         if clicks is not None and impressions is not None and clicks > impressions:
             raise ValueError(f"records[{index}] clicks cannot exceed impressions")
+        ctr_value = None
         if ctr is not None:
             ctr_value = _finite_number(ctr, field=f"records[{index}].ctr")
             if not 0 <= ctr_value <= 1:
                 raise ValueError(f"records[{index}].ctr must be within 0..1")
+        if clicks is not None and impressions is not None and ctr_value is not None:
+            expected_ctr = 0.0 if impressions == 0 else clicks / impressions
+            if not math.isclose(ctr_value, expected_ctr, rel_tol=1e-6, abs_tol=1e-9):
+                raise ValueError(f"records[{index}].ctr contradicts clicks/impressions")
         if position is not None:
             _non_negative_number(position, field=f"records[{index}].position")
 
@@ -272,6 +277,10 @@ def _validate_ga4_ai_referrals(records: Sequence[Mapping[str, Any]]) -> None:
             value = record.get(field)
             if value is not None:
                 _non_negative_integer(value, field=f"records[{index}].{field}")
+        sessions = record.get("sessions")
+        engaged_sessions = record.get("engaged_sessions")
+        if sessions is not None and engaged_sessions is not None and engaged_sessions > sessions:
+            raise ValueError(f"records[{index}].engaged_sessions cannot exceed sessions")
         for field in ("key_events", "revenue"):
             value = record.get(field)
             if value is not None:

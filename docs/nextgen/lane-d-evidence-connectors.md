@@ -13,7 +13,9 @@ The common envelope is versioned as `connected_evidence_v1`. Every envelope carr
 
 `scanner-api/app/connected_evidence_contract.py` adds a strict fail-closed validator for the envelope. It rejects missing/timezone-free timestamps, future observation timestamps, unknown top-level fields without a schema revision, unavailable states carrying records or claiming an observation timestamp, stale states without a strictly earlier `observed_at`, probability-like confidence labelling, missing transport provenance on observed evidence, oversized metadata/record shapes, non-JSON values, and non-finite JSON numbers such as `NaN`/`Infinity`. Unavailable envelopes remain compatible with the public fail-closed helper when no observation transport exists. The validator does not sign, persist, score, rank, or project evidence.
 
-`scanner-api/app/connected_evidence_source_contract.py` adds `connected_evidence_source_profile_v1`, a second pure boundary that validates registered provider/source attribution after the generic envelope contract. It checks exact surface/method/transport/provider-operation provenance, required connector identities, strict boolean provenance for claims such as Bing `api_used=false`, absolute HTTP(S) URL Inspection identities, exact URL Inspection record/provenance identity, and same-host absolute Bing cited-page URLs. Unregistered source profiles fail closed, including speculative Google generative-AI reporting/API profiles.
+`scanner-api/app/connected_evidence_source_contract.py` adds `connected_evidence_source_profile_v1`, a second pure boundary that validates registered provider/source attribution after the generic envelope contract. It checks exact surface/method/transport/provider-operation provenance, required connector identities, strict boolean provenance for claims such as Bing `api_used=false`, absolute HTTP(S) URL Inspection identities, exact URL Inspection record/provenance identity, and same-host absolute Bing cited-page URLs. Absolute-URL validation forces urllib port parsing, so non-numeric or out-of-range ports fail closed instead of being accepted as syntactically valid identities. Unregistered source profiles fail closed, including speculative Google generative-AI reporting/API profiles.
+
+`scanner-api/app/connected_evidence_record_contract.py` adds `connected_evidence_record_semantics_v1`, a third pure boundary that composes after source identity. It rejects provider records that are structurally valid but semantically contradictory or spoof-prone: impossible GSC metric relationships and duplicate row identities; URL Inspection malformed canonicals/referrers/sitemaps/future crawl times; Bing kind/URL/query contradictions, invalid citation metrics and duplicate row identities; and GA4 unregistered assistant labels, spoof/lookalike assistant hosts, assistant/source mismatches, invalid metrics and duplicate row identities. Its URL and GA4 source-host validation also forces port parsing so malformed or out-of-range ports fail closed.
 
 The producer fails closed before constructing any envelope when `retrieved_at` cannot be parsed. Timestamp fallback parsing now validates the full string rather than truncating to a date prefix, so malformed values such as `2026-09-20Tinvalid` cannot become verified evidence. Valid date-only values remain supported. Bing and GA4 import observation dates are accumulated only after a row has passed all acceptance checks, so rejected rows cannot move `observed_at`/`coverage.period_end` forward or make stale accepted evidence appear fresh.
 
@@ -41,7 +43,7 @@ These are integration prerequisites, not permissions granted by this lane:
 
 ## Serialized integrator hook
 
-The integrator may later call the pure adapters only after an authorized provider response/import already exists. Before any downstream use, validate each envelope first with `validate_connected_evidence(...)`, then with `validate_connected_evidence_source_identity(...)`. Keep the resulting connected-evidence collection separate from canonical crawl authority. `not_connected`, `not_supported`, `not_verified`, `provider_error`, and `stale` must remain explicit. Any future influence on B18 page value/priority belongs to the serialized integrator and existing signed authority path; this lane intentionally does not implement it.
+The integrator may later call the pure adapters only after an authorized provider response/import already exists. Before any downstream use, validate each envelope in three fail-closed stages: first `validate_connected_evidence(...)`, then `validate_connected_evidence_source_identity(...)`, then `validate_connected_evidence_record_semantics(...)`. Keep the resulting connected-evidence collection separate from canonical crawl authority. `not_connected`, `not_supported`, `not_verified`, `provider_error`, and `stale` must remain explicit. Any future influence on B18 page value/priority belongs to the serialized integrator and existing signed authority path; this lane intentionally does not implement it.
 
 Recommended integration sequence:
 
@@ -49,9 +51,10 @@ Recommended integration sequence:
 2. normalize with the provider adapter;
 3. validate the generic envelope strictly;
 4. validate provider/source identity strictly;
-5. attach as optional connected evidence with provenance/coverage intact;
-6. only the serialized integration layer may decide whether valid current evidence affects later ranking/repair logic;
-7. preserve Standard 150 output unchanged when no connected evidence is present.
+5. validate provider-specific record semantics strictly;
+6. attach as optional connected evidence with provenance/coverage intact;
+7. only the serialized integration layer may decide whether valid current evidence affects later ranking/repair logic;
+8. preserve Standard 150 output unchanged when no connected evidence is present.
 
 ## Verification
 
@@ -59,29 +62,30 @@ Focused suites on this lane now contain:
 
 - `scanner-api/tests/test_connected_evidence.py`: **23 adapter tests**;
 - `scanner-api/tests/test_connected_evidence_contract.py`: **24 generic contract tests**;
-- `scanner-api/tests/test_connected_evidence_source_contract.py`: **15 source-profile tests**;
-- `scanner-api/tests/test_connected_evidence_timestamp_hardening.py`: **2 timestamp hardening tests**.
+- `scanner-api/tests/test_connected_evidence_source_contract.py`: **17 source-profile tests**;
+- `scanner-api/tests/test_connected_evidence_timestamp_hardening.py`: **2 timestamp hardening tests**;
+- `scanner-api/tests/test_connected_evidence_record_contract.py`: **15 record-semantics tests**.
 
-The source-profile additions cover URL Inspection provenance/record identities being absolute HTTP(S) URLs and Bing `api_used` rejecting integer `0` rather than treating it as boolean `False`. The timestamp hardening tests cover a malformed timestamp with a valid date prefix plus continued support for valid date-only timestamps.
+The newest source/record additions cover invalid or out-of-range URL ports for URL Inspection identities, Bing site identity, URL Inspection canonical evidence and GA4 assistant-source host parsing. The earlier source-profile additions cover URL Inspection provenance/record identities being absolute HTTP(S) URLs and Bing `api_used` rejecting integer `0` rather than treating it as boolean `False`. Timestamp hardening covers a malformed timestamp with a valid date prefix plus continued support for valid date-only timestamps.
 
 Previously executed repository checkpoint:
 
 - `PYTHONPATH=. pytest -q tests/test_connected_evidence_contract.py` → **24 passed**;
 - `python -m py_compile app/connected_evidence_contract.py` → passed.
 
-Earlier hermetic slice checks passed the prior producer/freshness and source-profile additions, but they are not a substitute for the exact branch repository suite. The exact branch checkout still cannot be materialized by this runtime because outbound GitHub DNS is unavailable, and the normal repository PR workflow targets `main` while this draft targets `nextgen/integration-20260921`. Therefore the current exact-head focused suite is **not yet certified**.
+Hermetic slice checks have exercised the added pure validation behavior, but they are not a substitute for the exact branch repository suite. The exact branch checkout still cannot be materialized by this runtime because outbound GitHub DNS is unavailable, and the normal repository PR workflow targets `main` while this draft targets `nextgen/integration-20260921`. Therefore the current exact-head focused suite is **not yet certified**.
 
 Before integration, run from `scanner-api/` on the exact lane head:
 
-`PYTHONPATH=. pytest -q tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py`
+`PYTHONPATH=. pytest -q tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py`
 
 and:
 
-`python -m py_compile app/connected_evidence.py app/connected_evidence_contract.py app/connected_evidence_source_contract.py tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py`
+`python -m py_compile app/connected_evidence.py app/connected_evidence_contract.py app/connected_evidence_source_contract.py app/connected_evidence_record_contract.py tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py`
 
-Expected focused count on this checkpoint is **64 tests total** (23 adapter + 24 generic contract + 15 source-profile + 2 timestamp hardening). Do not mark the lane integration-ready until that exact-head run is green and material review findings are resolved.
+Expected focused count on this checkpoint is **81 tests total** (23 adapter + 24 generic contract + 17 source-profile + 2 timestamp hardening + 15 record-semantics). Do not mark the lane integration-ready until that exact-head run is green and material review findings are resolved.
 
-CodeRabbit review `5273246519` identified four valid current-head issues. This lane now addresses all four in code/docs/tests: the exact-head verification command includes source-profile coverage, URL Inspection identity values are absolute HTTP(S), boolean provenance is type-strict, and malformed timestamps with valid date prefixes are rejected rather than truncated. A fresh exact-head review is still required before integration readiness is claimed.
+The latest CodeRabbit review found two valid exact-head issues after the record-semantic layer landed: the serialized-integration handoff omitted the record-semantic validation stage, and urllib URL parsing was not forcing invalid-port validation. Both are addressed on this lane in docs/code/tests. A fresh exact-head review remains required before integration readiness is claimed.
 
 ## Known risks / truthful unsupported states
 

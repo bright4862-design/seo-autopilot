@@ -146,6 +146,9 @@ def _base_result(
         "semantic_vector_determinism_verified": bool(
             semantic_evidence.get("determinism_verified")
         ),
+        "semantic_vector_input_isolation_enforced": bool(
+            semantic_evidence.get("input_isolation_enforced")
+        ),
         "graph_integrity_state": graph_state,
         "graph_integrity_reason": graph_reason,
         "semantic_clusters": clusters,
@@ -171,9 +174,10 @@ def vector_bound_semantic_analysis_evidence(
     Page identity is checked before caller-provided vectorizer code executes.
     Thresholds are strict finite numeric values (``bool`` is rejected). The
     semantic adapter is then validated exactly once under
-    ``semantic_vector_contract_v1`` with repeatability checking enabled. If that
-    contract fails, no semantic-dependent analyzer executes. Near-duplicate B10
-    evidence remains available because it does not depend on semantic vectors.
+    ``semantic_vector_contract_v1`` with repeatability and input-isolation checks
+    enabled. If that contract fails, no semantic-dependent analyzer executes.
+    Near-duplicate B10 evidence remains available because it does not depend on
+    semantic vectors.
 
     A graph-integrity failure is isolated to contextual link-opportunity evidence:
     semantic clusters and cannibalization evidence may still be valid because they
@@ -210,6 +214,7 @@ def vector_bound_semantic_analysis_evidence(
             "vectorized_pages": 0,
             "determinism_checked": False,
             "determinism_verified": False,
+            "input_isolation_enforced": True,
         }
         reason = f"semantic_vector_{population_error}"
         return _base_result(

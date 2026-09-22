@@ -32,6 +32,18 @@ EXCLUSION_REASONS = {
     "metric_unit_missing",
     "metric_unit_mismatch",
 }
+NOT_VERIFIED_REASONS = {
+    "source_not_object",
+    "source_version_mismatch",
+    "source_not_lab_evidence",
+    "source_state_invalid",
+    "source_metrics_invalid",
+    "source_disconnected",
+    "source_unavailable",
+    "source_rate_limited",
+    "source_provider_error",
+    "all_metric_units_unverified",
+}
 _UNIT_ALIASES = {
     "ms": {"ms", "millisecond", "milliseconds"},
     "score": {"score", "unitless", "unitless_number", "unitlessnumber"},
@@ -167,10 +179,20 @@ def validate_lighthouse_metric_unit_contract(evidence: Any) -> dict[str, Any]:
     state = evidence.get("state")
     if state not in NORMALIZATION_STATES:
         reasons.append("state_invalid")
-    if evidence.get("source_version") != SOURCE_LIGHTHOUSE_VERSION:
+    reason = evidence.get("reason")
+    source_version = evidence.get("source_version")
+    allow_untrusted_version = (
+        state == "not_verified"
+        and reason in {"source_not_object", "source_version_mismatch"}
+    )
+    if source_version != SOURCE_LIGHTHOUSE_VERSION and not allow_untrusted_version:
         reasons.append("source_version_mismatch")
     source_state = evidence.get("source_state")
-    if source_state not in SOURCE_STATES:
+    allow_untrusted_state = (
+        state == "not_verified"
+        and reason in {"source_not_object", "source_state_invalid"}
+    )
+    if source_state not in SOURCE_STATES and not allow_untrusted_state:
         reasons.append("source_state_invalid")
 
     metrics = evidence.get("metrics")
@@ -225,7 +247,6 @@ def validate_lighthouse_metric_unit_contract(evidence: Any) -> dict[str, Any]:
     if normalized_names & excluded_names:
         reasons.append("metric_both_normalized_and_excluded")
 
-    reason = evidence.get("reason")
     if state == "normalized":
         if reason is not None:
             reasons.append("normalized_reason_present")
@@ -237,8 +258,26 @@ def validate_lighthouse_metric_unit_contract(evidence: Any) -> dict[str, Any]:
         if excluded:
             reasons.append("not_applicable_with_exclusions")
     elif state == "not_verified":
-        if not isinstance(reason, str) or not reason:
-            reasons.append("not_verified_reason_missing")
+        if reason not in NOT_VERIFIED_REASONS:
+            reasons.append("not_verified_reason_invalid")
+        elif reason == "all_metric_units_unverified":
+            if source_state != "connected":
+                reasons.append("all_units_unverified_source_not_connected")
+            if not excluded:
+                reasons.append("all_units_unverified_without_exclusions")
+        elif reason in {
+            "source_disconnected",
+            "source_unavailable",
+            "source_rate_limited",
+            "source_provider_error",
+        }:
+            expected_state = reason.removeprefix("source_")
+            if source_state != expected_state:
+                reasons.append("source_failure_reason_state_mismatch")
+            if excluded:
+                reasons.append("source_failure_with_exclusions")
+        elif excluded:
+            reasons.append("source_rejection_with_exclusions")
 
     return {
         "version": LIGHTHOUSE_UNIT_INTEGRITY_VERSION,

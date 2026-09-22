@@ -138,7 +138,13 @@ def test_bundle_validator_rejects_independently_valid_finding_count_drift():
     tampered = deepcopy(result)
     smart = tampered["finding_benchmark"]["smart_500"]
     smart["pages_assessed"] = 39
+    smart["route_signatures"] = min(smart["route_signatures"], 39)
     smart["finding_yield_per_100"] = round(smart["finding_fingerprints"] * 100.0 / 39, 4)
+    blind_yield = float(tampered["finding_benchmark"]["blind_1000"]["finding_yield_per_100"])
+    tampered["finding_benchmark"]["smart_efficiency_vs_blind"] = round(
+        smart["finding_yield_per_100"] / blind_yield,
+        4,
+    )
     tampered["finding_benchmark"]["pages_saved_by_smart"] = 1
     integrity = validate_adaptive_benchmark_bundle(tampered)
     assert integrity["valid"] is False

@@ -178,6 +178,51 @@ def test_template_contextual_opportunity_rejects_duplicate_candidate_pair():
     assert result["reason"] == "contextual_candidate_duplicate"
 
 
+def test_template_contextual_opportunity_rejects_incomplete_semantic_pair_scan():
+    _pages, templates, graph, contextual = build_inputs(with_edge=False)
+    forged = deepcopy(contextual)
+    forged["semantic_pair_scan_complete"] = False
+
+    result = template_contextual_internal_link_opportunities(templates, graph, forged)
+
+    assert result["state"] == "not_verified"
+    assert result["reason"] == "contextual_opportunity_scan_incomplete"
+
+
+def test_template_contextual_opportunity_rejects_inconsistent_truncation_flag():
+    _pages, templates, graph, contextual = build_inputs(with_edge=False)
+    forged = deepcopy(contextual)
+    forged["candidates_truncated"] = True
+
+    result = template_contextual_internal_link_opportunities(templates, graph, forged)
+
+    assert result["state"] == "not_verified"
+    assert result["reason"] == "contextual_opportunity_truncation_mismatch"
+
+
+def test_template_contextual_opportunity_requires_explicit_existing_zone_field():
+    _pages, templates, graph, contextual = build_inputs(with_edge=False)
+    forged = deepcopy(contextual)
+    forged["candidates"][0].pop("existing_strongest_zone")
+
+    result = template_contextual_internal_link_opportunities(templates, graph, forged)
+
+    assert result["state"] == "not_verified"
+    assert result["reason"] == "contextual_candidate_existing_zone_missing"
+
+
+def test_template_contextual_opportunity_rejects_forged_candidate_reason():
+    _pages, templates, graph, contextual = build_inputs(with_edge=True)
+    forged = deepcopy(contextual)
+    row = next(item for item in forged["candidates"] if item["observed_edge_present"] is True)
+    row["reason"] = "no_observed_edge_in_assessed_sample"
+
+    result = template_contextual_internal_link_opportunities(templates, graph, forged)
+
+    assert result["state"] == "not_verified"
+    assert result["reason"] == "contextual_candidate_reason_mismatch"
+
+
 def test_template_contextual_opportunity_is_deterministic_and_non_mutating():
     _pages, templates, graph, contextual = build_inputs(with_edge=True)
     templates_before = deepcopy(templates)

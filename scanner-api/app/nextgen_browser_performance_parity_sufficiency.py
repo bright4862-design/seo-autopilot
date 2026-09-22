@@ -150,7 +150,14 @@ def validate_critical_parity_sufficiency(
         reasons.append("evidence_kind_mismatch")
     if assessment.get("state") not in PARITY_SUFFICIENCY_STATES:
         reasons.append("state_invalid")
-    if assessment.get("source_version") not in {RESOLVED_CRITICAL_PARITY_VERSION, None}:
+    allow_untrusted_source_version = (
+        assessment.get("state") == "not_verified"
+        and assessment.get("reason") == "source_contract_invalid"
+    )
+    if (
+        assessment.get("source_version") not in {RESOLVED_CRITICAL_PARITY_VERSION, None}
+        and not allow_untrusted_source_version
+    ):
         reasons.append("source_version_invalid")
     if assessment.get("source_integrity_version") != RESOLVED_CRITICAL_PARITY_INTEGRITY_VERSION:
         reasons.append("source_integrity_version_mismatch")

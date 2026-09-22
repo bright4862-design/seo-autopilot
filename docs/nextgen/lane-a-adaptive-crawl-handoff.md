@@ -16,9 +16,12 @@ Versioned contracts currently present:
 - `adaptive_tranche_integrity_v1` — fail-closed telemetry integrity validation.
 - `adaptive_benchmark_v1` — smart-500 vs blind-1000 finding/template/family/route benchmark output.
 - `adaptive_benchmark_integrity_v1` — fail-closed benchmark integrity validation.
-- `adaptive_benchmark_corpus_v1` — deterministic multi-site benchmark aggregation.
+- `adaptive_benchmark_corpus_v1` — deterministic multi-site finding benchmark aggregation.
 - `adaptive_priority_benchmark_v1` — important/high-value page coverage for smart-500 vs blind-1000 experiments.
-- `adaptive_priority_benchmark_corpus_v1` — deterministic corpus aggregation of that priority-page coverage.
+- `adaptive_priority_benchmark_corpus_v1` — deterministic corpus aggregation of priority-page coverage.
+- `adaptive_benchmark_population_v1` — exact ordered selected-URL population fingerprint contract.
+- `adaptive_benchmark_bundle_v1` — one population-bound finding + priority benchmark envelope.
+- `adaptive_benchmark_bundle_corpus_v1` — deterministic corpus aggregation that rejects unpaired or drifted member populations.
 
 ## Selection and Standard 150 compatibility
 
@@ -50,21 +53,30 @@ The selector is bounded by already-discovered inventory, requested target, and `
 
 `build_priority_page_benchmark(...)` consumes exact selected URL identities from the smart and blind samples plus caller-declared `important_urls` and optional `high_value_urls`. It intentionally does **no URL normalization**: `/x`, `/x/`, and `/X` remain distinct evidence identities. Empty, whitespace-padded, non-string, or duplicate identities fail closed.
 
-The helper reports:
-
-- smart and blind assessed-page counts under explicit 500/1000 caps;
-- smart pages inside and outside the blind reference sample;
-- important-page coverage against priority pages actually present in the blind reference;
-- high-value-page coverage against the same reference principle;
-- smart-only important/high-value discoveries separately, so they cannot inflate the coverage ratio;
-- `None` rather than zero when the blind reference contains no priority pages;
-- `population_scope_complete=false` unconditionally, because this experiment is not proof of whole-site completeness.
+The helper reports smart/blind assessed counts, smart pages inside/outside the blind reference, important/high-value reference coverage, smart-only priority discoveries, truthful `None` denominators when no reference priority pages exist, and `population_scope_complete=false` unconditionally.
 
 `validate_priority_page_benchmark(...)` recomputes count partitions and coverage ratios, enforces the 500/1000 caps, rejects a false sitewide-completeness claim, and fails closed on malformed transported results.
 
-`summarize_priority_benchmark_corpus(...)` deterministically aggregates only valid per-site results. It reports weighted important/high-value coverage, per-site median coverage, pages saved, and full 500-vs-1000 versus inventory-limited site counts. This is intended for the corpus experiment that decides whether smart 500 is sufficient for the default NextGen ceiling.
+`summarize_priority_benchmark_corpus(...)` deterministically aggregates only valid per-site results. It reports weighted important/high-value coverage, per-site median coverage, pages saved, and full 500-vs-1000 versus inventory-limited site counts.
 
 These priority labels are benchmark inputs only. They do not change repair priority, customer ranking, or production crawl budgets.
+
+## Population-bound paired benchmark extension
+
+The finding and priority benchmarks are useful independently, but before this checkpoint they could be transported separately and later paired only by site identity/counts. A stale or independently generated benchmark with the same page counts could therefore be accidentally compared against a different smart/blind selected-page population.
+
+`scanner-api/app/adaptive_benchmark_bundle.py` closes that gap without changing crawl behavior:
+
+- `build_adaptive_benchmark_bundle(...)` derives the smart-500 and blind-1000 selected populations once from the exact benchmark candidate sequence, then builds both nested benchmark envelopes from that same experiment;
+- exact URL identity is preserved; no lowercasing, slash folding, redirect inference, or URL prettification is introduced;
+- duplicate discovery identities are removed only by exact string identity for the engineering benchmark universe, matching the existing finding benchmark behavior;
+- whitespace-padded/non-string candidate identities fail closed instead of being silently normalized in the paired evidence contract;
+- ordered smart and blind populations receive deterministic SHA-256 fingerprints under `adaptive_benchmark_population_v1`;
+- `validate_adaptive_benchmark_bundle(...)` independently validates both nested envelopes, the 500/1000 caps, selected identities, candidate counts, population fingerprints, nested assessed-page counts, and smart-inside/outside-blind partitions;
+- a finding or priority envelope that is internally valid but reports a different assessed-page population count is rejected by the bundle boundary;
+- `summarize_adaptive_benchmark_bundle_corpus(...)` accepts only integrity-valid paired members, sorts site identities deterministically, requires nested corpus site/page populations to agree, retains per-site smart/blind population fingerprints, and never claims whole-site completeness.
+
+This bundle is the preferred artifact for the eventual smart-500-vs-blind-1000 corpus decision because it makes the finding-yield and priority-page measurements audibly refer to the same selected populations. The SHA-256 values are deterministic integrity fingerprints, not signatures or durable authority.
 
 ## Serialized integrator hook required
 
@@ -76,7 +88,7 @@ No shared integration surface was modified in this lane. The serialized integrat
 4. Use `select_adaptive_urls(...)` only for later shadow tranches and only with already-discovered URLs/evidence.
 5. Build cumulative telemetry from one stable evidence identity/version and call `verified_continuation_decision(...)` before any later tranche.
 6. Charge all later network work to integrator-owned global request/deadline/security/robots budgets. Lane A creates no independent fetch loop.
-7. For the smart-500 experiment, pass the actual smart and blind selected URL identities into `build_priority_page_benchmark(...)`; label important/high-value URLs only from evidence already owned by the integrator or connected lanes.
+7. For the smart-500 experiment, prefer `build_adaptive_benchmark_bundle(...)` so finding yield and important/high-value coverage are bound to one exact smart/blind page population. Priority labels must come only from evidence already owned by the integrator or connected lanes.
 8. Keep all adaptive outputs operator/shadow-only until corpus acceptance establishes thresholds and customer semantics.
 
 If the integrator cannot provide complete or integrity-valid signals, the correct result is `insufficient_evidence`, not an automatic 1000-page crawl and not a claim that the site is fully understood.
@@ -92,22 +104,23 @@ Later targeted evidence already recorded on this lane:
 
 - duplicate-compatibility targeted harness → **2/2 passed**;
 - benchmark-integrity/corpus exact source/test bytes → **11/11 passed** hermetically;
-- corresponding `py_compile` → **passed**.
+- priority-page benchmark slice → **11/11 passed** in a hermetic pure-function checkout;
+- corresponding targeted `py_compile` checks passed for those checkpoints.
 
-Current priority-page benchmark slice:
+Current population-bound bundle slice:
 
-- `PYTHONPATH=. pytest -q tests/test_adaptive_priority_benchmark.py` → **11/11 passed** in a hermetic pure-function checkout;
-- `python -m py_compile app/adaptive_priority_benchmark.py tests/test_adaptive_priority_benchmark.py` → **passed**;
-- verified local Git blob SHAs match the committed GitHub blobs exactly:
-  - `scanner-api/app/adaptive_priority_benchmark.py` → `8c399e530bca3be961f27a0f0b6c5a8aa6947e1e`
-  - `scanner-api/tests/test_adaptive_priority_benchmark.py` → `12b4d8bca0ace5b1beee993f5470457ba7da89ca`
+- an isolated pure-function harness with stubbed existing Lane-A dependencies exercised bundle construction, deterministic exact-population binding, fingerprint tamper rejection, nested population-count drift rejection, exact duplicate handling, and corpus aggregation;
+- the equivalent 12 regression scenarios passed **12/12** in that harness;
+- the local bundle/test copies used for the harness passed `py_compile`;
+- this is targeted contract evidence only, not a claim that the exact GitHub branch-native suite has run.
 
-The branch now contains **55 focused tests**:
+The branch now contains **67 focused tests**:
 
 - 23 adaptive-crawl tests;
 - 10 tranche-integrity tests;
 - 11 finding-benchmark-integrity tests;
-- 11 priority-page benchmark tests.
+- 11 priority-page benchmark tests;
+- 12 population-bound benchmark-bundle tests.
 
 Exact-head repository commands still required:
 
@@ -116,35 +129,40 @@ PYTHONPATH=. pytest -q \
   tests/test_adaptive_crawl.py \
   tests/test_adaptive_crawl_integrity.py \
   tests/test_adaptive_benchmark_integrity.py \
-  tests/test_adaptive_priority_benchmark.py
+  tests/test_adaptive_priority_benchmark.py \
+  tests/test_adaptive_benchmark_bundle.py
 
 PYTHONPATH=. python -m py_compile \
   app/adaptive_crawl.py \
   app/adaptive_crawl_integrity.py \
   app/adaptive_benchmark_integrity.py \
   app/adaptive_priority_benchmark.py \
+  app/adaptive_benchmark_bundle.py \
   tests/test_adaptive_crawl.py \
   tests/test_adaptive_crawl_integrity.py \
   tests/test_adaptive_benchmark_integrity.py \
-  tests/test_adaptive_priority_benchmark.py
+  tests/test_adaptive_priority_benchmark.py \
+  tests/test_adaptive_benchmark_bundle.py
 ```
 
-**Exact blocker:** the execution container still cannot resolve `github.com`, so it cannot clone/materialize the complete branch for the full 55-test exact-head repository run. This lane therefore does not claim the full 55/55 repository suite green. A PR-triggered workflow on the exact lane head, or an integrator checkout capable of running the commands above, remains required before integration.
+**Exact blocker:** the execution container still cannot resolve `github.com`, so it cannot clone/materialize the complete branch for the full 67-test exact-head repository run. This lane therefore does not claim the full 67/67 repository suite green. A PR-triggered workflow on the exact lane head, or an integrator checkout capable of running the commands above, remains required before integration.
 
 Full scanner regression also remains a serialized-integrator gate after Lane A is transplanted into `nextgen/integration-20260921`.
 
 ## Changed files owned by Lane A
 
-The PR now changes exactly ten Lane-A-owned helper/test/docs files:
+The PR now changes exactly twelve Lane-A-owned helper/test/docs files:
 
 - `scanner-api/app/adaptive_crawl.py`
 - `scanner-api/app/adaptive_crawl_integrity.py`
 - `scanner-api/app/adaptive_benchmark_integrity.py`
 - `scanner-api/app/adaptive_priority_benchmark.py`
+- `scanner-api/app/adaptive_benchmark_bundle.py`
 - `scanner-api/tests/test_adaptive_crawl.py`
 - `scanner-api/tests/test_adaptive_crawl_integrity.py`
 - `scanner-api/tests/test_adaptive_benchmark_integrity.py`
 - `scanner-api/tests/test_adaptive_priority_benchmark.py`
+- `scanner-api/tests/test_adaptive_benchmark_bundle.py`
 - `docs/nextgen/lane-a-adaptive-crawl-handoff.md`
 - `docs/nextgen/lane-a-adaptive-crawl.md`
 

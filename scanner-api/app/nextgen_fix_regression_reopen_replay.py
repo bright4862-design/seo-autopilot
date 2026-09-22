@@ -10,9 +10,12 @@ from .nextgen_fix_verification_origin_binding import (
     evaluate_verification_observations_origin_bound,
 )
 from .nextgen_fix_verification_integrity import strict_regression_reopen_decision
+from .nextgen_fix_verification_plan_envelope import (
+    verification_plan_envelope_integrity,
+)
 
 STRICT_REGRESSION_REOPEN_OBSERVATION_REPLAY_VERSION = (
-    "fix_regression_reopen_observation_replay_v6_exact_historical_evidence_alias_binding"
+    "fix_regression_reopen_observation_replay_v7_exact_plan_envelope_invariants"
 )
 
 
@@ -26,6 +29,7 @@ def _denied(
     recomputed_result: dict[str, Any] | None = None,
     replay: dict[str, Any] | None = None,
     state_integrity: dict[str, Any] | None = None,
+    plan_integrity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     result = recomputed_result if isinstance(recomputed_result, dict) else {}
     state = _clean(result.get("state")).upper() or COULD_NOT_VERIFY
@@ -40,6 +44,9 @@ def _denied(
         "replay": replay if isinstance(replay, dict) else {},
         "historical_resolution_state_integrity": (
             state_integrity if isinstance(state_integrity, dict) else {}
+        ),
+        "verification_plan_envelope_integrity": (
+            plan_integrity if isinstance(plan_integrity, dict) else {}
         ),
     }
 
@@ -61,8 +68,9 @@ def strict_regression_reopen_from_observations(
     isolation. This final pure replay path recomputes that result, binds
     historical/plan/page/rule evidence to exact canonical scan origins, proves
     populated historical evidence aliases agree with the selected historical
-    population, and proves historical resolution-state aliases are exact and
-    non-conflicting before FAIL/PARTIAL may reopen a repair.
+    population, proves historical resolution-state aliases are exact and
+    non-conflicting, and requires the targeted recheck plan's own ready/completeness
+    metadata to be internally consistent before FAIL/PARTIAL may reopen a repair.
 
     The function is pure. It performs no network work and does not mutate
     workflow state, durable authority, persistence, customer projection,
@@ -99,6 +107,14 @@ def strict_regression_reopen_from_observations(
             state_integrity=state_integrity,
         )
 
+    plan_integrity = verification_plan_envelope_integrity(plan)
+    if plan_integrity.get("valid") is not True:
+        return _denied(
+            "verification_plan_envelope_integrity_failed",
+            state_integrity=state_integrity,
+            plan_integrity=plan_integrity,
+        )
+
     try:
         recomputed_result = evaluate_verification_observations_origin_bound(
             plan,
@@ -113,6 +129,7 @@ def strict_regression_reopen_from_observations(
         denied = _denied(
             "verification_replay_failed",
             state_integrity=state_integrity,
+            plan_integrity=plan_integrity,
         )
         return {**denied, "verification_error_type": type(exc).__name__}
 
@@ -120,6 +137,7 @@ def strict_regression_reopen_from_observations(
         return _denied(
             "verification_replay_returned_non_object",
             state_integrity=state_integrity,
+            plan_integrity=plan_integrity,
         )
 
     try:
@@ -133,6 +151,7 @@ def strict_regression_reopen_from_observations(
             "regression_reopen_replay_failed",
             recomputed_result=recomputed_result,
             state_integrity=state_integrity,
+            plan_integrity=plan_integrity,
         )
         return {**denied, "reopen_error_type": type(exc).__name__}
 
@@ -141,6 +160,7 @@ def strict_regression_reopen_from_observations(
             "regression_reopen_replay_returned_non_object",
             recomputed_result=recomputed_result,
             state_integrity=state_integrity,
+            plan_integrity=plan_integrity,
         )
 
     should_reopen = replay.get("should_reopen") is True
@@ -157,6 +177,7 @@ def strict_regression_reopen_from_observations(
             recomputed_result=recomputed_result,
             replay=replay,
             state_integrity=state_integrity,
+            plan_integrity=plan_integrity,
         )
 
     return {
@@ -169,4 +190,5 @@ def strict_regression_reopen_from_observations(
         "recomputed_result": recomputed_result,
         "replay": replay,
         "historical_resolution_state_integrity": state_integrity,
+        "verification_plan_envelope_integrity": plan_integrity,
     }

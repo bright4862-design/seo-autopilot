@@ -6,10 +6,13 @@ from .nextgen_fix_verification import COULD_NOT_VERIFY
 from .nextgen_fix_verification_origin_binding import (
     evaluate_verification_observations_origin_bound,
 )
+from .nextgen_fix_verification_plan_envelope import (
+    verification_plan_envelope_integrity,
+)
 from .nextgen_fix_verified_fixed_replay import strict_verified_fixed_transition_from_evidence
 
 STRICT_VERIFIED_FIXED_OBSERVATION_REPLAY_VERSION = (
-    "fix_verified_fixed_observation_replay_v6_exact_historical_evidence_alias_binding"
+    "fix_verified_fixed_observation_replay_v7_exact_plan_envelope_invariants"
 )
 
 
@@ -17,13 +20,21 @@ def _clean(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _denied(reason: str, *, recomputed_result: dict[str, Any] | None = None) -> dict[str, Any]:
+def _denied(
+    reason: str,
+    *,
+    recomputed_result: dict[str, Any] | None = None,
+    plan_integrity: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return {
         "version": STRICT_VERIFIED_FIXED_OBSERVATION_REPLAY_VERSION,
         "allowed": False,
         "reason": reason,
         "recomputed_result": recomputed_result if isinstance(recomputed_result, dict) else {},
         "replay": {},
+        "verification_plan_envelope_integrity": (
+            plan_integrity if isinstance(plan_integrity, dict) else {}
+        ),
     }
 
 
@@ -46,7 +57,10 @@ def strict_verified_fixed_transition_from_observations(
     to exact canonical caller-owned scan origins before either proof is allowed to
     run. The historical-bound evaluator additionally requires every populated
     historical evidence alias to agree with the selected affected-page population,
-    so an ignored contradictory fallback URL cannot become proof.
+    so an ignored contradictory fallback URL cannot become proof. The targeted
+    plan must also carry a self-consistent ready envelope: no blockers, omitted or
+    invalid population, malformed limits, contradictory request counts, or blocked
+    criterion may be hidden behind ``state=ready``.
 
     It recomputes the verification result from the exact historical repair,
     targeted plan, current page observations, rule evaluations, and comparison
@@ -80,6 +94,13 @@ def strict_verified_fixed_transition_from_observations(
     if not isinstance(scan_origin, str) or scan_origin != scan_origin.strip():
         return _denied("scan_origin_invalid")
 
+    plan_integrity = verification_plan_envelope_integrity(plan)
+    if plan_integrity.get("valid") is not True:
+        return _denied(
+            "verification_plan_envelope_integrity_failed",
+            plan_integrity=plan_integrity,
+        )
+
     try:
         recomputed_result = evaluate_verification_observations_origin_bound(
             plan,
@@ -92,12 +113,18 @@ def strict_verified_fixed_transition_from_observations(
         )
     except (KeyError, TypeError, ValueError) as exc:
         return {
-            **_denied("nextgen_verification_replay_failed"),
+            **_denied(
+                "nextgen_verification_replay_failed",
+                plan_integrity=plan_integrity,
+            ),
             "verification_error_type": type(exc).__name__,
         }
 
     if not isinstance(recomputed_result, dict):
-        return _denied("nextgen_verification_returned_non_object")
+        return _denied(
+            "nextgen_verification_returned_non_object",
+            plan_integrity=plan_integrity,
+        )
 
     replay = strict_verified_fixed_transition_from_evidence(
         previous_record,
@@ -112,6 +139,7 @@ def strict_verified_fixed_transition_from_observations(
         return _denied(
             "legacy_replay_returned_non_object",
             recomputed_result=recomputed_result,
+            plan_integrity=plan_integrity,
         )
 
     allowed = replay.get("allowed") is True
@@ -129,4 +157,5 @@ def strict_verified_fixed_transition_from_observations(
         "recomputed_verification_state": result_state,
         "recomputed_result": recomputed_result,
         "replay": replay,
+        "verification_plan_envelope_integrity": plan_integrity,
     }

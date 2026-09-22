@@ -11,7 +11,7 @@ from __future__ import annotations
 import ipaddress
 import re
 from typing import Any, Mapping
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import unquote, urlparse, urlunparse
 
 from .connected_evidence_coverage_contract import (
     validate_connected_evidence_coverage_semantics,
@@ -20,6 +20,8 @@ from .connected_evidence_coverage_contract import (
 SCOPE_SEMANTICS_VERSION = "connected_evidence_scope_semantics_v1"
 
 _GA4_PROPERTY_ID = re.compile(r"^(?:properties/)?[1-9][0-9]*$")
+_MALFORMED_PERCENT_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
+_ENCODED_PATH_SEPARATOR = re.compile(r"%(?:2f|5c)", re.IGNORECASE)
 
 
 def _bounded_text(value: Any, *, field: str, max_length: int = 4096) -> str:
@@ -61,6 +63,29 @@ def _canonical_host(value: str, *, field: str, allow_ip: bool = True) -> str:
     return address.compressed.lower()
 
 
+def _validate_unambiguous_scope_path(path: str, *, field: str) -> None:
+    """Reject path spellings whose scope changes after common URL normalization."""
+
+    if "\\" in path:
+        raise ValueError(f"{field} contained an ambiguous path separator")
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in path):
+        raise ValueError(f"{field} contained a control character in its path")
+    if _MALFORMED_PERCENT_ESCAPE.search(path):
+        raise ValueError(f"{field} contained a malformed percent escape")
+    if _ENCODED_PATH_SEPARATOR.search(path):
+        raise ValueError(f"{field} contained an encoded path separator")
+
+    for segment in path.split("/"):
+        try:
+            decoded = unquote(segment, errors="strict")
+        except UnicodeDecodeError:
+            raise ValueError(f"{field} contained an invalid UTF-8 percent escape") from None
+        if decoded in {".", ".."}:
+            raise ValueError(f"{field} contained ambiguous dot-segment traversal")
+        if "/" in decoded or "\\" in decoded:
+            raise ValueError(f"{field} contained an encoded path separator")
+
+
 def _canonical_http_url(
     value: Any,
     *,
@@ -80,6 +105,9 @@ def _canonical_http_url(
     except ValueError:
         raise ValueError(f"{field} must be a safe absolute HTTP(S) URL") from None
 
+    if parsed.params:
+        raise ValueError(f"{field} must not contain path parameters")
+
     host = _canonical_host(parsed.hostname, field=field)
     default_port = (parsed.scheme.lower() == "http" and port == 80) or (
         parsed.scheme.lower() == "https" and port == 443
@@ -90,6 +118,7 @@ def _canonical_http_url(
         rendered_host = host
     netloc = rendered_host if port is None or default_port else f"{rendered_host}:{port}"
     path = parsed.path or "/"
+    _validate_unambiguous_scope_path(path, field=field)
     canonical = urlunparse(
         (
             parsed.scheme.lower(),

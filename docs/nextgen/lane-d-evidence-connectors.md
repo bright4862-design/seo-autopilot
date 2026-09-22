@@ -26,6 +26,7 @@ Lane D exposes seven pure fail-closed validation boundaries.
    - provenance keys are allowlisted per registered provider/source profile so unversioned OAuth/API/credential claims cannot be smuggled into an otherwise valid envelope;
    - Search Console `sc-domain:` provenance must now be a real DNS identity rather than an empty, IP-like, wildcard, scheme-bearing, or path-bearing token;
    - path-scoped GSC/Bing source identities reject malformed hosts and embedded URL userinfo before any later scope check;
+   - URL Inspection provenance and record identity URLs reject embedded URL userinfo as well as malformed HTTP(S) ports, so credential-like authority spellings cannot become trusted provider identity;
    - URL Inspection and Bing URL identities force valid HTTP(S) ports;
    - boolean provenance is type-strict;
    - ambiguous path-scoped GSC URL-prefix and Bing branch identities fail closed unless their non-root path uses the provider-style trailing `/` directory boundary. This prevents `/docs` from later being mistaken for the scope of `/docs-foreign/...`.
@@ -64,6 +65,7 @@ Sanitized fixtures live under `scanner-api/tests/fixtures_connected_evidence/`. 
 
 - Search Console `sc-domain:` properties accept DNS domain identities only; empty values, URL/scheme/path syntax, wildcard hosts, and IP literals fail closed at the source-profile boundary rather than relying on the later scope validator.
 - Search Console URL-prefix and Bing path-scoped property identities reject URL userinfo and malformed host spellings before scope membership is evaluated.
+- URL Inspection `provenance.inspection_url` and the carried record `inspection_url` reject URL userinfo before exact identity comparison; credentials in a URL authority are not valid evidence identity even when the two strings match.
 - Search Console URL-prefix and Bing path-scoped property identities use a trailing `/` directory boundary for non-root paths. The source-profile gate rejects an ambiguous `/docs` identity rather than allowing a later raw prefix check to interpret `/docs-foreign` as a descendant.
 - Registered provenance is closed-world per provider/source profile. Current optional provenance is only `import_name` for Bing manual exports and GA4 provided rows; new metadata requires an intentional profile/version change instead of being silently accepted.
 - Evidence-quality confidence metadata is closed-world at the generic envelope boundary. It cannot carry arbitrary probability, score, API/OAuth, or provider claims; current registered levels are `none`, `provider_observed`, `first_party_provider_observed`, and `first_party_analytics_observed`, with only bounded textual `limitations` as optional metadata.
@@ -117,15 +119,16 @@ Focused suites on this lane now contain:
 - `scanner-api/tests/test_connected_evidence_prefix_provenance.py`: **4 path-prefix-provenance tests**;
 - `scanner-api/tests/test_connected_evidence_provenance_shape.py`: **6 closed-world provenance-profile tests**;
 - `scanner-api/tests/test_connected_evidence_ga4_landing_path_hardening.py`: **8 GA4 landing-path ambiguity tests**;
-- `scanner-api/tests/test_connected_evidence_source_identity_hardening.py`: **8 source-identity hardening tests**;
+- `scanner-api/tests/test_connected_evidence_source_identity_hardening.py`: **11 source-identity hardening tests**;
 - `scanner-api/tests/test_connected_evidence_snapshot_window_coherence.py`: **9 snapshot-window-coherence tests**.
 
-Expected focused total: **213 tests**.
+Expected focused total: **216 tests**.
 
 Latest verified slice evidence in this runtime:
 
-- closed-world confidence metadata hardening exercised the updated generic-contract suite **27/27** in a hermetic package; valid bounded limitations remained accepted while unknown probability fields, unregistered confidence levels, malformed limitations, and probability-style confidence kinds failed closed;
-- an additional focused confidence-shape smoke slice exercised **6/6** intended behaviors, including canonical unavailable confidence; `python -m py_compile app/connected_evidence_contract.py tests/test_connected_evidence_contract.py` passed for the candidate code used for this slice;
+- URL Inspection identity hardening exercised **3/3** focused cases in a hermetic package with only the already-tested generic-envelope boundary stubbed: a normal identity remained non-mutating, embedded userinfo in `provenance.inspection_url` failed closed, and embedded userinfo in the carried `inspection_url` failed closed; `python -m py_compile app/connected_evidence_source_contract.py tests/test_connected_evidence_source_identity_hardening.py` passed for the candidate code;
+- closed-world confidence metadata hardening previously exercised the updated generic-contract suite **27/27** in a hermetic package; valid bounded limitations remained accepted while unknown probability fields, unregistered confidence levels, malformed limitations, and probability-style confidence kinds failed closed;
+- an additional focused confidence-shape smoke slice previously exercised **6/6** intended behaviors, including canonical unavailable confidence; `python -m py_compile app/connected_evidence_contract.py tests/test_connected_evidence_contract.py` passed for that candidate code;
 - closed-world provider record-shape hardening previously exercised **8/8** intended behaviors in a hermetic package: the registered GSC Search Analytics, URL Inspection, Bing AI Performance, and GA4 AI-referral record fields remained accepted, while an extra unregistered provider claim failed closed for each profile;
 - snapshot-window coherence previously exercised **9/9** intended behaviors in a hermetic logic harness: canonical GSC dimension-series overlap rejection, GSC/Bing/GA4 disjoint-window acceptance, GSC different-dimension overlap acceptance, Bing/GA4 same-series overlap rejection, and no invented start for date-less Bing evidence;
 - source-identity hardening previously passed **8/8** in a hermetic package with only the already-tested generic-envelope boundary stubbed, covering valid `sc-domain:` DNS identity plus empty/scheme-bearing/IP/wildcard domain rejection, malformed URL-prefix hosts, and GSC/Bing URL-userinfo rejection;
@@ -143,9 +146,9 @@ and:
 
 `python -m py_compile app/connected_evidence.py app/connected_evidence_contract.py app/connected_evidence_source_contract.py app/connected_evidence_record_contract.py app/connected_evidence_coverage_contract.py app/connected_evidence_scope_contract.py app/connected_evidence_record_identity_contract.py app/connected_evidence_bundle_contract.py tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py tests/test_connected_evidence_record_shape_hardening.py tests/test_connected_evidence_coverage_contract.py tests/test_connected_evidence_scope_contract.py tests/test_connected_evidence_record_identity_contract.py tests/test_connected_evidence_bundle_contract.py tests/test_connected_evidence_snapshot_observation_identity.py tests/test_connected_evidence_record_url_identity.py tests/test_connected_evidence_prefix_provenance.py tests/test_connected_evidence_provenance_shape.py tests/test_connected_evidence_ga4_landing_path_hardening.py tests/test_connected_evidence_source_identity_hardening.py tests/test_connected_evidence_snapshot_window_coherence.py`
 
-Do not mark Lane D integration-ready until the exact-head **213-test** repository-native run is green and a fresh exact-head review has no unresolved material findings.
+Do not mark Lane D integration-ready until the exact-head **216-test** repository-native run is green and a fresh exact-head review has no unresolved material findings.
 
-The full repository-native exact-head 213-test run is **not yet claimed green** in this runtime. PR #332 intentionally targets `nextgen/integration-20260921`; do not retarget the PR or alter release workflows merely to manufacture CI.
+The full repository-native exact-head 216-test run is **not yet claimed green** in this runtime. PR #332 intentionally targets `nextgen/integration-20260921`; do not retarget the PR or alter release workflows merely to manufacture CI.
 
 ## Known risks / truthful unsupported states
 

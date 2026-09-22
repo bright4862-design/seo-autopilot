@@ -29,7 +29,8 @@ Lane D exposes seven pure fail-closed validation boundaries.
    - boolean provenance is type-strict;
    - ambiguous path-scoped GSC URL-prefix and Bing branch identities fail closed unless their non-root path uses the provider-style trailing `/` directory boundary. This prevents `/docs` from later being mistaken for the scope of `/docs-foreign/...`.
 3. `validate_connected_evidence_record_semantics(...)` / `connected_evidence_record_semantics_v1`
-   - provider-specific record meaning: GSC metric relationships, URL Inspection URL/timestamp semantics, Bing kind/citation semantics, GA4 assistant/source spoof resistance, and GA4 metric relationships.
+   - provider-specific record meaning: GSC metric relationships, URL Inspection URL/timestamp semantics, Bing kind/citation semantics, GA4 assistant/source spoof resistance, and GA4 metric relationships;
+   - `connected_evidence_record_shape_v1` makes each registered provider record closed-world at the field-name boundary, so unversioned API/OAuth/ranking/quality claims cannot be hidden inside an otherwise valid observation. Provider record expansion requires an intentional contract change.
 4. `validate_connected_evidence_coverage_semantics(...)` / `connected_evidence_coverage_semantics_v1`
    - binds sample/coverage metadata to transported records and rejects forged counts, inconsistent import accounting, dimension drift, period contradictions, and record dates later than observation.
 5. `validate_connected_evidence_scope_semantics(...)` / `connected_evidence_scope_semantics_v1`
@@ -64,6 +65,7 @@ Sanitized fixtures live under `scanner-api/tests/fixtures_connected_evidence/`. 
 - Search Console URL-prefix and Bing path-scoped property identities reject URL userinfo and malformed host spellings before scope membership is evaluated.
 - Search Console URL-prefix and Bing path-scoped property identities use a trailing `/` directory boundary for non-root paths. The source-profile gate rejects an ambiguous `/docs` identity rather than allowing a later raw prefix check to interpret `/docs-foreign` as a descendant.
 - Registered provenance is closed-world per provider/source profile. Current optional provenance is only `import_name` for Bing manual exports and GA4 provided rows; new metadata requires an intentional profile/version change instead of being silently accepted.
+- Registered provider record fields are also closed-world. The adapter-produced GSC Search Analytics, URL Inspection, Bing AI Performance, and GA4 AI-referral field sets are the only accepted record keys under `connected_evidence_record_shape_v1`; a new provider field must be deliberately reviewed and versioned instead of silently becoming trusted evidence.
 - Scope membership refuses ambiguous URL path forms whose meaning can change after ordinary URL normalization: raw/encoded dot segments, encoded path separators, raw backslashes, malformed escapes, controls, and semicolon path parameters. The semicolon rule applies to every path segment because `urllib.parse` exposes only terminal-segment parameters separately.
 - Search Analytics page-scope validation applies only when `page` is an observed dimension.
 - URL Inspection `inspection_url` must belong to its declared Search Console property.
@@ -87,7 +89,7 @@ Sanitized fixtures live under `scanner-api/tests/fixtures_connected_evidence/`. 
 For any later authorized payload/import, the serialized integration layer must:
 
 1. normalize with the registered Lane-D adapter;
-2. validate the complete logical enrichment set using `validate_connected_evidence_snapshot_bundle(...)`, which composes envelope → source identity → record semantics → coverage semantics → source/property scope → logical record identity, then applies canonical snapshot source/window identity, cross-state coherence, and provable observation-window overlap rejection;
+2. validate the complete logical enrichment set using `validate_connected_evidence_snapshot_bundle(...)`, which composes envelope → source identity → record semantics/closed-world record shape → coverage semantics → source/property scope → logical record identity, then applies canonical snapshot source/window identity, cross-state coherence, and provable observation-window overlap rejection;
 3. only then attach evidence as optional connected evidence with provenance/coverage intact;
 4. keep connected evidence separate from canonical crawl authority;
 5. preserve Standard 150 behavior unchanged when connected evidence is absent.
@@ -103,6 +105,7 @@ Focused suites on this lane now contain:
 - `scanner-api/tests/test_connected_evidence_source_contract.py`: **17 source-profile tests**;
 - `scanner-api/tests/test_connected_evidence_timestamp_hardening.py`: **2 timestamp-hardening tests**;
 - `scanner-api/tests/test_connected_evidence_record_contract.py`: **17 record-semantics tests**;
+- `scanner-api/tests/test_connected_evidence_record_shape_hardening.py`: **8 closed-world record-shape tests**;
 - `scanner-api/tests/test_connected_evidence_coverage_contract.py`: **13 coverage-semantics tests**;
 - `scanner-api/tests/test_connected_evidence_scope_contract.py`: **25 source/property-scope tests**;
 - `scanner-api/tests/test_connected_evidence_record_identity_contract.py`: **12 logical-record-identity tests**;
@@ -115,12 +118,13 @@ Focused suites on this lane now contain:
 - `scanner-api/tests/test_connected_evidence_source_identity_hardening.py`: **8 source-identity hardening tests**;
 - `scanner-api/tests/test_connected_evidence_snapshot_window_coherence.py`: **9 snapshot-window-coherence tests**.
 
-Expected focused total: **205 tests**.
+Expected focused total: **213 tests**.
 
 Latest verified slice evidence in this runtime:
 
-- snapshot-window coherence exercised **9/9** intended behaviors in a hermetic logic harness: canonical GSC dimension-series overlap rejection, GSC/Bing/GA4 disjoint-window acceptance, GSC different-dimension overlap acceptance, Bing/GA4 same-series overlap rejection, and no invented start for date-less Bing evidence;
-- the new repository test module contains the same nine deterministic cases and stubs only the already-tested upstream record-identity boundary so the new snapshot-window logic is isolated;
+- closed-world provider record-shape hardening exercised **8/8** intended behaviors in a hermetic package: the registered GSC Search Analytics, URL Inspection, Bing AI Performance, and GA4 AI-referral record fields remained accepted, while an extra unregistered provider claim failed closed for each profile;
+- `python -m py_compile app/connected_evidence_record_contract.py tests/test_connected_evidence_record_shape_hardening.py` passed for the candidate logic used for this slice;
+- snapshot-window coherence previously exercised **9/9** intended behaviors in a hermetic logic harness: canonical GSC dimension-series overlap rejection, GSC/Bing/GA4 disjoint-window acceptance, GSC different-dimension overlap acceptance, Bing/GA4 same-series overlap rejection, and no invented start for date-less Bing evidence;
 - source-identity hardening previously passed **8/8** in a hermetic package with only the already-tested generic-envelope boundary stubbed, covering valid `sc-domain:` DNS identity plus empty/scheme-bearing/IP/wildcard domain rejection, malformed URL-prefix hosts, and GSC/Bing URL-userinfo rejection;
 - immediately prior, closed-world provenance + GA4 landing-path hardening passed **14/14** in a hermetic package; only the already-tested generic-envelope and coverage boundaries were stubbed so the changed source/scope logic was exercised directly;
 - the first GA4 path candidate exposed a real semicolon gap: `/docs;param/x` is not represented by `urlparse(...).params`; the final guard therefore rejects semicolons directly in the raw path before canonicalization;
@@ -130,15 +134,15 @@ Latest verified slice evidence in this runtime:
 
 Before serialized integration, run from `scanner-api/` on the exact lane head:
 
-`PYTHONPATH=. pytest -q tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py tests/test_connected_evidence_coverage_contract.py tests/test_connected_evidence_scope_contract.py tests/test_connected_evidence_record_identity_contract.py tests/test_connected_evidence_bundle_contract.py tests/test_connected_evidence_snapshot_observation_identity.py tests/test_connected_evidence_record_url_identity.py tests/test_connected_evidence_prefix_provenance.py tests/test_connected_evidence_provenance_shape.py tests/test_connected_evidence_ga4_landing_path_hardening.py tests/test_connected_evidence_source_identity_hardening.py tests/test_connected_evidence_snapshot_window_coherence.py`
+`PYTHONPATH=. pytest -q tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py tests/test_connected_evidence_record_shape_hardening.py tests/test_connected_evidence_coverage_contract.py tests/test_connected_evidence_scope_contract.py tests/test_connected_evidence_record_identity_contract.py tests/test_connected_evidence_bundle_contract.py tests/test_connected_evidence_snapshot_observation_identity.py tests/test_connected_evidence_record_url_identity.py tests/test_connected_evidence_prefix_provenance.py tests/test_connected_evidence_provenance_shape.py tests/test_connected_evidence_ga4_landing_path_hardening.py tests/test_connected_evidence_source_identity_hardening.py tests/test_connected_evidence_snapshot_window_coherence.py`
 
 and:
 
-`python -m py_compile app/connected_evidence.py app/connected_evidence_contract.py app/connected_evidence_source_contract.py app/connected_evidence_record_contract.py app/connected_evidence_coverage_contract.py app/connected_evidence_scope_contract.py app/connected_evidence_record_identity_contract.py app/connected_evidence_bundle_contract.py tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py tests/test_connected_evidence_coverage_contract.py tests/test_connected_evidence_scope_contract.py tests/test_connected_evidence_record_identity_contract.py tests/test_connected_evidence_bundle_contract.py tests/test_connected_evidence_snapshot_observation_identity.py tests/test_connected_evidence_record_url_identity.py tests/test_connected_evidence_prefix_provenance.py tests/test_connected_evidence_provenance_shape.py tests/test_connected_evidence_ga4_landing_path_hardening.py tests/test_connected_evidence_source_identity_hardening.py tests/test_connected_evidence_snapshot_window_coherence.py`
+`python -m py_compile app/connected_evidence.py app/connected_evidence_contract.py app/connected_evidence_source_contract.py app/connected_evidence_record_contract.py app/connected_evidence_coverage_contract.py app/connected_evidence_scope_contract.py app/connected_evidence_record_identity_contract.py app/connected_evidence_bundle_contract.py tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py tests/test_connected_evidence_record_shape_hardening.py tests/test_connected_evidence_coverage_contract.py tests/test_connected_evidence_scope_contract.py tests/test_connected_evidence_record_identity_contract.py tests/test_connected_evidence_bundle_contract.py tests/test_connected_evidence_snapshot_observation_identity.py tests/test_connected_evidence_record_url_identity.py tests/test_connected_evidence_prefix_provenance.py tests/test_connected_evidence_provenance_shape.py tests/test_connected_evidence_ga4_landing_path_hardening.py tests/test_connected_evidence_source_identity_hardening.py tests/test_connected_evidence_snapshot_window_coherence.py`
 
-Do not mark Lane D integration-ready until the exact-head **205-test** repository-native run is green and a fresh exact-head review has no unresolved material findings.
+Do not mark Lane D integration-ready until the exact-head **213-test** repository-native run is green and a fresh exact-head review has no unresolved material findings.
 
-The full repository-native exact-head 205-test run is **not yet claimed green** in this runtime. PR #332 intentionally targets `nextgen/integration-20260921`; do not retarget the PR or alter release workflows merely to manufacture CI.
+The full repository-native exact-head 213-test run is **not yet claimed green** in this runtime. PR #332 intentionally targets `nextgen/integration-20260921`; do not retarget the PR or alter release workflows merely to manufacture CI.
 
 ## Known risks / truthful unsupported states
 
@@ -152,8 +156,8 @@ The full repository-native exact-head 205-test run is **not yet claimed green** 
 - Snapshot identities and window-coherence checks prevent ambiguous duplicate/overlapping observations inside one logical snapshot; they are not historical storage keys.
 - Window overlap is enforced only when both bounds are provable; missing starts remain explicitly unknown rather than being inferred.
 - Unavailable states deliberately do not retain observational count/window metadata.
-- Any future envelope/profile metadata expansion should be versioned rather than silently accepted.
+- Any future envelope/profile/record metadata expansion should be versioned rather than silently accepted.
 
-The lane changes **35 Lane-D-owned files**: seven handoff/hardening docs, eight pure app modules, sixteen focused test modules, and four sanitized fixtures. No serialized-integrator-owned surface is modified.
+The lane changes **36 Lane-D-owned files**: seven handoff/hardening docs, eight pure app modules, seventeen focused test modules, and four sanitized fixtures. No serialized-integrator-owned surface is modified.
 
 Rollback is lane-local: omit these pure modules/tests/docs from the serialized integration branch. No production state, credentials, schema, durable authority, or customer data requires reversal.

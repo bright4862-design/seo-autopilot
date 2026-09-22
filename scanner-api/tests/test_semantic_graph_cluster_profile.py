@@ -1,5 +1,6 @@
 from hashlib import sha256
 
+from app.semantic_graph import semantic_clusters
 from app.semantic_graph_cluster_profile import (
     SEMANTIC_CLUSTER_PROFILE_VERSION,
     semantic_cluster_profile_evidence,
@@ -31,13 +32,32 @@ def vector_evidence(vectors, *, coverage="complete", pair_complete=True):
     }
 
 
-def cluster_evidence(*rows, state="candidate"):
-    return {
-        "version": "semantic_cluster_evidence_v1_vector_bound",
-        "scope": "observed_assessed_pages_only",
-        "state": state,
-        "clusters": list(rows),
-    }
+class StaticVectorizer:
+    version = "test_static_vectors_v1"
+
+    def __init__(self, vectors):
+        self._vectors = vectors
+
+    def vectors(self, pages):
+        return {
+            url: dict(vector)
+            for url, vector in self._vectors.items()
+        }
+
+
+def authentic_cluster_evidence(vectors, *, threshold=0.0):
+    evidence = semantic_clusters(
+        [],
+        threshold=threshold,
+        vectorizer=StaticVectorizer(vectors),
+    )
+    evidence = dict(evidence)
+    evidence["version"] = "semantic_cluster_evidence_v1_vector_bound"
+    evidence["scope"] = "observed_assessed_pages_only"
+    evidence["state"] = (
+        "candidate" if evidence["clusters"] else "no_candidate_observed"
+    )
+    return evidence
 
 
 def row(*urls):
@@ -56,7 +76,7 @@ def test_profiles_valid_cluster_with_deterministic_representative_and_terms():
         "https://e.test/c": {"seo": 1.0, "links": 2.0},
     }
     result = semantic_cluster_profile_evidence(
-        cluster_evidence(row("https://e.test/a", "https://e.test/b", "https://e.test/c")),
+        authentic_cluster_evidence(vectors, threshold=0.39),
         vector_evidence(vectors),
     )
 
@@ -87,13 +107,15 @@ def test_profile_is_independent_of_cluster_and_vector_input_order():
         urls[0]: {"y": 1.0, "x": 2.0},
     }
     forward = semantic_cluster_profile_evidence(
-        cluster_evidence(row(*urls)),
+        authentic_cluster_evidence(vectors_a, threshold=0.0),
         vector_evidence(vectors_a),
     )
-    reverse_row = row(*urls)
-    reverse_row["urls"] = list(reversed(reverse_row["urls"]))
+    reverse_clusters = authentic_cluster_evidence(vectors_b, threshold=0.0)
+    reverse_clusters["clusters"] = list(reversed(reverse_clusters["clusters"]))
+    for cluster in reverse_clusters["clusters"]:
+        cluster["urls"] = list(reversed(cluster["urls"]))
     reverse = semantic_cluster_profile_evidence(
-        cluster_evidence(reverse_row),
+        reverse_clusters,
         vector_evidence(vectors_b),
     )
 
@@ -101,16 +123,15 @@ def test_profile_is_independent_of_cluster_and_vector_input_order():
 
 
 def test_forged_cluster_identity_fails_closed():
-    bad = row("https://e.test/a", "https://e.test/b")
-    bad["cluster_id"] = "sem_forged"
+    vectors = {
+        "https://e.test/a": {"x": 1.0},
+        "https://e.test/b": {"x": 1.0},
+    }
+    clusters = authentic_cluster_evidence(vectors, threshold=0.9)
+    clusters["clusters"][0]["cluster_id"] = "sem_forged"
     result = semantic_cluster_profile_evidence(
-        cluster_evidence(bad),
-        vector_evidence(
-            {
-                "https://e.test/a": {"x": 1.0},
-                "https://e.test/b": {"x": 1.0},
-            }
-        ),
+        clusters,
+        vector_evidence(vectors),
     )
 
     assert result["state"] == "not_verified"
@@ -124,11 +145,13 @@ def test_cluster_members_may_not_overlap():
         "https://e.test/b": {"x": 1.0},
         "https://e.test/c": {"x": 1.0},
     }
+    clusters = authentic_cluster_evidence(vectors, threshold=0.9)
+    clusters["clusters"] = [
+        row("https://e.test/a", "https://e.test/b"),
+        row("https://e.test/b", "https://e.test/c"),
+    ]
     result = semantic_cluster_profile_evidence(
-        cluster_evidence(
-            row("https://e.test/a", "https://e.test/b"),
-            row("https://e.test/b", "https://e.test/c"),
-        ),
+        clusters,
         vector_evidence(vectors),
     )
 
@@ -137,29 +160,37 @@ def test_cluster_members_may_not_overlap():
 
 
 def test_cluster_member_must_exist_in_validated_vector_population():
+    vectors = {
+        "https://e.test/a": {"x": 1.0},
+        "https://e.test/c": {"x": 1.0},
+    }
+    clusters = authentic_cluster_evidence(vectors, threshold=0.9)
+    clusters["clusters"] = [row("https://e.test/a", "https://e.test/b")]
     result = semantic_cluster_profile_evidence(
-        cluster_evidence(row("https://e.test/a", "https://e.test/b")),
-        vector_evidence({"https://e.test/a": {"x": 1.0}}),
+        clusters,
+        vector_evidence(vectors),
     )
 
     assert result["state"] == "not_verified"
     assert result["reason"] == "semantic_cluster_vector_population_mismatch"
 
 
-def test_opposite_vectors_keep_cluster_identity_but_profile_centroid_not_verified():
+def test_forged_valid_member_partition_that_does_not_follow_threshold_fails_closed():
     vectors = {
         "https://e.test/a": {"x": 1.0},
-        "https://e.test/b": {"x": -1.0},
+        "https://e.test/b": {"x": 1.0},
+        "https://e.test/c": {"y": 1.0},
     }
+    clusters = authentic_cluster_evidence(vectors, threshold=0.9)
+    clusters["clusters"] = [row("https://e.test/a", "https://e.test/c")]
     result = semantic_cluster_profile_evidence(
-        cluster_evidence(row("https://e.test/a", "https://e.test/b")),
+        clusters,
         vector_evidence(vectors),
     )
 
     assert result["state"] == "not_verified"
-    assert result["reason"] == "cluster_profiles_not_verified"
-    assert result["profiles"][0]["state"] == "not_verified"
-    assert result["profiles"][0]["reason"] == "semantic_cluster_centroid_zero_norm"
+    assert result["reason"] == "semantic_cluster_derivation_mismatch"
+    assert result["profiles"] == []
 
 
 def test_partial_semantic_population_is_preserved_without_sitewide_claim():
@@ -168,7 +199,7 @@ def test_partial_semantic_population_is_preserved_without_sitewide_claim():
         "https://e.test/b": {"x": 1.0},
     }
     result = semantic_cluster_profile_evidence(
-        cluster_evidence(row("https://e.test/a", "https://e.test/b")),
+        authentic_cluster_evidence(vectors, threshold=0.9),
         vector_evidence(vectors, coverage="partial", pair_complete=False),
     )
 
@@ -180,9 +211,10 @@ def test_partial_semantic_population_is_preserved_without_sitewide_claim():
 
 
 def test_clean_no_cluster_observed_remains_descriptive_not_sitewide():
+    vectors = {"https://e.test/a": {"x": 1.0}}
     result = semantic_cluster_profile_evidence(
-        cluster_evidence(state="no_candidate_observed"),
-        vector_evidence({"https://e.test/a": {"x": 1.0}}),
+        authentic_cluster_evidence(vectors, threshold=0.9),
+        vector_evidence(vectors),
     )
 
     assert result["state"] == "no_cluster_observed"
@@ -192,19 +224,72 @@ def test_clean_no_cluster_observed_remains_descriptive_not_sitewide():
 
 
 def test_unverified_vector_integrity_never_profiles_clusters():
-    evidence = vector_evidence(
-        {
-            "https://e.test/a": {"x": 1.0},
-            "https://e.test/b": {"x": 1.0},
-        }
-    )
+    vectors = {
+        "https://e.test/a": {"x": 1.0},
+        "https://e.test/b": {"x": 1.0},
+    }
+    evidence = vector_evidence(vectors)
     evidence["state"] = "not_verified"
     evidence["reason"] = "vectorizer_nondeterministic"
     result = semantic_cluster_profile_evidence(
-        cluster_evidence(row("https://e.test/a", "https://e.test/b")),
+        authentic_cluster_evidence(vectors, threshold=0.9),
         evidence,
     )
 
     assert result["state"] == "not_verified"
     assert result["reason"] == "semantic_vector_integrity_not_verified"
+    assert result["profiles"] == []
+
+
+def test_forged_qualifying_pair_count_fails_closed():
+    vectors = {
+        "https://e.test/a": {"x": 1.0},
+        "https://e.test/b": {"x": 1.0},
+        "https://e.test/c": {"y": 1.0},
+    }
+    clusters = authentic_cluster_evidence(vectors, threshold=0.9)
+    clusters["qualifying_pair_count"] += 1
+    result = semantic_cluster_profile_evidence(clusters, vector_evidence(vectors))
+
+    assert result["state"] == "not_verified"
+    assert result["reason"] == "semantic_cluster_qualifying_pair_count_mismatch"
+
+
+def test_incomplete_pair_scan_cannot_profile_clusters():
+    vectors = {
+        "https://e.test/a": {"x": 1.0},
+        "https://e.test/b": {"x": 1.0},
+    }
+    clusters = authentic_cluster_evidence(vectors, threshold=0.9)
+    clusters["pair_scan_complete"] = False
+    result = semantic_cluster_profile_evidence(clusters, vector_evidence(vectors))
+
+    assert result["state"] == "not_verified"
+    assert result["reason"] == "semantic_cluster_pair_scan_incomplete"
+
+
+def test_forged_vectorized_page_count_fails_closed():
+    vectors = {
+        "https://e.test/a": {"x": 1.0},
+        "https://e.test/b": {"x": 1.0},
+    }
+    clusters = authentic_cluster_evidence(vectors, threshold=0.9)
+    clusters["vectorized_pages"] += 1
+    result = semantic_cluster_profile_evidence(clusters, vector_evidence(vectors))
+
+    assert result["state"] == "not_verified"
+    assert result["reason"] == "semantic_cluster_vectorized_page_count_mismatch"
+
+
+def test_invalid_cluster_threshold_fails_closed_before_profile_generation():
+    vectors = {
+        "https://e.test/a": {"x": 1.0},
+        "https://e.test/b": {"x": 1.0},
+    }
+    clusters = authentic_cluster_evidence(vectors, threshold=0.9)
+    clusters["threshold"] = True
+    result = semantic_cluster_profile_evidence(clusters, vector_evidence(vectors))
+
+    assert result["state"] == "not_verified"
+    assert result["reason"] == "semantic_cluster_threshold_invalid"
     assert result["profiles"] == []

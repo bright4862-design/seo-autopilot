@@ -38,6 +38,27 @@ class AlternatingVectorizer:
         return {"https://e.test/a": {"topic": value}}
 
 
+class MutatingVectorizer:
+    version = "mutating_v1"
+
+    def vectors(self, pages):
+        pages[0]["title"] = "adapter-mutated"
+        return {"https://e.test/a": {"topic": 1.0}}
+
+
+class SecondCallMutatingVectorizer:
+    version = "second_call_mutating_v1"
+
+    def __init__(self):
+        self.calls = 0
+
+    def vectors(self, pages):
+        self.calls += 1
+        if self.calls == 2:
+            pages[1]["semantic_terms"] = ["mutated"]
+        return {"https://e.test/a": {"topic": 1.0}}
+
+
 def test_valid_vectors_are_verified_copied_and_deterministic():
     payload = {
         "https://e.test/b": {"beta": 2, "alpha": -1.5},
@@ -106,6 +127,37 @@ def test_nondeterministic_adapter_fails_closed():
     assert evidence["vectors"] == {}
 
 
+def test_mutating_adapter_fails_closed_without_mutating_caller_pages():
+    pages = [
+        {"url": "https://e.test/a", "title": "Original"},
+        {"url": "https://e.test/b"},
+    ]
+    evidence = semantic_vector_contract_evidence(pages, MutatingVectorizer())
+    assert evidence["state"] == "not_verified"
+    assert evidence["reason"] == "vectorizer_input_mutation"
+    assert evidence["vectors"] == {}
+    assert pages == [
+        {"url": "https://e.test/a", "title": "Original"},
+        {"url": "https://e.test/b"},
+    ]
+
+
+def test_second_determinism_call_mutation_fails_closed_and_isolated():
+    pages = [
+        {"url": "https://e.test/a"},
+        {"url": "https://e.test/b", "semantic_terms": ["stable"]},
+    ]
+    evidence = semantic_vector_contract_evidence(
+        pages,
+        SecondCallMutatingVectorizer(),
+    )
+    assert evidence["state"] == "not_verified"
+    assert evidence["reason"] == "vectorizer_input_mutation"
+    assert evidence["determinism_checked"] is True
+    assert evidence["determinism_verified"] is False
+    assert pages[1]["semantic_terms"] == ["stable"]
+
+
 def test_strict_adapter_preserves_interface_for_valid_local_vectors():
     adapter = ValidatedSemanticVectorizer(
         MappingVectorizer({
@@ -127,3 +179,12 @@ def test_strict_adapter_raises_reasoned_error_instead_of_returning_bad_vectors()
     with pytest.raises(SemanticVectorContractError) as exc:
         adapter.vectors(PAGES)
     assert exc.value.reason == "vector_population_mismatch"
+
+
+def test_strict_adapter_raises_when_delegate_mutates_input():
+    adapter = ValidatedSemanticVectorizer(MutatingVectorizer())
+    pages = [{"url": "https://e.test/a"}, {"url": "https://e.test/b"}]
+    with pytest.raises(SemanticVectorContractError) as exc:
+        adapter.vectors(pages)
+    assert exc.value.reason == "vectorizer_input_mutation"
+    assert pages == [{"url": "https://e.test/a"}, {"url": "https://e.test/b"}]

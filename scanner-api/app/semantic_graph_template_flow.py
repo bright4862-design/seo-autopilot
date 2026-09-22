@@ -11,9 +11,10 @@ are never promoted into sitewide absence claims.
 from __future__ import annotations
 
 from collections import defaultdict
+from hashlib import sha256
 from typing import Any
 
-from .semantic_graph import GRAPH_EVIDENCE_VERSION, TEMPLATE_EVIDENCE_VERSION, ZONE_WEIGHTS, _url
+from .semantic_graph import TEMPLATE_EVIDENCE_VERSION, ZONE_WEIGHTS, _url
 from .semantic_graph_contextual import EVIDENCE_SCOPE, _validated_graph
 
 
@@ -67,6 +68,9 @@ def _validated_template_membership(
             or page_count <= 0
         ):
             return {}, "template_group_identity_invalid"
+        expected_group_id = "tmpl_" + sha256(template_key.encode("utf-8")).hexdigest()[:12]
+        if group_id != expected_group_id:
+            return {}, "template_group_id_mismatch"
         declared_groups[group_id] = group
 
     membership: dict[str, dict[str, str]] = {}

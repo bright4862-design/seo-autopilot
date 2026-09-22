@@ -10,6 +10,7 @@ or production mutation.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 from typing import Any, Mapping, Sequence
 from urllib.parse import urlparse, urlunparse
@@ -20,6 +21,7 @@ from .connected_evidence_record_identity_contract import (
 
 SNAPSHOT_BUNDLE_VERSION = "connected_evidence_snapshot_bundle_v1"
 SNAPSHOT_SOURCE_IDENTITY_VERSION = "connected_evidence_snapshot_source_identity_v1"
+SNAPSHOT_OBSERVATION_IDENTITY_VERSION = "connected_evidence_snapshot_observation_identity_v1"
 MAX_SNAPSHOT_ITEMS = 64
 
 _UNAVAILABLE_STATES = frozenset(
@@ -32,6 +34,69 @@ def _text(value: Any, *, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field} must be a non-empty string")
     return value.strip()
+
+
+def _canonical_temporal_identity(
+    value: Any,
+    *,
+    field: str,
+    allow_none: bool = True,
+) -> str | None:
+    if value in (None, ""):
+        if allow_none:
+            return None
+        raise ValueError(f"{field} must be an ISO-8601 date/timestamp")
+    text = _text(value, field=field)
+    candidate = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        raise ValueError(f"{field} must be an ISO-8601 date/timestamp") from None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _canonical_dimension_identity(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, list) or not value:
+        raise ValueError("coverage.dimensions must be a non-empty list")
+    dimensions = tuple(
+        _text(dimension, field=f"coverage.dimensions[{index}]")
+        for index, dimension in enumerate(value)
+    )
+    if len(set(dimensions)) != len(dimensions):
+        raise ValueError("coverage.dimensions must be unique")
+    return tuple(sorted(dimensions))
+
+
+def _record_period_start(evidence: Mapping[str, Any]) -> str | None:
+    coverage_start = evidence["coverage"].get("period_start")
+    if coverage_start not in (None, ""):
+        return _canonical_temporal_identity(
+            coverage_start,
+            field="coverage.period_start",
+            allow_none=False,
+        )
+
+    profile_key = (evidence["provider"], evidence["source_kind"])
+    candidates: list[str] = []
+    records = evidence.get("records") or []
+    for index, record in enumerate(records):
+        if not isinstance(record, Mapping):
+            continue
+        if profile_key == ("google_search_console", "search_analytics"):
+            dimensions = record.get("dimensions")
+            value = dimensions.get("date") if isinstance(dimensions, Mapping) else None
+            field = f"records[{index}].dimensions.date"
+        else:
+            value = record.get("date")
+            field = f"records[{index}].date"
+        if value in (None, ""):
+            continue
+        canonical = _canonical_temporal_identity(value, field=field, allow_none=False)
+        assert canonical is not None
+        candidates.append(canonical)
+    return min(candidates) if candidates else None
 
 
 def _canonical_http_identity(value: Any, *, field: str) -> str:
@@ -136,9 +201,11 @@ def _profile_snapshot_identity(evidence: Mapping[str, Any]) -> tuple[Any, ...]:
 
     The identity deliberately excludes transport-only metadata such as import
     filenames so re-importing the same observation window under a different
-    local filename cannot silently double-count it. Provider source identifiers
-    are canonicalized so spelling/default-port aliases cannot evade duplicate
-    detection.
+    local filename cannot silently double-count it. Provider source identifiers,
+    dimension sets, and observation timestamps are canonicalized so harmless
+    spelling/order/timezone aliases cannot evade duplicate detection. When a
+    dated Bing/GA4 export omits explicit ``coverage.period_start``, the earliest
+    carried record date becomes the conservative window-start identity.
     """
 
     provider = evidence["provider"]
@@ -150,14 +217,14 @@ def _profile_snapshot_identity(evidence: Mapping[str, Any]) -> tuple[Any, ...]:
     if (provider, source_kind) == ("google_search_console", "search_analytics"):
         if state in _UNAVAILABLE_STATES:
             return source_scope + ("unavailable",)
-        dimensions = coverage.get("dimensions")
-        if not isinstance(dimensions, list) or not dimensions:
-            raise ValueError("coverage.dimensions must be a non-empty list")
+        dimensions = _canonical_dimension_identity(coverage.get("dimensions"))
         return source_scope + (
-            tuple(dimensions),
-            coverage.get("period_start"),
-            coverage.get("period_end"),
-            evidence.get("observed_at"),
+            dimensions,
+            _record_period_start(evidence),
+            _canonical_temporal_identity(
+                coverage.get("period_end"), field="coverage.period_end"
+            ),
+            _canonical_temporal_identity(evidence.get("observed_at"), field="observed_at"),
         )
 
     if (provider, source_kind) == ("google_search_console", "url_inspection"):
@@ -170,18 +237,22 @@ def _profile_snapshot_identity(evidence: Mapping[str, Any]) -> tuple[Any, ...]:
         if state in _UNAVAILABLE_STATES:
             return source_scope + ("unavailable",)
         return source_scope + (
-            coverage.get("period_start"),
-            coverage.get("period_end"),
-            evidence.get("observed_at"),
+            _record_period_start(evidence),
+            _canonical_temporal_identity(
+                coverage.get("period_end"), field="coverage.period_end"
+            ),
+            _canonical_temporal_identity(evidence.get("observed_at"), field="observed_at"),
         )
 
     if (provider, source_kind) == ("google_analytics_4", "ai_assistant_referrals"):
         if state in _UNAVAILABLE_STATES:
             return source_scope + ("unavailable",)
         return source_scope + (
-            coverage.get("period_start"),
-            coverage.get("period_end"),
-            evidence.get("observed_at"),
+            _record_period_start(evidence),
+            _canonical_temporal_identity(
+                coverage.get("period_end"), field="coverage.period_end"
+            ),
+            _canonical_temporal_identity(evidence.get("observed_at"), field="observed_at"),
         )
 
     raise ValueError("unsupported connected-evidence provider/source_kind profile")

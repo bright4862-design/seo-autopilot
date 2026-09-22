@@ -6,7 +6,9 @@ Branch: `agent/nextgen-semantic-graph-20260921`
 Integration base: `nextgen/integration-20260921`
 
 This lane implements only the Semantic Graph work defined in
-`docs/nextgen/2026-09-21-parallel-engineering-lanes.md`. It does not wire
+`docs/nextgen/2026-09-21-parallel-engineering-lanes.md`. That file is the exact
+authoritative, read-only ownership boundary for this lane; it is intentionally
+not part of the lane's writable `docs/nextgen/lane-b-*` surface. It does not wire
 customer-facing Fixes, repair priority, persistence, authority, scan
 orchestration, admission, release, deployment, or production behavior.
 

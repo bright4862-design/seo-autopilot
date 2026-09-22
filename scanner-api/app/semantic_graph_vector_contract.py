@@ -3,10 +3,12 @@
 Lane B is allowed to consume deterministic local semantic adapters, but candidate
 quality must not depend on trusting arbitrary transported vector dictionaries.
 This module validates adapter identity, assessed-page population, numeric shape,
-bounds, and repeatability without network calls or customer-facing decisions.
+bounds, repeatability, and input purity without network calls or customer-facing
+decisions.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from math import isfinite, sqrt
 from typing import Any
 
@@ -102,6 +104,37 @@ def _canonical_vectors(raw: Any, allowed_urls: set[str]) -> tuple[dict[str, dict
     return canonical, None
 
 
+def _isolated_vectorizer_call(
+    vectorizer: Any,
+    pages: Any,
+) -> tuple[Any, str | None]:
+    """Execute one adapter call against an isolated page snapshot.
+
+    Caller-owned page evidence is never passed to pluggable adapter code. An
+    adapter that mutates its private input snapshot is treated as contract-invalid
+    even when it restores deterministic vector output, because downstream Lane-B
+    analyzers require semantic adapters to behave as pure evidence readers.
+    """
+    try:
+        isolated_pages = deepcopy(pages)
+        baseline = deepcopy(isolated_pages)
+    except Exception:
+        return None, "page_snapshot_error"
+
+    try:
+        raw = vectorizer.vectors(isolated_pages)
+    except Exception:
+        return None, "vectorizer_execution_error"
+
+    try:
+        mutated = isolated_pages != baseline
+    except Exception:
+        return None, "page_snapshot_comparison_error"
+    if mutated:
+        return None, "vectorizer_input_mutation"
+    return raw, None
+
+
 def semantic_vector_contract_evidence(
     pages: Any,
     vectorizer: Any,
@@ -111,9 +144,10 @@ def semantic_vector_contract_evidence(
     """Validate one local/pluggable semantic adapter without trusting its output.
 
     Invalid or ambiguous evidence returns ``not_verified`` and never transports
-    the untrusted vectors. With determinism verification enabled, the adapter is
-    invoked twice on the same assessed page objects and both canonical outputs
-    must be exactly identical.
+    the untrusted vectors. Adapter code only receives deep-copied page snapshots;
+    mutation of either invocation is rejected as ``vectorizer_input_mutation``.
+    With determinism verification enabled, the adapter is invoked twice against
+    fresh equivalent snapshots and both canonical outputs must be exactly equal.
     """
     population, reason = _assessed_population(pages)
     version, version_reason = _version(vectorizer)
@@ -125,18 +159,14 @@ def semantic_vector_contract_evidence(
         reason = "vectorizer_interface_invalid"
 
     if reason is None:
-        try:
-            first_raw = vectorizer.vectors(pages)
-        except Exception:
-            reason = "vectorizer_execution_error"
-        else:
+        first_raw, reason = _isolated_vectorizer_call(vectorizer, pages)
+        if reason is None:
             vectors, reason = _canonical_vectors(first_raw, population)
 
     if reason is None and verify_determinism:
-        try:
-            second_raw = vectorizer.vectors(pages)
-        except Exception:
-            reason = "vectorizer_execution_error"
+        second_raw, second_call_reason = _isolated_vectorizer_call(vectorizer, pages)
+        if second_call_reason is not None:
+            reason = second_call_reason
         else:
             second, second_reason = _canonical_vectors(second_raw, population)
             if second_reason is not None:
@@ -161,6 +191,7 @@ def semantic_vector_contract_evidence(
         "vectorized_pages": len(vectors),
         "determinism_checked": bool(verify_determinism),
         "determinism_verified": bool(determinism_verified),
+        "input_isolation_enforced": True,
         "vectors": vectors,
         "customer_fix_created": False,
     }
@@ -170,8 +201,9 @@ class ValidatedSemanticVectorizer:
     """Strict adapter that can be passed to existing Lane-B semantic analyzers.
 
     It preserves the existing ``vectors(pages)`` interface while refusing to
-    return ambiguous, malformed, foreign-population, or nondeterministic vectors.
-    This is intentionally local/pure; it performs no provider or network call.
+    return ambiguous, malformed, foreign-population, mutating, or nondeterministic
+    vectors. This is intentionally local/pure; it performs no provider or network
+    call and never exposes caller-owned page objects to the delegate.
     """
 
     def __init__(self, delegate: Any, *, verify_determinism: bool = True):

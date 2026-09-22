@@ -80,6 +80,8 @@ def _validate_period_end_matches_observed(evidence: Mapping[str, Any]) -> dateti
     observed = _optional_temporal(evidence.get("observed_at"), field="observed_at")
     period_end_value = evidence["coverage"].get("period_end")
     period_end = _optional_temporal(period_end_value, field="coverage.period_end")
+    if period_end is not None and observed is None:
+        raise ValueError("coverage.period_end requires observed_at")
     if observed is not None and period_end is not None and observed != period_end:
         raise ValueError("coverage.period_end did not match observed_at")
     return observed
@@ -90,13 +92,17 @@ def _validate_record_dates_not_after_observed(
     *,
     observed: datetime | None,
 ) -> None:
+    saw_dated_record = False
     for index, record in enumerate(records):
         value = record.get("date")
         if value in (None, ""):
             continue
+        saw_dated_record = True
         record_date = _temporal(value, field=f"records[{index}].date")
         if observed is not None and record_date > observed:
             raise ValueError(f"records[{index}].date cannot be later than observed_at")
+    if saw_dated_record and observed is None:
+        raise ValueError("dated records require observed_at")
 
 
 def _validate_gsc(evidence: Mapping[str, Any], records: Sequence[Mapping[str, Any]]) -> None:
@@ -135,20 +141,24 @@ def _validate_gsc(evidence: Mapping[str, Any], records: Sequence[Mapping[str, An
         raise ValueError("coverage.period_start cannot be later than coverage.period_end")
 
     observed = _optional_temporal(evidence.get("observed_at"), field="observed_at")
+    if period_end is not None and observed is None:
+        raise ValueError("coverage.period_end requires observed_at")
     if observed is not None and period_end is not None and observed != period_end:
         raise ValueError("coverage.period_end did not match observed_at")
 
     if "date" in expected_dimensions:
+        if period_start is None or period_end is None:
+            raise ValueError("date-dimension evidence requires coverage period bounds")
         for index, record in enumerate(records):
             record_date = _temporal(
                 record["dimensions"].get("date"),
                 field=f"records[{index}].dimensions.date",
             )
-            if period_start is not None and record_date < period_start:
+            if record_date < period_start:
                 raise ValueError(
                     f"records[{index}].dimensions.date preceded coverage.period_start"
                 )
-            if period_end is not None and record_date > period_end:
+            if record_date > period_end:
                 raise ValueError(
                     f"records[{index}].dimensions.date exceeded coverage.period_end"
                 )
@@ -164,6 +174,8 @@ def _validate_url_inspection(
     )
     if len(records) != 1:
         raise ValueError("URL Inspection observed coverage must contain exactly one URL")
+    if _optional_temporal(evidence.get("observed_at"), field="observed_at") is None:
+        raise ValueError("URL Inspection observed coverage requires observed_at")
 
 
 def _validate_bing(

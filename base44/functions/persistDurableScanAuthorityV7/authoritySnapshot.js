@@ -1,0 +1,83 @@
+import * as legacy from "./authoritySnapshotStage1Legacy.js";
+import {
+  STAGE3_AUTHORITY_VERSION,
+  STAGE3_AUTHORITY_CLAIM_VERSION,
+  STAGE3_V7_DELIVERY_VERSION,
+  buildAuthoritySnapshotStage3,
+  buildPersistedAuthoritySnapshotStage3,
+} from "./stage3V7Delivery.js";
+import { PUBLISHED_REVIEW_ATTESTATION_VERSION } from "./publishedRepairEvidence.js";
+
+export * from "./authoritySnapshotStage1Legacy.js";
+
+const INTERNAL_STAGE3_BASE = "__fixlist_stage3_v7_legacy_base";
+
+function withoutInternalMarker(value = {}) {
+  const { [INTERNAL_STAGE3_BASE]: _marker, ...rest } = value || {};
+  return rest;
+}
+
+function hasPersistedStage3Delivery(run) {
+  return Boolean(
+    run?.authority_seal_version === PUBLISHED_REVIEW_ATTESTATION_VERSION
+    && run?.health_score_explanation?.stage3_delivery?.version === STAGE3_V7_DELIVERY_VERSION
+  );
+}
+
+function claimsDurableStage3Delivery(review, identity) {
+  if (!review || typeof review !== "object" || Array.isArray(review)) return false;
+  if (review.stage3_authority_claim === undefined) return false;
+  const claim = review.stage3_authority_claim;
+  const scanId = typeof identity?.scan_id === "string" ? identity.scan_id.trim() : "";
+  if (
+    !claim || typeof claim !== "object" || Array.isArray(claim)
+    || claim.version !== STAGE3_AUTHORITY_CLAIM_VERSION
+    || typeof claim.scan_id !== "string" || claim.scan_id.trim() !== scanId || !scanId
+    || claim.delivery_version !== "stage3_delivery_v1_rank_before_truncate"
+    || claim.score_version !== "stage3_health_score_caps_v1_verified_root_cause"
+  ) {
+    throw new Error("Stage3 authority claim is invalid");
+  }
+  return true;
+}
+
+/**
+ * Keep the published-route V7 HMAC version stable while extending its signed
+ * payload with the versioned Stage-3 delivery capsule. The nested capsule is
+ * itself inside the HMAC bytes, so injecting it into a historical row changes
+ * reconstruction and fails verification instead of upgrading that row.
+ */
+export function buildAuthoritySnapshot(options = {}) {
+  if (options?.[INTERNAL_STAGE3_BASE] === true) {
+    return legacy.buildAuthoritySnapshot(withoutInternalMarker(options));
+  }
+  if (!claimsDurableStage3Delivery(options?.review, options?.identity)) {
+    return legacy.buildAuthoritySnapshot(options);
+  }
+  const staged = buildAuthoritySnapshotStage3({
+    ...options,
+    [INTERNAL_STAGE3_BASE]: true,
+  });
+  return staged?.version === STAGE3_AUTHORITY_VERSION
+    ? { ...staged, version: PUBLISHED_REVIEW_ATTESTATION_VERSION }
+    : staged;
+}
+
+export function buildPersistedAuthoritySnapshot(args = {}) {
+  if (args?.[INTERNAL_STAGE3_BASE] === true) {
+    return legacy.buildPersistedAuthoritySnapshot(withoutInternalMarker(args));
+  }
+  const run = args?.run;
+  if (!hasPersistedStage3Delivery(run)) {
+    return legacy.buildPersistedAuthoritySnapshot(args);
+  }
+  const staged = buildPersistedAuthoritySnapshotStage3({
+    ...args,
+    [INTERNAL_STAGE3_BASE]: true,
+    run: { ...run, authority_seal_version: STAGE3_AUTHORITY_VERSION },
+  });
+  if (staged?.version !== STAGE3_AUTHORITY_VERSION) {
+    throw new Error("Persisted Stage3 delivery did not reconstruct the expected authenticated contract");
+  }
+  return { ...staged, version: PUBLISHED_REVIEW_ATTESTATION_VERSION };
+}

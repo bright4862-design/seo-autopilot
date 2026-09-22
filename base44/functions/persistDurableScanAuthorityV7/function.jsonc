@@ -1,0 +1,4 @@
+{
+  "name": "persistDurableScanAuthorityV7",
+  "entry": "entry.ts"
+}

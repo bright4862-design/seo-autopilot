@@ -216,7 +216,7 @@ def summarize_marginal_gap_corpus(
         "full_smart_500_missed_reference_high_impact_findings": missed_high,
         "full_smart_500_reference_high_impact_coverage": high_coverage,
         "full_blind_tail_new_high_impact_findings": tail_high,
-        "full_blind_tail_new_high_impact_finding_yield_per_100": high_tail_yield,
+        "full_blind_tail_new_high_impact_yield_per_100": high_tail_yield,
         "population_scope_complete": False,
         "production_budget_authorized": False,
         "site_fully_understood": False,

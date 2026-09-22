@@ -65,6 +65,21 @@ def test_bound_psi_rejects_foreign_lighthouse_requested_identity_without_poisoni
     assert evidence["lab"]["metrics"] is None
 
 
+def test_bound_psi_requires_lighthouse_requested_identity_when_caller_source_is_known():
+    payload = psi_payload()
+    del payload["lighthouseResult"]["requestedUrl"]
+    evidence = normalize_pagespeed_insights_evidence_bound(
+        payload, source_url="https://example.com/start"
+    )
+    assert evidence["field"]["state"] == "connected"
+    assert evidence["lab"]["state"] == "unavailable"
+    assert evidence["lab"]["reason"] == "lighthouse_requested_identity_missing"
+    assert evidence["lab"]["performance_score"] is None
+    assert evidence["lab"]["metrics"] is None
+    assert evidence["lab"]["opportunities"] == []
+    assert evidence["provenance"]["lighthouse_requested_url"] is None
+
+
 def test_bound_psi_runtime_error_fails_lab_closed_but_keeps_valid_field_evidence():
     payload = psi_payload()
     payload["lighthouseResult"]["runtimeError"] = {
@@ -105,6 +120,19 @@ def test_bound_psi_rejects_foreign_field_initial_identity_without_poisoning_lab(
     assert evidence["field"]["reason"] == "psi_field_initial_identity_mismatch"
     assert evidence["field"]["metrics"] is None
     assert evidence["lab"]["state"] == "connected"
+
+
+def test_bound_psi_requires_field_initial_identity_when_caller_source_is_known():
+    payload = psi_payload()
+    del payload["loadingExperience"]["initial_url"]
+    evidence = normalize_pagespeed_insights_evidence_bound(
+        payload, source_url="https://example.com/start"
+    )
+    assert evidence["field"]["state"] == "unavailable"
+    assert evidence["field"]["reason"] == "psi_field_initial_identity_missing"
+    assert evidence["field"]["metrics"] is None
+    assert evidence["lab"]["state"] == "connected"
+    assert evidence["provenance"]["field_initial_url"] is None
 
 
 def test_bound_psi_invalid_caller_identity_fails_both_components_closed():

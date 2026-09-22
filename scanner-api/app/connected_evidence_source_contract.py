@@ -22,6 +22,7 @@ _PROFILES: dict[tuple[str, str], dict[str, Any]] = {
         "transport": "provided_payload",
         "exact_provenance": {"provider_operation": "searchanalytics.query"},
         "required_provenance": ("property_uri",),
+        "optional_provenance": (),
     },
     ("google_search_console", "url_inspection"): {
         "surface": "google_search_console.url_inspection",
@@ -29,6 +30,7 @@ _PROFILES: dict[tuple[str, str], dict[str, Any]] = {
         "transport": "provided_payload",
         "exact_provenance": {"provider_operation": "urlInspection.index.inspect"},
         "required_provenance": ("property_uri", "inspection_url"),
+        "optional_provenance": (),
     },
     ("microsoft_bing_webmaster_tools", "ai_performance_export"): {
         "surface": "bing_webmaster_tools.ai_performance",
@@ -39,6 +41,7 @@ _PROFILES: dict[tuple[str, str], dict[str, Any]] = {
             "api_used": False,
         },
         "required_provenance": ("site_url",),
+        "optional_provenance": ("import_name",),
     },
     ("google_analytics_4", "ai_assistant_referrals"): {
         "surface": "google_analytics_4.referral_traffic",
@@ -46,6 +49,7 @@ _PROFILES: dict[tuple[str, str], dict[str, Any]] = {
         "transport": "provided_rows",
         "exact_provenance": {"provider_surface": "ga4_reporting_export_or_response"},
         "required_provenance": ("property_id",),
+        "optional_provenance": ("import_name",),
     },
 }
 
@@ -116,6 +120,22 @@ def _validate_optional_import_name(provenance: Mapping[str, Any]) -> None:
         _bounded_text(value, field="provenance.import_name", max_length=512)
 
 
+def _validate_provenance_shape(
+    provenance: Mapping[str, Any],
+    *,
+    profile: Mapping[str, Any],
+) -> None:
+    allowed = {
+        "transport",
+        *profile["exact_provenance"].keys(),
+        *profile["required_provenance"],
+        *profile.get("optional_provenance", ()),
+    }
+    unknown = sorted(set(provenance) - allowed)
+    if unknown:
+        raise ValueError(f"provenance has unregistered fields: {unknown}")
+
+
 def _validate_profile_records(
     evidence: Mapping[str, Any],
     *,
@@ -176,6 +196,7 @@ def validate_connected_evidence_source_identity(
     provenance = evidence["provenance"]
     if not isinstance(provenance, Mapping):
         raise ValueError("provenance must be an object")
+    _validate_provenance_shape(provenance, profile=profile)
     _require_exact(provenance.get("transport"), profile["transport"], field="provenance.transport")
 
     for field, expected in profile["exact_provenance"].items():

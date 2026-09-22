@@ -68,6 +68,8 @@ def _validate_unambiguous_scope_path(path: str, *, field: str) -> None:
 
     if "\\" in path:
         raise ValueError(f"{field} contained an ambiguous path separator")
+    if ";" in path:
+        raise ValueError(f"{field} must not contain path parameters")
     if any(ord(char) < 0x20 or ord(char) == 0x7F for char in path):
         raise ValueError(f"{field} contained a control character in its path")
     if _MALFORMED_PERCENT_ESCAPE.search(path):
@@ -222,9 +224,10 @@ def _validate_ga4_scope(evidence: Mapping[str, Any]) -> None:
         landing_page = record.get("landing_page")
         if landing_page in (None, "", "(not set)"):
             continue
+        field = f"records[{index}].landing_page"
         text = _bounded_text(
             landing_page,
-            field=f"records[{index}].landing_page",
+            field=field,
             max_length=4096,
         )
         parsed = urlparse(text)
@@ -236,8 +239,11 @@ def _validate_ga4_scope(evidence: Mapping[str, Any]) -> None:
             or parsed.fragment
         ):
             raise ValueError(
-                f"records[{index}].landing_page must be a root-relative GA4 landing-page path"
+                f"{field} must be a root-relative GA4 landing-page path"
             )
+        if parsed.params:
+            raise ValueError(f"{field} must not contain path parameters")
+        _validate_unambiguous_scope_path(parsed.path or "/", field=field)
 
 
 def validate_connected_evidence_scope_semantics(

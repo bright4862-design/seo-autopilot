@@ -98,6 +98,42 @@ def test_url_inspection_record_identity_must_match_provenance():
         validate_connected_evidence_source_identity(evidence)
 
 
+def test_url_inspection_provenance_identity_must_be_absolute_http_url():
+    evidence = _envelope(
+        provider="google_search_console",
+        source_kind="url_inspection",
+        surface="google_search_console.url_inspection",
+        method="api_response_normalization",
+        provenance={
+            "transport": "provided_payload",
+            "provider_operation": "urlInspection.index.inspect",
+            "property_uri": "sc-domain:getfixlist.com",
+            "inspection_url": "pending",
+        },
+        records=[{"inspection_url": "pending"}],
+    )
+    with pytest.raises(ValueError, match=r"provenance\.inspection_url must be an absolute HTTP\(S\) URL"):
+        validate_connected_evidence_source_identity(evidence)
+
+
+def test_url_inspection_record_identity_must_be_absolute_http_url():
+    evidence = _envelope(
+        provider="google_search_console",
+        source_kind="url_inspection",
+        surface="google_search_console.url_inspection",
+        method="api_response_normalization",
+        provenance={
+            "transport": "provided_payload",
+            "provider_operation": "urlInspection.index.inspect",
+            "property_uri": "sc-domain:getfixlist.com",
+            "inspection_url": "https://getfixlist.com/a",
+        },
+        records=[{"inspection_url": "/a"}],
+    )
+    with pytest.raises(ValueError, match=r"records\[0\]\.inspection_url must be an absolute HTTP\(S\) URL"):
+        validate_connected_evidence_source_identity(evidence)
+
+
 def test_url_inspection_provider_error_still_preserves_source_provenance():
     evidence = _envelope(
         provider="google_search_console",
@@ -129,6 +165,23 @@ def test_bing_manual_export_requires_explicit_api_used_false():
         },
     )
     with pytest.raises(ValueError, match="api_used"):
+        validate_connected_evidence_source_identity(evidence)
+
+
+def test_bing_manual_export_rejects_integer_zero_as_false_boolean():
+    evidence = _envelope(
+        provider="microsoft_bing_webmaster_tools",
+        source_kind="ai_performance_export",
+        surface="bing_webmaster_tools.ai_performance",
+        method="manual_export_normalization",
+        provenance={
+            "transport": "manual_export",
+            "provider_surface": "bing_webmaster_tools_ai_performance",
+            "site_url": "https://getfixlist.com",
+            "api_used": 0,
+        },
+    )
+    with pytest.raises(ValueError, match="api_used must be an explicit boolean"):
         validate_connected_evidence_source_identity(evidence)
 
 

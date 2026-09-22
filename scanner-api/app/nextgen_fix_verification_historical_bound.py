@@ -6,12 +6,12 @@ from .nextgen_fix_verification import COULD_NOT_VERIFY, VERIFICATION_RESULT_VERS
 from .nextgen_fix_verification_historical_identity import (
     verification_historical_identity_integrity,
 )
-from .nextgen_fix_verification_observation_identity import (
-    evaluate_verification_observations_identity_bound,
+from .nextgen_fix_verification_observation_values import (
+    evaluate_verification_observations_value_bound,
 )
 
 HISTORICAL_BOUND_OBSERVATION_VERSION = (
-    "fix_verification_historical_bound_observation_v1_exact_repair_identity"
+    "fix_verification_historical_bound_observation_v2_exact_repair_identity_and_observation_values"
 )
 
 
@@ -63,14 +63,15 @@ def evaluate_verification_observations_historical_bound(
     *,
     scan_origin: str = "",
 ) -> dict[str, Any]:
-    """Require exact historical repair identity before current evidence can prove a state.
+    """Require exact historical identity and exact current proving values.
 
-    Historical repair identity reconstruction remains intentionally tolerant for
-    report compatibility. This final pure observation boundary prevents that
-    tolerance from becoming proof: stable-identity source fields must already be
-    exact strings and any persisted identity metadata that is present must agree
-    with a freshly derived identity. Only then may the existing current-observation
-    identity and metadata boundaries evaluate PASS/PARTIAL/FAIL.
+    Historical repair reconstruction and page comparability remain intentionally
+    tolerant for legacy read compatibility. This final pure observation boundary
+    prevents either tolerance from becoming proof: the historical stable repair
+    identity must be exact, current observation identities must be exact, and
+    proof-bearing status/content/indexability/predicate values must arrive in
+    their machine-typed form without coercion before PASS/PARTIAL/FAIL may be
+    produced.
     """
     identity_integrity = verification_historical_identity_integrity(previous_record)
     if identity_integrity.get("valid") is not True:
@@ -81,7 +82,7 @@ def evaluate_verification_observations_historical_bound(
             identity_integrity=identity_integrity,
         )
 
-    result = evaluate_verification_observations_identity_bound(
+    result = evaluate_verification_observations_value_bound(
         plan,
         previous_record,
         current_pages,
@@ -92,7 +93,7 @@ def evaluate_verification_observations_historical_bound(
     if not isinstance(result, dict):
         return _could_not_verify(
             plan if isinstance(plan, dict) else {},
-            "Identity-bound verification evaluator returned non-object evidence.",
+            "Value-bound verification evaluator returned non-object evidence.",
             identity_integrity=identity_integrity,
         )
     return {

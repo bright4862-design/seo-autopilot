@@ -122,8 +122,13 @@ def validate_connected_evidence_import_rows(
     header collisions that intersect a registered alias.
     """
 
-    if isinstance(max_rows, bool) or not isinstance(max_rows, int) or max_rows <= 0:
-        raise ValueError("max_rows must be a positive integer")
+    if (
+        isinstance(max_rows, bool)
+        or not isinstance(max_rows, int)
+        or max_rows <= 0
+        or max_rows > MAX_IMPORT_ROWS
+    ):
+        raise ValueError(f"max_rows must be within 1..{MAX_IMPORT_ROWS}")
     normalized_to_semantic, compact_to_semantic = _profile_alias_indexes(profile)
 
     result: list[Mapping[str, Any]] = []

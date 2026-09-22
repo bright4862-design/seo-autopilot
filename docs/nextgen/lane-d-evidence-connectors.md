@@ -104,23 +104,29 @@ Focused suites on this lane now contain:
 - `scanner-api/tests/test_connected_evidence_timestamp_hardening.py`: **2 timestamp-hardening tests**;
 - `scanner-api/tests/test_connected_evidence_record_contract.py`: **17 record-semantics tests**;
 - `scanner-api/tests/test_connected_evidence_coverage_contract.py`: **13 coverage-semantics tests**;
-- `scanner-api/tests/test_connected_evidence_scope_contract.py`: **18 source/property-scope tests**;
+- `scanner-api/tests/test_connected_evidence_scope_contract.py`: **19 source/property-scope tests**;
 - `scanner-api/tests/test_connected_evidence_record_identity_contract.py`: **12 logical-record-identity tests**;
-- `scanner-api/tests/test_connected_evidence_bundle_contract.py`: **21 snapshot-bundle tests**.
+- `scanner-api/tests/test_connected_evidence_bundle_contract.py`: **24 snapshot-bundle/full-chain tests**.
 
-Expected focused total: **150 tests**.
+Expected focused total: **154 tests**.
 
-Latest slice verification in this runtime:
+Latest verified slice evidence in this runtime:
 
 - `PYTHONPATH=. pytest -q tests/test_connected_evidence_contract.py` against the unavailable-metadata hardening candidate → **27/27 passed**;
 - `python -m py_compile app/connected_evidence_contract.py tests/test_connected_evidence_contract.py` → passed;
-- the tests prove that all four unavailable states retain their explicit state while failing closed on records, observed timestamps, sample row/completeness claims, or non-empty coverage metadata;
-- this is focused slice evidence only and does not replace repository-native exact-head certification.
+- the tests prove that all four unavailable states retain their explicit state while failing closed on records, observed timestamps, sample row/completeness claims, or non-empty coverage metadata.
+
+Additional exact-head regressions added after that focused run:
+
+- the source/property-scope suite now explicitly stubs only its already-tested upstream coverage boundary using an autouse fixture, matching the historical slice's intended isolation; one added regression proves the scope validator actually invokes that upstream seam. This fixes a repository-native test-harness defect where scope-unit fixtures lacked the full upstream envelope shape;
+- the snapshot-bundle suite now includes three **non-stubbed full-chain regressions**: one feeds valid normalized GSC Search Analytics + URL Inspection + Bing AI Performance + GA4 AI-referral evidence through the complete bundle stack, one accepts a registered GSC `provider_error`, and one proves unavailable coverage-metadata smuggling is rejected by the full composed boundary.
+
+These newest four regressions have not been claimed green in repository-native exact-head pytest because this runtime still cannot materialize the repository checkout. They are part of the required exact-head gate below.
 
 Earlier focused bundle verification:
 
-- `test_connected_evidence_bundle_contract.py` candidate logic: **21/21 passed** in a hermetic package with the already-tested upstream record-identity boundary stubbed;
-- `python -m py_compile app/connected_evidence_bundle_contract.py` → passed in the same hermetic package.
+- the prior 21-test bundle candidate logic passed **21/21** in a hermetic package with the already-tested upstream record-identity boundary stubbed;
+- `python -m py_compile app/connected_evidence_bundle_contract.py` passed in that same hermetic package.
 
 Before serialized integration, run from `scanner-api/` on the exact lane head:
 
@@ -130,7 +136,7 @@ and:
 
 `python -m py_compile app/connected_evidence.py app/connected_evidence_contract.py app/connected_evidence_source_contract.py app/connected_evidence_record_contract.py app/connected_evidence_coverage_contract.py app/connected_evidence_scope_contract.py app/connected_evidence_record_identity_contract.py app/connected_evidence_bundle_contract.py tests/test_connected_evidence.py tests/test_connected_evidence_contract.py tests/test_connected_evidence_source_contract.py tests/test_connected_evidence_timestamp_hardening.py tests/test_connected_evidence_record_contract.py tests/test_connected_evidence_coverage_contract.py tests/test_connected_evidence_scope_contract.py tests/test_connected_evidence_record_identity_contract.py tests/test_connected_evidence_bundle_contract.py`
 
-Do not mark Lane D integration-ready until the exact-head **150-test** run is green and a fresh exact-head review has no unresolved material findings.
+Do not mark Lane D integration-ready until the exact-head **154-test** run is green and a fresh exact-head review has no unresolved material findings.
 
 ## Known risks / truthful unsupported states
 

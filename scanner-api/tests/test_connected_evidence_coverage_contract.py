@@ -190,10 +190,24 @@ def test_gsc_date_dimension_must_fit_declared_period():
         validate_connected_evidence_coverage_semantics(evidence)
 
 
+def test_gsc_date_dimension_requires_period_bounds():
+    evidence = _gsc()
+    evidence["coverage"]["period_start"] = None
+    with pytest.raises(ValueError, match="date-dimension evidence requires coverage period bounds"):
+        validate_connected_evidence_coverage_semantics(evidence)
+
+
 def test_url_inspection_sample_url_count_must_match_records():
     evidence = _inspection()
     evidence["sample"]["url_count"] = 2
     with pytest.raises(ValueError, match="sample.url_count did not match"):
+        validate_connected_evidence_coverage_semantics(evidence)
+
+
+def test_url_inspection_requires_observed_at():
+    evidence = _inspection()
+    evidence["observed_at"] = None
+    with pytest.raises(ValueError, match="URL Inspection observed coverage requires observed_at"):
         validate_connected_evidence_coverage_semantics(evidence)
 
 
@@ -218,6 +232,21 @@ def test_bing_record_date_cannot_exceed_observed_at():
         validate_connected_evidence_coverage_semantics(evidence)
 
 
+def test_bing_period_end_requires_observed_at():
+    evidence = _bing()
+    evidence["observed_at"] = None
+    with pytest.raises(ValueError, match="coverage.period_end requires observed_at"):
+        validate_connected_evidence_coverage_semantics(evidence)
+
+
+def test_bing_date_less_observation_can_remain_unbounded():
+    evidence = _bing()
+    evidence["observed_at"] = None
+    evidence["coverage"]["period_end"] = None
+    evidence["records"][0]["date"] = None
+    assert validate_connected_evidence_coverage_semantics(evidence) is evidence
+
+
 def test_ga4_normalized_count_must_match_records():
     evidence = _ga4()
     evidence["coverage"]["normalized_row_count"] = 2
@@ -236,6 +265,14 @@ def test_period_end_must_match_observed_at():
     evidence = _ga4()
     evidence["coverage"]["period_end"] = "2026-09-19"
     with pytest.raises(ValueError, match="period_end did not match observed_at"):
+        validate_connected_evidence_coverage_semantics(evidence)
+
+
+def test_ga4_dated_record_requires_observed_at_even_without_period_end():
+    evidence = _ga4()
+    evidence["observed_at"] = None
+    evidence["coverage"]["period_end"] = None
+    with pytest.raises(ValueError, match="dated records require observed_at"):
         validate_connected_evidence_coverage_semantics(evidence)
 
 

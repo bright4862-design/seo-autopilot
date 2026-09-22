@@ -3,7 +3,7 @@
 Issue: #324  
 Draft PR: #331  
 Lane branch: `agent/nextgen-browser-performance-20260921`  
-Latest lane code/test checkpoint before this handoff refresh: `3e9ea388b6b8eeae624bb87709375cd739922319`
+Latest lane code/test checkpoint before this handoff refresh: `64d80deaae3ced4e10e019a60bd4013068b4610b`
 
 ## Ownership boundary
 
@@ -48,6 +48,11 @@ Lane C currently provides:
   audits before normalization, and preserving fetch/version/strategy provenance;
 - `nextgen_lighthouse_bound_integrity_v1`, which validates the additive direct-Lighthouse
   provenance and source relationship before connected lab evidence is trusted;
+- `nextgen_lighthouse_metric_units_v1` plus
+  `nextgen_lighthouse_metric_units_integrity_v1`, a separate lab-only derived contract that
+  canonicalizes timing metrics to `ms` and CLS to `score`, excludes missing/malformed/
+  contradictory units instead of guessing, emits truthful fail-closed artifacts for
+  malformed source states, and rejects reason/state tampering;
 - deterministic representative template/high-value sampling, final-URL deduplication and a
   hard 12-candidate ceiling;
 - `nextgen_performance_sample_binding_v1`, which recomputes the deterministic sample from
@@ -105,15 +110,18 @@ The integrator, not this lane, owns execution and shared orchestration.
 7. For direct Lighthouse lab payloads outside PSI, prefer
    `normalize_lighthouse_evidence_bound(...)`, then require
    `validate_bound_lighthouse_contract(...).valid` before trusting connected lab evidence.
-8. Assemble already-observed provider results under the sampled request identity. Before
+8. When a downstream consumer needs canonical lab metric units, pass only already-trusted
+   Lighthouse lab evidence to `normalize_lighthouse_metric_units(...)` and require
+   `validate_lighthouse_metric_unit_contract(...).valid`. This derived artifact remains lab-only.
+9. Assemble already-observed provider results under the sampled request identity. Before
    trusting connected coverage, call
    `validate_performance_observation_source_binding(sample, observations)`.
-9. Only after source binding succeeds, call
-   `summarize_performance_evidence_coverage(...)`.
-10. After a trusted direct-CrUX or PSI **field** component is available, optionally call
+10. Only after source binding succeeds, call
+    `summarize_performance_evidence_coverage(...)`.
+11. After a trusted direct-CrUX or PSI **field** component is available, optionally call
     `assess_core_web_vitals_field_evidence(field)`. Never substitute Lighthouse lab metrics
     for this field-only assessment.
-11. Keep field and lab envelopes separate through any future persistence/authority/customer
+12. Keep field and lab envelopes separate through any future persistence/authority/customer
     logic. Repair priority/customer scoring remain integrator-owned.
 
 A 500/1,000-page adaptive crawl must never imply 500/1,000 browser or Lighthouse
@@ -134,10 +142,11 @@ Recorded Lane-C checkpoints:
 - direct Lighthouse provenance/integrity hermetic slice: 10/10 passed;
 - direct CrUX source/coverage provenance/integrity hermetic slice: 10/10 passed in 0.05s;
 - PSI bound-integrity hermetic slice: 12/12 passed in 0.08s;
-- field-only Core Web Vitals assessment slice: **10/10 passed in 0.06s**; new source/test
-  `py_compile` passed.
+- field-only Core Web Vitals assessment slice: 10/10 passed in 0.06s;
+- Lighthouse lab metric-unit normalization/integrity slice: **12/12 passed in 0.04s**;
+  new source/test `py_compile` passed.
 
-Lane C now contains **144 focused tests across thirteen test files**. **144/144 exact-repository
+Lane C now contains **156 focused tests across fourteen test files**. **156/156 exact-repository
 execution is not claimed.**
 
 Required exact-head gate:
@@ -157,7 +166,8 @@ PYTHONPATH=. pytest -q \
   tests/test_nextgen_browser_performance_parity_hardening.py \
   tests/test_nextgen_browser_performance_lighthouse_provenance.py \
   tests/test_nextgen_browser_performance_crux_provenance.py \
-  tests/test_nextgen_browser_performance_cwv.py
+  tests/test_nextgen_browser_performance_cwv.py \
+  tests/test_nextgen_browser_performance_lighthouse_units.py
 
 python -m py_compile \
   app/nextgen_browser_performance.py \
@@ -173,6 +183,7 @@ python -m py_compile \
   app/nextgen_browser_performance_lighthouse_provenance.py \
   app/nextgen_browser_performance_crux_provenance.py \
   app/nextgen_browser_performance_cwv.py \
+  app/nextgen_browser_performance_lighthouse_units.py \
   tests/test_nextgen_browser_performance.py \
   tests/test_nextgen_browser_performance_contract.py \
   tests/test_nextgen_browser_performance_provider.py \
@@ -185,7 +196,8 @@ python -m py_compile \
   tests/test_nextgen_browser_performance_parity_hardening.py \
   tests/test_nextgen_browser_performance_lighthouse_provenance.py \
   tests/test_nextgen_browser_performance_crux_provenance.py \
-  tests/test_nextgen_browser_performance_cwv.py
+  tests/test_nextgen_browser_performance_cwv.py \
+  tests/test_nextgen_browser_performance_lighthouse_units.py
 ```
 
 The available local execution path still cannot materialize the complete branch from
@@ -220,6 +232,11 @@ Direct Lighthouse evidence has a parallel risk: a runtime-failed report or an au
 explicitly marked as errored could still contain numeric remnants. The bound direct-
 Lighthouse adapter removes that ambiguity: runtime failure is `provider_error`; errored
 audits are excluded; caller/requested/final identity is explicit.
+
+A second Lighthouse risk is semantic unit laundering: a numeric metric paired with a wrong
+but string-valued provider unit could otherwise look structurally usable. The unit-normalizer
+keeps that evidence lab-only, maps only explicit allowlisted unit aliases, excludes conflicting
+rows, and validates truthful fail-closed source/reason state before downstream use.
 
 The sample ceiling is still only a candidate bound. It is not an execution budget or
 entitlement.

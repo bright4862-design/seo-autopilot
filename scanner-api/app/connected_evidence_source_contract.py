@@ -65,11 +65,37 @@ def _absolute_url(value: Any, *, field: str) -> str:
         parsed = urlparse(text)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise ValueError
-        # Accessing ``port`` is part of URL validation: urllib parses an
-        # out-of-range/non-numeric port lazily and raises only here.
         parsed.port
     except ValueError:
         raise ValueError(f"{field} must be an absolute HTTP(S) URL") from None
+    return text
+
+
+def _validate_path_prefix_identity(
+    value: Any,
+    *,
+    field: str,
+    allow_sc_domain: bool = False,
+) -> str:
+    """Fail closed on ambiguous path-scoped provider property identities.
+
+    Search Console URL-prefix properties and Bing branch properties represent
+    directory-like scopes. A non-root path that omits its trailing slash makes a
+    later textual prefix check ambiguous (`/docs` versus `/docs-foreign`).
+    Require the provider-style directory form instead of guessing membership.
+    """
+
+    text = _bounded_text(value, field=field)
+    if allow_sc_domain and text.lower().startswith("sc-domain:"):
+        return text
+
+    text = _absolute_url(text, field=field)
+    parsed = urlparse(text)
+    if parsed.query or parsed.fragment:
+        raise ValueError(f"{field} must not contain a query or fragment")
+    path = parsed.path or "/"
+    if path != "/" and not path.endswith("/"):
+        raise ValueError(f"{field} path-scoped prefixes must end with '/'")
     return text
 
 
@@ -160,6 +186,24 @@ def validate_connected_evidence_source_identity(
 
     for field in profile["required_provenance"]:
         _bounded_text(provenance.get(field), field=f"provenance.{field}")
+
+    if profile_key in {
+        ("google_search_console", "search_analytics"),
+        ("google_search_console", "url_inspection"),
+    }:
+        _validate_path_prefix_identity(
+            provenance.get("property_uri"),
+            field="provenance.property_uri",
+            allow_sc_domain=True,
+        )
+    elif profile_key == (
+        "microsoft_bing_webmaster_tools",
+        "ai_performance_export",
+    ):
+        _validate_path_prefix_identity(
+            provenance.get("site_url"),
+            field="provenance.site_url",
+        )
 
     if profile_key in {
         ("microsoft_bing_webmaster_tools", "ai_performance_export"),

@@ -33,6 +33,9 @@ boundary and risk turning sample absence into a sitewide claim.
 
 - `template_link_flow_evidence_v1_graph_bound`;
 - exact template page/group identity validation;
+- deterministic `group_id` ↔ `template_key` binding using the producer's
+  `tmpl_<sha256(template_key)[:12]>` identity rule, so a caller cannot regroup pages
+  under forged but internally self-consistent template IDs;
 - exact template-page ↔ graph-node population binding;
 - reuse of Lane B's graph integrity validator, including edge endpoints/zones and
   recomputed node edge counts/weights;
@@ -45,8 +48,9 @@ boundary and risk turning sample absence into a sitewide claim.
   `sitewide_link_absence_claim=false`, and `customer_fix_created=false`.
 
 The helper fails closed rather than transporting ambiguous evidence when template
-identity, declared group counts/keys, page population, graph population, edge
-identity/zone, or graph node metrics are inconsistent.
+identity, deterministic group identity, declared group counts/keys, page
+population, graph population, edge identity/zone, or graph node metrics are
+inconsistent.
 
 A zero-edge assessed graph remains valid **observed evidence with zero observed
 flows**. It is not converted into proof that no links exist sitewide.
@@ -65,24 +69,25 @@ prevents the top-level envelope from becoming verified. The legacy
 
 ## Regressions added
 
-`scanner-api/tests/test_semantic_graph_template_flow.py` adds seven deterministic
+`scanner-api/tests/test_semantic_graph_template_flow.py` adds eight deterministic
 cases covering:
 
 1. article→product flow aggregation across contextual/navigation/footer zones;
 2. graph metric forgery failing closed before weights are trusted;
 3. exact template-page/graph-node population binding;
 4. forged declared template group counts failing closed;
-5. missing template page identity failing closed;
-6. deterministic output across reversed page/link input order;
-7. bounded edge samples without hiding the true observed edge count.
+5. forged but internally self-consistent template group IDs failing closed;
+6. missing template page identity failing closed;
+7. deterministic output across reversed page/link input order;
+8. bounded edge samples without hiding the true observed edge count.
 
 `scanner-api/tests/test_semantic_graph_evidence_bound_template_flow.py` adds two
 composition cases proving the preferred envelope carries the new flow contract
 and that a zero-edge assessed graph stays verified-but-observed-only rather than
 becoming a sitewide absence claim.
 
-Expected Lane-B focused total after this checkpoint: **79 tests across 11 test
-files** (previous 70 plus 9 new regressions).
+Expected Lane-B focused total after this checkpoint: **80 tests across 11 test
+files** (previous 70 plus 10 new regressions).
 
 ## Verification
 
@@ -94,8 +99,10 @@ passed focused assertions for:
 - graph node-weight forgery rejection;
 - declared template group-count forgery rejection.
 
-This is supplementary evidence only. It does **not** replace the required
-branch-native exact-head gate:
+The deterministic group-ID hardening was additionally checked by code inspection
+against the existing `infer_template_groups` producer identity rule. These are
+supplementary checks only. They do **not** replace the required branch-native
+exact-head gate:
 
 ```text
 cd scanner-api
@@ -134,7 +141,7 @@ python -m py_compile \
   tests/test_semantic_graph_evidence_bound_template_flow.py
 ```
 
-Do not claim 79/79 exact-head green until that repository-native command runs.
+Do not claim 80/80 exact-head green until that repository-native command runs.
 
 ## Integration handoff
 

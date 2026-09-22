@@ -215,8 +215,17 @@ def summarize_benchmark_corpus(results_by_site: Mapping[str, Any] | Any) -> dict
             "site_count": 0,
         }
 
-    ordered_site_ids = tuple(sorted(str(site_id) for site_id in results_by_site))
-    normalized_by_id = {str(site_id): value for site_id, value in results_by_site.items()}
+    raw_site_ids = tuple(results_by_site.keys())
+    if any(not isinstance(site_id, str) or not site_id.strip() for site_id in raw_site_ids):
+        return {
+            "version": ADAPTIVE_BENCHMARK_CORPUS_VERSION,
+            "state": "invalid_benchmark",
+            "valid": False,
+            "reason": "invalid_site_identity",
+            "site_count": len(raw_site_ids),
+        }
+    ordered_site_ids = tuple(sorted(raw_site_ids))
+    normalized_by_id = dict(results_by_site)
     invalid: list[tuple[str, str]] = []
     for site_id in ordered_site_ids:
         integrity = validate_adaptive_benchmark(normalized_by_id[site_id])

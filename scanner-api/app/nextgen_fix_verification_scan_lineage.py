@@ -29,15 +29,18 @@ def _source_claim_reason(
     if not isinstance(container, dict):
         return f"{label}_not_an_object"
 
-    populated: list[tuple[str, Any]] = [
+    # Presence itself is a claim. A present null alias must not be ignored just
+    # because another alias happens to carry the expected scan id; that would let
+    # ambiguous transport metadata participate in proof.
+    present: list[tuple[str, Any]] = [
         (field, container.get(field))
         for field in _SOURCE_ID_FIELDS
-        if field in container and container.get(field) is not None
+        if field in container
     ]
-    if not populated:
+    if not present:
         return f"{label}_source_scan_id_missing" if require_claim else ""
 
-    for field, value in populated:
+    for field, value in present:
         if not _exact_nonempty_string(value):
             return f"{label}_{field}_must_be_exact_nonempty_string"
         if value != expected_scan_id:
@@ -64,8 +67,8 @@ def verification_scan_lineage_integrity(
     This pure boundary closes that gap by requiring exact caller-owned scan IDs
     plus matching source claims on every proving input.
 
-    Nothing is persisted or mutated. A missing, whitespace-normalized, conflicting,
-    or cross-scan source claim is non-proof.
+    Nothing is persisted or mutated. A missing, null, whitespace-normalized,
+    conflicting, or cross-scan source claim is non-proof.
     """
     base = {
         "version": SCAN_LINEAGE_BINDING_VERSION,

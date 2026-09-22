@@ -7,6 +7,8 @@ persistence, scoring, projection, or production mutation.
 
 from __future__ import annotations
 
+import csv
+import io
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -18,6 +20,8 @@ from .connected_evidence import (
 )
 
 IMPORT_SHAPE_VERSION = "connected_evidence_import_shape_v1"
+CSV_SHAPE_VERSION = "connected_evidence_csv_shape_v1"
+MAX_IMPORT_BYTES = 5_000_000
 
 BING_AI_PERFORMANCE_PROFILE = "bing_ai_performance_export"
 GA4_AI_REFERRAL_PROFILE = "ga4_ai_assistant_referrals"
@@ -86,6 +90,57 @@ def _value_identity(value: Any) -> str:
     return str(value).strip().casefold()
 
 
+def _validated_import_limits(*, max_bytes: int, max_rows: int) -> tuple[int, int]:
+    if (
+        isinstance(max_bytes, bool)
+        or not isinstance(max_bytes, int)
+        or max_bytes <= 0
+        or max_bytes > MAX_IMPORT_BYTES
+    ):
+        raise ValueError(f"max_bytes must be within 1..{MAX_IMPORT_BYTES}")
+    if (
+        isinstance(max_rows, bool)
+        or not isinstance(max_rows, int)
+        or max_rows <= 0
+        or max_rows > MAX_IMPORT_ROWS
+    ):
+        raise ValueError(f"max_rows must be within 1..{MAX_IMPORT_ROWS}")
+    return max_bytes, max_rows
+
+
+def parse_connected_evidence_import_csv(
+    text: str,
+    *,
+    max_bytes: int = MAX_IMPORT_BYTES,
+    max_rows: int = MAX_IMPORT_ROWS,
+) -> list[dict[str, str]]:
+    """Parse strict bounded CSV rows without silently dropping ragged fields."""
+
+    max_bytes, max_rows = _validated_import_limits(max_bytes=max_bytes, max_rows=max_rows)
+    try:
+        encoded = text.encode("utf-8")
+    except (AttributeError, UnicodeEncodeError):
+        raise ValueError("CSV import must be valid UTF-8 text") from None
+    if len(encoded) > max_bytes:
+        raise ValueError("CSV import exceeds max_bytes")
+
+    stream = io.StringIO(text.lstrip("\ufeff"), newline="")
+    reader = csv.reader(stream)
+    try:
+        header = next(reader)
+    except StopIteration:
+        return []
+    expected_fields = len(header)
+    for row_number, row in enumerate(reader, start=1):
+        if row_number > max_rows:
+            raise ValueError("CSV import exceeds max_rows")
+        if len(row) != expected_fields:
+            relation = "more" if len(row) > expected_fields else "fewer"
+            raise ValueError(f"CSV row {row_number} has {relation} fields than header")
+
+    return parse_csv_dict_rows(text, max_bytes=max_bytes, max_rows=max_rows)
+
+
 def _profile_alias_indexes(profile: str) -> tuple[dict[str, str], dict[str, str]]:
     groups = _PROFILE_ALIAS_GROUPS.get(profile)
     if groups is None:
@@ -122,13 +177,7 @@ def validate_connected_evidence_import_rows(
     header collisions that intersect a registered alias.
     """
 
-    if (
-        isinstance(max_rows, bool)
-        or not isinstance(max_rows, int)
-        or max_rows <= 0
-        or max_rows > MAX_IMPORT_ROWS
-    ):
-        raise ValueError(f"max_rows must be within 1..{MAX_IMPORT_ROWS}")
+    _, max_rows = _validated_import_limits(max_bytes=MAX_IMPORT_BYTES, max_rows=max_rows)
     normalized_to_semantic, compact_to_semantic = _profile_alias_indexes(profile)
 
     result: list[Mapping[str, Any]] = []
@@ -181,6 +230,8 @@ def validate_connected_evidence_import_rows(
 
 def normalize_bing_ai_performance_import_rows(
     rows: Iterable[Mapping[str, Any]],
+    *,
+    max_rows: int = MAX_IMPORT_ROWS,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Strict manual/Excel-derived Bing import entrypoint."""
@@ -188,18 +239,28 @@ def normalize_bing_ai_performance_import_rows(
     checked = validate_connected_evidence_import_rows(
         rows,
         profile=BING_AI_PERFORMANCE_PROFILE,
+        max_rows=max_rows,
     )
     return normalize_bing_ai_performance_rows(checked, **kwargs)
 
 
-def normalize_bing_ai_performance_import_csv(text: str, **kwargs: Any) -> dict[str, Any]:
+def normalize_bing_ai_performance_import_csv(
+    text: str,
+    *,
+    max_bytes: int = MAX_IMPORT_BYTES,
+    max_rows: int = MAX_IMPORT_ROWS,
+    **kwargs: Any,
+) -> dict[str, Any]:
     """Strict bounded CSV Bing import entrypoint."""
 
-    return normalize_bing_ai_performance_import_rows(parse_csv_dict_rows(text), **kwargs)
+    rows = parse_connected_evidence_import_csv(text, max_bytes=max_bytes, max_rows=max_rows)
+    return normalize_bing_ai_performance_import_rows(rows, max_rows=max_rows, **kwargs)
 
 
 def normalize_ga4_ai_referral_import_rows(
     rows: Iterable[Mapping[str, Any]],
+    *,
+    max_rows: int = MAX_IMPORT_ROWS,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Strict aggregate/Excel-derived GA4 import entrypoint."""
@@ -207,11 +268,19 @@ def normalize_ga4_ai_referral_import_rows(
     checked = validate_connected_evidence_import_rows(
         rows,
         profile=GA4_AI_REFERRAL_PROFILE,
+        max_rows=max_rows,
     )
     return normalize_ga4_ai_referral_rows(checked, **kwargs)
 
 
-def normalize_ga4_ai_referral_import_csv(text: str, **kwargs: Any) -> dict[str, Any]:
+def normalize_ga4_ai_referral_import_csv(
+    text: str,
+    *,
+    max_bytes: int = MAX_IMPORT_BYTES,
+    max_rows: int = MAX_IMPORT_ROWS,
+    **kwargs: Any,
+) -> dict[str, Any]:
     """Strict bounded CSV GA4 import entrypoint."""
 
-    return normalize_ga4_ai_referral_import_rows(parse_csv_dict_rows(text), **kwargs)
+    rows = parse_connected_evidence_import_csv(text, max_bytes=max_bytes, max_rows=max_rows)
+    return normalize_ga4_ai_referral_import_rows(rows, max_rows=max_rows, **kwargs)

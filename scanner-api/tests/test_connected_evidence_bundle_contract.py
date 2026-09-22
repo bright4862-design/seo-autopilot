@@ -5,15 +5,18 @@ import pytest
 import app.connected_evidence_bundle_contract as bundle_contract
 
 
+UNAVAILABLE = {"not_connected", "not_supported", "not_verified", "provider_error"}
+
+
 def _gsc(*, period_end="2026-09-20", state="verified", property_uri="sc-domain:example.test"):
     return {
         "provider": "google_search_console",
         "source_kind": "search_analytics",
         "state": state,
-        "observed_at": None if state in {"not_connected", "not_supported", "not_verified", "provider_error"} else f"{period_end}T00:00:00Z",
+        "observed_at": None if state in UNAVAILABLE else f"{period_end}T00:00:00Z",
         "provenance": {"property_uri": property_uri},
         "coverage": {}
-        if state in {"not_connected", "not_supported", "not_verified", "provider_error"}
+        if state in UNAVAILABLE
         else {
             "dimensions": ["date", "query"],
             "period_start": period_end,
@@ -22,42 +25,42 @@ def _gsc(*, period_end="2026-09-20", state="verified", property_uri="sc-domain:e
     }
 
 
-def _inspection(*, url="https://example.test/a"):
+def _inspection(*, url="https://example.test/a", property_uri="sc-domain:example.test", state="verified"):
     return {
         "provider": "google_search_console",
         "source_kind": "url_inspection",
-        "state": "verified",
-        "observed_at": "2026-09-20T00:00:00Z",
+        "state": state,
+        "observed_at": None if state in UNAVAILABLE else "2026-09-20T00:00:00Z",
         "provenance": {
-            "property_uri": "sc-domain:example.test",
+            "property_uri": property_uri,
             "inspection_url": url,
         },
-        "coverage": {"url_count": 1},
+        "coverage": {} if state in UNAVAILABLE else {"url_count": 1},
     }
 
 
-def _bing(*, period_end="2026-09-20", import_name="a.csv"):
+def _bing(*, period_end="2026-09-20", import_name="a.csv", state="verified", site_url="https://example.test"):
     return {
         "provider": "microsoft_bing_webmaster_tools",
         "source_kind": "ai_performance_export",
-        "state": "verified",
-        "observed_at": f"{period_end}T00:00:00Z",
+        "state": state,
+        "observed_at": None if state in UNAVAILABLE else f"{period_end}T00:00:00Z",
         "provenance": {
-            "site_url": "https://example.test",
+            "site_url": site_url,
             "import_name": import_name,
         },
-        "coverage": {"period_start": period_end, "period_end": period_end},
+        "coverage": {} if state in UNAVAILABLE else {"period_start": period_end, "period_end": period_end},
     }
 
 
-def _ga4(*, period_end="2026-09-20"):
+def _ga4(*, period_end="2026-09-20", state="verified", property_id="properties/123"):
     return {
         "provider": "google_analytics_4",
         "source_kind": "ai_assistant_referrals",
-        "state": "verified",
-        "observed_at": f"{period_end}T00:00:00Z",
-        "provenance": {"property_id": "properties/123"},
-        "coverage": {"period_start": period_end, "period_end": period_end},
+        "state": state,
+        "observed_at": None if state in UNAVAILABLE else f"{period_end}T00:00:00Z",
+        "provenance": {"property_id": property_id},
+        "coverage": {} if state in UNAVAILABLE else {"period_start": period_end, "period_end": period_end},
     }
 
 
@@ -160,3 +163,65 @@ def test_snapshot_identity_is_deterministic_and_does_not_mutate_input(bypass_ups
 def test_real_composed_boundary_rejects_invalid_envelope_without_monkeypatch():
     with pytest.raises(ValueError):
         bundle_contract.validate_connected_evidence_snapshot_bundle([{}])
+
+
+def test_snapshot_source_identity_version_is_explicit():
+    assert (
+        bundle_contract.SNAPSHOT_SOURCE_IDENTITY_VERSION
+        == "connected_evidence_snapshot_source_identity_v1"
+    )
+
+
+def test_gsc_snapshot_identity_canonicalizes_domain_case_and_trailing_dot(bypass_upstream):
+    first = _gsc(property_uri="sc-domain:Example.Test.")
+    second = _gsc(property_uri="sc-domain:example.test")
+    with pytest.raises(ValueError, match="duplicate connected-evidence snapshot identity"):
+        bundle_contract.validate_connected_evidence_snapshot_bundle([first, second])
+
+
+def test_url_inspection_snapshot_identity_canonicalizes_default_port_and_host_case(bypass_upstream):
+    first = _inspection(
+        property_uri="sc-domain:Example.Test.",
+        url="https://EXAMPLE.test:443/a",
+    )
+    second = _inspection(
+        property_uri="sc-domain:example.test",
+        url="https://example.test/a",
+    )
+    with pytest.raises(ValueError, match="duplicate connected-evidence snapshot identity"):
+        bundle_contract.validate_connected_evidence_snapshot_bundle([first, second])
+
+
+def test_bing_snapshot_identity_canonicalizes_default_port_and_root_slash(bypass_upstream):
+    first = _bing(site_url="https://EXAMPLE.test:443")
+    second = _bing(site_url="https://example.test/")
+    with pytest.raises(ValueError, match="duplicate connected-evidence snapshot identity"):
+        bundle_contract.validate_connected_evidence_snapshot_bundle([first, second])
+
+
+def test_ga4_snapshot_identity_canonicalizes_property_resource_alias(bypass_upstream):
+    first = _ga4(property_id="properties/123")
+    second = _ga4(property_id="123")
+    with pytest.raises(ValueError, match="duplicate connected-evidence snapshot identity"):
+        bundle_contract.validate_connected_evidence_snapshot_bundle([first, second])
+
+
+def test_gsc_observed_and_unavailable_same_property_fail_closed(bypass_upstream):
+    with pytest.raises(ValueError, match="contradictory connected-evidence availability states"):
+        bundle_contract.validate_connected_evidence_snapshot_bundle(
+            [_gsc(state="verified"), _gsc(state="not_connected")]
+        )
+
+
+def test_bing_observed_and_unavailable_same_site_fail_closed(bypass_upstream):
+    with pytest.raises(ValueError, match="contradictory connected-evidence availability states"):
+        bundle_contract.validate_connected_evidence_snapshot_bundle(
+            [_bing(state="verified"), _bing(state="provider_error")]
+        )
+
+
+def test_ga4_observed_and_unavailable_same_property_fail_closed(bypass_upstream):
+    with pytest.raises(ValueError, match="contradictory connected-evidence availability states"):
+        bundle_contract.validate_connected_evidence_snapshot_bundle(
+            [_ga4(state="stale"), _ga4(state="not_verified")]
+        )

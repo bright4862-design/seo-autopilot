@@ -79,11 +79,17 @@ def test_rejects_non_hex_population_fingerprint_even_when_base_shape_passes():
 def test_rejects_underfilled_checkpoint_population_that_base_arithmetic_allows():
     forged = copy.deepcopy(_build())
     first = forged["smart"][0]
+    second = forged["smart"][1]
     first["pages_assessed"] = 149
     first["pages_added"] = 149
     first["new_finding_yield_per_100"] = _rate(
         first["new_finding_fingerprints"],
         149,
+    )
+    second["pages_added"] = second["pages_assessed"] - first["pages_assessed"]
+    second["new_finding_yield_per_100"] = _rate(
+        second["new_finding_fingerprints"],
+        second["pages_added"],
     )
     assert validate_marginal_yield_benchmark(forged)["valid"] is True
     check = validate_marginal_population_integrity(forged)

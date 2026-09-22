@@ -3,7 +3,7 @@
 Issue: #324  
 Draft PR: #331  
 Lane branch: `agent/nextgen-browser-performance-20260921`  
-Latest code/test checkpoint before this handoff refresh: `b73610ca88a22fb567a7beb07940ce00b1e4c96b`
+Latest code/test checkpoint before this handoff refresh: `98b1fb66a61ae59a5c93cc2c62134be0499f1f4a`
 
 ## Ownership boundary
 
@@ -26,6 +26,11 @@ Lane C currently provides:
 - direct CrUX and PageSpeed Insights normalization with CrUX field evidence and Lighthouse
   lab evidence kept in separate envelopes;
 - strict direct-CrUX URL/origin scope, source identity and collection-period provenance;
+- `nextgen_crux_field_dimension_v1` + integrity binding for direct CrUX device context:
+  `PHONE`/`TABLET`/`DESKTOP` normalize to `phone`/`tablet`/`desktop`, while an omitted
+  provider form factor is preserved as `all` (aggregate field population). Caller query
+  dimensions may corroborate but not contradict the provider record; Lighthouse `mobile`
+  strategy is intentionally not accepted as a CrUX field dimension;
 - source-bound PSI requested/final/component provenance and a fail-closed integrity layer;
 - bounded Lighthouse metric/opportunity extraction with direct-Lighthouse requested/final
   identity, runtime-error and failed-audit provenance;
@@ -78,24 +83,30 @@ The serialized integrator, not this lane, owns execution and shared orchestratio
 6. For direct CrUX `queryRecord` payloads, prefer
    `normalize_crux_query_record_evidence_bound(...)`, then require
    `validate_bound_crux_contract(...).valid` before trusting connected field evidence.
-7. For PSI payloads, prefer `normalize_pagespeed_insights_evidence_bound(...)`, then require
+7. After that direct-CrUX bound contract passes, optionally derive device context with
+   `normalize_crux_field_dimension_context(raw_crux_payload, bound_field,
+   requested_form_factor=original_query_form_factor)` and require
+   `validate_crux_field_dimension_contract(...).valid`. Do not populate the CrUX request
+   dimension from Lighthouse/PSI lab strategy. Omitted provider `formFactor` means field data
+   aggregated across all form factors.
+8. For PSI payloads, prefer `normalize_pagespeed_insights_evidence_bound(...)`, then require
    `validate_bound_pagespeed_contract(...).valid` before trusting either connected component.
-8. For direct Lighthouse lab payloads, prefer `normalize_lighthouse_evidence_bound(...)`, then
+9. For direct Lighthouse lab payloads, prefer `normalize_lighthouse_evidence_bound(...)`, then
    require `validate_bound_lighthouse_contract(...).valid`.
-9. If canonical lab metric units are needed, call `normalize_lighthouse_metric_units(...)` and
-   require `validate_lighthouse_metric_unit_contract(...).valid`.
-10. If Lighthouse opportunity savings are needed, call
+10. If canonical lab metric units are needed, call `normalize_lighthouse_metric_units(...)` and
+    require `validate_lighthouse_metric_unit_contract(...).valid`.
+11. If Lighthouse opportunity savings are needed, call
     `normalize_lighthouse_opportunity_evidence(raw_lighthouse_payload, bound_lab)` and require
     `validate_lighthouse_opportunity_contract(raw_lighthouse_payload, bound_lab, artifact).valid`.
     This derived artifact is lab-only and must not become field evidence.
-11. Assemble already-observed provider results under sampled request identities, then require
+12. Assemble already-observed provider results under sampled request identities, then require
     `validate_performance_observation_source_binding(sample, observations)` before aggregate
     coverage is trusted.
-12. Only after source binding succeeds, call `summarize_performance_evidence_coverage(...)`.
-13. For trusted direct-CrUX or PSI **field** evidence, the integrator may optionally call
+13. Only after source binding succeeds, call `summarize_performance_evidence_coverage(...)`.
+14. For trusted direct-CrUX or PSI **field** evidence, the integrator may optionally call
     `assess_core_web_vitals_field_evidence(field)`. Do not substitute Lighthouse lab metrics.
-14. Keep field and lab envelopes separate through any future persistence/authority/customer
-    logic. Repair priority/customer scoring remain integrator-owned.
+15. Keep field and lab envelopes and their device contexts separate through any future
+    persistence/authority/customer logic. Repair priority/customer scoring remain integrator-owned.
 
 A 500/1,000-page adaptive crawl must never imply 500/1,000 browser or Lighthouse executions.
 
@@ -117,10 +128,11 @@ Recorded focused checkpoints include:
 - field-only CWV assessment: 10/10;
 - Lighthouse lab metric-unit normalization/integrity: 12/12;
 - critical parity sufficiency/integrity: 11/11;
-- Lighthouse opportunity unit/provenance hardening: **13/13 in 0.06s**; source/test
-  `py_compile` passed.
+- Lighthouse opportunity unit/provenance hardening: 13/13;
+- direct CrUX form-factor context/integrity: **13/13 in 0.07s**; source/test `py_compile`
+  passed.
 
-Lane C now contains **180 focused tests across sixteen test files**. **180/180 exact-repository
+Lane C now contains **193 focused tests across seventeen test files**. **193/193 exact-repository
 execution is not claimed.** The available execution container cannot resolve GitHub to
 materialize the full branch, and this integration-target draft does not receive the normal
 main-target PR CI workflow. Exact-head repository execution remains an integration-readiness
@@ -143,6 +155,7 @@ PYTHONPATH=. pytest -q \
   tests/test_nextgen_browser_performance_parity_hardening.py \
   tests/test_nextgen_browser_performance_lighthouse_provenance.py \
   tests/test_nextgen_browser_performance_crux_provenance.py \
+  tests/test_nextgen_browser_performance_crux_dimensions.py \
   tests/test_nextgen_browser_performance_cwv.py \
   tests/test_nextgen_browser_performance_lighthouse_units.py \
   tests/test_nextgen_browser_performance_parity_sufficiency.py \
@@ -161,6 +174,7 @@ python -m py_compile \
   app/nextgen_browser_performance_parity_hardening.py \
   app/nextgen_browser_performance_lighthouse_provenance.py \
   app/nextgen_browser_performance_crux_provenance.py \
+  app/nextgen_browser_performance_crux_dimensions.py \
   app/nextgen_browser_performance_cwv.py \
   app/nextgen_browser_performance_lighthouse_units.py \
   app/nextgen_browser_performance_parity_sufficiency.py \
@@ -177,6 +191,7 @@ python -m py_compile \
   tests/test_nextgen_browser_performance_parity_hardening.py \
   tests/test_nextgen_browser_performance_lighthouse_provenance.py \
   tests/test_nextgen_browser_performance_crux_provenance.py \
+  tests/test_nextgen_browser_performance_crux_dimensions.py \
   tests/test_nextgen_browser_performance_cwv.py \
   tests/test_nextgen_browser_performance_lighthouse_units.py \
   tests/test_nextgen_browser_performance_parity_sufficiency.py \
@@ -189,7 +204,12 @@ The main evidence risk remains treating unavailable, mismatched, partial, unit-a
 failed provider/render observations as measured defects. Lane-C contracts therefore preserve
 unknown/not-verified states and keep CrUX field evidence separate from Lighthouse lab evidence.
 
-Lighthouse opportunities need special care because `numericValue` is audit-specific. The new
+Direct CrUX has an additional device-dimension risk: a response without
+`record.key.formFactor` is an all-form-factor aggregate, not implicitly mobile or desktop.
+The new field-context contract preserves that distinction and refuses to accept Lighthouse
+`mobile` strategy as a CrUX field dimension.
+
+Lighthouse opportunities need special care because `numericValue` is audit-specific. The
 opportunity contract does not infer a savings unit: it accepts explicitly typed provider
 savings fields, or an explicit millisecond/byte `numericUnit`, and otherwise excludes the
 ambiguous numeric value. This derived evidence remains lab-only.

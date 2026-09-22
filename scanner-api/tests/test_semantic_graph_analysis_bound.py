@@ -79,6 +79,18 @@ class CountingVectorizer:
         return {row["url"]: {"shared_intent": 1.0} for row in pages}
 
 
+class MutatingVectorizer:
+    version = "mutating_v1"
+
+    def __init__(self):
+        self.calls = 0
+
+    def vectors(self, pages):
+        self.calls += 1
+        pages[0]["title"] = "mutated-by-adapter"
+        return {row["url"]: {"shared_intent": 1.0} for row in pages}
+
+
 def test_valid_bundle_uses_one_verified_snapshot_for_all_semantic_outputs():
     left = "https://e.test/a"
     right = "https://e.test/b"
@@ -99,6 +111,7 @@ def test_valid_bundle_uses_one_verified_snapshot_for_all_semantic_outputs():
     assert result["semantic_vector_contract_version"] == SEMANTIC_VECTOR_CONTRACT_VERSION
     assert result["semantic_vector_integrity_state"] == "verified"
     assert result["semantic_vector_determinism_verified"] is True
+    assert result["semantic_vector_input_isolation_enforced"] is True
     assert result["graph_integrity_state"] == "verified"
     assert vectorizer.calls == 2
     assert result["semantic_clusters"]["state"] == "candidate"
@@ -152,6 +165,31 @@ def test_nondeterministic_vectors_fail_closed_before_semantic_analyzers():
     assert result["semantic_clusters"]["clusters"] == []
     assert result["cannibalization_candidates"]["candidate_count"] == 0
     assert result["contextual_internal_link_opportunities"]["candidate_count"] == 0
+
+
+def test_mutating_vectorizer_fails_closed_without_contaminating_page_evidence():
+    left = "https://e.test/a"
+    right = "https://e.test/b"
+    pages = [page(left), page(right)]
+    pages[0]["title"] = "Original"
+    before = deepcopy(pages)
+    graph = build_weighted_internal_link_graph(pages, [])
+    vectorizer = MutatingVectorizer()
+
+    result = vector_bound_semantic_analysis_evidence(
+        pages,
+        graph,
+        vectorizer=vectorizer,
+    )
+
+    assert vectorizer.calls == 1
+    assert result["semantic_vector_integrity_state"] == "not_verified"
+    assert result["semantic_vector_integrity_reason"] == "vectorizer_input_mutation"
+    assert result["semantic_vector_input_isolation_enforced"] is True
+    assert result["semantic_clusters"]["state"] == "not_verified"
+    assert result["cannibalization_candidates"]["candidate_count"] == 0
+    assert result["contextual_internal_link_opportunities"]["candidate_count"] == 0
+    assert pages == before
 
 
 def test_foreign_vector_population_fails_closed_but_keeps_independent_near_duplicate_evidence():

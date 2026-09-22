@@ -5,7 +5,9 @@ from app.connected_evidence_import_contract import (
     GA4_AI_REFERRAL_PROFILE,
     normalize_bing_ai_performance_import_csv,
     normalize_bing_ai_performance_import_rows,
+    normalize_ga4_ai_referral_import_csv,
     normalize_ga4_ai_referral_import_rows,
+    parse_connected_evidence_import_csv,
     validate_connected_evidence_import_rows,
 )
 
@@ -100,3 +102,49 @@ def test_ga4_strict_row_wrapper_blocks_conflict_before_delegate():
     row = {"session_source": "chatgpt.com", "source": "perplexity.ai"}
     with pytest.raises(ValueError, match="conflicting aliases for source"):
         normalize_ga4_ai_referral_import_rows([row], property_id="123")
+
+
+def test_strict_csv_rejects_row_wider_than_header():
+    with pytest.raises(ValueError, match="row 1 has more fields than header"):
+        parse_connected_evidence_import_csv(
+            "Cited Page,Citation Count\nhttps://example.com/a,2,unexpected\n"
+        )
+
+
+def test_strict_csv_rejects_row_shorter_than_header():
+    with pytest.raises(ValueError, match="row 1 has fewer fields than header"):
+        parse_connected_evidence_import_csv(
+            "Cited Page,Citation Count\nhttps://example.com/a\n"
+        )
+
+
+def test_strict_csv_preserves_quoted_commas_and_explicit_empty_trailing_cells():
+    rows = parse_connected_evidence_import_csv(
+        'Cited Page,Topic,Citation Count\nhttps://example.com/a,"travel, europe",\n'
+    )
+    assert rows == [
+        {
+            "Cited Page": "https://example.com/a",
+            "Topic": "travel, europe",
+            "Citation Count": "",
+        }
+    ]
+
+
+def test_strict_csv_limits_can_only_be_lowered():
+    with pytest.raises(ValueError, match="max_bytes must be within"):
+        parse_connected_evidence_import_csv("a\n1\n", max_bytes=5_000_001)
+    with pytest.raises(ValueError, match="max_rows must be within"):
+        parse_connected_evidence_import_csv("a\n1\n", max_rows=50_001)
+    with pytest.raises(ValueError, match="exceeds max_rows"):
+        parse_connected_evidence_import_csv("a\n1\n2\n", max_rows=1)
+
+
+def test_ga4_strict_csv_wrapper_rejects_ragged_row_before_normalization():
+    with pytest.raises(ValueError, match="row 1 has more fields than header"):
+        normalize_ga4_ai_referral_import_csv(
+            "session_source,sessions\nchatgpt.com,1,unexpected\n",
+            property_id="123",
+            retrieved_at="2026-09-23T00:00:00Z",
+            stale_after_days=None,
+        )

@@ -222,7 +222,11 @@ def contextual_internal_link_opportunities(
                     continue
 
                 existing = edges.get((source, target))
-                existing_zone = str(existing.get("strongest_zone") or "").lower() if existing else None
+                existing_zone = (
+                    str(existing.get("strongest_zone") or "").strip().lower()
+                    if existing
+                    else None
+                )
                 if existing_zone == "contextual":
                     continue
 

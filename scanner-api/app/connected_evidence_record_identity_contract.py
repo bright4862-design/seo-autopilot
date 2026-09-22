@@ -21,6 +21,25 @@ _UNAVAILABLE_STATES = frozenset(
     {"not_connected", "not_supported", "not_verified", "provider_error"}
 )
 
+_GA4_ASSISTANT_ALIASES: dict[str, str] = {
+    "chatgpt": "chatgpt",
+    "openai_chatgpt": "chatgpt",
+    "perplexity": "perplexity",
+    "perplexity_ai": "perplexity",
+    "claude": "claude",
+    "anthropic_claude": "claude",
+    "gemini": "gemini",
+    "google_gemini": "gemini",
+    "microsoft_copilot": "microsoft_copilot",
+    "copilot": "microsoft_copilot",
+    "bing_chat": "microsoft_copilot",
+    "meta_ai": "meta_ai",
+    "poe": "poe",
+    "you": "you",
+    "you_com": "you",
+    "phind": "phind",
+}
+
 
 def _identity_text(value: Any, *, field: str, allow_none: bool = True) -> str | None:
     if value is None and allow_none:
@@ -35,6 +54,21 @@ def _identity_text(value: Any, *, field: str, allow_none: bool = True) -> str | 
     if len(text) > 4096:
         raise ValueError(f"{field} exceeds its size bound")
     return text
+
+
+def _canonical_ga4_assistant_identity(value: Any, *, field: str) -> str:
+    text = _identity_text(value, field=field, allow_none=False)
+    assert text is not None
+    normalized = "_".join(
+        part
+        for part in "".join(
+            char if char.isalnum() else " " for char in text.lower()
+        ).split()
+    )
+    canonical = _GA4_ASSISTANT_ALIASES.get(normalized)
+    if canonical is None:
+        raise ValueError(f"{field} is not a registered AI assistant")
+    return canonical
 
 
 def _record_identity(
@@ -103,8 +137,10 @@ def _record_identity(
         )
 
     if profile_key == ("google_analytics_4", "ai_assistant_referrals"):
+        assistant = _canonical_ga4_assistant_identity(
+            record.get("assistant"), field=f"records[{index}].assistant"
+        )
         fields = (
-            "assistant",
             "date",
             "source",
             "medium",
@@ -114,11 +150,11 @@ def _record_identity(
             "region",
             "device_category",
         )
-        return profile_key + tuple(
+        return profile_key + (assistant,) + tuple(
             _identity_text(
                 record.get(field),
                 field=f"records[{index}].{field}",
-                allow_none=field != "assistant",
+                allow_none=True,
             )
             for field in fields
         )
@@ -149,7 +185,9 @@ def validate_connected_evidence_record_identity_semantics(
     Provider row numbers are transport positions, not semantic identities. Two
     rows with the same provider dimensions but different row numbers would make
     later aggregation order-dependent or double-count evidence, so they fail
-    closed instead of being silently summed.
+    closed instead of being silently summed. Accepted GA4 assistant aliases are
+    canonicalized for identity so spelling aliases cannot evade duplicate-row
+    detection.
     """
 
     validate_connected_evidence_scope_semantics(evidence)

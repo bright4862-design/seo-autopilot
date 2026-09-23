@@ -43,7 +43,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "member-control",
-        "text": "Trusted member root.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/observed", "require_live": true}],
         "numeric_claims": [],
         "fix_refs": [],
@@ -57,7 +57,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "borrowed-root",
-        "text": "Borrowed sibling root.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/observed", "require_live": true}],
         "numeric_claims": [],
         "fix_refs": [],
@@ -72,7 +72,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "borrowed-url",
-        "text": "Borrowed sibling evidence URL.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/borrowed-proof", "require_live": false}],
         "numeric_claims": [],
         "fix_refs": [],
@@ -124,7 +124,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "borrowed-local-pair",
-        "text": "Local scan pair still cannot borrow containment.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/observed", "require_live": true}],
         "numeric_claims": [],
         "fix_refs": [],
@@ -176,7 +176,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "nested-borrow",
-        "text": "Nested diagnostics cannot borrow producer membership.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/observed", "require_live": true}],
         "numeric_claims": [],
         "fix_refs": [],
@@ -214,7 +214,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "legacy-control",
-        "text": "Legacy compatibility control.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/observed", "require_live": true}],
         "numeric_claims": [],
         "fix_refs": [],

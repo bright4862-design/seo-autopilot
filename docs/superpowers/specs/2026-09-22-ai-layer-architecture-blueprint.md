@@ -74,6 +74,17 @@ A strict answer envelope containing:
 
 Unknown fields are rejected. The answer envelope exists so each independently grounded clause can be verified/redacted without editing prose inside a clause.
 
+### Deterministic annotation text
+
+Typed claim arrays do not, by themselves, prove that arbitrary prose says only
+what those arrays declare. `ai_annotation_v1` therefore permits only the
+versioned deterministic v1 text, `Grounded evidence is available for this
+annotation.`, after every evidence/numeric/Fix/root-cause/state atom passes its
+own exact verifier checks. Any other text fails closed with
+`text_not_deterministically_rendered`. Richer customer wording must later be
+rendered deterministically from new constrained claim types; regex, keyword, or
+set-membership inspection of free-form prose is not a semantic verifier.
+
 ## Deterministic EvidenceSet
 
 `build_evidence_set()` consumes a sealed L2 snapshot only. A usable snapshot must carry the existing authority seal markers (`authority_seal_version`, `authority_sealed_at`, `authority_proof`). The builder:

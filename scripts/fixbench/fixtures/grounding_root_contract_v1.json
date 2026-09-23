@@ -27,7 +27,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "root-clean",
-        "text": "Verified root evidence.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/root-evidence", "require_live": false}],
         "numeric_claims": [],
         "fix_refs": [],
@@ -51,7 +51,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "root-version",
-        "text": "Must reject unknown version.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/real", "require_live": true}],
         "numeric_claims": [],
         "fix_refs": [],
@@ -74,7 +74,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "root-conflict",
-        "text": "Must reject conflicted evidence.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/real", "require_live": true}],
         "numeric_claims": [],
         "fix_refs": [],
@@ -97,7 +97,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "root-empty",
-        "text": "Must reject empty evidence refs.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/real", "require_live": true}],
         "numeric_claims": [],
         "fix_refs": [],
@@ -120,7 +120,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "root-structured",
-        "text": "Must reject structured evidence refs.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/real", "require_live": true}],
         "numeric_claims": [],
         "fix_refs": [],
@@ -143,7 +143,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "root-orphan",
-        "text": "Must reject orphan producer evidence.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/real", "require_live": true}],
         "numeric_claims": [],
         "fix_refs": [],
@@ -166,7 +166,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "root-url",
-        "text": "Must reject plausible URL from invalid root evidence.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/root-evidence", "require_live": false}],
         "numeric_claims": [],
         "fix_refs": [],

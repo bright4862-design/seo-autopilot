@@ -2,7 +2,9 @@
 
 This module does not call a model, crawl the web, persist data, rank repairs, or
 create authority. It verifies strict AI envelopes against a read-only EvidenceSet
-built from an already sealed L2 snapshot.
+built from a caller-authenticated L2 snapshot. Seal-marker shape checks are not
+cryptographic authentication; a runtime adapter must verify the exact snapshot
+before calling the offline builder.
 """
 from __future__ import annotations
 
@@ -21,6 +23,8 @@ from .stage3_root_causes import validate_root_cause_evidence
 
 EVIDENCE_SET_VERSION = "ai_evidence_set_v1"
 GROUNDING_VERIFIER_VERSION = "grounding_verifier_v1"
+DETERMINISTIC_ANNOTATION_TEXT_VERSION = "grounded_annotation_text_v1"
+DETERMINISTIC_ANNOTATION_TEXT = "Grounded evidence is available for this annotation."
 _STAGE3_HANDOFF_VERSION = "fixlist_handoff_v2"
 
 # URL evidence is intentionally container-bound. A sealed snapshot can contain
@@ -50,6 +54,58 @@ _ROOT_CONTAINERS = frozenset({"root_causes", "root_cause_evidence"})
 _FIX_ID_FIELDS = frozenset({"fix_id", "repair_id", "repair_fingerprint"})
 _ROOT_ID_FIELDS = frozenset({"root_cause_id"})
 _SEAL_FIELDS = ("authority_seal_version", "authority_sealed_at", "authority_proof")
+
+# Evidence membership is path-bound. Recognizing a collection name at an
+# arbitrary recursive location (for example ``diagnostics.pages`` or
+# ``metadata.fixes``) must never grant sealed evidence authority.
+_ROOT_PAGE_PATHS = frozenset((name,) for name in _PAGE_CONTAINERS)
+_ROOT_FIX_PATHS = frozenset((name,) for name in _FIX_CONTAINERS)
+_ROOT_CAUSE_PATHS = frozenset({("root_causes",)})
+_HANDOFF_FIX_PATHS = frozenset({
+    ("stage3_handoff_v2_source", "fixes"),
+    ("review", "stage3_handoff_v2_source", "fixes"),
+    ("health_score_explanation", "stage3_delivery", "handoff_v2_source", "fixes"),
+})
+_AUTHORIZED_FIX_PATHS = _ROOT_FIX_PATHS | _HANDOFF_FIX_PATHS
+
+# Scalar claims have a separate positive contract from URL/ref membership.
+# The exact sealed-schema path, direct field, and JSON scalar type must all
+# match. Expand this only with a reviewed producer contract.
+_ROOT_SCALAR_FIELD_TYPES = {
+    "status": "string",
+    "scan_status": "string",
+    "health_score": "number",
+    "pages_found": "integer",
+    "pages_crawled": "integer",
+    "pages_retained": "integer",
+    "fix_count": "integer",
+    "release_gate_eligible": "boolean",
+    "evidence_quality_blocking": "boolean",
+    "score_is_provisional": "boolean",
+    "provisional": "boolean",
+    "authority_verified": "boolean",
+}
+_PAGE_SCALAR_FIELD_TYPES = {
+    "status_code": "integer",
+    "http_status": "integer",
+    "response_status": "integer",
+}
+_ROOT_CAUSE_SCALAR_FIELD_TYPES = {"state": "string"}
+_FIX_COUNT_FIELD_TYPES = {
+    "unique_affected_pages": "integer",
+    "observations": "integer",
+    "known_population": "integer",
+    "displayed_examples": "integer",
+    "indexable_affected": "integer",
+}
+_HEALTH_SCORE_DECISION_FIELD_TYPES = {
+    "adjusted_health_score": "number",
+    "coverage_state": "string",
+    "state": "string",
+}
+_HANDOFF_VERSION_PATHS = {
+    path: path[:-1] for path in _HANDOFF_FIX_PATHS
+}
 
 Scalar = str | int | float | bool
 
@@ -95,23 +151,81 @@ def _path(parent: str, key: str | int) -> str:
     return f"{parent}[{json.dumps(key, ensure_ascii=False)}]"
 
 
-def _walk(value: Any, path: str = "$", containers: tuple[str, ...] = ()):
-    if isinstance(value, dict):
-        for key in sorted(value):
-            child = value[key]
-            name = str(key)
-            yield from _walk(child, _path(path, name), containers + (name,))
-    elif isinstance(value, list):
-        for index, child in enumerate(value):
-            yield from _walk(child, _path(path, index), containers)
-    else:
-        yield path, value, containers
+def _scalar_matches_type(value: Any, expected: str) -> bool:
+    if expected == "string":
+        return isinstance(value, str) and bool(value.strip())
+    if expected == "boolean":
+        return type(value) is bool
+    if expected == "integer":
+        return type(value) is int
+    if expected == "number":
+        return type(value) in (int, float) and not (
+            isinstance(value, float) and not isfinite(value)
+        )
+    return False
 
 
-def _scalar(value: Any) -> bool:
-    return isinstance(value, (str, int, float, bool)) and not (
-        isinstance(value, float) and not isfinite(value)
+def _node_at_path(source: dict[str, Any], parts: tuple[str, ...]) -> Any:
+    node: Any = source
+    for part in parts:
+        if not isinstance(node, dict):
+            return None
+        node = node.get(part)
+    return node
+
+
+def _json_path(parts: tuple[str | int, ...]) -> str:
+    path = "$"
+    for part in parts:
+        path = _path(path, part)
+    return path
+
+
+def _typed_scalar_values(source: dict[str, Any]):
+    """Yield only exact-path, exact-field, exact-type scalar evidence."""
+    for field, expected in _ROOT_SCALAR_FIELD_TYPES.items():
+        value = source.get(field)
+        if _scalar_matches_type(value, expected):
+            yield _json_path((field,)), value
+
+    decision_parts = ("health_score_explanation", "stage3_delivery", "health_score_decision")
+    decision = _node_at_path(source, decision_parts)
+    if isinstance(decision, dict):
+        for field, expected in _HEALTH_SCORE_DECISION_FIELD_TYPES.items():
+            value = decision.get(field)
+            if _scalar_matches_type(value, expected):
+                yield _json_path((*decision_parts, field)), value
+
+    record_contracts = (
+        *((path, _PAGE_SCALAR_FIELD_TYPES, None) for path in _ROOT_PAGE_PATHS),
+        *((path, _ROOT_CAUSE_SCALAR_FIELD_TYPES, None) for path in _ROOT_CAUSE_PATHS),
+        *((path, {}, _FIX_COUNT_FIELD_TYPES) for path in _AUTHORIZED_FIX_PATHS),
     )
+    for collection_parts, field_types, child_field_types in record_contracts:
+        version_path = _HANDOFF_VERSION_PATHS.get(collection_parts)
+        if version_path is not None:
+            handoff = _node_at_path(source, version_path)
+            if not isinstance(handoff, dict) or handoff.get("handoff_version") != _STAGE3_HANDOFF_VERSION:
+                continue
+
+        records = _node_at_path(source, collection_parts)
+        if not isinstance(records, list):
+            continue
+        for index, record in enumerate(records):
+            if not isinstance(record, dict):
+                continue
+            record_parts: tuple[str | int, ...] = (*collection_parts, index)
+            for field, expected in field_types.items():
+                value = record.get(field)
+                if _scalar_matches_type(value, expected):
+                    yield _json_path((*record_parts, field)), value
+            if child_field_types:
+                counts = record.get("counts")
+                if isinstance(counts, dict):
+                    for field, expected in child_field_types.items():
+                        value = counts.get(field)
+                        if _scalar_matches_type(value, expected):
+                            yield _json_path((*record_parts, "counts", field)), value
 
 
 def _canonical_fingerprint(payload: dict[str, Any]) -> str:
@@ -267,6 +381,40 @@ def _member_matches_trusted_scan(
     return True
 
 
+def _authorized_fix_record(
+    node: Any,
+    *,
+    schema_path: tuple[str, ...],
+    trusted_scan_id: str,
+    trusted_scan_state: str,
+    trusted_member_ids: frozenset[int],
+    trusted_membership_state: str,
+) -> bool:
+    """Authorize a Fix only at a known path and, when present, signed membership."""
+    if not isinstance(node, dict) or schema_path not in _AUTHORIZED_FIX_PATHS:
+        return False
+    if trusted_membership_state == "invalid" or trusted_scan_state == "invalid":
+        return False
+    if schema_path in _HANDOFF_FIX_PATHS:
+        return (
+            trusted_scan_state == "verified"
+            and trusted_membership_state == "enforced"
+            and id(node) in trusted_member_ids
+            and _member_matches_trusted_scan(
+                node,
+                trusted_scan_id=trusted_scan_id,
+                trusted_scan_state=trusted_scan_state,
+            )
+        )
+    if trusted_scan_state == "verified" and trusted_membership_state == "enforced":
+        return id(node) in trusted_member_ids
+    return _member_matches_trusted_scan(
+        node,
+        trusted_scan_id=trusted_scan_id,
+        trusted_scan_state=trusted_scan_state,
+    )
+
+
 def _verified_root_cause_evidence_identity(
     node: Any,
     *,
@@ -329,6 +477,7 @@ def _collect_urls(
     *,
     container: str = "",
     parent_container: str = "",
+    schema_path: tuple[str, ...] = (),
     evidence_scope: bool = False,
     trusted_scan_id: str = "",
     trusted_scan_state: str = "absent",
@@ -336,8 +485,17 @@ def _collect_urls(
     trusted_membership_state: str = "inactive",
 ) -> None:
     if isinstance(node, dict):
-        page_record = container in _PAGE_CONTAINERS
-        evidence_record = container in _FIX_CONTAINERS or container == "root_causes"
+        page_record = schema_path in _ROOT_PAGE_PATHS
+        fix_record = _authorized_fix_record(
+            node,
+            schema_path=schema_path,
+            trusted_scan_id=trusted_scan_id,
+            trusted_scan_state=trusted_scan_state,
+            trusted_member_ids=trusted_member_ids,
+            trusted_membership_state=trusted_membership_state,
+        )
+        root_record = schema_path in _ROOT_CAUSE_PATHS
+        evidence_record = fix_record or root_record
         authorized = evidence_scope or page_record or evidence_record
 
         if authorized:
@@ -370,8 +528,9 @@ def _collect_urls(
 
         for key, child in node.items():
             child_name = str(key)
-            if child_name == "root_cause_evidence" and container in _FIX_CONTAINERS:
-                child_scope = bool(
+            child_path = (*schema_path, child_name)
+            if child_name == "root_cause_evidence" and fix_record:
+                child_scope = fix_record and bool(
                     _verified_root_cause_evidence_identity(
                         child,
                         parent_container=container,
@@ -400,6 +559,7 @@ def _collect_urls(
                 live,
                 container=child_name,
                 parent_container=container,
+                schema_path=child_path,
                 evidence_scope=child_scope,
                 trusted_scan_id=trusted_scan_id,
                 trusted_scan_state=trusted_scan_state,
@@ -415,6 +575,7 @@ def _collect_urls(
                 live,
                 container=container,
                 parent_container=parent_container,
+                schema_path=schema_path,
                 evidence_scope=evidence_scope,
                 trusted_scan_id=trusted_scan_id,
                 trusted_scan_state=trusted_scan_state,
@@ -456,6 +617,7 @@ def _collect_refs(
     *,
     container: str = "",
     parent_container: str = "",
+    schema_path: tuple[str, ...] = (),
     fixes: set[str],
     roots: set[str],
     fix_counts: dict[str, int],
@@ -473,7 +635,15 @@ def _collect_refs(
         # known sealed repair/Fix record. Repeated aliases on one record are one
         # identity occurrence; conflicting canonical aliases on that same record
         # are never guessed and instead become explicit fail-closed conflicts.
-        if container in _FIX_CONTAINERS:
+        fix_record = _authorized_fix_record(
+            node,
+            schema_path=schema_path,
+            trusted_scan_id=trusted_scan_id,
+            trusted_scan_state=trusted_scan_state,
+            trusted_member_ids=trusted_member_ids,
+            trusted_membership_state=trusted_membership_state,
+        )
+        if fix_record:
             record_fixes = _record_strings(node, _fix_container_id_fields(container))
             record_fix_aliases = _record_strings(node, _fix_identity_alias_fields(container))
             if len(record_fix_aliases) > 1:
@@ -511,7 +681,7 @@ def _collect_refs(
                     # evidence objects cannot be assumed to belong to one run.
                     root_counts[root_id] = root_counts.get(root_id, 0) + 1
 
-        if container == "root_causes":
+        if schema_path in _ROOT_CAUSE_PATHS:
             record_roots = _record_strings(node, _ROOT_ID_FIELDS | {"id"})
             if len(record_roots) > 1:
                 conflicting_roots.update(record_roots)
@@ -527,6 +697,7 @@ def _collect_refs(
                 child,
                 container=str(key),
                 parent_container=container,
+                schema_path=(*schema_path, str(key)),
                 fixes=fixes,
                 roots=roots,
                 fix_counts=fix_counts,
@@ -545,6 +716,7 @@ def _collect_refs(
                 child,
                 container=container,
                 parent_container=parent_container,
+                schema_path=schema_path,
                 fixes=fixes,
                 roots=roots,
                 fix_counts=fix_counts,
@@ -560,6 +732,12 @@ def _collect_refs(
 
 
 def build_evidence_set(sealed_l2: dict[str, Any], *, scan_origin: str = "") -> EvidenceSet:
+    """Build the offline claimable view of a caller-authenticated snapshot.
+
+    Required seal markers are shape/version inputs, not proof verification. A
+    runtime caller must authenticate the exact snapshot first through the
+    existing version-aware V8 HMAC verifier.
+    """
     if not isinstance(sealed_l2, dict):
         raise EvidenceUnavailable("sealed_l2_missing")
     missing = [field for field in _SEAL_FIELDS if not isinstance(sealed_l2.get(field), str) or not sealed_l2[field].strip()]
@@ -591,9 +769,7 @@ def build_evidence_set(sealed_l2: dict[str, Any], *, scan_origin: str = "") -> E
 
     state_values: dict[str, Scalar] = {}
     numeric_values: dict[str, int | float] = {}
-    for path, value, _containers in _walk(sealed_l2):
-        if not _scalar(value):
-            continue
+    for path, value in _typed_scalar_values(sealed_l2):
         state_values[path] = value
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             numeric_values[path] = value
@@ -657,6 +833,30 @@ def build_evidence_set(sealed_l2: dict[str, Any], *, scan_origin: str = "") -> E
     )
 
 
+def build_evidence_set_from_authenticated_snapshot(
+    sealed_l2: dict[str, Any],
+    *,
+    authenticate_snapshot,
+    scan_origin: str = "",
+) -> EvidenceSet:
+    """Authenticate the exact snapshot before entering the offline builder.
+
+    The callback is supplied by the future serialized integrator and must wrap
+    the existing version-aware authority/HMAC verifier. Only the literal boolean
+    ``True`` authorizes construction. Callback errors are converted to a bounded
+    unavailable result so verifier details are not exposed.
+    """
+    if not callable(authenticate_snapshot):
+        raise EvidenceUnavailable("sealed_l2_authentication_failed")
+    try:
+        authenticated = authenticate_snapshot(sealed_l2)
+    except Exception:
+        raise EvidenceUnavailable("sealed_l2_authentication_failed") from None
+    if authenticated is not True:
+        raise EvidenceUnavailable("sealed_l2_authentication_failed")
+    return build_evidence_set(sealed_l2, scan_origin=scan_origin)
+
+
 def _annotations(model: AIAnnotationV1 | ChatAnswerV1) -> list[AIAnnotationV1]:
     return [model] if isinstance(model, AIAnnotationV1) else list(model.annotations)
 
@@ -665,6 +865,19 @@ def _exact_scalar_equal(left: Scalar, right: Scalar) -> bool:
     # JSON distinguishes integer and fractional numeric provenance in the sealed
     # snapshot. Fail closed rather than accepting Python's ``1 == 1.0`` coercion.
     return type(left) is type(right) and left == right
+
+
+def render_grounded_annotation_text(_annotation: AIAnnotationV1) -> str:
+    """Return the only prose emitted by ``ai_annotation_v1`` today.
+
+    V1 deliberately keeps factual detail in the typed evidence, numeric, Fix,
+    root-cause, and state atoms that the verifier can check exactly. Free-form
+    prose is a separate semantic channel and cannot be proven by validating
+    those arrays alone. Until a versioned deterministic renderer exists for a
+    richer claim type, the annotation text is therefore a fixed statement that
+    asserts only what the envelope itself proves: grounded evidence is present.
+    """
+    return DETERMINISTIC_ANNOTATION_TEXT
 
 
 def _annotation_errors(annotation: AIAnnotationV1, evidence: EvidenceSet) -> list[str]:
@@ -702,6 +915,14 @@ def _annotation_errors(annotation: AIAnnotationV1, evidence: EvidenceSet) -> lis
             errors.add("state_source_missing")
         elif not _exact_scalar_equal(evidence.state_values[claim.source_ref], claim.value):
             errors.add("state_value_mismatch")
+
+    # Check prose only after every typed atom is independently grounded. This
+    # avoids presenting regex/substring inspection as semantic verification and
+    # keeps existing attribution errors precise. A fully grounded annotation
+    # may emit only the deterministic v1 rendering; arbitrary factual prose is
+    # rejected rather than trusted because its arrays happen to be valid.
+    if not errors and annotation.text != render_grounded_annotation_text(annotation):
+        errors.add("text_not_deterministically_rendered")
     return sorted(errors)
 
 

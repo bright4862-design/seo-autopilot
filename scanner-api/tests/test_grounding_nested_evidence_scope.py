@@ -38,7 +38,7 @@ def annotation(
     return {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "nested-scope",
-        "text": "Grounded evidence scope.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": url, "require_live": False}],
         "numeric_claims": [],
         "fix_refs": ["fix-1"] if fix_refs is None else fix_refs,

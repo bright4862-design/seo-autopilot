@@ -39,7 +39,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "shared-clean",
-        "text": "Two fixes share one verified root cause.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/real", "require_live": true}],
         "numeric_claims": [],
         "fix_refs": [],
@@ -70,7 +70,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "shared-refs",
-        "text": "Shared root remains one definition when evidence refs differ.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/evidence-b", "require_live": false}],
         "numeric_claims": [],
         "fix_refs": [],
@@ -101,7 +101,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "shared-empty-surface",
-        "text": "Missing surface uses the Stage-3 empty surface grouping key.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/real", "require_live": true}],
         "numeric_claims": [],
         "fix_refs": [],
@@ -130,7 +130,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "shared-cross-surface",
-        "text": "A bare root reference cannot disambiguate repair surfaces.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/real", "require_live": true}],
         "numeric_claims": [],
         "fix_refs": [],
@@ -161,7 +161,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "shared-cross-container",
-        "text": "Cross-container root definitions remain ambiguous.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/real", "require_live": true}],
         "numeric_claims": [],
         "fix_refs": [],
@@ -191,7 +191,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "shared-distinct-roots",
-        "text": "Distinct root identities remain independently grounded.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/real", "require_live": true}],
         "numeric_claims": [],
         "fix_refs": [],

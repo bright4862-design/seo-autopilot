@@ -33,7 +33,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "clean",
-        "text": "Grounded identity control.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/real", "require_live": true}],
         "numeric_claims": [],
         "fix_refs": ["fix-1"],
@@ -56,7 +56,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "bad-fix-alias",
-        "text": "Conflicting Fix identity.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/real", "require_live": true}],
         "numeric_claims": [],
         "fix_refs": ["fix-1"],
@@ -79,7 +79,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "bad-root-alias",
-        "text": "Conflicting root identity.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/real", "require_live": true}],
         "numeric_claims": [],
         "fix_refs": [],
@@ -102,7 +102,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "link-only-root",
-        "text": "Unproven root link.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/real", "require_live": true}],
         "numeric_claims": [],
         "fix_refs": [],
@@ -137,7 +137,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "verified-root",
-        "text": "Verified root definition.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/real", "require_live": true}],
         "numeric_claims": [],
         "fix_refs": [],
@@ -160,7 +160,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "fake-details",
-        "text": "Fake details URL.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/fake-details", "require_live": false}],
         "numeric_claims": [],
         "fix_refs": [],
@@ -175,7 +175,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "root-details-control",
-        "text": "Root details evidence.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/real", "require_live": false}],
         "numeric_claims": [],
         "fix_refs": [],

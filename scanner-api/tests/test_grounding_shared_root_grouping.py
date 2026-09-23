@@ -50,7 +50,7 @@ def annotation(*, root_refs: list[str] | None = None) -> dict:
     return {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "shared-root",
-        "text": "Grounded shared root cause.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": REAL_URL, "require_live": True}],
         "numeric_claims": [],
         "fix_refs": [],

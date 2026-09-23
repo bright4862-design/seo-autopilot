@@ -80,7 +80,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "v8-clean",
-        "text": "Grounded V8 evidence.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [
           {
             "url": "https://example.com/products/CaseSensitive?variant=1#hero",
@@ -110,7 +110,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "v8-request-url",
-        "text": "Grounded request URL.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [
           {
             "url": "https://example.com/products/CaseSensitive?variant=1&utm_source=x",
@@ -129,7 +129,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "v8-fake-url",
-        "text": "Fabricated URL.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [
           {"url": "https://example.com/products/plausible-but-fake", "require_live": false}
         ],
@@ -145,7 +145,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "v8-fake-fix",
-        "text": "Fabricated Fix.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [
           {
             "url": "https://example.com/products/CaseSensitive?variant=1",
@@ -164,7 +164,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "v8-type-drift",
-        "text": "Type drift.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [
           {
             "url": "https://example.com/products/CaseSensitive?variant=1",
@@ -190,7 +190,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "v8-unavailable",
-        "text": "No usable seal.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [
           {"url": "https://example.com/", "require_live": false}
         ],
@@ -220,7 +220,7 @@
           {
             "schema_version": "ai_annotation_v1",
             "annotation_id": "good",
-            "text": "Grounded clause.",
+            "text": "Grounded evidence is available for this annotation.",
             "evidence": [
               {
                 "url": "https://example.com/products/CaseSensitive?variant=1#good",
@@ -235,7 +235,7 @@
           {
             "schema_version": "ai_annotation_v1",
             "annotation_id": "bad",
-            "text": "Ungrounded clause.",
+            "text": "Grounded evidence is available for this annotation.",
             "evidence": [
               {
                 "url": "https://example.com/products/CaseSensitive?variant=1",

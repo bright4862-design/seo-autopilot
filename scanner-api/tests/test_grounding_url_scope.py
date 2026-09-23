@@ -38,7 +38,7 @@ def annotation(url: str, *, require_live: bool = False) -> dict:
     return {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "url-scope",
-        "text": "Grounded URL evidence.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": url, "require_live": require_live}],
         "numeric_claims": [],
         "fix_refs": [],

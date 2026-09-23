@@ -35,7 +35,7 @@ def annotation(*, url: str = REAL_URL, root_refs: list[str] | None = None) -> di
     return {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "root-contract",
-        "text": "Grounded root cause contract.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": url, "require_live": False}],
         "numeric_claims": [],
         "fix_refs": [],

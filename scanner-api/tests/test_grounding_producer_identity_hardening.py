@@ -60,7 +60,7 @@ def annotation(*, evidence_url=PAGE_URL) -> dict:
     return {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "producer-identity",
-        "text": "Grounded root cause.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": evidence_url, "require_live": evidence_url == PAGE_URL}],
         "numeric_claims": [],
         "fix_refs": [],

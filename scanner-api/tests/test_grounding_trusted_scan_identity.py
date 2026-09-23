@@ -67,7 +67,7 @@ def annotation(*, url: str = REAL_URL) -> dict:
     return {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "trusted-scan-root",
-        "text": "Grounded shared root cause.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": url, "require_live": False}],
         "numeric_claims": [],
         "fix_refs": [],

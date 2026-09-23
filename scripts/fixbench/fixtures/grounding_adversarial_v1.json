@@ -21,7 +21,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "clean",
-        "text": "Grounded.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/a", "require_live": true}],
         "numeric_claims": [{"name": "health_score", "value": 88, "source_ref": "$.health_score"}],
         "fix_refs": ["fix-1"],
@@ -36,7 +36,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "preserve",
-        "text": "Grounded.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/a#section", "require_live": true}],
         "numeric_claims": [], "fix_refs": ["fix-1"], "root_cause_refs": [], "state_claims": []
       }
@@ -92,7 +92,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "bad-url",
-        "text": "Fabricated attribution.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/plausible", "require_live": false}],
         "numeric_claims": [], "fix_refs": [], "root_cause_refs": [], "state_claims": []
       }
@@ -103,7 +103,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "bad-count",
-        "text": "Fabricated count.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/a", "require_live": false}],
         "numeric_claims": [{"name": "health_score", "value": 91, "source_ref": "$.health_score"}],
         "fix_refs": [], "root_cause_refs": [], "state_claims": []
@@ -115,7 +115,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "bad-fix",
-        "text": "Fabricated fix.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/a", "require_live": false}],
         "numeric_claims": [], "fix_refs": ["fix-999"], "root_cause_refs": [], "state_claims": []
       }
@@ -126,7 +126,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "bad-root",
-        "text": "Grounded.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/a", "require_live": true}],
         "numeric_claims": [], "fix_refs": [], "root_cause_refs": ["root-999"], "state_claims": []
       }
@@ -137,7 +137,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "bad-live",
-        "text": "Grounded.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/b", "require_live": true}],
         "numeric_claims": [], "fix_refs": [], "root_cause_refs": [], "state_claims": []
       }
@@ -148,7 +148,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "bad-state",
-        "text": "Grounded.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/a", "require_live": true}],
         "numeric_claims": [], "fix_refs": [], "root_cause_refs": [],
         "state_claims": [{"field": "scan_status", "value": "partial", "source_ref": "$.scan_status"}]
@@ -162,13 +162,13 @@
         "answer_id": "conflict",
         "annotations": [
           {
-            "schema_version": "ai_annotation_v1", "annotation_id": "conflict-a", "text": "Grounded.",
+            "schema_version": "ai_annotation_v1", "annotation_id": "conflict-a", "text": "Grounded evidence is available for this annotation.",
             "evidence": [{"url": "https://example.com/a", "require_live": true}],
             "numeric_claims": [{"name": "health_score", "value": 88, "source_ref": "$.health_score"}],
             "fix_refs": [], "root_cause_refs": [], "state_claims": []
           },
           {
-            "schema_version": "ai_annotation_v1", "annotation_id": "conflict-b", "text": "Grounded.",
+            "schema_version": "ai_annotation_v1", "annotation_id": "conflict-b", "text": "Grounded evidence is available for this annotation.",
             "evidence": [{"url": "https://example.com/a", "require_live": true}],
             "numeric_claims": [{"name": "health_score", "value": 87, "source_ref": "$.health_score"}],
             "fix_refs": [], "root_cause_refs": [], "state_claims": []
@@ -184,12 +184,12 @@
         "answer_id": "redaction-control",
         "annotations": [
           {
-            "schema_version": "ai_annotation_v1", "annotation_id": "good", "text": "Grounded.",
+            "schema_version": "ai_annotation_v1", "annotation_id": "good", "text": "Grounded evidence is available for this annotation.",
             "evidence": [{"url": "https://example.com/a", "require_live": true}],
             "numeric_claims": [], "fix_refs": ["fix-1"], "root_cause_refs": [], "state_claims": []
           },
           {
-            "schema_version": "ai_annotation_v1", "annotation_id": "bad", "text": "Ungrounded.",
+            "schema_version": "ai_annotation_v1", "annotation_id": "bad", "text": "Grounded evidence is available for this annotation.",
             "evidence": [{"url": "https://example.com/a", "require_live": true}],
             "numeric_claims": [], "fix_refs": ["fix-fake"], "root_cause_refs": [], "state_claims": []
           }

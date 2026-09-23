@@ -19,7 +19,7 @@ def annotation(**overrides):
     payload = {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "v8-grounded",
-        "text": "Grounded V8 evidence.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [
             {
                 "url": "https://example.com/products/CaseSensitive?variant=1#hero",
@@ -94,7 +94,7 @@ def test_v8_duplicate_url_identities_collapse_for_membership_without_rewriting_p
     assert result.verified_payload["evidence"][0]["url"].endswith("#hero")
 
 
-def test_v8_non_identifier_source_paths_are_addressable_exactly():
+def test_v8_untyped_diagnostic_scalars_are_not_claimable():
     payload = annotation(
         numeric_claims=[
             {
@@ -112,7 +112,8 @@ def test_v8_non_identifier_source_paths_are_addressable_exactly():
         ],
     )
     result = verify_grounded_payload(payload, sealed_l2=sealed_l2())
-    assert result.status == "verified"
+    assert result.status == "rejected"
+    assert result.reasons == ["numeric_source_missing", "state_source_missing"]
 
 
 def test_numeric_provenance_rejects_integer_float_type_drift():

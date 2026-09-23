@@ -18,7 +18,7 @@
   "cases": [
     {
       "name": "exact sealed producer identity groups shared root",
-      "payload": {"schema_version": "ai_annotation_v1", "annotation_id": "trusted-clean", "text": "Trusted members share one root.", "evidence": [{"url": "https://example.com/real", "require_live": true}], "numeric_claims": [], "fix_refs": [], "root_cause_refs": ["root-shared"], "state_claims": []},
+      "payload": {"schema_version": "ai_annotation_v1", "annotation_id": "trusted-clean", "text": "Grounded evidence is available for this annotation.", "evidence": [{"url": "https://example.com/real", "require_live": true}], "numeric_claims": [], "fix_refs": [], "root_cause_refs": ["root-shared"], "state_claims": []},
       "expected_status": "verified",
       "expect_preserved": {"root_cause_refs": ["root-shared"]}
     },
@@ -33,7 +33,7 @@
           {"fix_id": "fix-2", "scan_id": "foreign-scan", "scan_run_id": "foreign-scan", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/foreign-root-evidence"]}}
         ]
       },
-      "payload": {"schema_version": "ai_annotation_v1", "annotation_id": "trusted-one-good", "text": "Only the trusted member grounds the root.", "evidence": [{"url": "https://example.com/real", "require_live": true}], "numeric_claims": [], "fix_refs": [], "root_cause_refs": ["root-shared"], "state_claims": []},
+      "payload": {"schema_version": "ai_annotation_v1", "annotation_id": "trusted-one-good", "text": "Grounded evidence is available for this annotation.", "evidence": [{"url": "https://example.com/real", "require_live": true}], "numeric_claims": [], "fix_refs": [], "root_cause_refs": ["root-shared"], "state_claims": []},
       "expected_status": "verified"
     },
     {
@@ -47,7 +47,7 @@
           {"fix_id": "fix-2", "scan_id": "foreign-scan", "scan_run_id": "foreign-scan", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/foreign-root-evidence"]}}
         ]
       },
-      "payload": {"schema_version": "ai_annotation_v1", "annotation_id": "trusted-foreign-url", "text": "Foreign evidence cannot be cited.", "evidence": [{"url": "https://example.com/foreign-root-evidence", "require_live": false}], "numeric_claims": [], "fix_refs": [], "root_cause_refs": ["root-shared"], "state_claims": []},
+      "payload": {"schema_version": "ai_annotation_v1", "annotation_id": "trusted-foreign-url", "text": "Grounded evidence is available for this annotation.", "evidence": [{"url": "https://example.com/foreign-root-evidence", "require_live": false}], "numeric_claims": [], "fix_refs": [], "root_cause_refs": ["root-shared"], "state_claims": []},
       "expected_status": "rejected",
       "expected_reasons": ["url_not_in_evidence"]
     },
@@ -62,7 +62,7 @@
           {"fix_id": "fix-2", "scan_id": "foreign-scan", "scan_run_id": "foreign-scan", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}}
         ]
       },
-      "payload": {"schema_version": "ai_annotation_v1", "annotation_id": "trusted-all-foreign", "text": "Foreign members cannot ground a root.", "evidence": [{"url": "https://example.com/real", "require_live": true}], "numeric_claims": [], "fix_refs": [], "root_cause_refs": ["root-shared"], "state_claims": []},
+      "payload": {"schema_version": "ai_annotation_v1", "annotation_id": "trusted-all-foreign", "text": "Grounded evidence is available for this annotation.", "evidence": [{"url": "https://example.com/real", "require_live": true}], "numeric_claims": [], "fix_refs": [], "root_cause_refs": ["root-shared"], "state_claims": []},
       "expected_status": "rejected",
       "expected_reasons": ["root_cause_ref_missing"]
     },
@@ -77,7 +77,7 @@
           {"fix_id": "fix-2", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}}
         ]
       },
-      "payload": {"schema_version": "ai_annotation_v1", "annotation_id": "trusted-bad-producer", "text": "Malformed producer identity cannot ground a root.", "evidence": [{"url": "https://example.com/real", "require_live": true}], "numeric_claims": [], "fix_refs": [], "root_cause_refs": ["root-shared"], "state_claims": []},
+      "payload": {"schema_version": "ai_annotation_v1", "annotation_id": "trusted-bad-producer", "text": "Grounded evidence is available for this annotation.", "evidence": [{"url": "https://example.com/real", "require_live": true}], "numeric_claims": [], "fix_refs": [], "root_cause_refs": ["root-shared"], "state_claims": []},
       "expected_status": "rejected",
       "expected_reasons": ["root_cause_ref_missing"]
     },
@@ -91,7 +91,7 @@
           {"fix_id": "fix-2", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}}
         ]
       },
-      "payload": {"schema_version": "ai_annotation_v1", "annotation_id": "trusted-absent-producer", "text": "Repeated roots without sealed scan identity are ambiguous.", "evidence": [{"url": "https://example.com/real", "require_live": true}], "numeric_claims": [], "fix_refs": [], "root_cause_refs": ["root-shared"], "state_claims": []},
+      "payload": {"schema_version": "ai_annotation_v1", "annotation_id": "trusted-absent-producer", "text": "Grounded evidence is available for this annotation.", "evidence": [{"url": "https://example.com/real", "require_live": true}], "numeric_claims": [], "fix_refs": [], "root_cause_refs": ["root-shared"], "state_claims": []},
       "expected_status": "rejected",
       "expected_reasons": ["root_cause_ref_ambiguous"]
     },
@@ -106,7 +106,7 @@
           {"fix_id": "fix-2", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}}
         ]
       },
-      "payload": {"schema_version": "ai_annotation_v1", "annotation_id": "trusted-nested-v8", "text": "Nested V8 handoff identity is trusted.", "evidence": [{"url": "https://example.com/real", "require_live": true}], "numeric_claims": [], "fix_refs": [], "root_cause_refs": ["root-shared"], "state_claims": []},
+      "payload": {"schema_version": "ai_annotation_v1", "annotation_id": "trusted-nested-v8", "text": "Grounded evidence is available for this annotation.", "evidence": [{"url": "https://example.com/real", "require_live": true}], "numeric_claims": [], "fix_refs": [], "root_cause_refs": ["root-shared"], "state_claims": []},
       "expected_status": "verified"
     }
   ]

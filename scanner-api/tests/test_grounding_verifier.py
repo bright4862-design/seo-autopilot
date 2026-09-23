@@ -4,7 +4,12 @@ from copy import deepcopy
 
 import pytest
 
-from app.grounding_verifier import EvidenceUnavailable, build_evidence_set, verify_grounded_payload
+from app.grounding_verifier import (
+    DETERMINISTIC_ANNOTATION_TEXT,
+    EvidenceUnavailable,
+    build_evidence_set,
+    verify_grounded_payload,
+)
 
 
 def sealed_l2():
@@ -32,7 +37,7 @@ def ann(annotation_id="a1", **overrides):
     payload = {
         "schema_version": "ai_annotation_v1",
         "annotation_id": annotation_id,
-        "text": "Grounded claim.",
+        "text": DETERMINISTIC_ANNOTATION_TEXT,
         "evidence": [{"url": "https://example.com/a", "require_live": True}],
         "numeric_claims": [{"name": "health_score", "value": 88, "source_ref": "$.health_score"}],
         "fix_refs": ["fix-1"],
@@ -68,6 +73,7 @@ def test_clean_annotation_verifies():
     result = verify_grounded_payload(ann(), sealed_l2=sealed_l2())
     assert result.status == "verified"
     assert result.verified_payload["annotation_id"] == "a1"
+    assert result.verified_payload["text"] == DETERMINISTIC_ANNOTATION_TEXT
 
 
 @pytest.mark.parametrize(

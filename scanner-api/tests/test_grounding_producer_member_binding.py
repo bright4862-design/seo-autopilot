@@ -59,7 +59,7 @@ def annotation(root_id: str, *, evidence_url: str = PAGE_URL) -> dict:
     return {
         "schema_version": "ai_annotation_v1",
         "annotation_id": f"member-binding-{root_id}",
-        "text": "Grounded root-cause claim.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": evidence_url, "require_live": evidence_url == PAGE_URL}],
         "numeric_claims": [],
         "fix_refs": [],

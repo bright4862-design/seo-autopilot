@@ -24,6 +24,7 @@ _SUPPORTED_FIXTURES = frozenset({
     "fixbench_grounding_trusted_scan_v1",
     "fixbench_grounding_producer_identity_v1",
     "fixbench_grounding_member_binding_v1",
+    "fixbench_grounding_scalar_field_contract_v1",
 })
 
 

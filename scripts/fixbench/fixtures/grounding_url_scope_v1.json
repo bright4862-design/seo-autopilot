@@ -41,7 +41,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "clean-page",
-        "text": "Observed page evidence.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [
           {"url": "https://example.com/real#section", "require_live": true}
         ],
@@ -64,7 +64,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "fix-proof",
-        "text": "Sealed Fix evidence.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [
           {"url": "https://example.com/fix-proof", "require_live": false}
         ],
@@ -80,7 +80,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "diagnostics-url",
-        "text": "Unrelated diagnostics URL.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [
           {"url": "https://example.com/plausible-evidence", "require_live": false}
         ],
@@ -96,7 +96,7 @@
       "payload": {
         "schema_version": "ai_annotation_v1",
         "annotation_id": "diagnostics-live",
-        "text": "Unrelated diagnostics URL and status.",
+        "text": "Grounded evidence is available for this annotation.",
         "evidence": [
           {"url": "https://example.com/plausible-live", "require_live": true}
         ],

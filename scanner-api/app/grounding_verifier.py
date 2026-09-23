@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .ai_schemas import AIAnnotationV1, ChatAnswerV1, UnknownAISchemaVersion, validate_ai_schema
 from .repair_coverage import published_evidence_url_key, scan_evidence_origin
+from .stage3_root_causes import validate_root_cause_evidence
 
 EVIDENCE_SET_VERSION = "ai_evidence_set_v1"
 GROUNDING_VERIFIER_VERSION = "grounding_verifier_v1"
@@ -129,6 +130,22 @@ def _observed_status_code(node: dict[str, Any]) -> int:
     return 0
 
 
+def _verified_root_cause_evidence_id(node: Any, *, parent_container: str) -> str:
+    """Return a root identity only for the existing signed Stage-3 contract.
+
+    `root_cause_evidence` is producer evidence nested on a Fix. Reuse the Stage-3
+    validator so Grounding cannot accidentally accept a looser version/state/ref
+    contract than the authority pipeline that created the sealed evidence.
+    """
+    if parent_container not in _FIX_CONTAINERS or not isinstance(node, dict):
+        return ""
+    validated = validate_root_cause_evidence({"root_cause_evidence": node})
+    if validated.get("state") != "verified":
+        return ""
+    root_id = validated.get("root_cause_id")
+    return root_id.strip() if isinstance(root_id, str) else ""
+
+
 def _nested_evidence_scope_allowed(*, container: str, child_name: str, evidence_scope: bool) -> bool:
     if child_name in _NESTED_EVIDENCE_CONTAINERS:
         return container in _FIX_CONTAINERS or container in _ROOT_CONTAINERS or evidence_scope
@@ -144,11 +161,20 @@ def _collect_urls(
     live: set[str],
     *,
     container: str = "",
+    parent_container: str = "",
     evidence_scope: bool = False,
 ) -> None:
     if isinstance(node, dict):
         page_record = container in _PAGE_CONTAINERS
-        evidence_record = container in _FIX_CONTAINERS or container in _ROOT_CONTAINERS
+        verified_root_evidence = (
+            container == "root_cause_evidence"
+            and bool(_verified_root_cause_evidence_id(node, parent_container=parent_container))
+        )
+        evidence_record = (
+            container in _FIX_CONTAINERS
+            or container == "root_causes"
+            or verified_root_evidence
+        )
         authorized = evidence_scope or page_record or evidence_record
 
         if authorized:
@@ -197,6 +223,7 @@ def _collect_urls(
                 members,
                 live,
                 container=child_name,
+                parent_container=container,
                 evidence_scope=child_scope,
             )
     elif isinstance(node, list):
@@ -207,6 +234,7 @@ def _collect_urls(
                 members,
                 live,
                 container=container,
+                parent_container=parent_container,
                 evidence_scope=evidence_scope,
             )
 
@@ -243,6 +271,7 @@ def _collect_refs(
     node: Any,
     *,
     container: str = "",
+    parent_container: str = "",
     fixes: set[str],
     roots: set[str],
     fix_counts: dict[str, int],
@@ -269,18 +298,32 @@ def _collect_refs(
             # root_cause_ref by itself. A definition must appear in a recognized
             # root-cause evidence container below or elsewhere in sealed L2.
 
-        if container in _ROOT_CONTAINERS:
+        if container == "root_causes":
             record_roots = _record_strings(node, _ROOT_ID_FIELDS | {"id"})
             if len(record_roots) > 1:
                 conflicting_roots.update(record_roots)
             for value in record_roots:
                 roots.add(value)
                 root_counts[value] = root_counts.get(value, 0) + 1
+        elif container == "root_cause_evidence":
+            # Nested producer evidence defines a root only when it satisfies the
+            # exact Stage-3 signed evidence contract: known version, verified or
+            # confirmed state, strict string root ID, and non-empty strict refs.
+            # Unknown/unverified/conflicted/malformed evidence cannot become L2
+            # root authority merely because it carries a plausible ID.
+            root_id = _verified_root_cause_evidence_id(
+                node,
+                parent_container=parent_container,
+            )
+            if root_id:
+                roots.add(root_id)
+                root_counts[root_id] = root_counts.get(root_id, 0) + 1
 
         for key, child in node.items():
             _collect_refs(
                 child,
                 container=str(key),
+                parent_container=container,
                 fixes=fixes,
                 roots=roots,
                 fix_counts=fix_counts,
@@ -293,6 +336,7 @@ def _collect_refs(
             _collect_refs(
                 child,
                 container=container,
+                parent_container=parent_container,
                 fixes=fixes,
                 roots=roots,
                 fix_counts=fix_counts,

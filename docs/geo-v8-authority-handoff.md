@@ -25,20 +25,23 @@ Do not synthesize either sidecar when its observation is unavailable.
 ## Required serialized integration sequence
 
 1. **Compute server-side from trusted retained evidence.** Build `geo_readiness_v2_candidate` after the existing accepted-evidence and access-limited gates. Do not accept a client-supplied candidate.
-2. **Compatibility-check v1.** For the same page/check matrix and gates, require equality for assessment status, numeric/null score, coverage, score bounds, dimensions/check counts, reasons, sample size, and authority=false before sealing.
-3. **Version the authenticated payload.** Add the GEO candidate under a new compatible V8 snapshot revision or equivalent repository-approved authority version. Update every active producer, verifier, reconstruction path, and generated contract together. Do not append an unsigned/unsealed field beside the authority payload.
-4. **Persist the sealed candidate, not a recomputation recipe.** Historical snapshots remain byte/semantic compatible and are never rescored on read. Historical scans without the new field project a neutral `not_assessed`/legacy state.
-5. **Verify tamper rejection.** Mutating score, coverage, observation scope digest, dimension summaries, unknown cells, version, reasons, or evidence references inside the authenticated GEO block must fail the existing authority verification path.
-6. **Verify reload/history.** A newly sealed scan must return the identical authorized GEO block after persistence/reload/history traversal. Missing or malformed candidate data must fail closed; do not coerce null score to zero.
-7. **Apply existing entitlement/projection policy.** Customer projection may expose only the approved summary/findings surface. Full evidence/unknown-cell detail must not bypass the current full-access/free-preview boundary. No new repair priority or customer score is introduced by this lane.
-8. **Only then set authority state.** `authority_verified=true` may be projected only after the V8 authority verifier has authenticated the exact snapshot containing that GEO block and the end-to-end equality checks pass. The evaluator itself must continue returning false.
+2. **Bind exact observation scope and assessment gates.** Supply the exact retained page-ID set plus the actual upstream `parent_authoritative`, `entry_verified`, and `access_limited` booleans to the Lane-C scope/semantic validator. It must independently reconstruct v1-compatible status, numeric/null score, coverage, score bounds, dimensions/check counts, complete dimension summaries, reasons, sample size, and authority=false.
+3. **Bind optional sidecars to exact retained sources.** Re-run the pure named-crawler and `llms.txt` normalizers over the exact already-retained source observations and require exact structural equality with the candidate sidecars. Missing sidecars require missing source observations; access-limited candidates carry neither.
+4. **Serialize only after all pre-seal checks.** Use the source-bound serializer so the canonical candidate bytes are emitted only after shape/digest, exact page scope, exact gate semantics, and retained-source rebinding all succeed.
+5. **Version the authenticated payload.** Add those exact candidate bytes under a new compatible V8 snapshot revision or equivalent repository-approved authority version. Update every active producer, verifier, reconstruction path, and generated contract together. Do not append an unsigned/unsealed field beside the authority payload.
+6. **Persist the sealed candidate, not a recomputation recipe.** Historical snapshots remain byte/semantic compatible and are never rescored on read. Historical scans without the new field project a neutral `not_assessed`/legacy state.
+7. **Verify tamper rejection.** Mutating score, coverage, observation scope digest, dimension/check arithmetic, dimension summary counts, unknown cells, version, reasons, named-crawler sidecars, `llms.txt` sidecars, or evidence references inside the authenticated GEO block must fail the existing authority verification path.
+8. **Verify reload/history.** A newly sealed scan must return the identical authorized GEO block after persistence/reload/history traversal. Missing or malformed candidate data must fail closed; do not coerce null score to zero.
+9. **Apply existing entitlement/projection policy.** Customer projection may expose only the approved summary/findings surface. Full evidence/unknown-cell detail must not bypass the current full-access/free-preview boundary. No new repair priority or customer score is introduced by this lane.
+10. **Only then set authority state.** `authority_verified=true` may be projected only after the V8 authority verifier has authenticated the exact snapshot containing that GEO block and the end-to-end equality checks pass. The evaluator and Lane-C candidate must continue returning false.
 
 ## Required compatibility regressions
 
 - Old V8 snapshot without GEO v2 verifies unchanged and projects neutral legacy/not-assessed GEO state.
 - New snapshot with v2 candidate verifies, persists, reloads, and projects the same approved summary.
-- Tampered v2 score, coverage, unknown-cell list/count, observation-scope digest, dimensions, reasons, or version fails authority verification.
-- Access-limited candidate remains score null and does not surface page-content diagnostics after sealing/projection.
+- Tampered v2 score, coverage, unknown-cell list/count, observation-scope digest, dimensions, dimension summary counts, reasons, version, optional sidecars, or evidence references fails authority verification.
+- A candidate whose ordinary non-authoritative digest was recomputed after semantic tampering still fails exact pre-seal gate/source binding.
+- Access-limited candidate remains score null and does not surface page-content diagnostics or optional sidecars after sealing/projection.
 - All-unknown and all-not-applicable matrices remain score null.
 - Exact 80% overall and 50% per-dimension boundaries remain identical to v1.
 - Funbooker-like non-article pages can carry deterministic N/A support applicability without lowering gates; unresolved entity/support cells remain unknown.
@@ -47,7 +50,7 @@ Do not synthesize either sidecar when its observation is unavailable.
 
 ## Production acceptance evidence required before authority=true
 
-A staged or production-acceptance rerun must provide the immutable scan ID/release identity, sealed snapshot version, GEO candidate version, adapter version, authority digest/verification result, assessment status, score/null state, overall coverage, per-dimension coverage/scores, unknown-cell count, and a post-reload equality check. The exact payload should be retained in an approved evidence artifact so a future lane run can refresh it instead of relying on chat-reported values.
+A staged or production-acceptance rerun must provide the immutable scan ID/release identity, sealed snapshot version, GEO candidate version, adapter version, authority digest/verification result, assessment status, score/null state, overall coverage, per-dimension coverage/scores, unknown-cell count, optional-sidecar source provenance where present, and a post-reload equality check. The exact payload should be retained in an approved evidence artifact so a future lane run can refresh it instead of relying on chat-reported values.
 
 For the currently reported Funbooker baseline, do not lower the score gates. If Entity or Support remain below their evidence thresholds after the adapter improvements, the correct result is still `insufficient_evidence` with `score=null`.
 

@@ -222,6 +222,14 @@ def _fix_container_id_fields(container: str) -> frozenset[str]:
     return frozenset()
 
 
+def _fix_identity_alias_fields(container: str) -> frozenset[str]:
+    # ``repair_fingerprint`` is an independently valid sealed reference, not an
+    # alias for the human/stable Fix identifier. A Fix may legitimately carry
+    # both ``fix_id`` and a different fingerprint; only canonical ID aliases are
+    # required to agree with one another.
+    return _fix_container_id_fields(container) - frozenset({"repair_fingerprint"})
+
+
 def _record_strings(node: dict[str, Any], fields: frozenset[str]) -> set[str]:
     values: set[str] = set()
     for field in fields:
@@ -245,12 +253,13 @@ def _collect_refs(
     if isinstance(node, dict):
         # Repair identities are evidence only when they are direct fields on a
         # known sealed repair/Fix record. Repeated aliases on one record are one
-        # identity occurrence; conflicting aliases on that same record are never
-        # guessed and instead become explicit fail-closed conflicts.
+        # identity occurrence; conflicting canonical aliases on that same record
+        # are never guessed and instead become explicit fail-closed conflicts.
         if container in _FIX_CONTAINERS:
             record_fixes = _record_strings(node, _fix_container_id_fields(container))
-            if len(record_fixes) > 1:
-                conflicting_fixes.update(record_fixes)
+            record_fix_aliases = _record_strings(node, _fix_identity_alias_fields(container))
+            if len(record_fix_aliases) > 1:
+                conflicting_fixes.update(record_fix_aliases)
             for value in record_fixes:
                 fixes.add(value)
                 fix_counts[value] = fix_counts.get(value, 0) + 1

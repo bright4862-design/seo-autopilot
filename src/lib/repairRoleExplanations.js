@@ -69,16 +69,37 @@ function clean(value = "") {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function hasOwn(source, key) {
+  return Boolean(source && typeof source === "object" && Object.prototype.hasOwnProperty.call(source, key));
+}
+
+function consistentIdentifierOf(item = {}, topFields = [], originalFields = topFields) {
+  let present = false;
+  let selected = "";
+  const sources = [
+    [item, topFields],
+    [item?.original, originalFields],
+  ];
+
+  for (const [source, fields] of sources) {
+    if (!source || typeof source !== "object" || Array.isArray(source)) continue;
+    for (const field of fields) {
+      if (!hasOwn(source, field)) continue;
+      present = true;
+      const normalized = clean(source[field]).toLowerCase();
+      if (!normalized) return { present: true, value: "" };
+      if (selected && normalized !== selected) return { present: true, value: "" };
+      selected = normalized;
+    }
+  }
+
+  return { present, value: selected };
+}
+
 function ruleOf(item = {}) {
-  return clean(
-    item.rule
-      || item.rule_id
-      || item.ruleId
-      || item.issue_type
-      || item.original?.rule
-      || item.original?.rule_id
-      || item.original?.issue_type,
-  ).toLowerCase();
+  const publishedRule = consistentIdentifierOf(item, ["rule", "rule_id", "ruleId"], ["rule", "rule_id"]);
+  if (publishedRule.present) return publishedRule.value;
+  return consistentIdentifierOf(item, ["issue_type"], ["issue_type"]).value;
 }
 
 /**

@@ -57,6 +57,22 @@ def test_v8_stage3_handoff_rule_id_is_a_fix_identity_only_inside_fixes_container
     assert "not-a-fix" not in evidence.fix_refs
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "evidence_attr"),
+    [
+        ("fix_id", "diagnostic-fix-id", "fix_refs"),
+        ("repair_id", "diagnostic-repair-id", "fix_refs"),
+        ("repair_fingerprint", "diagnostic-repair-fingerprint", "fix_refs"),
+        ("root_cause_id", "diagnostic-root-cause-id", "root_cause_refs"),
+    ],
+)
+def test_v8_unrelated_diagnostics_cannot_become_authorized_repair_refs(field, value, evidence_attr):
+    source = sealed_l2()
+    source["diagnostics"][field] = value
+    evidence = build_evidence_set(source)
+    assert value not in getattr(evidence, evidence_attr)
+
+
 def test_v8_nested_root_cause_and_fix_refs_verify():
     result = verify_grounded_payload(annotation(), sealed_l2=sealed_l2())
     assert result.status == "verified"

@@ -22,12 +22,19 @@ if [[ "$CONFIRM" != "$SOURCE_SHA" ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SOURCE_DIR="$REPO_ROOT/dispatch-gateway"
 
 # The claimed SOURCE_SHA must be the exact clean checkout whose bytes are sent
 # to source deploy. A label without this guard is not provenance.
 source "$REPO_ROOT/scripts/lib/release-source-guard.sh"
 fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$CONFIRM"
+
+# The gateway uses the canonical pure comparison library from scanner-api. Build
+# a minimal context from this exact committed tree, never maintained copies or
+# the full scanner/worker image. gcloud source deploy requires a root Dockerfile.
+SOURCE_ARCHIVE_DIR="$(mktemp -d)"
+trap 'rm -rf "$SOURCE_ARCHIVE_DIR"' EXIT
+SOURCE_DIR="$SOURCE_ARCHIVE_DIR/context"
+bash "$REPO_ROOT/scripts/package_dispatch_gateway.sh" "$SOURCE_SHA" "$SOURCE_DIR"
 
 BUILD_SA_RAW="${CLOUD_BUILD_SERVICE_ACCOUNT:-$(gcloud builds get-default-service-account --project="$PROJECT" --format='value(serviceAccountEmail)')}"
 BUILD_SA_EMAIL="${BUILD_SA_RAW##*/}"
@@ -47,7 +54,7 @@ HEALTH_JSON="$(mktemp)"
 PRE_JSON="$(mktemp)"
 REVISION_JSON="$(mktemp)"
 CREATED_JSON="$(mktemp)"
-trap 'rm -f "$WORKER_JSON" "$GATEWAY_JSON" "$HEALTH_JSON" "$PRE_JSON" "$REVISION_JSON" "$CREATED_JSON"' EXIT
+trap 'rm -f "$WORKER_JSON" "$GATEWAY_JSON" "$HEALTH_JSON" "$PRE_JSON" "$REVISION_JSON" "$CREATED_JSON"; rm -rf "$SOURCE_ARCHIVE_DIR"' EXIT
 
 # Reads the revision that actually holds traffic, not the desired template.
 # spec.template is whatever the last deploy asked for; status.traffic is what

@@ -2,3 +2,4 @@ Flask
 gunicorn
 google-auth
 requests
+ada-url==1.32.0

@@ -71,7 +71,7 @@ test("Base44 scanner route generation is explicit and complete", () => {
   }
 });
 
-test("fresh Base44 routes preserve canonical source except the bounded signed-preview delta", () => {
+test("fresh Base44 routes preserve canonical source outside preview, Stage 3, and comparison additions", () => {
   const withoutActivationNonce = (value) => value.replace(
     /(BASE44_RUNTIME_ACTIVATION_ID\s*=\s*)["'][^"']+["']/g,
     '$1"<deployment-activation-nonce>"',
@@ -85,6 +85,8 @@ test("fresh Base44 routes preserve canonical source except the bounded signed-pr
       "stage3V7DeliveryStrict.js",
     ]],
     ["getCustomerScanResult", [
+      "comparisonGateway.js",
+      "comparisonReader.js",
       "customerPreviewSeal.js",
       "projectionStage1Legacy.js",
       "stage3V7Delivery.js",
@@ -118,6 +120,8 @@ test("fresh Base44 routes preserve canonical source except the bounded signed-pr
       assert.match(source(path.join(activeDir, "entry.ts")), /customerPreviewSeal\.js/, `${active} must wire the signed preview helper`);
     }
     if (canonical === "getCustomerScanResult") {
+      assert.match(source(path.join(activeDir, "entry.ts")), /readCustomerScanComparison\(\{/);
+      assert.match(source(path.join(activeDir, "comparisonGateway.js")), /fixlist-scan-comparison-response-v1/);
       assert.match(source(path.join(activeDir, "projectionStage1Legacy.js")), /"preview_example_page"/);
       assert.match(source(path.join(activeDir, "projection.js")), /projectionStage1Legacy\.js/);
       assert.match(source(path.join(activeDir, "releaseCompatibility.js")), /customer_result_reader_v9_published_route_identity/);

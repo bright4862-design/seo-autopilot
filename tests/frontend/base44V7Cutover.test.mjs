@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import ts from "typescript";
 
 const source = (p) => fs.readFileSync(p, "utf8");
 const contract = JSON.parse(source("data/base44-function-routes.json"));
@@ -17,6 +18,38 @@ const normalizeActivation = (value) => value.replace(
   /(BASE44_RUNTIME_ACTIVATION_ID\s*=\s*)["'][^"']+["']/g,
   '$1"<deployment-activation-nonce>"',
 );
+
+// Compare is the only new V8 operation. Strip only its imports and explicitly
+// action-gated branches, then require byte parity for every inherited operation.
+// customerScanComparisonRead.test.mjs executes this addition against real seals.
+function withoutComparisonOperation(value) {
+  const file = ts.createSourceFile("entry.ts", value, ts.ScriptTarget.Latest, true);
+  const ranges = [];
+  let imports = 0;
+  let gates = 0;
+  function visit(node) {
+    if (ts.isImportDeclaration(node) && ["./comparisonReader.js", "./comparisonGateway.js"].includes(node.moduleSpecifier.text)) {
+      imports += 1;
+      ranges.push([value.lastIndexOf("\n", node.getStart(file)) + 1, node.end + 1]);
+      return;
+    }
+    if (ts.isIfStatement(node) && [
+      'action === "compare"', 'action === "compare" && !validComparisonRequest(body)',
+    ].includes(node.expression.getText(file))) {
+      gates += 1;
+      assert.equal(node.elseStatement, undefined);
+      ranges.push([value.lastIndexOf("\n", node.getStart(file)) + 1, node.end + 1]);
+      return;
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(file);
+  assert.equal(imports, 2, "comparison helper import allowlist");
+  assert.equal(gates, 3, "comparison-only request, legacy-access, and dispatch gates");
+  for (const [start, end] of ranges.sort((left, right) => right[0] - left[0])) value = value.slice(0, start) + value.slice(end);
+  assert.equal((value.match(/action !== "get" && action !== "compare"/g) || []).length, 1);
+  return value.replace('action !== "get" && action !== "compare"', 'action !== "get"');
+}
 
 test("V8 is active and V7/V6/V5/V4/V3/V2 remain historical", () => {
   assert.equal(contract.schema_version, "base44_function_routes_v1");
@@ -34,19 +67,21 @@ test("V8 is active and V7/V6/V5/V4/V3/V2 remain historical", () => {
   }
 });
 
-test("V8 packages preserve V7 behavior exactly except route identity", () => {
+test("V8 packages preserve V7 behavior outside route identity and the isolated compare action", () => {
   for (const canonical of canonicals) {
     const v7dir = "base44/functions/" + canonical + "V7";
     const v8dir = "base44/functions/" + canonical + "V8";
     const v7files = fs.readdirSync(v7dir).sort();
     const v8files = fs.readdirSync(v8dir).sort();
-    assert.deepEqual(v8files, v7files, canonical);
+    const comparisonFiles = canonical === "getCustomerScanResult" ? ["comparisonGateway.js", "comparisonReader.js"] : [];
+    assert.deepEqual(v8files, [...v7files, ...comparisonFiles].sort(), canonical);
     for (const file of v7files) {
       if (file === "generatedBuildId.js") continue;
       let actual = source(path.join(v8dir, file));
       let expected = source(path.join(v7dir, file));
       if (file === "function.jsonc") actual = actual.replace(canonical + "V8", canonical + "V7");
       if (file === "entry.ts" || file === "index.ts") {
+        if (canonical === "getCustomerScanResult") actual = withoutComparisonOperation(actual);
         actual = normalizeActivation(actual);
         expected = normalizeActivation(expected);
       }

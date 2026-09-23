@@ -91,6 +91,12 @@ jobs:
       - name: Run root scanner regression tests
         run: pytest tests/
 
+      - name: Install gateway test dependencies
+        run: pip install -r dispatch-gateway/requirements.txt
+
+      - name: Verify signed comparison gateway
+        run: pytest dispatch-gateway/test_gateway.py
+
       - name: Run Python scanner-api tests
         working-directory: scanner-api
         run: pytest tests/

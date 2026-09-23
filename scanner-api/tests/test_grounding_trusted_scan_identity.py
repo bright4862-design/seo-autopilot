@@ -44,6 +44,9 @@ def sealed_l2(
         "pages": [{"url": REAL_URL, "status_code": 200}],
         "fixes": fixes or [fix("fix-1"), fix("fix-2")],
     }
+    if producer_scan_id is None and producer_scan_run_id is None:
+        return source
+
     handoff = {
         "handoff_version": "fixlist_handoff_v2",
         "scan": {

@@ -1,0 +1,181 @@
+{
+  "fixture_version": "fixbench_grounding_shared_root_v1",
+  "sealed_l2": {
+    "authority_seal_version": "authority_v8",
+    "authority_sealed_at": "2026-09-23T06:00:00Z",
+    "authority_proof": "shared-root-fixbench",
+    "website_url": "https://example.com",
+    "pages": [{"url": "https://example.com/real", "status_code": 200}],
+    "fixes": [
+      {
+        "fix_id": "fix-1",
+        "root_cause_evidence": {
+          "version": "root_cause_evidence_v1_verified",
+          "state": "verified",
+          "root_cause_id": "root-shared",
+          "repair_surface_id": "surface:template",
+          "evidence_refs": ["https://example.com/real"]
+        }
+      },
+      {
+        "fix_id": "fix-2",
+        "root_cause_evidence": {
+          "version": "root_cause_evidence_v1_verified",
+          "state": "verified",
+          "root_cause_id": "root-shared",
+          "repair_surface_id": "surface:template",
+          "evidence_refs": ["https://example.com/real"]
+        }
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "shared root same surface verifies",
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "shared-clean",
+        "text": "Two fixes share one verified root cause.",
+        "evidence": [{"url": "https://example.com/real", "require_live": true}],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": ["root-shared"],
+        "state_claims": []
+      },
+      "expected_status": "verified",
+      "expect_preserved_evidence": ["https://example.com/real"],
+      "expect_preserved": {"root_cause_refs": ["root-shared"]}
+    },
+    {
+      "name": "shared root same surface preserves different evidence refs",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8",
+        "authority_sealed_at": "2026-09-23T06:00:00Z",
+        "authority_proof": "shared-root-fixbench",
+        "website_url": "https://example.com",
+        "pages": [{"url": "https://example.com/real", "status_code": 200}],
+        "fixes": [
+          {"fix_id": "fix-1", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/evidence-a"]}},
+          {"fix_id": "fix-2", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/evidence-b"]}}
+        ]
+      },
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "shared-refs",
+        "text": "Shared root remains one definition when evidence refs differ.",
+        "evidence": [{"url": "https://example.com/evidence-b", "require_live": false}],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": ["root-shared"],
+        "state_claims": []
+      },
+      "expected_status": "verified",
+      "expect_preserved_evidence": ["https://example.com/evidence-b"],
+      "expect_preserved": {"root_cause_refs": ["root-shared"]}
+    },
+    {
+      "name": "shared root empty surface key verifies",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8",
+        "authority_sealed_at": "2026-09-23T06:00:00Z",
+        "authority_proof": "shared-root-fixbench",
+        "website_url": "https://example.com",
+        "pages": [{"url": "https://example.com/real", "status_code": 200}],
+        "fixes": [
+          {"fix_id": "fix-1", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "evidence_refs": ["https://example.com/real"]}},
+          {"fix_id": "fix-2", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "evidence_refs": ["https://example.com/real"]}}
+        ]
+      },
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "shared-empty-surface",
+        "text": "Missing surface uses the Stage-3 empty surface grouping key.",
+        "evidence": [{"url": "https://example.com/real", "require_live": true}],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": ["root-shared"],
+        "state_claims": []
+      },
+      "expected_status": "verified"
+    },
+    {
+      "name": "same root different surfaces is ambiguous",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8",
+        "authority_sealed_at": "2026-09-23T06:00:00Z",
+        "authority_proof": "shared-root-fixbench",
+        "website_url": "https://example.com",
+        "pages": [{"url": "https://example.com/real", "status_code": 200}],
+        "fixes": [
+          {"fix_id": "fix-1", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}},
+          {"fix_id": "fix-2", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:page", "evidence_refs": ["https://example.com/real"]}}
+        ]
+      },
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "shared-cross-surface",
+        "text": "A bare root reference cannot disambiguate repair surfaces.",
+        "evidence": [{"url": "https://example.com/real", "require_live": true}],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": ["root-shared"],
+        "state_claims": []
+      },
+      "expected_status": "rejected",
+      "expected_reasons": ["root_cause_ref_ambiguous"]
+    },
+    {
+      "name": "explicit root plus stage3 group is ambiguous",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8",
+        "authority_sealed_at": "2026-09-23T06:00:00Z",
+        "authority_proof": "shared-root-fixbench",
+        "website_url": "https://example.com",
+        "pages": [{"url": "https://example.com/real", "status_code": 200}],
+        "fixes": [
+          {"fix_id": "fix-1", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}},
+          {"fix_id": "fix-2", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}}
+        ],
+        "root_causes": [{"root_cause_id": "root-shared"}]
+      },
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "shared-cross-container",
+        "text": "Cross-container root definitions remain ambiguous.",
+        "evidence": [{"url": "https://example.com/real", "require_live": true}],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": ["root-shared"],
+        "state_claims": []
+      },
+      "expected_status": "rejected",
+      "expected_reasons": ["root_cause_ref_ambiguous"]
+    },
+    {
+      "name": "distinct roots on same surface both verify",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8",
+        "authority_sealed_at": "2026-09-23T06:00:00Z",
+        "authority_proof": "shared-root-fixbench",
+        "website_url": "https://example.com",
+        "pages": [{"url": "https://example.com/real", "status_code": 200}],
+        "fixes": [
+          {"fix_id": "fix-1", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}},
+          {"fix_id": "fix-2", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-other", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}}
+        ]
+      },
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "shared-distinct-roots",
+        "text": "Distinct root identities remain independently grounded.",
+        "evidence": [{"url": "https://example.com/real", "require_live": true}],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": ["root-shared", "root-other"],
+        "state_claims": []
+      },
+      "expected_status": "verified",
+      "expect_preserved": {"root_cause_refs": ["root-shared", "root-other"]}
+    }
+  ]
+}

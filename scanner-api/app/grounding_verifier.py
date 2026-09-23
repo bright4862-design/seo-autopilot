@@ -130,20 +130,38 @@ def _observed_status_code(node: dict[str, Any]) -> int:
     return 0
 
 
-def _verified_root_cause_evidence_id(node: Any, *, parent_container: str) -> str:
-    """Return a root identity only for the existing signed Stage-3 contract.
+def _verified_root_cause_evidence_identity(
+    node: Any,
+    *,
+    parent_container: str,
+) -> tuple[str, str] | None:
+    """Return Stage-3 root/surface identity only for verified producer evidence.
 
-    `root_cause_evidence` is producer evidence nested on a Fix. Reuse the Stage-3
-    validator so Grounding cannot accidentally accept a looser version/state/ref
-    contract than the authority pipeline that created the sealed evidence.
+    Grounding intentionally reuses the existing Stage-3 validator. Repeated
+    evidence for one ``root_cause_id + repair_surface_id`` pair inside a single
+    sealed EvidenceSet represents the producer's shared-root group, not multiple
+    competing root definitions. Different surfaces stay distinct and therefore
+    make a bare root reference ambiguous.
     """
     if parent_container not in _FIX_CONTAINERS or not isinstance(node, dict):
-        return ""
+        return None
     validated = validate_root_cause_evidence({"root_cause_evidence": node})
     if validated.get("state") != "verified":
-        return ""
+        return None
     root_id = validated.get("root_cause_id")
-    return root_id.strip() if isinstance(root_id, str) else ""
+    if not isinstance(root_id, str) or not root_id.strip():
+        return None
+    surface_id = validated.get("repair_surface_id")
+    surface = surface_id.strip() if isinstance(surface_id, str) else ""
+    return root_id.strip(), surface
+
+
+def _verified_root_cause_evidence_id(node: Any, *, parent_container: str) -> str:
+    identity = _verified_root_cause_evidence_identity(
+        node,
+        parent_container=parent_container,
+    )
+    return identity[0] if identity else ""
 
 
 def _nested_evidence_scope_allowed(*, container: str, child_name: str, evidence_scope: bool) -> bool:
@@ -276,6 +294,7 @@ def _collect_refs(
     roots: set[str],
     fix_counts: dict[str, int],
     root_counts: dict[str, int],
+    grouped_root_surfaces: dict[str, set[str]],
     conflicting_fixes: set[str],
     conflicting_roots: set[str],
 ) -> None:
@@ -304,20 +323,30 @@ def _collect_refs(
                 conflicting_roots.update(record_roots)
             for value in record_roots:
                 roots.add(value)
+                # Each explicit root_causes record is an independent definition.
+                # Duplicate explicit definitions remain ambiguous even if their
+                # IDs match exactly.
                 root_counts[value] = root_counts.get(value, 0) + 1
         elif container == "root_cause_evidence":
             # Nested producer evidence defines a root only when it satisfies the
-            # exact Stage-3 signed evidence contract: known version, verified or
-            # confirmed state, strict string root ID, and non-empty strict refs.
-            # Unknown/unverified/conflicted/malformed evidence cannot become L2
-            # root authority merely because it carries a plausible ID.
-            root_id = _verified_root_cause_evidence_id(
+            # exact Stage-3 signed evidence contract. Stage-3 intentionally groups
+            # multiple Fixes that share the same root_cause_id + repair_surface_id
+            # within one trusted scan. An EvidenceSet is derived from one sealed
+            # L2 snapshot, so repeated verified evidence for that same pair is one
+            # root definition, not ambiguity. Different repair surfaces remain
+            # distinct definitions because ai_annotation_v1 carries only a bare
+            # root_cause_ref and cannot disambiguate them.
+            identity = _verified_root_cause_evidence_identity(
                 node,
                 parent_container=parent_container,
             )
-            if root_id:
+            if identity:
+                root_id, surface_id = identity
                 roots.add(root_id)
-                root_counts[root_id] = root_counts.get(root_id, 0) + 1
+                seen_surfaces = grouped_root_surfaces.setdefault(root_id, set())
+                if surface_id not in seen_surfaces:
+                    seen_surfaces.add(surface_id)
+                    root_counts[root_id] = root_counts.get(root_id, 0) + 1
 
         for key, child in node.items():
             _collect_refs(
@@ -328,6 +357,7 @@ def _collect_refs(
                 roots=roots,
                 fix_counts=fix_counts,
                 root_counts=root_counts,
+                grouped_root_surfaces=grouped_root_surfaces,
                 conflicting_fixes=conflicting_fixes,
                 conflicting_roots=conflicting_roots,
             )
@@ -341,6 +371,7 @@ def _collect_refs(
                 roots=roots,
                 fix_counts=fix_counts,
                 root_counts=root_counts,
+                grouped_root_surfaces=grouped_root_surfaces,
                 conflicting_fixes=conflicting_fixes,
                 conflicting_roots=conflicting_roots,
             )
@@ -374,6 +405,7 @@ def build_evidence_set(sealed_l2: dict[str, Any], *, scan_origin: str = "") -> E
     roots: set[str] = set()
     fix_counts: dict[str, int] = {}
     root_counts: dict[str, int] = {}
+    grouped_root_surfaces: dict[str, set[str]] = {}
     conflicting_fixes: set[str] = set()
     conflicting_roots: set[str] = set()
     _collect_refs(
@@ -382,6 +414,7 @@ def build_evidence_set(sealed_l2: dict[str, Any], *, scan_origin: str = "") -> E
         roots=roots,
         fix_counts=fix_counts,
         root_counts=root_counts,
+        grouped_root_surfaces=grouped_root_surfaces,
         conflicting_fixes=conflicting_fixes,
         conflicting_roots=conflicting_roots,
     )

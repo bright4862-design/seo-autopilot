@@ -138,3 +138,16 @@ test("blank evidence refs cannot grant root-cause authority", () => {
   assert.deepEqual(result.appliedDependencies, []);
   assert.equal(result.groups.length, 2);
 });
+
+test("non-string scan identity aliases cannot grant root-cause authority", () => {
+  const input = dependencyPair();
+  input[0].scan_id = TRUSTED_SCAN_ID;
+  input[0].scanId = [TRUSTED_SCAN_ID];
+  input[1].scan_id = TRUSTED_SCAN_ID;
+  input[1].scan_run_id = TRUSTED_SCAN_ID;
+
+  const result = buildImplementationPlan(input, { trustedScanId: TRUSTED_SCAN_ID });
+  assert.deepEqual(result.orderedRepairIds, ["sitemap", "redirect"]);
+  assert.deepEqual(result.appliedDependencies, []);
+  assert.equal(result.groups.length, 2);
+});

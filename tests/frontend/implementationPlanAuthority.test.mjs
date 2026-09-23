@@ -79,6 +79,18 @@ test("root-cause dependency rejects a repair-local scan identity mismatch", () =
   assert.equal(result.groups.length, 2);
 });
 
+test("root-cause dependency rejects conflicting scan identity aliases", () => {
+  const input = dependencyPair(rootEvidence("root:shared"), {
+    scan_id: "scan:trusted",
+    scanId: "scan:other",
+    scan_run_id: "scan:trusted",
+  });
+  const result = buildImplementationPlan(input, { trustedScanId: "scan:trusted" });
+  assert.deepEqual(result.orderedRepairIds, ["sitemap", "redirect"]);
+  assert.deepEqual(result.appliedDependencies, []);
+  assert.equal(result.groups.length, 2);
+});
+
 test("root-cause dependency is allowed only with evidence refs and exact trusted scan binding", () => {
   const input = dependencyPair(rootEvidence("root:shared"), {
     scan_id: "scan:trusted",
@@ -103,6 +115,19 @@ test("surface/remediation grouping rejects a repair-local scan identity mismatch
   input[0].scan_run_id = "scan:trusted";
   input[1].scan_id = "scan:other";
   input[1].scan_run_id = "scan:other";
+
+  const result = buildImplementationPlan(input, { trustedScanId: "scan:trusted" });
+  assert.deepEqual(result.orderedRepairIds, ["heading-a", "heading-b"]);
+  assert.equal(result.groups.length, 2);
+  assert.notEqual(result.groups[0].key, result.groups[1].key);
+});
+
+test("surface/remediation grouping rejects a conflicting identity hidden in original repair data", () => {
+  const input = surfacePair({
+    scan_id: "scan:trusted",
+    scan_run_id: "scan:trusted",
+    original: { scan_run_id: "scan:other" },
+  });
 
   const result = buildImplementationPlan(input, { trustedScanId: "scan:trusted" });
   assert.deepEqual(result.orderedRepairIds, ["heading-a", "heading-b"]);

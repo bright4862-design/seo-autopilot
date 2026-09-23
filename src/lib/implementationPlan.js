@@ -85,21 +85,32 @@ function pageFamilyOf(item = {}) {
   );
 }
 
-function localScanIdentityOf(item = {}) {
-  return {
-    scanId: item.scan_id ?? item.scanId ?? item.original?.scan_id ?? item.original?.scanId,
-    scanRunId: item.scan_run_id ?? item.scanRunId ?? item.original?.scan_run_id ?? item.original?.scanRunId,
-  };
+function localScanIdentityValuesOf(item = {}) {
+  return [
+    item.scan_id,
+    item.scanId,
+    item.scan_run_id,
+    item.scanRunId,
+    item.original?.scan_id,
+    item.original?.scanId,
+    item.original?.scan_run_id,
+    item.original?.scanRunId,
+  ];
 }
 
 function matchesTrustedScanIdentity(item = {}, trustedScanId = "") {
   const trusted = strictText(trustedScanId);
   if (!trusted) return false;
 
-  const localIdentity = localScanIdentityOf(item);
-  for (const value of [localIdentity.scanId, localIdentity.scanRunId]) {
-    if (value === undefined || value === null || value === "") continue;
-    if (strictText(value) !== trusted) return false;
+  // Treat every published scan-identity alias as a consistency assertion. A
+  // trusted value in one field must never hide a conflicting or malformed value
+  // in another alias, including the original repair payload.
+  for (const value of localScanIdentityValuesOf(item)) {
+    if (value === undefined || value === null) continue;
+    if (typeof value !== "string") return false;
+    const local = value.trim();
+    if (!local) continue;
+    if (local !== trusted) return false;
   }
   return true;
 }

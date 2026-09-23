@@ -42,6 +42,51 @@
       }
     },
     {
+      "name": "undeclared_url_in_clean_control_text",
+      "expected_status": "rejected",
+      "expected_reasons": ["text_not_deterministically_rendered"],
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "text-url",
+        "text": "See https://example.com/invented for the evidence.",
+        "evidence": [{"url": "https://example.com/a", "require_live": true}],
+        "numeric_claims": [{"name": "health_score", "value": 88, "source_ref": "$.health_score"}],
+        "fix_refs": ["fix-1"],
+        "root_cause_refs": ["root-1"],
+        "state_claims": [{"field": "scan_status", "value": "complete", "source_ref": "$.scan_status"}]
+      }
+    },
+    {
+      "name": "undeclared_number_in_clean_control_text",
+      "expected_status": "rejected",
+      "expected_reasons": ["text_not_deterministically_rendered"],
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "text-number",
+        "text": "Your health score is 999.",
+        "evidence": [{"url": "https://example.com/a", "require_live": true}],
+        "numeric_claims": [{"name": "health_score", "value": 88, "source_ref": "$.health_score"}],
+        "fix_refs": ["fix-1"],
+        "root_cause_refs": ["root-1"],
+        "state_claims": [{"field": "scan_status", "value": "complete", "source_ref": "$.scan_status"}]
+      }
+    },
+    {
+      "name": "undeclared_applied_repair_claim_in_clean_control_text",
+      "expected_status": "rejected",
+      "expected_reasons": ["text_not_deterministically_rendered"],
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "text-applied",
+        "text": "FixList has applied the repair to your website.",
+        "evidence": [{"url": "https://example.com/a", "require_live": true}],
+        "numeric_claims": [{"name": "health_score", "value": 88, "source_ref": "$.health_score"}],
+        "fix_refs": ["fix-1"],
+        "root_cause_refs": ["root-1"],
+        "state_claims": [{"field": "scan_status", "value": "complete", "source_ref": "$.scan_status"}]
+      }
+    },
+    {
       "name": "fabricated_plausible_url",
       "expected_status": "rejected",
       "payload": {

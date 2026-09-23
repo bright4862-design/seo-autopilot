@@ -70,6 +70,20 @@ def test_clean_annotation_verifies():
     assert result.verified_payload["annotation_id"] == "a1"
 
 
+@pytest.mark.parametrize(
+    "undeclared_text",
+    [
+        "See https://example.com/invented for the evidence.",
+        "Your health score is 999.",
+        "FixList has applied the repair to your website.",
+    ],
+)
+def test_undeclared_factual_prose_cannot_bypass_typed_grounding(undeclared_text):
+    result = verify_grounded_payload(ann(text=undeclared_text), sealed_l2=sealed_l2())
+    assert result.status == "rejected"
+    assert "text_not_deterministically_rendered" in result.reasons
+
+
 def test_fabricated_plausible_url_is_rejected():
     bad = ann(evidence=[{"url": "https://example.com/plausible-but-fake", "require_live": False}])
     result = verify_grounded_payload(bad, sealed_l2=sealed_l2())

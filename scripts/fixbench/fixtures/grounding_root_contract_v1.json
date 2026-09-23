@@ -1,0 +1,340 @@
+{
+  "fixture_version": "fixbench_grounding_root_contract_v1",
+  "sealed_l2": {
+    "authority_seal_version": "authority_v8",
+    "authority_sealed_at": "2026-09-23T05:00:00Z",
+    "authority_proof": "root-contract-fixbench",
+    "website_url": "https://example.com",
+    "pages": [
+      {
+        "url": "https://example.com/real",
+        "status_code": 200
+      }
+    ],
+    "fixes": [
+      {
+        "fix_id": "fix-1",
+        "root_cause_evidence": {
+          "version": "root_cause_evidence_v1_verified",
+          "state": "verified",
+          "root_cause_id": "root-1",
+          "repair_surface_id": "surface:template",
+          "evidence_refs": [
+            "https://example.com/root-evidence"
+          ]
+        }
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "clean verified root evidence",
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "root-clean",
+        "evidence": [
+          {
+            "url": "https://example.com/root-evidence",
+            "require_live": false
+          }
+        ],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": [
+          "root-1"
+        ],
+        "state_claims": []
+      },
+      "expected_status": "verified",
+      "expect_preserved_evidence": [
+        "https://example.com/root-evidence"
+      ],
+      "expect_preserved": {
+        "root_cause_refs": [
+          "root-1"
+        ]
+      }
+    },
+    {
+      "name": "unknown root evidence version fails closed",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8",
+        "authority_sealed_at": "2026-09-23T05:00:00Z",
+        "authority_proof": "root-contract-fixbench",
+        "website_url": "https://example.com",
+        "pages": [
+          {
+            "url": "https://example.com/real",
+            "status_code": 200
+          }
+        ],
+        "fixes": [
+          {
+            "fix_id": "fix-1",
+            "root_cause_evidence": {
+              "version": "root_cause_evidence_v999",
+              "state": "verified",
+              "root_cause_id": "root-1",
+              "evidence_refs": [
+                "https://example.com/root-evidence"
+              ]
+            }
+          }
+        ]
+      },
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "root-version",
+        "evidence": [
+          {
+            "url": "https://example.com/real",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": [
+          "root-1"
+        ],
+        "state_claims": []
+      },
+      "expected_status": "rejected",
+      "expected_reasons": [
+        "root_cause_ref_missing"
+      ]
+    },
+    {
+      "name": "conflicted root evidence fails closed",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8",
+        "authority_sealed_at": "2026-09-23T05:00:00Z",
+        "authority_proof": "root-contract-fixbench",
+        "website_url": "https://example.com",
+        "pages": [
+          {
+            "url": "https://example.com/real",
+            "status_code": 200
+          }
+        ],
+        "fixes": [
+          {
+            "fix_id": "fix-1",
+            "root_cause_evidence": {
+              "version": "root_cause_evidence_v1_verified",
+              "state": "conflicted",
+              "root_cause_id": "root-1",
+              "evidence_refs": [
+                "https://example.com/root-evidence"
+              ]
+            }
+          }
+        ]
+      },
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "root-conflict",
+        "evidence": [
+          {
+            "url": "https://example.com/real",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": [
+          "root-1"
+        ],
+        "state_claims": []
+      },
+      "expected_status": "rejected",
+      "expected_reasons": [
+        "root_cause_ref_missing"
+      ]
+    },
+    {
+      "name": "verified root without refs fails closed",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8",
+        "authority_sealed_at": "2026-09-23T05:00:00Z",
+        "authority_proof": "root-contract-fixbench",
+        "website_url": "https://example.com",
+        "pages": [
+          {
+            "url": "https://example.com/real",
+            "status_code": 200
+          }
+        ],
+        "fixes": [
+          {
+            "fix_id": "fix-1",
+            "root_cause_evidence": {
+              "version": "root_cause_evidence_v1_verified",
+              "state": "verified",
+              "root_cause_id": "root-1",
+              "evidence_refs": []
+            }
+          }
+        ]
+      },
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "root-empty",
+        "evidence": [
+          {
+            "url": "https://example.com/real",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": [
+          "root-1"
+        ],
+        "state_claims": []
+      },
+      "expected_status": "rejected",
+      "expected_reasons": [
+        "root_cause_ref_missing"
+      ]
+    },
+    {
+      "name": "structured root refs fail closed",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8",
+        "authority_sealed_at": "2026-09-23T05:00:00Z",
+        "authority_proof": "root-contract-fixbench",
+        "website_url": "https://example.com",
+        "pages": [
+          {
+            "url": "https://example.com/real",
+            "status_code": 200
+          }
+        ],
+        "fixes": [
+          {
+            "fix_id": "fix-1",
+            "root_cause_evidence": {
+              "version": "root_cause_evidence_v1_verified",
+              "state": "verified",
+              "root_cause_id": "root-1",
+              "evidence_refs": [
+                {
+                  "operator_debug": "https://private.example/debug"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "root-structured",
+        "evidence": [
+          {
+            "url": "https://example.com/real",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": [
+          "root-1"
+        ],
+        "state_claims": []
+      },
+      "expected_status": "rejected",
+      "expected_reasons": [
+        "root_cause_ref_missing"
+      ]
+    },
+    {
+      "name": "orphan root evidence cannot define authority",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8",
+        "authority_sealed_at": "2026-09-23T05:00:00Z",
+        "authority_proof": "root-contract-fixbench",
+        "website_url": "https://example.com",
+        "pages": [
+          {
+            "url": "https://example.com/real",
+            "status_code": 200
+          }
+        ],
+        "root_cause_evidence": {
+          "version": "root_cause_evidence_v1_verified",
+          "state": "verified",
+          "root_cause_id": "root-1",
+          "evidence_refs": [
+            "https://example.com/root-evidence"
+          ]
+        }
+      },
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "root-orphan",
+        "evidence": [
+          {
+            "url": "https://example.com/real",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": [
+          "root-1"
+        ],
+        "state_claims": []
+      },
+      "expected_status": "rejected",
+      "expected_reasons": [
+        "root_cause_ref_missing"
+      ]
+    },
+    {
+      "name": "invalid root evidence cannot authorize plausible URL",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8",
+        "authority_sealed_at": "2026-09-23T05:00:00Z",
+        "authority_proof": "root-contract-fixbench",
+        "website_url": "https://example.com",
+        "pages": [
+          {
+            "url": "https://example.com/real",
+            "status_code": 200
+          }
+        ],
+        "fixes": [
+          {
+            "fix_id": "fix-1",
+            "root_cause_evidence": {
+              "version": "root_cause_evidence_v1_verified",
+              "state": "conflict",
+              "root_cause_id": "root-1",
+              "evidence_refs": [
+                "https://example.com/root-evidence"
+              ]
+            }
+          }
+        ]
+      },
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "root-url",
+        "evidence": [
+          {
+            "url": "https://example.com/root-evidence",
+            "require_live": false
+          }
+        ],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": [],
+        "state_claims": []
+      },
+      "expected_status": "rejected",
+      "expected_reasons": [
+        "url_not_in_evidence"
+      ]
+    }
+  ]
+}

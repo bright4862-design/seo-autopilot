@@ -1,0 +1,304 @@
+{
+  "fixture_version": "fixbench_grounding_adversarial_v1",
+  "sealed_l2": {
+    "authority_seal_version": "authority_v8",
+    "authority_sealed_at": "2026-09-22T15:00:00Z",
+    "authority_proof": "fixture-proof",
+    "website_url": "https://example.com",
+    "scan_status": "complete",
+    "health_score": 88,
+    "pages": [
+      {
+        "url": "https://example.com/a",
+        "status_code": 200
+      },
+      {
+        "url": "https://example.com/b",
+        "status_code": 404
+      }
+    ],
+    "fixes": [
+      {
+        "fix_id": "fix-1",
+        "affected_urls": [
+          "https://example.com/a"
+        ]
+      }
+    ],
+    "root_causes": [
+      {
+        "root_cause_id": "root-1",
+        "state": "verified"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "clean_control",
+      "expected_status": "verified",
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "clean",
+        "evidence": [
+          {
+            "url": "https://example.com/a",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [
+          {
+            "value": 88,
+            "source_ref": "$.health_score"
+          }
+        ],
+        "fix_refs": [
+          "fix-1"
+        ],
+        "root_cause_refs": [
+          "root-1"
+        ],
+        "state_claims": [
+          {
+            "value": "complete",
+            "source_ref": "$.scan_status"
+          }
+        ]
+      }
+    },
+    {
+      "name": "evidence_preservation_control",
+      "expected_status": "verified",
+      "expect_preserved_evidence": [
+        "https://example.com/a#section"
+      ],
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "preserve",
+        "evidence": [
+          {
+            "url": "https://example.com/a#section",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [],
+        "fix_refs": [
+          "fix-1"
+        ],
+        "root_cause_refs": [],
+        "state_claims": []
+      }
+    },
+    {
+      "name": "fabricated_plausible_url",
+      "expected_status": "rejected",
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "bad-url",
+        "evidence": [
+          {
+            "url": "https://example.com/plausible",
+            "require_live": false
+          }
+        ],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": [],
+        "state_claims": []
+      }
+    },
+    {
+      "name": "fabricated_count",
+      "expected_status": "rejected",
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "bad-count",
+        "evidence": [
+          {
+            "url": "https://example.com/a",
+            "require_live": false
+          }
+        ],
+        "numeric_claims": [
+          {
+            "value": 91,
+            "source_ref": "$.health_score"
+          }
+        ],
+        "fix_refs": [],
+        "root_cause_refs": [],
+        "state_claims": []
+      }
+    },
+    {
+      "name": "fabricated_fix_id",
+      "expected_status": "rejected",
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "bad-fix",
+        "evidence": [
+          {
+            "url": "https://example.com/a",
+            "require_live": false
+          }
+        ],
+        "numeric_claims": [],
+        "fix_refs": [
+          "fix-999"
+        ],
+        "root_cause_refs": [],
+        "state_claims": []
+      }
+    },
+    {
+      "name": "fabricated_root_cause_id",
+      "expected_status": "rejected",
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "bad-root",
+        "evidence": [
+          {
+            "url": "https://example.com/a",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": [
+          "root-999"
+        ],
+        "state_claims": []
+      }
+    },
+    {
+      "name": "required_liveness_not_observed",
+      "expected_status": "rejected",
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "bad-live",
+        "evidence": [
+          {
+            "url": "https://example.com/b",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": [],
+        "state_claims": []
+      }
+    },
+    {
+      "name": "fabricated_state",
+      "expected_status": "rejected",
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "bad-state",
+        "evidence": [
+          {
+            "url": "https://example.com/a",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": [],
+        "state_claims": [
+          {
+            "value": "partial",
+            "source_ref": "$.scan_status"
+          }
+        ]
+      }
+    },
+    {
+      "name": "deterministic_conflict",
+      "expected_status": "rejected",
+      "payload": {
+        "schema_version": "chat_answer_v2",
+        "answer_id": "conflict",
+        "annotations": [
+          {
+            "schema_version": "ai_annotation_v2",
+            "annotation_id": "conflict-a",
+            "evidence": [
+              {
+                "url": "https://example.com/a",
+                "require_live": true
+              }
+            ],
+            "numeric_claims": [
+              {
+                "value": 88,
+                "source_ref": "$.health_score"
+              }
+            ],
+            "fix_refs": [],
+            "root_cause_refs": [],
+            "state_claims": []
+          },
+          {
+            "schema_version": "ai_annotation_v2",
+            "annotation_id": "conflict-b",
+            "evidence": [
+              {
+                "url": "https://example.com/a",
+                "require_live": true
+              }
+            ],
+            "numeric_claims": [
+              {
+                "value": 87,
+                "source_ref": "$.health_score"
+              }
+            ],
+            "fix_refs": [],
+            "root_cause_refs": [],
+            "state_claims": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "safe_redaction",
+      "expected_status": "redacted",
+      "payload": {
+        "schema_version": "chat_answer_v2",
+        "answer_id": "redaction-control",
+        "annotations": [
+          {
+            "schema_version": "ai_annotation_v2",
+            "annotation_id": "good",
+            "evidence": [
+              {
+                "url": "https://example.com/a",
+                "require_live": true
+              }
+            ],
+            "numeric_claims": [],
+            "fix_refs": [
+              "fix-1"
+            ],
+            "root_cause_refs": [],
+            "state_claims": []
+          },
+          {
+            "schema_version": "ai_annotation_v2",
+            "annotation_id": "bad",
+            "evidence": [
+              {
+                "url": "https://example.com/a",
+                "require_live": true
+              }
+            ],
+            "numeric_claims": [],
+            "fix_refs": [
+              "fix-fake"
+            ],
+            "root_cause_refs": [],
+            "state_claims": []
+          }
+        ]
+      }
+    }
+  ]
+}

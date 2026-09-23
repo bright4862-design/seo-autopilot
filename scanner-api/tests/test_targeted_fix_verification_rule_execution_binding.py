@@ -1,0 +1,855 @@
+import copy
+
+import pytest
+
+from app.coverage_probes import COVERAGE_PROBE_SCHEDULER_VERSION
+from app.repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
+from app.targeted_fix_verification import (
+    TARGETED_FIX_VERIFICATION_OBSERVATION_VERSION,
+    TARGETED_FIX_VERIFICATION_PURPOSE,
+)
+from app.targeted_fix_verification_rule_execution_binding import (
+    ORIGINATING_RULE_PRODUCER_CONTRACT,
+    TARGETED_FIX_VERIFICATION_EXECUTION_WINDOW_VERSION,
+    TARGETED_FIX_VERIFICATION_RULE_EXECUTION_BINDING_VERSION,
+    TARGETED_FIX_VERIFICATION_RULE_EXECUTION_RESULT_VERSION,
+    build_originating_rule_execution_result,
+    build_rule_execution_bound_rule_evaluation_receipt,
+    evaluate_rule_execution_bound_targeted_fix_verification_service,
+)
+from app.targeted_fix_verification_service_adapter import (
+    prepare_targeted_fix_verification_service,
+)
+
+EXECUTION_ID = "verification-run-1"
+STARTED_MS = 1_800_000_000_000
+EVALUATED_MS = STARTED_MS + 10_000
+
+ORIGIN = "https://example.com"
+RULE_VERSION = "missing_h1_v3"
+PROFILE_VERSION = "standard150_review_v8"
+STAT_KEYS = (
+    "eligible",
+    "selected",
+    "attempted",
+    "completed",
+    "passed",
+    "failed",
+    "not_verified",
+    "skipped",
+    "exhausted",
+)
+
+
+def repair(urls=None, **overrides):
+    value = {
+        "rule": "missing_h1",
+        "category": "thin_content",
+        "repair_surface": "product_template",
+        "remediation_family": "add_single_h1",
+        "affected_pages": urls or ["/a", "/b"],
+        "rule_definition_version": RULE_VERSION,
+        "comparison_profile_version": PROFILE_VERSION,
+        "evidence_url_identity_version": PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION,
+    }
+    value.update(overrides)
+    return value
+
+
+def contract(**overrides):
+    value = {
+        "rule_definition_version": RULE_VERSION,
+        "comparison_profile_version": PROFILE_VERSION,
+        "evidence_url_identity_version": PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION,
+    }
+    value.update(overrides)
+    return value
+
+
+def stats(**overrides):
+    value = {key: 0 for key in STAT_KEYS}
+    value.update(overrides)
+    return value
+
+
+def summary(*, consumed=0, remaining=None, observations=None, target_stats=None):
+    configured = 18
+    shared_limit = 100
+    crawl_consumed = 80
+    if remaining is None:
+        remaining = min(
+            max(0, configured - consumed),
+            max(0, shared_limit - crawl_consumed - consumed),
+        )
+    purposes = {}
+    if target_stats is not None:
+        purposes[TARGETED_FIX_VERIFICATION_PURPOSE] = target_stats
+    return {
+        "version": COVERAGE_PROBE_SCHEDULER_VERSION,
+        "request_budget": {
+            "configured_probe_requests": configured,
+            "shared_request_limit": shared_limit,
+            "crawl_requests_consumed": crawl_consumed,
+            "requests_consumed": consumed,
+            "requests_reused": 0,
+            "requests_remaining": remaining,
+            "budget_exhausted": False,
+            "deadline_exhausted": False,
+            "time_budget_seconds": 30.0,
+        },
+        "purposes": purposes,
+        "observations": observations or [],
+        "observation_samples_truncated": False,
+    }
+
+
+def scheduler_observation(url, *, state="pass", reason="verified", evidence_ref=None):
+    return {
+        "purpose": TARGETED_FIX_VERIFICATION_PURPOSE,
+        "version": COVERAGE_PROBE_SCHEDULER_VERSION,
+        "state": state,
+        "reason": reason,
+        "observed_url": url,
+        "status_code": 200 if state != "not_verified" else 0,
+        "final_url": url if state != "not_verified" else "",
+        "source_pages": [],
+        "link_text_samples": [],
+        "metadata": {},
+        "evidence_ref": evidence_ref
+        or f"{COVERAGE_PROBE_SCHEDULER_VERSION}:receipt:{url.rsplit('/', 1)[-1]}",
+    }
+
+
+def prepare(sealed, pre):
+    return prepare_targeted_fix_verification_service(
+        sealed,
+        source_scan_id="scan-old",
+        source_scan_origin=ORIGIN,
+        scheduler_summary=pre,
+    )
+
+
+def observed(prepared, key, *, scheduler_ref=None, **page_overrides):
+    page = {
+        "url": key,
+        "final_url": key,
+        "status_code": 200,
+        "content_type": "text/html; charset=utf-8",
+        "page_evidence_class": "usable_html",
+        "raw_html_truncated": False,
+        "robots_txt_fetch_allowed": True,
+        "access_block_kind": "",
+        "fetch_error": "",
+    }
+    page.update(page_overrides)
+    return {
+        "version": TARGETED_FIX_VERIFICATION_OBSERVATION_VERSION,
+        "plan_fingerprint": prepared["plan"]["plan_fingerprint"],
+        "evidence_key": key,
+        "scheduler_evidence_ref": scheduler_ref
+        or f"{COVERAGE_PROBE_SCHEDULER_VERSION}:receipt:{key.rsplit('/', 1)[-1]}",
+        "state": "observed",
+        "execution_id": EXECUTION_ID,
+        "observed_at_ms": STARTED_MS + 5_000,
+        "page": page,
+    }
+
+
+def not_verified(prepared, key, reason):
+    return {
+        "version": TARGETED_FIX_VERIFICATION_OBSERVATION_VERSION,
+        "plan_fingerprint": prepared["plan"]["plan_fingerprint"],
+        "evidence_key": key,
+        "scheduler_evidence_ref": f"{COVERAGE_PROBE_SCHEDULER_VERSION}:receipt:{key.rsplit('/', 1)[-1]}",
+        "state": "not_verified",
+        "execution_id": EXECUTION_ID,
+        "observed_at_ms": STARTED_MS + 5_000,
+        "reason": reason,
+    }
+
+
+def completed_post(prepared, *, state="pass", reason="verified"):
+    urls = [row["url"] for row in prepared["plan"]["requests"]]
+    return summary(
+        consumed=len(urls),
+        target_stats=stats(
+            eligible=len(urls),
+            selected=len(urls),
+            attempted=len(urls),
+            completed=len(urls),
+            passed=len(urls) if state == "pass" else 0,
+            failed=len(urls) if state == "fail" else 0,
+            not_verified=len(urls) if state == "not_verified" else 0,
+        ),
+        observations=[
+            scheduler_observation(url, state=state, reason=reason) for url in urls
+        ],
+    )
+
+
+def context(sealed=None):
+    sealed = sealed or repair()
+    pre = summary()
+    prepared = prepare(sealed, pre)
+    post = completed_post(prepared)
+    outcomes = [
+        observed(prepared, row["evidence_key"])
+        for row in prepared["plan"]["requests"]
+    ]
+    return sealed, pre, prepared, post, outcomes
+
+
+def _absolute(value):
+    if value.startswith(("https://", "http://")):
+        return value
+    return ORIGIN + (value if value.startswith("/") else "/" + value)
+
+
+def current_target_keys(current_fixes):
+    keys = set()
+    for fix in current_fixes:
+        if not isinstance(fix, dict):
+            continue
+        for value in fix.get("affected_pages") or []:
+            if isinstance(value, str):
+                keys.add(_absolute(value))
+    return keys
+
+
+def rule_results(prepared, outcomes, current_fixes):
+    present = current_target_keys(current_fixes)
+    results = []
+    for outcome in outcomes:
+        finding_state = (
+            "finding_present"
+            if outcome.get("evidence_key") in present
+            else "finding_absent"
+        )
+        results.append(
+            build_originating_rule_execution_result(
+                prepared["plan"],
+                outcome,
+                finding_state=finding_state,
+            )
+        )
+    return results
+
+
+def execution_window(prepared, **overrides):
+    return {
+        "version": TARGETED_FIX_VERIFICATION_EXECUTION_WINDOW_VERSION,
+        "execution_id": EXECUTION_ID,
+        "plan_fingerprint": prepared["plan"]["plan_fingerprint"],
+        "started_at_ms": STARTED_MS,
+        "expires_at_ms": STARTED_MS + 30_000,
+        **overrides,
+    }
+
+
+def bound_receipt(
+    prepared,
+    sealed,
+    pre,
+    post,
+    outcomes,
+    current_fixes,
+    results,
+    current_contract=None,
+    window=None,
+    evaluation_time_ms=EVALUATED_MS,
+    expected_execution_id=EXECUTION_ID,
+):
+    return build_rule_execution_bound_rule_evaluation_receipt(
+        prepared,
+        sealed,
+        preflight_scheduler_summary=pre,
+        postflight_scheduler_summary=post,
+        current_scan_origin=ORIGIN,
+        current_contract=current_contract or contract(),
+        recheck_outcomes=outcomes,
+        current_fixes=current_fixes,
+        rule_execution_results=results,
+        execution_window=window if window is not None else execution_window(prepared),
+        expected_execution_id=expected_execution_id,
+        evaluation_time_ms=evaluation_time_ms,
+    )
+
+
+def evaluate(
+    prepared,
+    sealed,
+    pre,
+    post,
+    outcomes,
+    current_fixes,
+    *,
+    results=None,
+    receipt=None,
+    current_contract=None,
+    window=None,
+    evaluation_time_ms=EVALUATED_MS,
+    expected_execution_id=EXECUTION_ID,
+):
+    current_contract = current_contract or contract()
+    if results is None:
+        results = rule_results(prepared, outcomes, current_fixes)
+    if receipt is None:
+        receipt = bound_receipt(
+            prepared,
+            sealed,
+            pre,
+            post,
+            outcomes,
+            current_fixes,
+            results,
+            current_contract,
+            window=window,
+            evaluation_time_ms=evaluation_time_ms,
+            expected_execution_id=expected_execution_id,
+        )
+    return evaluate_rule_execution_bound_targeted_fix_verification_service(
+        prepared,
+        sealed,
+        preflight_scheduler_summary=pre,
+        postflight_scheduler_summary=post,
+        current_scan_origin=ORIGIN,
+        current_contract=current_contract,
+        recheck_outcomes=outcomes,
+        current_fixes=current_fixes,
+        rule_execution_results=results,
+        rule_execution_bound_receipt=receipt,
+        execution_window=window if window is not None else execution_window(prepared),
+        expected_execution_id=expected_execution_id,
+        evaluation_time_ms=evaluation_time_ms,
+    )
+
+
+def test_exact_originating_rule_execution_binding_preserves_pass():
+    sealed, pre, prepared, post, outcomes = context()
+    result = evaluate(prepared, sealed, pre, post, outcomes, [])
+    assert result["state"] == "PASS"
+    assert result["rule_execution_binding"]["state"] == "valid"
+    assert (
+        result["rule_execution_binding_version"]
+        == TARGETED_FIX_VERIFICATION_RULE_EXECUTION_BINDING_VERSION
+    )
+    assert result["model_calls_performed"] is False
+    assert result["side_effects_performed"] is False
+
+
+def test_originating_rule_execution_binding_preserves_partial_and_fail():
+    sealed, pre, prepared, post, outcomes = context()
+    partial = evaluate(
+        prepared,
+        sealed,
+        pre,
+        post,
+        outcomes,
+        [repair(["/a"])],
+    )
+    failed = evaluate(
+        prepared,
+        sealed,
+        pre,
+        post,
+        outcomes,
+        [repair(["/a", "/b"])],
+    )
+    assert partial["state"] == "PARTIAL"
+    assert failed["state"] == "FAIL"
+
+
+def test_verified_fixed_reappearance_reopens_without_mutating_history():
+    sealed, pre, prepared, post, outcomes = context(
+        repair(verification_state="verified_fixed")
+    )
+    snapshot = copy.deepcopy(sealed)
+    result = evaluate(
+        prepared,
+        sealed,
+        pre,
+        post,
+        outcomes,
+        [repair(["/a", "/b"])],
+    )
+    assert result["state"] == "FAIL"
+    assert result["reopen_regression"] is True
+    assert sealed == snapshot
+
+
+def test_missing_rule_execution_receipt_is_never_accepted():
+    sealed, pre, prepared, post, outcomes = context()
+    results = rule_results(prepared, outcomes, [])
+    result = evaluate_rule_execution_bound_targeted_fix_verification_service(
+        prepared,
+        sealed,
+        preflight_scheduler_summary=pre,
+        postflight_scheduler_summary=post,
+        current_scan_origin=ORIGIN,
+        current_contract=contract(),
+        recheck_outcomes=outcomes,
+        current_fixes=[],
+        rule_execution_results=results,
+        rule_execution_bound_receipt=None,
+        execution_window=execution_window(prepared),
+        expected_execution_id=EXECUTION_ID,
+        evaluation_time_ms=EVALUATED_MS,
+    )
+    assert result["state"] == "COULD_NOT_VERIFY"
+    assert result["reason"] == "rule_execution_bound_receipt_missing_or_invalid"
+
+
+def test_missing_one_rule_execution_result_fails_closed():
+    sealed, pre, prepared, post, outcomes = context()
+    results = rule_results(prepared, outcomes, [])
+    receipt = bound_receipt(
+        prepared, sealed, pre, post, outcomes, [], results[:1]
+    )
+    assert receipt["state"] == "could_not_verify"
+    assert receipt["reason"] == "rule_execution_result_population_mismatch"
+
+
+def test_duplicate_rule_execution_result_fails_closed():
+    sealed, pre, prepared, post, outcomes = context()
+    results = rule_results(prepared, outcomes, [])
+    results[1] = copy.deepcopy(results[0])
+    receipt = bound_receipt(
+        prepared, sealed, pre, post, outcomes, [], results
+    )
+    assert receipt["state"] == "could_not_verify"
+    assert receipt["reason"] == "duplicate_rule_execution_result"
+
+
+def test_same_origin_outside_plan_rule_result_is_rejected():
+    sealed, pre, prepared, post, outcomes = context()
+    results = rule_results(prepared, outcomes, [])
+    results[1]["evidence_key"] = f"{ORIGIN}/c"
+    receipt = bound_receipt(
+        prepared, sealed, pre, post, outcomes, [], results
+    )
+    assert receipt["state"] == "could_not_verify"
+    assert receipt["reason"] == "rule_execution_result_outside_planned_scope"
+
+
+def test_foreign_host_rule_result_is_rejected():
+    sealed, pre, prepared, post, outcomes = context()
+    results = rule_results(prepared, outcomes, [])
+    results[1]["evidence_key"] = "https://evil.example/b"
+    receipt = bound_receipt(
+        prepared, sealed, pre, post, outcomes, [], results
+    )
+    assert receipt["state"] == "could_not_verify"
+    assert receipt["reason"] == "rule_execution_result_outside_planned_scope"
+
+
+def test_rule_version_drift_in_rule_execution_result_fails_closed():
+    sealed, pre, prepared, post, outcomes = context()
+    results = rule_results(prepared, outcomes, [])
+    results[0]["rule_definition_version"] = "missing_h1_v4"
+    receipt = bound_receipt(
+        prepared, sealed, pre, post, outcomes, [], results
+    )
+    assert receipt["state"] == "could_not_verify"
+    assert (
+        receipt["reason"]
+        == "rule_execution_result_rule_definition_version_mismatch"
+    )
+
+
+def test_plan_fingerprint_drift_in_rule_execution_result_fails_closed():
+    sealed, pre, prepared, post, outcomes = context()
+    results = rule_results(prepared, outcomes, [])
+    results[0]["plan_fingerprint"] = "0" * 64
+    receipt = bound_receipt(
+        prepared, sealed, pre, post, outcomes, [], results
+    )
+    assert receipt["state"] == "could_not_verify"
+    assert receipt["reason"] == "rule_execution_result_plan_fingerprint_mismatch"
+
+
+def test_scheduler_receipt_mismatch_in_rule_execution_result_fails_closed():
+    sealed, pre, prepared, post, outcomes = context()
+    results = rule_results(prepared, outcomes, [])
+    results[0]["scheduler_evidence_ref"] = "stale-receipt"
+    receipt = bound_receipt(
+        prepared, sealed, pre, post, outcomes, [], results
+    )
+    assert receipt["state"] == "could_not_verify"
+    assert receipt["reason"] == "rule_execution_scheduler_evidence_ref_mismatch"
+
+
+def test_page_evidence_fingerprint_mismatch_fails_closed():
+    sealed, pre, prepared, post, outcomes = context()
+    results = rule_results(prepared, outcomes, [])
+    results[0]["page_evidence_fingerprint"] = "0" * 64
+    receipt = bound_receipt(
+        prepared, sealed, pre, post, outcomes, [], results
+    )
+    assert receipt["state"] == "could_not_verify"
+    assert (
+        receipt["reason"]
+        == "rule_execution_page_evidence_fingerprint_mismatch"
+    )
+
+
+def test_rule_result_cannot_claim_absent_when_target_fix_is_present():
+    sealed, pre, prepared, post, outcomes = context()
+    current_fixes = [repair(["/a"])]
+    results = rule_results(prepared, outcomes, current_fixes)
+    results[0]["finding_state"] = "finding_absent"
+    receipt = bound_receipt(
+        prepared,
+        sealed,
+        pre,
+        post,
+        outcomes,
+        current_fixes,
+        results,
+    )
+    assert receipt["state"] == "could_not_verify"
+    assert receipt["reason"] == "rule_execution_fix_population_mismatch"
+
+
+def test_rule_result_cannot_claim_present_when_target_fix_is_absent():
+    sealed, pre, prepared, post, outcomes = context()
+    results = rule_results(prepared, outcomes, [])
+    results[0]["finding_state"] = "finding_present"
+    receipt = bound_receipt(
+        prepared, sealed, pre, post, outcomes, [], results
+    )
+    assert receipt["state"] == "could_not_verify"
+    assert receipt["reason"] == "rule_execution_fix_population_mismatch"
+
+
+def test_finding_state_type_coercion_is_rejected():
+    sealed, pre, prepared, post, outcomes = context()
+    results = rule_results(prepared, outcomes, [])
+    results[0]["finding_state"] = 0
+    receipt = bound_receipt(
+        prepared, sealed, pre, post, outcomes, [], results
+    )
+    assert receipt["state"] == "could_not_verify"
+    assert receipt["reason"] == "rule_execution_finding_state_invalid"
+
+
+def test_extra_rule_execution_fields_cannot_smuggle_unbound_claims():
+    sealed, pre, prepared, post, outcomes = context()
+    results = rule_results(prepared, outcomes, [])
+    results[0]["client_claim"] = "trust-me"
+    receipt = bound_receipt(
+        prepared, sealed, pre, post, outcomes, [], results
+    )
+    assert receipt["state"] == "could_not_verify"
+    assert receipt["reason"] == "rule_execution_result_fields_invalid"
+
+
+def test_model_calls_are_explicitly_forbidden_by_rule_execution_contract():
+    sealed, pre, prepared, post, outcomes = context()
+    results = rule_results(prepared, outcomes, [])
+    results[0]["model_calls_performed"] = True
+    receipt = bound_receipt(
+        prepared, sealed, pre, post, outcomes, [], results
+    )
+    assert receipt["state"] == "could_not_verify"
+    assert receipt["reason"] == "rule_execution_model_calls_not_allowed"
+
+
+def test_disappeared_url_cannot_claim_rule_execution_or_pass():
+    sealed, pre, prepared, _, _ = context(repair(["/a"]))
+    key = prepared["plan"]["requests"][0]["evidence_key"]
+    post = completed_post(prepared, state="not_verified", reason="not_observed")
+    outcomes = [not_verified(prepared, key, "not_observed")]
+    results = [
+        build_originating_rule_execution_result(
+            prepared["plan"],
+            outcomes[0],
+            finding_state="finding_absent",
+        )
+    ]
+    assert results[0]["state"] == "could_not_verify"
+    assert results[0]["reason"] == "rule_execution_requires_observed_evidence"
+    receipt = bound_receipt(
+        prepared, sealed, pre, post, outcomes, [], results
+    )
+    assert receipt["state"] == "could_not_verify"
+    assert receipt["reason"] == "rule_execution_requires_observed_evidence"
+    result = evaluate(
+        prepared,
+        sealed,
+        pre,
+        post,
+        outcomes,
+        [],
+        results=results,
+        receipt=receipt,
+    )
+    assert result["state"] == "COULD_NOT_VERIFY"
+
+
+def test_timeout_cannot_claim_rule_execution_or_pass():
+    sealed, pre, prepared, _, _ = context(repair(["/a"]))
+    key = prepared["plan"]["requests"][0]["evidence_key"]
+    post = completed_post(prepared, state="not_verified", reason="timeout")
+    outcomes = [not_verified(prepared, key, "timeout")]
+    results = [
+        build_originating_rule_execution_result(
+            prepared["plan"],
+            outcomes[0],
+            finding_state="finding_absent",
+        )
+    ]
+    receipt = bound_receipt(
+        prepared, sealed, pre, post, outcomes, [], results
+    )
+    assert receipt["state"] == "could_not_verify"
+    assert receipt["reason"] == "rule_execution_requires_observed_evidence"
+
+
+def test_robots_denial_still_fails_closed_after_rule_execution_binding():
+    sealed, pre, prepared, post, outcomes = context(repair(["/a"]))
+    outcomes[0]["page"]["robots_txt_fetch_allowed"] = False
+    results = rule_results(prepared, outcomes, [])
+    result = evaluate(
+        prepared,
+        sealed,
+        pre,
+        post,
+        outcomes,
+        [],
+        results=results,
+    )
+    assert result["state"] == "COULD_NOT_VERIFY"
+    assert result["reason"] == "robots_denied"
+
+
+def test_challenge_still_fails_closed_after_rule_execution_binding():
+    sealed, pre, prepared, post, outcomes = context(repair(["/a"]))
+    outcomes[0]["page"]["access_block_kind"] = "challenge"
+    results = rule_results(prepared, outcomes, [])
+    result = evaluate(
+        prepared,
+        sealed,
+        pre,
+        post,
+        outcomes,
+        [],
+        results=results,
+    )
+    assert result["state"] == "COULD_NOT_VERIFY"
+    assert result["reason"] == "challenge"
+
+
+def test_current_fix_identity_conflict_fails_before_rule_truth_can_be_used():
+    sealed, pre, prepared, post, outcomes = context(repair(["/a"]))
+    current_fixes = [
+        repair(
+            ["/a"],
+            repair_surface="different_surface",
+            repair_fingerprint=prepared["plan"]["repair_fingerprint"],
+        )
+    ]
+    results = rule_results(prepared, outcomes, [])
+    receipt = bound_receipt(
+        prepared,
+        sealed,
+        pre,
+        post,
+        outcomes,
+        current_fixes,
+        results,
+    )
+    assert receipt["state"] == "could_not_verify"
+    assert receipt["reason"] == "current_fix_identity_conflict"
+
+
+def test_matching_current_fix_cannot_expand_beyond_sealed_scope():
+    sealed, pre, prepared, post, outcomes = context()
+    current_fixes = [repair(["/a", "/b", "/c"])]
+    results = rule_results(prepared, outcomes, current_fixes)
+    receipt = bound_receipt(
+        prepared,
+        sealed,
+        pre,
+        post,
+        outcomes,
+        current_fixes,
+        results,
+    )
+    assert receipt["state"] == "could_not_verify"
+    assert receipt["reason"] == "matching_current_fix_expands_sealed_repair_scope"
+
+
+def test_non_serializable_page_evidence_fails_closed():
+    sealed, pre, prepared, post, outcomes = context(repair(["/a"]))
+    outcomes[0]["page"]["opaque"] = {1, 2, 3}
+    results = [
+        {
+            "version": TARGETED_FIX_VERIFICATION_RULE_EXECUTION_RESULT_VERSION,
+            "state": "evaluated",
+            "producer_contract": ORIGINATING_RULE_PRODUCER_CONTRACT,
+            "model_calls_performed": False,
+            "plan_fingerprint": prepared["plan"]["plan_fingerprint"],
+            "repair_fingerprint": prepared["plan"]["repair_fingerprint"],
+            "rule_definition_version": prepared["plan"]["rule_definition_version"],
+            "comparison_profile_version": prepared["plan"]["comparison_profile_version"],
+            "evidence_url_identity_version": prepared["plan"][
+                "evidence_url_identity_version"
+            ],
+            "evidence_key": outcomes[0]["evidence_key"],
+            "scheduler_evidence_ref": outcomes[0]["scheduler_evidence_ref"],
+            "page_evidence_fingerprint": "",
+            "finding_state": "finding_absent",
+        }
+    ]
+    receipt = bound_receipt(
+        prepared, sealed, pre, post, outcomes, [], results
+    )
+    assert receipt["state"] == "could_not_verify"
+    assert receipt["reason"] == "execution_bound_rule_receipt_material_invalid"
+
+
+def test_legacy_execution_without_freshness_window_cannot_pass():
+    sealed, pre, prepared, post, outcomes = context()
+    results = rule_results(prepared, outcomes, [])
+    receipt = bound_receipt(prepared, sealed, pre, post, outcomes, [], results)
+    result = evaluate_rule_execution_bound_targeted_fix_verification_service(
+        prepared,
+        sealed,
+        preflight_scheduler_summary=pre,
+        postflight_scheduler_summary=post,
+        current_scan_origin=ORIGIN,
+        current_contract=contract(),
+        recheck_outcomes=outcomes,
+        current_fixes=[],
+        rule_execution_results=results,
+        rule_execution_bound_receipt=receipt,
+    )
+    assert result["state"] == "COULD_NOT_VERIFY"
+    assert result["reason"] == "execution_window_missing_or_invalid"
+
+
+@pytest.mark.parametrize("change, now, expected_reason", [
+    ({"expires_at_ms": EVALUATED_MS}, EVALUATED_MS, "execution_window_expired"),
+    ({}, STARTED_MS - 1, "execution_window_not_started"),
+    ({"started_at_ms": True}, EVALUATED_MS, "execution_window_timestamp_invalid"),
+    ({"expires_at_ms": "tomorrow"}, EVALUATED_MS, "execution_window_timestamp_invalid"),
+    ({}, float("nan"), "execution_window_timestamp_invalid"),
+    ({"expires_at_ms": STARTED_MS}, EVALUATED_MS, "execution_window_interval_invalid"),
+    ({"expires_at_ms": STARTED_MS + 30_001}, EVALUATED_MS, "execution_window_exceeds_scheduler_time_budget"),
+    ({"plan_fingerprint": "another-plan"}, EVALUATED_MS, "execution_window_plan_mismatch"),
+    ({"execution_id": "another-run"}, EVALUATED_MS, "execution_window_execution_id_mismatch"),
+    ({"version": "old"}, EVALUATED_MS, "execution_window_version_mismatch"),
+    ({"unexpected": True}, EVALUATED_MS, "execution_window_missing_or_invalid"),
+])
+def test_execution_window_rejects_expired_future_malformed_or_cross_run_context(change, now, expected_reason):
+    sealed, pre, prepared, post, outcomes = context()
+    result = evaluate(prepared, sealed, pre, post, outcomes, [],
+                      window=execution_window(prepared, **change), evaluation_time_ms=now)
+    assert result["state"] == "COULD_NOT_VERIFY"
+    assert result["reason"] == expected_reason
+
+
+@pytest.mark.parametrize("timestamp", [None, True, "1800000005000", STARTED_MS - 1, EVALUATED_MS + 1])
+def test_observations_must_have_trusted_time_inside_execution_window(timestamp):
+    sealed, pre, prepared, post, outcomes = context()
+    outcomes[0]["observed_at_ms"] = timestamp
+    result = evaluate(prepared, sealed, pre, post, outcomes, [])
+    assert result["state"] == "COULD_NOT_VERIFY"
+    assert result["reason"] == "recheck_outcome_outside_execution_window"
+
+
+def test_receipt_cannot_be_replayed_after_expiry_or_under_another_window():
+    sealed, pre, prepared, post, outcomes = context()
+    results = rule_results(prepared, outcomes, [])
+    receipt = bound_receipt(prepared, sealed, pre, post, outcomes, [], results)
+    expired = evaluate(prepared, sealed, pre, post, outcomes, [], receipt=receipt,
+                       evaluation_time_ms=STARTED_MS + 30_000)
+    assert expired["state"] == "COULD_NOT_VERIFY"
+    assert expired["reason"] == "execution_window_expired"
+    replaced = evaluate(prepared, sealed, pre, post, outcomes, [], receipt=receipt,
+                        window=execution_window(prepared, expires_at_ms=STARTED_MS + 29_000))
+    assert replaced["state"] == "COULD_NOT_VERIFY"
+    assert replaced["reason"] == "rule_execution_bound_receipt_mismatch"
+
+
+def test_outcome_and_expected_execution_id_are_both_required():
+    sealed, pre, prepared, post, outcomes = context()
+    missing_trusted_id = evaluate(prepared, sealed, pre, post, outcomes, [], expected_execution_id=None)
+    assert missing_trusted_id["state"] == "COULD_NOT_VERIFY"
+    assert missing_trusted_id["reason"] == "execution_window_execution_id_mismatch"
+    outcomes[0]["execution_id"] = "another-execution"
+    mixed = evaluate(prepared, sealed, pre, post, outcomes, [])
+    assert mixed["state"] == "COULD_NOT_VERIFY"
+    assert mixed["reason"] == "recheck_outcome_execution_id_mismatch"
+
+
+@pytest.mark.parametrize("field, value", [("deadline_exhausted", []), ("budget_exhausted", {})])
+def test_malformed_scheduler_flags_fail_closed_without_type_error(field, value):
+    sealed, pre, prepared, post, outcomes = context()
+    post["request_budget"][field] = value
+    result = evaluate(prepared, sealed, pre, post, outcomes, [])
+    assert result["state"] == "COULD_NOT_VERIFY"
+    assert result["reason"] == "shared_scheduler_" + field + "_flag_invalid"
+
+
+@pytest.mark.parametrize("value", [[], {}])
+def test_malformed_rule_finding_state_fails_closed_without_type_error(value):
+    sealed, pre, prepared, post, outcomes = context()
+    results = rule_results(prepared, outcomes, [])
+    results[0]["finding_state"] = value
+    result = evaluate(prepared, sealed, pre, post, outcomes, [], results=results)
+    assert result["state"] == "COULD_NOT_VERIFY"
+    assert result["reason"] == "rule_execution_finding_state_invalid"
+
+
+@pytest.mark.parametrize("mime", ["application/nothtml", "text/htmlish", "image/html", "text/plain"])
+def test_non_html_mime_cannot_produce_pass(mime):
+    sealed, pre, prepared, post, outcomes = context()
+    outcomes[0]["page"]["content_type"] = mime
+    result = evaluate(prepared, sealed, pre, post, outcomes, [])
+    assert result["state"] == "COULD_NOT_VERIFY"
+    assert result["reason"] == "observed_page_not_html"
+
+
+@pytest.mark.parametrize("mime", ["text/html; charset=utf-8", "application/xhtml+xml; charset=utf-8", "TEXT/HTML"])
+def test_supported_html_mime_remains_comparable(mime):
+    sealed, pre, prepared, post, outcomes = context()
+    for outcome in outcomes:
+        outcome["page"]["content_type"] = mime
+    assert evaluate(prepared, sealed, pre, post, outcomes, [])["state"] == "PASS"
+
+
+def test_scheduler_counts_cannot_disagree_with_completed_observations():
+    sealed, pre, prepared, post, outcomes = context()
+    post["purposes"][TARGETED_FIX_VERIFICATION_PURPOSE].update(passed=0, not_verified=2)
+    result = evaluate(prepared, sealed, pre, post, outcomes, [])
+    assert result["state"] == "COULD_NOT_VERIFY"
+    assert result["reason"] == "targeted_scheduler_observation_state_counts_mismatch"
+
+
+@pytest.mark.parametrize("consumed, reused", [(0, 0), (1, 0), (0, 1), (1, 2), (0, 10000)])
+def test_strongest_service_rejects_unaccounted_or_excess_reused_observations(consumed, reused):
+    sealed, pre, prepared, post, outcomes = context()
+    post["request_budget"].update(requests_consumed=consumed, requests_reused=reused,
+                                  requests_remaining=18 - consumed)
+    result = evaluate(prepared, sealed, pre, post, outcomes, [])
+    assert result["state"] == "COULD_NOT_VERIFY"
+    assert result["reason"] == "targeted_execution_request_accounting_population_mismatch"
+
+
+@pytest.mark.parametrize("value", [[], {}])
+def test_malformed_scheduler_observation_state_fails_closed(value):
+    sealed, pre, prepared, post, outcomes = context()
+    post["observations"][0]["state"] = value
+    result = evaluate(prepared, sealed, pre, post, outcomes, [])
+    assert result["state"] == "COULD_NOT_VERIFY"
+    assert result["reason"] == "targeted_scheduler_observation_state_invalid"
+
+
+@pytest.mark.parametrize("value", [None, True, 0, -1, "30", float("inf"), float("nan"), 10**1000])
+def test_unbounded_or_malformed_scheduler_clock_cannot_authorize_freshness(value):
+    sealed, pre, prepared, post, outcomes = context()
+    pre["request_budget"]["time_budget_seconds"] = value
+    result = evaluate(prepared, sealed, pre, post, outcomes, [])
+    assert result["state"] == "COULD_NOT_VERIFY"
+    assert result["reason"] == "execution_window_scheduler_time_budget_invalid"

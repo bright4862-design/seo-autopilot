@@ -197,6 +197,73 @@ def _page_lookup(pages: list[dict[str, Any]], *, scan_origin: str = "", identity
     return lookup
 
 
+def _persisted_reference_fingerprint(fix: dict[str, Any]) -> str:
+    value = fix.get("repair_fingerprint")
+    if not isinstance(value, str):
+        return ""
+    value = value.strip().lower()
+    return value if re.fullmatch(r"[0-9a-f]{24}", value) else ""
+
+
+def _provisional_current_conflicts(
+    previous_identity: dict[str, Any],
+    previous_affected: list[str],
+    current: dict[str, Any],
+    *,
+    scan_origin: str = "",
+    identity_version: str = "",
+) -> bool:
+    """Block false-fixed when current evidence points at the repair but lacks stable identity."""
+    identity = build_repair_identity(current)
+    if identity["stable"]:
+        return False
+    persisted = _persisted_reference_fingerprint(current)
+    if persisted and persisted == previous_identity.get("fingerprint"):
+        return True
+    if identity.get("rule") != previous_identity.get("rule"):
+        return False
+    current_affected = set(_affected_pages(current, scan_origin=scan_origin, identity_version=identity_version))
+    return bool(current_affected & set(previous_affected))
+
+
+def _rule_evaluation_state(
+    fix: dict[str, Any],
+    page: dict[str, Any],
+    current_contract: dict[str, Any] | None,
+) -> tuple[str, str]:
+    """Require originating-rule evidence before a versioned repair can be fixed."""
+    previous_rule = _identity_field(fix, "rule_id", "rule", "type", "issue_type")
+    previous_rule_version = _clean(fix.get("rule_definition_version"))
+    previous_profile = _clean(fix.get("comparison_profile_version"))
+    if not previous_rule_version and not previous_profile:
+        return "not_required", "Historical repair has no explicit originating-rule contract."
+
+    evidence = page.get("comparison_rule_evaluation") if isinstance(page, dict) else None
+    if not isinstance(evidence, dict):
+        return "unavailable", "Authenticated originating-rule evaluation is unavailable for this page."
+    if _token(evidence.get("rule")) != previous_rule:
+        return "unavailable", "Authenticated rule evidence does not match the historical repair."
+    if previous_rule_version and _clean(evidence.get("rule_definition_version")) != previous_rule_version:
+        return "unavailable", "Authenticated rule-definition evidence is incompatible with the historical repair."
+    if previous_profile and _clean(evidence.get("comparison_profile_version")) != previous_profile:
+        return "unavailable", "Authenticated comparison-profile evidence is incompatible with the historical repair."
+    if isinstance(current_contract, dict):
+        current_rule_version = _clean(current_contract.get("rule_definition_version"))
+        current_profile = _clean(current_contract.get("comparison_profile_version"))
+        if previous_rule_version and current_rule_version != previous_rule_version:
+            return "unavailable", "Current rule-definition contract does not match the page evaluation."
+        if previous_profile and current_profile != previous_profile:
+            return "unavailable", "Current comparison profile does not match the page evaluation."
+    if evidence.get("evaluated") is not True or evidence.get("applicable") is not True:
+        return "unavailable", "The originating rule was not evaluated as applicable on this page."
+    present = evidence.get("finding_present")
+    if type(present) is not bool:
+        return "unavailable", "The originating rule did not produce an exact finding state."
+    return ("finding_present", "The originating rule still detects this repair.") if present else (
+        "finding_absent", "The originating rule was re-evaluated and no longer detects this repair."
+    )
+
+
 def _status_code(page: dict[str, Any]) -> int | None:
     raw = page.get("status_code") if page.get("status_code") is not None else page.get("status")
     try:
@@ -341,12 +408,20 @@ def compare_repair_runs(
         }
 
     matching_current = []
+    provisional_conflicts = []
     for current in current_fixes or []:
         if not isinstance(current, dict):
             continue
         identity = build_repair_identity(current)
         if identity["stable"] and identity["fingerprint"] == previous_identity["fingerprint"]:
             matching_current.append(current)
+        elif _provisional_current_conflicts(
+            previous_identity,
+            previous_affected,
+            current,
+            **current_context,
+        ):
+            provisional_conflicts.append(current)
 
     previous_state = _token(
         previous_fix.get("verification_state")
@@ -363,6 +438,17 @@ def compare_repair_runs(
             "rechecked_pages": len(set(_affected_pages(matching_current[0], **current_context))),
             "eligible_rechecked_pages": 0,
             "previous_affected_pages": len(previous_affected),
+        }
+
+    if provisional_conflicts:
+        return {
+            "version": REPAIR_VERIFICATION_VERSION,
+            "state": "could_not_verify",
+            "reason": "The latest scan contains matching repair evidence without stable technical identity, so disappearance cannot be treated as fixed.",
+            "rechecked_pages": 0,
+            "eligible_rechecked_pages": 0,
+            "previous_affected_pages": len(previous_affected),
+            "comparison_contract_state": "current_fix_identity_conflict",
         }
 
     contract_state, contract_reason = verification_contract_comparability(previous_fix, current_contract)
@@ -424,10 +510,44 @@ def compare_repair_runs(
             "comparison_contract_state": contract_state,
         }
 
+    rule_evaluations = {key: _rule_evaluation_state(previous_fix, lookup[key], current_contract) for key in previous_set}
+    required_rule_evidence = bool(
+        _clean(previous_fix.get("rule_definition_version"))
+        or _clean(previous_fix.get("comparison_profile_version"))
+    )
+    if required_rule_evidence:
+        present = [key for key, (state, _) in rule_evaluations.items() if state == "finding_present"]
+        unavailable = [
+            {"page": key, "state": state, "reason": reason}
+            for key, (state, reason) in sorted(rule_evaluations.items())
+            if state not in {"finding_absent", "finding_present"}
+        ]
+        if present:
+            return {
+                "version": REPAIR_VERIFICATION_VERSION,
+                "state": "could_not_verify",
+                "reason": "Authenticated rule evidence still detects the issue, but no matching stable current repair was available.",
+                "rechecked_pages": len(observed),
+                "eligible_rechecked_pages": len(eligible),
+                "previous_affected_pages": len(previous_affected),
+                "comparison_contract_state": "current_repair_population_conflict",
+            }
+        if unavailable:
+            return {
+                "version": REPAIR_VERIFICATION_VERSION,
+                "state": "could_not_verify",
+                "reason": "All previous URLs were comparable, but authenticated originating-rule evidence was incomplete.",
+                "rechecked_pages": len(observed),
+                "eligible_rechecked_pages": len(eligible),
+                "previous_affected_pages": len(previous_affected),
+                "rule_evidence_gaps": unavailable,
+                "comparison_contract_state": contract_state,
+            }
+
     return {
         "version": REPAIR_VERIFICATION_VERSION,
         "state": "verified_fixed",
-        "reason": "All previously affected pages were checked again under compatible rules in a comparable eligible state and the stable repair fingerprint was no longer detected.",
+        "reason": "All previously affected pages were checked again under compatible rules, remained comparable, and authenticated originating-rule evidence no longer detected the stable repair.",
         "rechecked_pages": len(observed),
         "eligible_rechecked_pages": len(eligible),
         "previous_affected_pages": len(previous_affected),

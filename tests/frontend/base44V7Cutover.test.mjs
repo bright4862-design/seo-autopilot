@@ -73,10 +73,21 @@ test("V8 packages preserve V7 behavior outside route identity and the isolated c
     const v8dir = "base44/functions/" + canonical + "V8";
     const v7files = fs.readdirSync(v7dir).sort();
     const v8files = fs.readdirSync(v8dir).sort();
-    const comparisonFiles = canonical === "getCustomerScanResult" ? ["comparisonGateway.js", "comparisonReader.js"] : [];
+    const comparisonFiles =
+      canonical === "getCustomerScanResult"
+        ? ["comparisonEvidence.js", "comparisonGateway.js", "comparisonReader.js"]
+        : canonical === "persistDurableScanAuthority"
+          ? ["comparisonEvidence.js"]
+          : [];
+    const comparisonChangedInheritedFiles =
+      canonical === "getCustomerScanResult"
+        ? new Set(["projectionStage1Legacy.js"])
+        : canonical === "persistDurableScanAuthority"
+          ? new Set(["authoritySnapshotStage1Legacy.js"])
+          : new Set();
     assert.deepEqual(v8files, [...v7files, ...comparisonFiles].sort(), canonical);
     for (const file of v7files) {
-      if (file === "generatedBuildId.js") continue;
+      if (file === "generatedBuildId.js" || comparisonChangedInheritedFiles.has(file)) continue;
       let actual = source(path.join(v8dir, file));
       let expected = source(path.join(v7dir, file));
       if (file === "function.jsonc") actual = actual.replace(canonical + "V8", canonical + "V7");
@@ -86,6 +97,14 @@ test("V8 packages preserve V7 behavior outside route identity and the isolated c
         expected = normalizeActivation(expected);
       }
       assert.equal(actual, expected, canonical + "/" + file);
+    }
+    if (canonical === "persistDurableScanAuthority") {
+      assert.match(source(path.join(v8dir, "authoritySnapshotStage1Legacy.js")), /sanitizeComparisonEvidence/);
+      assert.match(source(path.join(v8dir, "authoritySnapshotStage1Legacy.js")), /comparison_evidence/);
+    }
+    if (canonical === "getCustomerScanResult") {
+      assert.match(source(path.join(v8dir, "projectionStage1Legacy.js")), /sanitizeComparisonEvidence/);
+      assert.match(source(path.join(v8dir, "projectionStage1Legacy.js")), /comparison_evidence/);
     }
   }
 });

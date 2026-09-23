@@ -2,7 +2,6 @@
 
 Date: 2026-09-23
 Lane: `agent/ai-geo-readiness-20260923`
-Parent checkpoint: `f285b8e8b5e74651182be861425fe658d6bac97f`
 Refreshed main: `c1080d75f7d1aacd748e74009be7a6c15aa40a93`
 
 ## Purpose
@@ -27,7 +26,7 @@ Additional fields:
 
 - `geo_readiness_version`: `geo_readiness_v2_candidate`.
 - `compatibility_base_version`: `geo_readiness_v1_experimental`.
-- `observation_scope`: `{kind, page_count, page_set_digest, origin, access_limited}`. The digest is SHA-256 of the sorted declared page IDs; it binds the page set without adding URLs or page content to the scope metadata. `origin=retained_evidence_only` is explicit because this lane adds no request.
+- `observation_scope`: `{kind, page_count, page_set_digest, origin, access_limited}`. `page_set_digest` is SHA-256 over the UTF-8 bytes of the sorted page-ID list encoded as compact JSON with `ensure_ascii=false` and separators `(',', ':')`. JSON string escaping makes this set binding unambiguous even when a valid page ID contains a newline or another delimiter. Raw delimiter-joining is forbidden because it can collide for different page-ID sets. `origin=retained_evidence_only` is explicit because this lane adds no request.
 - `dimension_scores`: stable `access`, `clarity`, `entity`, `support` entries carrying the v1 dimension `score` and `coverage`, plus counts of verified, unknown and not-applicable cells. For a globally access-limited assessment these values are null rather than inferred.
 - `unknown_cells`: sorted by page ID then the fixed v1 check registry. Omitted observations are emitted with reason `observation_missing`; explicit `not_verified` observations retain only their bounded reason. Evidence references are not surfaced for unknown cells.
 - `unknown_cell_count`: exact size of that list.
@@ -49,19 +48,15 @@ No threshold, check weight, dimension weight, applicability rule, or score round
 
 ## Production/Funbooker implication
 
-The production scan ID `6ab314008da962a9f8c58929` is still not retrievable from repository code/issues or an available production datastore/log connector in this lane, so its reported 139-page payload cannot be independently re-read here. The supplied baseline therefore remains an external production reference, not a newly verified fixture.
+Read-only production evidence was refreshed on 2026-09-23 for Funbooker scan `6ab314008da962a9f8c58929`. The scan remains `complete` with 5,000 pages found, 139 crawled and 139 retained. Persisted GEO remains `assessment_status=insufficient_evidence`, `score=null`, overall coverage `0.456835`, Access coverage `0.829736` / score 100, Clarity coverage `0.997602` / score 100, Entity coverage 0, and Support coverage 0. All 139 retained pages remain `not_verified` for `subject_identity`, `entity_details`, `schema_agreement`, `accountability`, `date_context`, and `source_attribution`.
 
-This v2 candidate by itself would not change that scan's v1 evidence coverage or make its null score numeric. It only makes scope, dimension summaries, and unknown cells explicit. Entity/support coverage can improve only from newly verified or deterministically not-applicable evidence supplied by the evidence adapter; the score gates are unchanged.
+The parent Standard 150 result is authority-sealed under `standard_review_snapshot_hmac_identity_v1`, while the nested GEO block correctly remains `authority_verified=false`. This v2 candidate does not change that production evidence or make the null score numeric. Entity/support coverage can improve only from newly verified or deterministically not-applicable evidence supplied by the evidence adapter; the score gates are unchanged.
 
-## Verification
+## Verification focus
 
-Local hermetic compatibility run against the current v1 evaluator:
+The v2 compatibility suite now includes a regression proving distinct page sets `['a', 'b']` and `['a\nb']` cannot share a scope digest. The four fixed V8 transport acceptance vectors are regenerated from the collision-safe scope encoding so any future byte-level transport drift remains explicit and reviewable.
 
-- `scanner-api/tests/test_geo_readiness_v2.py`: **19 passed**.
-- Current `scanner-api/tests/test_geo_readiness.py` compatibility suite + v2 candidate suite: **39 passed**.
-- `py_compile` passed for the candidate and its test module.
-
-The parent exact head `f285b8e8b5e74651182be861425fe658d6bac97f` had FixList CI run **2847** green in both `Scanner regression fixtures` and `Lint, typecheck, contract tests, and build`. The new head still requires its own exact-head CI after push.
+Exact-head CI remains the broad repository gate after the lane checkpoint is pushed. Matching candidate or serialization SHA-256 values is only test integrity; it is not authority sealing.
 
 ## Claim boundary
 
@@ -69,4 +64,4 @@ This remains a structural-readiness diagnostic. It does not measure or predict c
 
 ## Next integration gate
 
-The next step is not deployment. The serialized integrator must review the V8 authority handoff, run exact-head scanner/customer compatibility, decide the versioned sealed snapshot shape, and only then wire a candidate GEO block. Historical results must not be recomputed on read.
+The next step is not deployment. The serialized integrator must review the V8 authority handoff, run exact-head scanner/customer compatibility, decide the versioned sealed snapshot shape, and only then wire a candidate GEO block. Historical results must not be recomputed on read, and `authority_verified` must remain false until the exact GEO block is authenticated and verified end to end.

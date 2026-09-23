@@ -3,7 +3,7 @@
 Status: lane checkpoint only; not integrated, merged, published, or deployed  
 Lane branch: `agent/ai-explanation-plan-20260923`  
 Baseline refreshed from `main`: `c1080d75f7d1aacd748e74009be7a6c15aa40a93` (V8 runtime cutover merged)  
-Verified code checkpoint: `64e002919072e0be00e8ddcac25b10fc34ce9395`  
+Verified code checkpoint: `2c66f0fe5855b4c1eab0a85fd38fb911ea882030`  
 
 ## Boundaries
 
@@ -74,6 +74,8 @@ Every published repair-local scan identity alias — `scan_id`, `scanId`, `scan_
 
 Control identifiers that can affect ordering or grouping are string-only. Malformed array/object values cannot be coerced into a valid scanner rule, verified evidence state, repair surface, remediation family, dependency-table version, dependency-edge field, or scan identity assertion. Published `rule` / `rule_id` aliases, `repair_surface` aliases, `remediation_family` aliases, and accepted root-cause-evidence aliases must also agree when repeated across the normalized row/original payload. Conflicting or malformed siblings fail closed to canonical ordering and/or singleton grouping instead of creating implementation authority.
 
+Dependency-edge aliases are now atomic consistency assertions too. If both `tableVersion` / `table_version`, `beforeRule` / `before_rule`, or `afterRule` / `after_rule` are published, both aliases must be non-empty strings and normalize to the same value. A conflicting or blank sibling invalidates that edge, so ambiguous dependency metadata cannot authorize a canonical-priority crossing. Matching camel/snake aliases preserve the same deterministic ordering.
+
 A lower action-priority repair can move ahead of a higher action-priority repair only as a prerequisite needed by a versioned dependency edge. Ordering walks canonical rows in order and recursively emits each row's prerequisites first. This matters for a three-row case such as `sitemap(fix_first), h1(important), redirect(improve)`: when verified evidence instantiates `redirect -> sitemap`, the deterministic order is `redirect, sitemap, h1`, not `h1, redirect, sitemap`. Unrelated work is not allowed to drift ahead merely because a canonical row is waiting on its prerequisite.
 
 The priority-inversion verifier treats such collateral prerequisite movement as explicit only when the moved prerequisite reaches a dependency target whose canonical position is at or before the row it crossed.
@@ -93,14 +95,15 @@ If instantiated dependencies contain a cycle, the plan sets `cycleDetected=true`
 
 ## Verification
 
-Focused Lane-D inventory at exact code checkpoint `64e002919072e0be00e8ddcac25b10fc34ce9395`:
+Focused Lane-D inventory at exact code checkpoint `2c66f0fe5855b4c1eab0a85fd38fb911ea882030`:
 
 - role-explanation tests: 43
 - role-presentation tests: 6
 - implementation-plan core tests: 13
 - implementation-plan authority-boundary tests: 8
 - implementation-plan input-hardening tests: 15
-- total: 85
+- implementation-plan dependency-alias tests: 4
+- total: 89
 
 Coverage includes:
 
@@ -120,6 +123,10 @@ Coverage includes:
 - three-row prerequisite ordering that preserves unrelated canonical work;
 - no dependency => no canonical reorder;
 - unversioned or mismatched dependency edges cannot reorder;
+- conflicting dependency-table aliases fail closed;
+- blank dependency-table sibling aliases fail closed;
+- conflicting dependency-rule aliases fail closed;
+- matching camel/snake dependency aliases preserve explicit versioned ordering;
 - malformed array-shaped repair-rule identifiers cannot instantiate dependencies;
 - conflicting published repair-rule aliases cannot instantiate dependencies;
 - malformed verified-state identifiers cannot grant root-cause authority;
@@ -145,9 +152,9 @@ Coverage includes:
 - identical-input plan stability;
 - dependency table size/version.
 
-Repository-native exact-head FixList CI #2950 / run `35841808429` passed on `64e002919072e0be00e8ddcac25b10fc34ce9395`. That run passed lint, typecheck, generated release-contract verification, all frontend contract tests (including the 43 role-explanation tests), frontend build, root scanner regressions, the full scanner-api test suite, labelled corpus verification, frozen beta-revision verification, and production scanner-image build. CodeRabbit commit status is also green on that exact head.
+Repository-native exact-head FixList CI #2959 / run `35844960021` passed on `2c66f0fe5855b4c1eab0a85fd38fb911ea882030`. That run passed lint, typecheck, generated release-contract verification, all frontend contract tests (including the new dependency-alias regressions), frontend build, root scanner regressions, the full scanner-api test suite, labelled corpus verification, frozen beta-revision verification, and production scanner-image build. CodeRabbit commit status is also green on that exact head.
 
-Earlier material review identified unrelated canonical-row drift, coercive role/rule identifiers, inherited object-property lookups, invalid `evidence_refs` filtering, and scan-alias disagreement masking; those were fixed at prior checkpoints. The current checkpoint additionally closes two presentation/planning alias-consistency gaps without changing customer copy or scanner authority: implementation-plan rule/root-cause/surface/remediation aliases now fail closed on disagreement, and role-specific explanation lookup no longer selects one arbitrary scanner-rule alias when published aliases disagree.
+Earlier material review identified unrelated canonical-row drift, coercive role/rule identifiers, inherited object-property lookups, invalid `evidence_refs` filtering, and scan-alias disagreement masking; those were fixed at prior checkpoints. The current checkpoint additionally closes dependency-edge alias ambiguity without changing customer copy, the two dependency rules, grouping semantics, or scanner authority.
 
 ## Integration handoff
 

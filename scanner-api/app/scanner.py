@@ -155,6 +155,7 @@ RATE_LIMIT_PROACTIVE_REQUEST_INTERVAL_SECONDS = 1.0
 # that detected profile only; normal sites and generic 429 recovery stay unchanged.
 RATE_LIMIT_CLOUDFLARE_SHOPIFY_INTERVAL_SECONDS = 2.5
 RATE_LIMIT_INITIAL_COOLDOWN_SECONDS = 30.0
+RATE_LIMIT_MIN_REMAINING_CRAWL_SECONDS = 20.0
 RATE_LIMIT_BACKOFF_INTERVAL_SECONDS = 2.5
 RATE_LIMIT_MAX_INTERVAL_SECONDS = 4.0
 RATE_LIMIT_MAX_RETRIES = 8
@@ -218,10 +219,12 @@ def parse_retry_after_seconds(value: str, *, now: datetime | None = None) -> flo
         return 0.0
 
 
+def is_rate_limited_response(response) -> bool:
+    return response is not None and int(getattr(response, "status_code", 0) or 0) == 429
+
+
 def is_cloudflare_rate_limited_response(response) -> bool:
-    if response is None or int(getattr(response, "status_code", 0) or 0) != 429:
-        return False
-    return "cloudflare" in str(response.headers.get("server", "")).lower()
+    return is_rate_limited_response(response) and "cloudflare" in str(response.headers.get("server", "")).lower()
 
 
 def detect_rate_limit_profile(response) -> str:
@@ -548,21 +551,50 @@ async def run_scan(
                     start_url,
                     max_decoded_bytes=MAX_DECODED_RESPONSE_BYTES,
                 )
-                if job_mode and is_cloudflare_rate_limited_response(landing):
-                    remaining_for_crawl = max(0.0, deadline - time.monotonic() - 20.0)
-                    cooldown = min(RATE_LIMIT_INITIAL_COOLDOWN_SECONDS, remaining_for_crawl)
-                    if cooldown > 0:
+                if job_mode and is_rate_limited_response(landing):
+                    retry_started_at = time.monotonic()
+                    retry_budget = allocate_scan_time_budget(
+                        scan_started_at, budget["timeout"], fetch_timeout, now=retry_started_at,
+                    )
+                    remaining_for_wait = max(
+                        0.0, retry_budget["crawl_deadline"] - retry_started_at
+                        - fetch_timeout - RATE_LIMIT_MIN_REMAINING_CRAWL_SECONDS,
+                    )
+                    retry_after = parse_retry_after_seconds(landing.headers.get("retry-after", ""))
+                    cooldown = max(RATE_LIMIT_INITIAL_COOLDOWN_SECONDS, retry_after)
+                    # Do not shorten the server's requested wait to fit our
+                    # deadline. Reserve a retry, useful crawling and response
+                    # assembly; otherwise retain the blocked evidence.
+                    if 0 < cooldown < remaining_for_wait:
                         await asyncio.sleep(cooldown)
-                        initial_rate_limit_retry_count = 1
-                        landing = await safe_get(
-                            client,
-                            start_url,
-                            max_decoded_bytes=MAX_DECODED_RESPONSE_BYTES,
-                        )
-                        initial_rate_limit_recovered = not is_cloudflare_rate_limited_response(landing)
-                    if is_cloudflare_rate_limited_response(landing):
+                        # Recheck after sleeping: scheduling delays must not
+                        # consume the reserved crawl window either.
+                        if retry_budget["crawl_deadline"] - time.monotonic() > (
+                            fetch_timeout + RATE_LIMIT_MIN_REMAINING_CRAWL_SECONDS
+                        ):
+                            initial_rate_limit_retry_count = 1
+                            try:
+                                retried_landing = await asyncio.wait_for(
+                                    safe_get(
+                                        client, start_url,
+                                        max_decoded_bytes=MAX_DECODED_RESPONSE_BYTES,
+                                    ),
+                                    timeout=fetch_timeout,
+                                )
+                            except (httpx.HTTPError, TimeoutError):
+                                retried_landing = None
+                            # No response does not prove the throttle cleared.
+                            # Retain the original 429 and suppress follow-ups.
+                            if retried_landing is not None:
+                                landing = retried_landing
+                                initial_rate_limit_recovered = not is_rate_limited_response(landing)
+                    if is_rate_limited_response(landing):
                         initial_rate_limit_blocked = True
-                        rate_limit_profile = "cloudflare_initial_throttle"
+                        rate_limit_profile = (
+                            "cloudflare_initial_throttle"
+                            if is_cloudflare_rate_limited_response(landing)
+                            else "initial_throttle"
+                        )
                         snapshot = {key: list(value) for key, value in discovery.get(start_url, empty_discovery()).items()}
                         initial_rate_limit_page = extract_page(
                             str(getattr(landing, "text", "") or ""),
@@ -806,7 +838,9 @@ async def run_scan(
         remaining_crawl_seconds = max(0.0, timing_budget["crawl_deadline"] - probe_started_at)
         # Coverage is additive. It must not consume the whole remainder and
         # starve the pre-existing canonical validator that follows it.
-        probe_time_budget_seconds = min(12.0, remaining_crawl_seconds * 0.25)
+        probe_time_budget_seconds = (
+            0.0 if initial_rate_limit_blocked else min(12.0, remaining_crawl_seconds * 0.25)
+        )
         probe_scheduler = SharedCoverageProbeScheduler(
             max_probe_requests=coverage_probe_request_limit(scan_mode),
             shared_request_limit=max_pages * 8,
@@ -926,7 +960,13 @@ async def run_scan(
                     "score_impact": 0,
                 })
 
-        if int(budget.get("max_pages") or 0) >= 150 and _supports_stage2_probe_fetch(fetch_and_extract):
+        if initial_rate_limit_blocked:
+            coverage_probe_evidence = probe_scheduler.summary()
+            coverage_probe_evidence.update({
+                "stage2_orchestration_state": "not_verified",
+                "stage2_orchestration_reason": "initial_rate_limited",
+            })
+        elif int(budget.get("max_pages") or 0) >= 150 and _supports_stage2_probe_fetch(fetch_and_extract):
             coverage_probe_evidence = await run_stage2_shared_probe_orchestration(
                 client=client,
                 pages=pages,
@@ -949,7 +989,7 @@ async def run_scan(
             client,
             pages,
             robots_policy,
-            deadline=timing_budget["crawl_deadline"],
+            deadline=probe_started_at if initial_rate_limit_blocked else timing_budget["crawl_deadline"],
         )
         redirect_evidence = summarize_redirect_evidence(pages)
         for page in pages:

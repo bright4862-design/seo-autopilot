@@ -30,6 +30,7 @@ from .market_scope import strip_market_locale_prefix
 from .search_applicability import rule_is_applicable, search_metadata_applicable
 from .content_evidence_findings import content_evidence_findings
 from .location_template_content import build_location_template_raw_fixes
+from .missing_h1_contract import missing_h1_contract_fields
 
 REVIEW_VERSION = "python_review_v2_structural_marketplace"
 SCORING_MODEL = "python_review_v2_group_dedup"
@@ -1547,6 +1548,7 @@ def build_page_pattern_findings(pages: list[dict[str, Any]], *, scan_origin: str
                 "combined_rules": combined_rules,
                 "grouping_explanation": grouping_explanation,
                 "grouped_recommendation_evidence_version": GROUPED_RECOMMENDATION_EVIDENCE_VERSION,
+                **(missing_h1_contract_fields() if output_rule == "missing_h1" else {}),
                 **repair_observation_evidence(bucket["pages"], output_rule, **identity_context),
             },
         ))

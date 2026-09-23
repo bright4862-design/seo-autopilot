@@ -44,12 +44,41 @@ function lower(value = "") {
   return strictText(value).toLowerCase();
 }
 
+function hasOwn(source, key) {
+  return Boolean(source && typeof source === "object" && Object.prototype.hasOwnProperty.call(source, key));
+}
+
+function consistentIdentifierOf(item = {}, topFields = [], originalFields = topFields) {
+  let present = false;
+  let selected = "";
+  const sources = [
+    [item, topFields],
+    [item?.original, originalFields],
+  ];
+
+  for (const [source, fields] of sources) {
+    if (!source || typeof source !== "object" || Array.isArray(source)) continue;
+    for (const field of fields) {
+      if (!hasOwn(source, field)) continue;
+      present = true;
+      const normalized = lower(source[field]);
+      if (!normalized) return { present: true, value: "" };
+      if (selected && normalized !== selected) return { present: true, value: "" };
+      selected = normalized;
+    }
+  }
+
+  return { present, value: selected };
+}
+
 function idOf(item = {}, index = 0) {
   return clean(item.id || item.fix_id || item.repair_fingerprint) || `row:${index}`;
 }
 
 function ruleOf(item = {}) {
-  return lower(item.rule || item.rule_id || item.issue_type || item.original?.rule || item.original?.rule_id);
+  const publishedRule = consistentIdentifierOf(item, ["rule", "rule_id"], ["rule", "rule_id"]);
+  if (publishedRule.present) return publishedRule.value;
+  return lower(item.issue_type);
 }
 
 function actionPriorityOf(item = {}) {
@@ -64,16 +93,19 @@ function actionPriorityOf(item = {}) {
 }
 
 function repairSurfaceOf(item = {}) {
-  return lower(
-    item.repairSurface
-      || item.repair_surface
-      || item.implementation_surface
-      || item.original?.repair_surface,
-  );
+  return consistentIdentifierOf(
+    item,
+    ["repairSurface", "repair_surface", "implementation_surface"],
+    ["repair_surface"],
+  ).value;
 }
 
 function remediationFamilyOf(item = {}) {
-  return lower(item.remediationFamily || item.remediation_family || item.original?.remediation_family);
+  return consistentIdentifierOf(
+    item,
+    ["remediationFamily", "remediation_family"],
+    ["remediation_family"],
+  ).value;
 }
 
 function pageFamilyOf(item = {}) {
@@ -115,8 +147,7 @@ function matchesTrustedScanIdentity(item = {}, trustedScanId = "") {
   return true;
 }
 
-function rootCauseEvidenceOf(item = {}, trustedScanId = "") {
-  const evidence = item.rootCauseEvidence || item.root_cause_evidence || item.original?.root_cause_evidence;
+function normalizedRootCauseEvidence(evidence) {
   if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return null;
   if (evidence.version !== VERIFIED_ROOT_CAUSE_VERSION) return null;
   if (!VERIFIED_STATES.has(lower(evidence.state))) return null;
@@ -129,6 +160,49 @@ function rootCauseEvidenceOf(item = {}, trustedScanId = "") {
     : [];
   if (refs.length === 0 || refs.some((ref) => !ref)) return null;
 
+  return {
+    rootCauseId,
+    repairSurfaceId: strictText(evidence.repair_surface_id),
+    evidenceRefs: refs,
+  };
+}
+
+function rootCauseEvidenceSignature(evidence) {
+  return JSON.stringify({
+    rootCauseId: evidence.rootCauseId,
+    repairSurfaceId: evidence.repairSurfaceId,
+    evidenceRefs: [...evidence.evidenceRefs].sort(),
+  });
+}
+
+function rootCauseEvidenceOf(item = {}, trustedScanId = "") {
+  const candidates = [
+    [item, "rootCauseEvidence", true],
+    [item, "root_cause_evidence", true],
+    [item?.original, "root_cause_evidence", true],
+    // The camel-case original alias was not previously an authority source. If
+    // it is published beside an accepted source, however, it is still a
+    // consistency assertion and cannot contradict the authoritative evidence.
+    [item?.original, "rootCauseEvidence", false],
+  ];
+
+  let acceptedSourcePresent = false;
+  let selected = null;
+  let signature = "";
+
+  for (const [source, field, acceptedAuthoritySource] of candidates) {
+    if (!hasOwn(source, field)) continue;
+    if (acceptedAuthoritySource) acceptedSourcePresent = true;
+    const normalized = normalizedRootCauseEvidence(source[field]);
+    if (!normalized) return null;
+    const currentSignature = rootCauseEvidenceSignature(normalized);
+    if (signature && currentSignature !== signature) return null;
+    signature = currentSignature;
+    selected = normalized;
+  }
+
+  if (!acceptedSourcePresent || !selected) return null;
+
   // B20 root-cause authority is scan-bound. A pure presentation/planning helper
   // cannot establish that boundary by itself, so callers must pass the exact
   // scan identity already authenticated by the owner-bound V8 reader. Missing
@@ -137,8 +211,8 @@ function rootCauseEvidenceOf(item = {}, trustedScanId = "") {
   if (!matchesTrustedScanIdentity(item, trustedScanId)) return null;
 
   return {
-    rootCauseId,
-    repairSurfaceId: strictText(evidence.repair_surface_id),
+    rootCauseId: selected.rootCauseId,
+    repairSurfaceId: selected.repairSurfaceId,
   };
 }
 

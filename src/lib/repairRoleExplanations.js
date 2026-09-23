@@ -9,59 +9,59 @@ import { REPAIR_SUGGESTION_FALLBACK } from "./repairSuggestions.js";
  * role. Copy is authored/reviewed before commit; there is no runtime model call.
  */
 export const REPAIR_ROLE_EXPLANATION_VERSION = "repair_role_explanation_v1";
-export const REPAIR_ROLE_EXPLANATION_LIBRARY_VERSION = "role_explanation_copy_v1_20260923_top8";
+export const REPAIR_ROLE_EXPLANATION_LIBRARY_VERSION = "role_explanation_copy_v2_20260923_top8";
 
 export const REPAIR_EXPLANATION_ROLES = Object.freeze(["owner", "marketing", "seo", "developer"]);
 export const REPAIR_EXPLANATION_FALLBACK = REPAIR_SUGGESTION_FALLBACK;
 
 const ROLE_EXPLANATIONS = Object.freeze({
   sitemap_redirect: Object.freeze({
-    owner: "Your sitemap is sending search engines through redirects instead of listing the final page addresses directly. Cleaning those entries makes the site easier to maintain and gives crawlers a clearer map.",
-    marketing: "Some URLs submitted for discovery redirect before reaching the real page. Keep campaign and content destinations aligned with the final URLs so search visibility is not built on outdated addresses.",
-    seo: "The XML sitemap contains redirecting URLs. Submit only final, indexable canonical destinations so sitemap signals agree with the URLs you want search engines to crawl and index.",
-    developer: "The sitemap generator is emitting non-final URLs. Update its URL source or normalization so generated entries resolve directly to the intended 200-status canonical destinations.",
+    owner: "The scan found redirects in your sitemap, the list of page addresses you give search engines. Ask whoever maintains it to check the destinations and list the intended final addresses directly.",
+    marketing: "Some sitemap entries redirect to another address. Confirm that each destination is the page you want people to discover before updating the entries.",
+    seo: "The scan found redirecting sitemap URLs. Check that each final destination is the intended indexable canonical URL before replacing the sitemap entry.",
+    developer: "Trace the affected sitemap entries to their source. Once the intended destinations are confirmed, update the stored URLs or generator responsible and check the sitemap again.",
   }),
   image_alt_text: Object.freeze({
-    owner: "FixList found a meaningful image without a usable text alternative. Adding a short description helps people who cannot see the image understand the information it contributes to the page.",
-    marketing: "A meaningful image is missing its text alternative. Describe the information the image adds in the context of this page rather than repeating nearby copy or stuffing search terms.",
-    seo: "Material image evidence shows a missing text alternative. Add concise, context-specific alt text for the informative image while continuing to leave genuinely decorative images empty.",
-    developer: "Material image evidence shows a missing alt alternative. Expose a content-controlled alt value for the evidenced informative image; do not auto-fill filenames or change intentionally empty alt attributes on decorative images.",
+    owner: "The scan found an informative image without a usable text alternative. Add a short description of what it communicates so people who cannot see it can access that information.",
+    marketing: "Check what the flagged image adds to the page. Write alt text that conveys that information in context; an image used only for decoration can keep an empty alt attribute.",
+    seo: "Review the flagged image in context before writing alt text. Describe its purpose clearly, avoid keyword stuffing, and preserve empty alt attributes for purely decorative images.",
+    developer: "Inspect the flagged image and its alt attribute. For an informative image, supply a meaningful value from the content source; preserve intentionally empty alt attributes for decorative images.",
   }),
   missing_h1: Object.freeze({
-    owner: "This page does not have a clear main heading. Adding one helps visitors understand the page immediately and gives the page a stronger structure.",
-    marketing: "The page is missing its main visible headline. Use one clear heading that matches the page's purpose and the promise visitors saw before arriving.",
-    seo: "The page has no H1 in the collected evidence. Add one descriptive main heading that reflects the page topic without turning it into a keyword list.",
-    developer: "The rendered page is missing an H1. Ensure the page or its evidenced shared template emits one semantic main heading from the correct content field without duplicating other headings.",
+    owner: "The scan did not find an H1, the code label for a main heading. A headline may already be visible; ask your website editor to check how it is marked up.",
+    marketing: "The scan did not find an H1. Check the existing headline before writing a new one: it should express the page’s purpose and be marked up as its main heading.",
+    seo: "No H1 was found in the collected page evidence. Check the page before adding one, then use a descriptive main heading that matches its topic.",
+    developer: "No H1 was found in the collected page evidence. Check the HTML and rendered page; if a main headline already exists, use the appropriate heading markup rather than adding a duplicate.",
   }),
   canonical_missing: Object.freeze({
-    owner: "This page does not clearly state which URL should be treated as its preferred version. Setting that preference helps prevent multiple addresses from competing as if they were different pages.",
-    marketing: "The page is missing a preferred-URL signal. Keeping campaign, shared, and indexed versions aligned reduces the chance that visibility is split across alternate addresses.",
-    seo: "No canonical URL was observed for this page. Add a self-referencing or otherwise intentionally selected canonical that points to the final indexable URL you want consolidated in search.",
-    developer: "The document head is missing the canonical link signal. Emit a valid absolute canonical URL from the page/template using the final normalized URL and avoid pointing it through redirects or to a non-indexable target.",
+    owner: "The scan did not find a canonical signal, which tells search engines your preferred page address. Ask your website maintainer whether one is needed and which address it should name.",
+    marketing: "The scan did not find a preferred-page address signal. Confirm which version of the content should represent this page in search before requesting a canonical change.",
+    seo: "No canonical was observed in the collected evidence. Review the intended indexable URL and any existing canonical signals before deciding whether to add or correct one.",
+    developer: "The scan did not find a canonical signal. Check the document head and HTTP headers first; if a canonical is needed, emit the intended absolute URL and verify the target and consistency.",
   }),
   potential_orphan_pages: Object.freeze({
-    owner: "These pages were found but appear difficult to reach by following links through the site. Decide which ones still matter, then make important pages easier for visitors to discover.",
-    marketing: "Useful pages that sit outside normal navigation are less likely to receive internal traffic or support a customer journey. Confirm the pages are intentional before adding them to relevant hubs or journeys.",
-    seo: "The crawl found pages with weak or missing internal-link discovery evidence. Review intent first, then add contextual or hub links to pages that should remain indexable rather than linking every detected URL indiscriminately.",
-    developer: "Treat this as a discovery-graph issue, not proof that every listed page shares one template defect. For pages that should remain, add links from evidenced navigation, hub, or related-content surfaces and verify they become crawl-reachable.",
+    owner: "The scan found limited evidence of links leading to these pages within the pages checked. Review how visitors should reach the pages that matter; links may exist outside this scan.",
+    marketing: "These pages may be hard to discover from the pages checked. Review where they belong in the visitor journey and add relevant links where useful; the scan does not cover every possible route.",
+    seo: "The sampled crawl found weak or missing incoming-link evidence for these pages. Confirm their purpose and review links beyond the sample before classifying them as orphaned.",
+    developer: "Review incoming links for the listed pages, including sources outside the crawl sample. If links are needed, update the appropriate navigation or content source and verify that the crawler can follow them.",
   }),
   internal_link_redirect: Object.freeze({
-    owner: "Some links on your site send visitors through an unnecessary redirect before reaching the destination. Updating the links to point straight to the final page removes an avoidable extra step.",
-    marketing: "Internal links are pointing at old addresses that redirect. Update recurring navigation and content links to the final destinations so journeys and campaign paths stay clean.",
-    seo: "Internal links resolve through redirects instead of pointing directly to the final URL. Replace the source hrefs with their final destinations to reduce crawl hops and keep internal signals on the canonical URL.",
-    developer: "Update the evidenced link sources to use the final destination URL directly. Prefer fixing shared navigation or template emitters where the repair surface proves they are responsible rather than adding another redirect rule.",
+    owner: "The scan found links that take an extra step through a redirect. Check that the destination is still the right page before asking for those links to point there directly.",
+    marketing: "Some internal links redirect before reaching their destination. Confirm the intended visitor journey, including any tracking or routing needs, before changing the linked addresses.",
+    seo: "The scan found internal links that redirect. Check the intended destination and redirect purpose before updating source links to an appropriate final URL.",
+    developer: "Inspect the reported source links and redirect behavior. Where a direct link is appropriate, update the responsible content or template and verify the destination; keep intentional routing requirements intact.",
   }),
   failed_page: Object.freeze({
-    owner: "FixList could not verify this page during the scan. Treat it as something to check again, not as proof that the page is permanently broken, until a repeat check confirms the failure.",
-    marketing: "A page in the journey could not be verified during this scan. Before changing messaging or destinations, confirm the page is consistently unavailable and not just temporarily blocked or slow.",
-    seo: "The page fetch was not successfully verified in this observation. Keep it in verification until repeated or structural evidence confirms a durable accessibility problem; one failed observation is not enough to call the URL broken.",
-    developer: "The scanner recorded an unsuccessful page verification. Reproduce the request and inspect status, network, WAF/rate-limit, and origin behavior before treating it as a persistent defect or changing routing.",
+    owner: "FixList could not verify this page during the scan. Check it again before deciding what needs fixing; this result alone does not show that visitors cannot open it.",
+    marketing: "The scan could not verify this page. Test the visitor journey before replacing links or changing campaign destinations; a scanner failure may not affect visitors.",
+    seo: "The page could not be verified in this scan. Review the failure evidence and repeat the check before classifying it as a persistent availability or crawl-access problem.",
+    developer: "Reproduce the failed request and inspect the response, network conditions, server logs, and bot or rate-limit rules. Establish the cause before changing routing or declaring the page unavailable.",
   }),
   duplicate_title_template: Object.freeze({
-    owner: "Several pages are using the same page title even though they represent different content. Making the titles distinct helps people and search engines tell the pages apart.",
-    marketing: "A shared title pattern is making different pages look the same in search. Keep the brand pattern if useful, but include the page-specific product, place, topic, or offer that differentiates each result.",
-    seo: "Multiple pages share a title through the detected title pattern. Make the template generate distinct, descriptive titles for each indexable page while preserving a consistent site convention.",
-    developer: "The evidenced title template is collapsing different pages onto the same output. Add the correct page-specific field to the title generator and verify representative pages from the affected template family before rollout.",
+    owner: "The scan found pages with matching or repeated title patterns. Check whether they serve different purposes; distinct pages should have titles that help people tell them apart.",
+    marketing: "Review the repeated titles against each page’s purpose. For distinct pages, include the product, place, topic, or offer that makes each useful while keeping any helpful brand wording.",
+    seo: "Review the pages grouped by the repeated title pattern. Confirm which should be distinct indexable pages before changing titles; the pattern alone does not establish the cause.",
+    developer: "Trace the repeated titles to their content fields or generation logic. If a shared template causes the repetition, add the appropriate page-specific field and check representative pages before rollout.",
   }),
 });
 

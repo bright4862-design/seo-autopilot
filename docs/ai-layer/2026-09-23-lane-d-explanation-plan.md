@@ -3,7 +3,7 @@
 Status: lane checkpoint only; not integrated, merged, published, or deployed  
 Lane branch: `agent/ai-explanation-plan-20260923`  
 Baseline refreshed from `main`: `3609acc1be5beda86b77e95115342798f043841f` (PR #360 merged; not fresh publication acceptance)
-Focused-green code checkpoint: `4dfc4c3e89bdf1649044196548e9d18931e41c28`
+Focused-green code checkpoint: `cd2db36319c1e991ca25b8bb708af1ec69ba46b2`
 
 ## Boundaries
 
@@ -53,7 +53,7 @@ families and every current Funbooker repair. This lane still contains the older
 eight-rule table, so neither its complete role-copy file nor its lane-only v2
 version string may replace current main.
 
-Checkpoint `4dfc4c3e89bdf1649044196548e9d18931e41c28` changes only the four
+Checkpoint `cd2db36319c1e991ca25b8bb708af1ec69ba46b2` changes only the four
 `missing_h1` role variants plus the lane-local library version and pinned tests.
 Each variant now gives one distinct next action inside the existing repair card:
 
@@ -122,7 +122,7 @@ If instantiated dependencies contain a cycle, the plan sets `cycleDetected=true`
 
 ## Verification
 
-Focused Lane-D inventory at code checkpoint `4dfc4c3e89bdf1649044196548e9d18931e41c28`:
+Focused Lane-D inventory at code checkpoint `cd2db36319c1e991ca25b8bb708af1ec69ba46b2`:
 
 - role-explanation tests: 44
 - role-presentation tests: 6
@@ -181,7 +181,7 @@ Coverage includes:
 - identical-input plan stability;
 - dependency table size/version.
 
-Fresh focused verification at code checkpoint `4dfc4c3e89bdf1649044196548e9d18931e41c28` passed all 90 Lane-D tests with `node --test` across the six role/presentation/implementation-plan suites. The last complete repository-wide lane checkpoint remains exact-head FixList CI #2961 / run `35845241862` on `ca159fdc4730192c4ae754d86f2748171a62698e`; it passed lint, typecheck, generated release-contract verification, all frontend contract tests, frontend build, root scanner regressions, the full scanner-api test suite, labelled corpus verification, frozen beta-revision verification, and production scanner-image build. The new checkpoint changes only deterministic `missing_h1` copy and its pinned tests; repository-wide CI must still run on the final pushed SHA.
+Fresh focused verification at code checkpoint `cd2db36319c1e991ca25b8bb708af1ec69ba46b2` passed all 90 Lane-D tests with `node --test` across the six role/presentation/implementation-plan suites. The last complete repository-wide lane checkpoint remains exact-head FixList CI #2961 / run `35845241862` on `ca159fdc4730192c4ae754d86f2748171a62698e`; it passed lint, typecheck, generated release-contract verification, all frontend contract tests, frontend build, root scanner regressions, the full scanner-api test suite, labelled corpus verification, frozen beta-revision verification, and production scanner-image build. The new checkpoint changes only deterministic `missing_h1` copy and its pinned tests; repository-wide CI must still run on the final pushed SHA.
 
 Earlier material review identified unrelated canonical-row drift, coercive role/rule identifiers, inherited object-property lookups, invalid `evidence_refs` filtering, and scan-alias disagreement masking; those were fixed at prior checkpoints. The current checkpoint additionally closes dependency-edge alias ambiguity without changing customer copy, the two dependency rules, grouping semantics, or scanner authority.
 

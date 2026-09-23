@@ -39,10 +39,10 @@ _NESTED_EVIDENCE_CONTAINERS = frozenset({
     "evidence",
     "evidence_detail",
     "evidence_details",
-    "details",
     "source_evidence",
     "observed_evidence",
 })
+_ROOT_DETAIL_EVIDENCE_CONTAINERS = frozenset({"details"})
 _FIX_CONTAINERS = frozenset({"fixes", "cleaned_fixes", "recommended_actions", "findings", "repairs"})
 _ROOT_CONTAINERS = frozenset({"root_causes", "root_cause_evidence"})
 _FIX_ID_FIELDS = frozenset({"fix_id", "repair_id", "repair_fingerprint"})
@@ -69,6 +69,8 @@ class EvidenceSet:
     root_cause_refs: frozenset[str]
     ambiguous_fix_refs: frozenset[str]
     ambiguous_root_cause_refs: frozenset[str]
+    conflicting_fix_refs: frozenset[str]
+    conflicting_root_cause_refs: frozenset[str]
 
 
 class GroundingResult(BaseModel):
@@ -127,6 +129,14 @@ def _observed_status_code(node: dict[str, Any]) -> int:
     return 0
 
 
+def _nested_evidence_scope_allowed(*, container: str, child_name: str, evidence_scope: bool) -> bool:
+    if child_name in _NESTED_EVIDENCE_CONTAINERS:
+        return container in _FIX_CONTAINERS or container in _ROOT_CONTAINERS or evidence_scope
+    if child_name in _ROOT_DETAIL_EVIDENCE_CONTAINERS:
+        return container in _ROOT_CONTAINERS
+    return False
+
+
 def _collect_urls(
     node: Any,
     scan_origin: str,
@@ -174,10 +184,13 @@ def _collect_urls(
             # Evidence scope is never inherited merely because an ancestor was a
             # Fix/root-cause record. Only explicit evidence-shaped child
             # containers may carry citation membership deeper into the tree.
-            # This prevents nested diagnostics/debug objects from laundering
-            # plausible URLs into the EvidenceSet while preserving V8
-            # url_provenance/details evidence.
-            child_scope = authorized and child_name in _NESTED_EVIDENCE_CONTAINERS
+            # Generic ``details`` is intentionally root-only; permitting it on a
+            # Fix would let prose/diagnostic metadata launder arbitrary URLs.
+            child_scope = authorized and _nested_evidence_scope_allowed(
+                container=container,
+                child_name=child_name,
+                evidence_scope=evidence_scope,
+            )
             _collect_urls(
                 child,
                 scan_origin,
@@ -226,25 +239,31 @@ def _collect_refs(
     roots: set[str],
     fix_counts: dict[str, int],
     root_counts: dict[str, int],
+    conflicting_fixes: set[str],
+    conflicting_roots: set[str],
 ) -> None:
     if isinstance(node, dict):
         # Repair identities are evidence only when they are direct fields on a
         # known sealed repair/Fix record. Repeated aliases on one record are one
-        # identity occurrence; the same identity on multiple records is
-        # ambiguous and must fail closed at verification time.
+        # identity occurrence; conflicting aliases on that same record are never
+        # guessed and instead become explicit fail-closed conflicts.
         if container in _FIX_CONTAINERS:
             record_fixes = _record_strings(node, _fix_container_id_fields(container))
+            if len(record_fixes) > 1:
+                conflicting_fixes.update(record_fixes)
             for value in record_fixes:
                 fixes.add(value)
                 fix_counts[value] = fix_counts.get(value, 0) + 1
 
-            # A sealed Fix may carry its verified root-cause linkage directly.
-            # Links are valid refs but are not root-cause definitions, so
-            # repeated links across Fixes do not create false ambiguity.
-            roots.update(_record_strings(node, _ROOT_ID_FIELDS))
+            # ``root_cause_id`` on a Fix is only a link. It does not establish a
+            # sealed root-cause definition and therefore cannot authorize an AI
+            # root_cause_ref by itself. A definition must appear in a recognized
+            # root-cause evidence container below or elsewhere in sealed L2.
 
         if container in _ROOT_CONTAINERS:
             record_roots = _record_strings(node, _ROOT_ID_FIELDS | {"id"})
+            if len(record_roots) > 1:
+                conflicting_roots.update(record_roots)
             for value in record_roots:
                 roots.add(value)
                 root_counts[value] = root_counts.get(value, 0) + 1
@@ -257,6 +276,8 @@ def _collect_refs(
                 roots=roots,
                 fix_counts=fix_counts,
                 root_counts=root_counts,
+                conflicting_fixes=conflicting_fixes,
+                conflicting_roots=conflicting_roots,
             )
     elif isinstance(node, list):
         for child in node:
@@ -267,6 +288,8 @@ def _collect_refs(
                 roots=roots,
                 fix_counts=fix_counts,
                 root_counts=root_counts,
+                conflicting_fixes=conflicting_fixes,
+                conflicting_roots=conflicting_roots,
             )
 
 
@@ -298,12 +321,16 @@ def build_evidence_set(sealed_l2: dict[str, Any], *, scan_origin: str = "") -> E
     roots: set[str] = set()
     fix_counts: dict[str, int] = {}
     root_counts: dict[str, int] = {}
+    conflicting_fixes: set[str] = set()
+    conflicting_roots: set[str] = set()
     _collect_refs(
         sealed_l2,
         fixes=fixes,
         roots=roots,
         fix_counts=fix_counts,
         root_counts=root_counts,
+        conflicting_fixes=conflicting_fixes,
+        conflicting_roots=conflicting_roots,
     )
     ambiguous_fixes = {ref for ref, count in fix_counts.items() if count > 1}
     ambiguous_roots = {ref for ref, count in root_counts.items() if count > 1}
@@ -320,6 +347,8 @@ def build_evidence_set(sealed_l2: dict[str, Any], *, scan_origin: str = "") -> E
         "root_cause_refs": sorted(roots),
         "ambiguous_fix_refs": sorted(ambiguous_fixes),
         "ambiguous_root_cause_refs": sorted(ambiguous_roots),
+        "conflicting_fix_refs": sorted(conflicting_fixes),
+        "conflicting_root_cause_refs": sorted(conflicting_roots),
     })
     return EvidenceSet(
         version=EVIDENCE_SET_VERSION,
@@ -333,6 +362,8 @@ def build_evidence_set(sealed_l2: dict[str, Any], *, scan_origin: str = "") -> E
         root_cause_refs=frozenset(roots),
         ambiguous_fix_refs=frozenset(ambiguous_fixes),
         ambiguous_root_cause_refs=frozenset(ambiguous_roots),
+        conflicting_fix_refs=frozenset(conflicting_fixes),
+        conflicting_root_cause_refs=frozenset(conflicting_roots),
     )
 
 
@@ -362,12 +393,16 @@ def _annotation_errors(annotation: AIAnnotationV1, evidence: EvidenceSet) -> lis
             errors.add("numeric_value_mismatch")
 
     for ref in annotation.fix_refs:
-        if ref in evidence.ambiguous_fix_refs:
+        if ref in evidence.conflicting_fix_refs:
+            errors.add("fix_ref_conflicting_alias")
+        elif ref in evidence.ambiguous_fix_refs:
             errors.add("fix_ref_ambiguous")
         elif ref not in evidence.fix_refs:
             errors.add("fix_ref_missing")
     for ref in annotation.root_cause_refs:
-        if ref in evidence.ambiguous_root_cause_refs:
+        if ref in evidence.conflicting_root_cause_refs:
+            errors.add("root_cause_ref_conflicting_alias")
+        elif ref in evidence.ambiguous_root_cause_refs:
             errors.add("root_cause_ref_ambiguous")
         elif ref not in evidence.root_cause_refs:
             errors.add("root_cause_ref_missing")

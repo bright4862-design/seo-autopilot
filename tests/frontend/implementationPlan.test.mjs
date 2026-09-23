@@ -8,13 +8,20 @@ import {
   buildImplementationPlan,
 } from "../../src/lib/implementationPlan.js";
 
+const TRUSTED_SCAN_ID = "scan:implementation-plan-test";
+
 function verifiedRoot(rootCauseId, repairSurfaceId = "") {
   return {
     version: "root_cause_evidence_v1_verified",
     state: "verified",
     root_cause_id: rootCauseId,
     repair_surface_id: repairSurfaceId,
+    evidence_refs: [`observation:${rootCauseId}`],
   };
+}
+
+function plan(items, options = {}) {
+  return buildImplementationPlan(items, { trustedScanId: TRUSTED_SCAN_ID, ...options });
 }
 
 const GOLDEN_INPUT = Object.freeze([
@@ -53,7 +60,7 @@ const GOLDEN_INPUT = Object.freeze([
 ]);
 
 test("golden implementation plan preserves canonical order unless dependencies require movement", () => {
-  const actual = buildImplementationPlan(GOLDEN_INPUT);
+  const actual = plan(GOLDEN_INPUT);
   assert.deepEqual(actual, {
     version: IMPLEMENTATION_PLAN_VERSION,
     dependencyTableVersion: IMPLEMENTATION_DEPENDENCY_TABLE_VERSION,
@@ -107,7 +114,7 @@ test("an explicit dependency edge may move a lower priority repair ahead of a hi
     { fix_id: "sitemap", rule: "sitemap_redirect", action_priority: "fix_first", root_cause_evidence: verifiedRoot("root:x") },
     { fix_id: "redirect", rule: "redirect_chain", action_priority: "important", root_cause_evidence: verifiedRoot("root:x") },
   ];
-  const actual = buildImplementationPlan(input);
+  const actual = plan(input);
   assert.deepEqual(actual.orderedRepairIds, ["redirect", "sitemap"]);
   assert.equal(actual.priorityMonotonicOrExplicit, true);
   assert.equal(actual.appliedDependencies.length, 1);
@@ -121,7 +128,7 @@ test("without an explicit satisfied dependency, canonical priority order never c
     { fix_id: "redirect", rule: "redirect_chain", action_priority: "important" },
     { fix_id: "h1", rule: "missing_h1", action_priority: "improve" },
   ];
-  const actual = buildImplementationPlan(input);
+  const actual = plan(input);
   assert.deepEqual(actual.orderedRepairIds, ["sitemap", "redirect", "h1"]);
   assert.deepEqual(actual.appliedDependencies, []);
 });
@@ -140,14 +147,14 @@ test("unversioned or mismatched dependency edges cannot reorder canonical priori
     rationale: "test",
   };
 
-  const unversioned = buildImplementationPlan(input, {
+  const unversioned = plan(input, {
     dependencyEdges: [baseEdge],
     dependencyTableVersion: "test_dependencies_v1",
   });
   assert.deepEqual(unversioned.orderedRepairIds, ["sitemap", "redirect"]);
   assert.deepEqual(unversioned.appliedDependencies, []);
 
-  const mismatched = buildImplementationPlan(input, {
+  const mismatched = plan(input, {
     dependencyEdges: [{ ...baseEdge, tableVersion: "other_dependencies_v1" }],
     dependencyTableVersion: "test_dependencies_v1",
   });
@@ -156,7 +163,7 @@ test("unversioned or mismatched dependency edges cannot reorder canonical priori
 });
 
 test("page-family similarity alone never creates one implementation group", () => {
-  const actual = buildImplementationPlan([
+  const actual = plan([
     { fix_id: "a", rule: "missing_h1", action_priority: "important", page_template_family: "product_page" },
     { fix_id: "b", rule: "duplicate_title_template", action_priority: "important", page_template_family: "product_page" },
   ]);
@@ -165,7 +172,7 @@ test("page-family similarity alone never creates one implementation group", () =
 });
 
 test("surface plus remediation family can group evidenced shared implementation work", () => {
-  const actual = buildImplementationPlan([
+  const actual = plan([
     { fix_id: "a", rule: "missing_h1", action_priority: "important", repair_surface: "cms_field", remediation_family: "heading_template", page_template_family: "product_page" },
     { fix_id: "b", rule: "missing_h1", action_priority: "important", repair_surface: "cms_field", remediation_family: "heading_template", page_template_family: "location_landing" },
   ]);
@@ -176,7 +183,7 @@ test("surface plus remediation family can group evidenced shared implementation 
 
 test("verified root cause can group different implementation surfaces without inventing a cause from page family", () => {
   const root = verifiedRoot("root:shared");
-  const actual = buildImplementationPlan([
+  const actual = plan([
     { fix_id: "a", rule: "redirect_chain", action_priority: "important", repair_surface: "redirect_configuration", root_cause_evidence: root },
     { fix_id: "b", rule: "sitemap_redirect", action_priority: "improve", repair_surface: "xml_sitemap", root_cause_evidence: root },
   ]);
@@ -185,7 +192,7 @@ test("verified root cause can group different implementation surfaces without in
 });
 
 test("unverified or wrong-version root cause evidence is ignored", () => {
-  const actual = buildImplementationPlan([
+  const actual = plan([
     { fix_id: "a", rule: "redirect_chain", action_priority: "important", root_cause_evidence: { ...verifiedRoot("root:x"), state: "candidate" } },
     { fix_id: "b", rule: "sitemap_redirect", action_priority: "improve", root_cause_evidence: { ...verifiedRoot("root:x"), version: "future_version" } },
   ]);
@@ -204,7 +211,7 @@ test("dependency cycles fail safely to canonical priority order", () => {
     { tableVersion: dependencyTableVersion, id: "a_before_b", beforeRule: "a", afterRule: "b", requires: "verified_shared_root_cause", rationale: "test" },
     { tableVersion: dependencyTableVersion, id: "b_before_a", beforeRule: "b", afterRule: "a", requires: "verified_shared_root_cause", rationale: "test" },
   ];
-  const actual = buildImplementationPlan(input, { dependencyEdges: edges, dependencyTableVersion });
+  const actual = plan(input, { dependencyEdges: edges, dependencyTableVersion });
   assert.equal(actual.dependencyTableVersion, dependencyTableVersion);
   assert.equal(actual.cycleDetected, true);
   assert.equal(actual.fallbackUsed, true);
@@ -225,13 +232,13 @@ test("implementation planning does not mutate fix IDs, priorities, evidence clas
     remediation_family: "heading_template",
   }];
   const before = structuredClone(input);
-  buildImplementationPlan(input);
+  plan(input);
   assert.deepEqual(input, before);
 });
 
 test("identical implementation-plan input produces byte-stable output", () => {
-  const once = JSON.stringify(buildImplementationPlan(GOLDEN_INPUT));
-  const twice = JSON.stringify(buildImplementationPlan(GOLDEN_INPUT));
+  const once = JSON.stringify(plan(GOLDEN_INPUT));
+  const twice = JSON.stringify(plan(GOLDEN_INPUT));
   assert.equal(once, twice);
 });
 

@@ -3,6 +3,7 @@ import * as legacy from "./repairCardModelLegacy.js";
 export * from "./repairCardModelLegacy.js";
 
 const STAGE3_PRIORITY_VERSION = "repair_priority_v3_four_factor_v1";
+const STAGE3_PRESENTATION_ORIGIN = Symbol.for("fixlist.stage3.presentation_origin");
 
 const plainObject = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : null;
 const finiteOrNull = (value, min, max) => value === null
@@ -90,10 +91,31 @@ function hasStage3PresentationSignal(item) {
   );
 }
 
+function markStage3PresentationOrigin(card) {
+  Object.defineProperty(card, STAGE3_PRESENTATION_ORIGIN, {
+    value: true,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return card;
+}
+
+export function hasStage3PresentationOrigin(card) {
+  return Boolean(
+    card
+      && typeof card === "object"
+      && card[STAGE3_PRESENTATION_ORIGIN] === true,
+  );
+}
+
 export function buildRepairCard(item = {}) {
   const base = legacy.buildRepairCard(item);
   const stage3 = stage3Fields(item);
-  return stage3 ? { ...base, ...stage3 } : base;
+  const card = stage3 ? { ...base, ...stage3 } : base;
+  return hasStage3PresentationSignal(item)
+    ? markStage3PresentationOrigin(card)
+    : card;
 }
 
 /**
@@ -102,7 +124,8 @@ export function buildRepairCard(item = {}) {
  * malformed, degrade that row only: valid neighbouring rows must keep their
  * authenticated Stage-3 presentation fields and source order. Historical
  * batches with no Stage-3 signal retain the existing repair-fingerprint merge
- * behavior unchanged.
+ * behavior unchanged. A non-enumerable origin marker survives local planning
+ * without becoming customer-visible payload truth.
  */
 export function buildRepairCards(items = []) {
   const source = Array.isArray(items) ? items.filter((item) => item && typeof item === "object") : [];

@@ -3,7 +3,7 @@
 Status: lane checkpoint only; not integrated, merged, published, or deployed  
 Lane branch: `agent/ai-explanation-plan-20260923`  
 Baseline refreshed from `main`: `c1080d75f7d1aacd748e74009be7a6c15aa40a93` (V8 runtime cutover merged)  
-Verified code checkpoint: `c9f1bb26044ebb109356b30644b33eef49b969dc`  
+Verified code checkpoint: `7243a0538a72150636d7e57241cc0b35474556fc`  
 
 ## Boundaries
 
@@ -66,7 +66,7 @@ Two hand-authored edges are registered:
 1. `redirect_chain -> sitemap_redirect`: stabilize the final redirect destination before publishing that destination in the sitemap.
 2. `redirect_chain -> internal_link_redirect`: stabilize the final redirect destination before replacing internal links with that destination.
 
-Both edges require the two repairs to carry the same explicit verified `root_cause_evidence_v1_verified.root_cause_id`, non-empty contributing `evidence_refs`, and exact trusted scan binding. Missing trusted scan identity fails closed. Repair-local `scan_id` / `scan_run_id`, when present, are consistency assertions and must match the trusted scan id exactly.
+Both edges require the two repairs to carry the same explicit verified `root_cause_evidence_v1_verified.root_cause_id`, non-empty contributing `evidence_refs`, and exact trusted scan binding. `evidence_refs` is all-or-nothing: it must be a non-empty list and every entry must be a non-empty string. Mixed-type or blank-entry lists fail closed and cannot instantiate grouping or dependency authority. Missing trusted scan identity fails closed. Repair-local `scan_id` / `scan_run_id`, when present, are consistency assertions and must match the trusted scan id exactly.
 
 Control identifiers that can affect ordering or grouping are string-only. Malformed array/object values cannot be coerced into a valid scanner rule, verified evidence state, repair surface, remediation family, dependency-table version, or dependency-edge field. Invalid shapes therefore fail closed to canonical ordering and/or singleton grouping rather than creating implementation authority.
 
@@ -89,14 +89,14 @@ If instantiated dependencies contain a cycle, the plan sets `cycleDetected=true`
 
 ## Verification
 
-Focused Lane-D inventory at code checkpoint `c9f1bb26044ebb109356b30644b33eef49b969dc`:
+Focused Lane-D inventory at code checkpoint `7243a0538a72150636d7e57241cc0b35474556fc`:
 
 - role-explanation tests: 39
 - role-presentation tests: 6
 - implementation-plan core tests: 13
 - implementation-plan authority-boundary tests: 6
-- implementation-plan input-hardening tests: 5
-- total: 69
+- implementation-plan input-hardening tests: 7
+- total: 71
 
 Coverage includes:
 
@@ -117,6 +117,8 @@ Coverage includes:
 - malformed verified-state identifiers cannot grant root-cause authority;
 - malformed repair-surface/remediation-family identifiers cannot create a shared group;
 - malformed dependency-edge/table-version identifiers fail closed;
+- mixed-type root-cause `evidence_refs` fail closed;
+- blank root-cause `evidence_refs` fail closed;
 - page-family-only no-grouping;
 - scan-bound surface + remediation grouping;
 - verified scan-bound root-cause grouping;
@@ -127,9 +129,9 @@ Coverage includes:
 - identical-input plan stability;
 - dependency table size/version.
 
-Repository-native exact-head FixList CI #2890 / run `35819263502` passed on `c9f1bb26044ebb109356b30644b33eef49b969dc`. That run passed lint, typecheck, generated release-contract verification, all frontend contract tests, frontend build, root scanner regressions, the full scanner-api test suite, labelled corpus verification, frozen beta-revision verification, and production scanner-image build.
+Repository-native exact-head FixList CI #2907 / run `35823316618` passed on `7243a0538a72150636d7e57241cc0b35474556fc`. That run passed lint, typecheck, generated release-contract verification, all frontend contract tests, frontend build, root scanner regressions, the full scanner-api test suite, labelled corpus verification, frozen beta-revision verification, and production scanner-image build.
 
-The earlier material review identified three issues: unrelated canonical rows could drift ahead while a dependent waited for a later prerequisite; non-string role/rule identifiers could coerce to valid strings; and inherited object properties could appear as mapped role entries. Those were fixed at the preceding checkpoint. The current checkpoint extends the same fail-closed identifier policy across H1-3 ordering/grouping controls and adds five adversarial regressions without changing the two production dependency edges or any scanner/customer authority path.
+Earlier material review identified unrelated canonical-row drift, coercive role/rule identifiers, and inherited object-property lookups; those were fixed at prior checkpoints. The latest material review identified one remaining strictness gap: invalid `evidence_refs` entries were being filtered out instead of invalidating the entire verified-root-cause claim. The current code checkpoint now rejects mixed-type and blank-entry lists atomically, with two adversarial regressions, without changing the two production dependency edges or any scanner/customer authority path.
 
 ## Integration handoff
 

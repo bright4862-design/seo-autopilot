@@ -2,8 +2,8 @@
 
 Status: lane checkpoint only; not integrated, merged, published, or deployed  
 Lane branch: `agent/ai-explanation-plan-20260923`  
-Baseline refreshed from `main`: `c1080d75f7d1aacd748e74009be7a6c15aa40a93` (V8 runtime cutover merged)  
-Verified code checkpoint: `2c66f0fe5855b4c1eab0a85fd38fb911ea882030`  
+Baseline refreshed from `main`: `3609acc1be5beda86b77e95115342798f043841f` (PR #360 merged; not fresh publication acceptance)
+Focused-green code checkpoint: `4dfc4c3e89bdf1649044196548e9d18931e41c28`
 
 ## Boundaries
 
@@ -42,8 +42,35 @@ Viewer roles are exactly `owner`, `marketing`, `seo`, `developer`. Runtime behav
 Versioning:
 
 - `REPAIR_ROLE_EXPLANATION_VERSION = repair_role_explanation_v1`
-- `REPAIR_ROLE_EXPLANATION_LIBRARY_VERSION = role_explanation_copy_v1_20260923_top8`
+- lane-only `REPAIR_ROLE_EXPLANATION_LIBRARY_VERSION = role_explanation_copy_v2_20260923_top8_missing_h1_actions`
 - `REPAIR_ROLE_PRESENTATION_VERSION = repair_role_presentation_v1`
+
+### Current-main reconciliation and `missing_h1` action slice
+
+Current `main` already carries the newer
+`role_explanation_copy_v3_20260923_top11` library, covering eleven rule
+families and every current Funbooker repair. This lane still contains the older
+eight-rule table, so neither its complete role-copy file nor its lane-only v2
+version string may replace current main.
+
+Checkpoint `4dfc4c3e89bdf1649044196548e9d18931e41c28` changes only the four
+`missing_h1` role variants plus the lane-local library version and pinned tests.
+Each variant now gives one distinct next action inside the existing repair card:
+
+- Owner delegates a check of the visible headline before anyone adds another.
+- Marketing decides whether the existing headline wording is usable or needs
+  rewriting.
+- SEO validates topic alignment and H1 markup before recommending new copy.
+- Developer inspects the rendered DOM and source/template, then marks up the
+  approved headline or adds it once and verifies final HTML.
+
+The wording continues to say that the scan did not find an H1; it does not
+claim that no visible headline exists. The scanner-authored recommendation,
+evidence, priority, repair identity and canonical order remain untouched. The
+serialized integrator should port only these four strings and the focused
+behavioral assertion onto main's top-11 table, then bump main's copy version to
+a new top-11 revision. Do not transplant this lane's top-8 version string or
+remove the three newer main-only rule families.
 
 The role module imports `REPAIR_SUGGESTION_FALLBACK` from the existing deterministic suggestion library instead of creating a competing fallback. Missing roles and unmapped rules fail closed to that existing fallback; the helper never guesses a viewer role. Identifiers are string-only, so array/object coercion cannot turn malformed input into a supported role or rule. Direct rule-entry lookup is restricted to own registered keys, so inherited object properties cannot masquerade as mapped rules.
 
@@ -95,15 +122,15 @@ If instantiated dependencies contain a cycle, the plan sets `cycleDetected=true`
 
 ## Verification
 
-Focused Lane-D inventory at exact code checkpoint `2c66f0fe5855b4c1eab0a85fd38fb911ea882030`:
+Focused Lane-D inventory at code checkpoint `4dfc4c3e89bdf1649044196548e9d18931e41c28`:
 
-- role-explanation tests: 43
+- role-explanation tests: 44
 - role-presentation tests: 6
 - implementation-plan core tests: 13
 - implementation-plan authority-boundary tests: 8
 - implementation-plan input-hardening tests: 15
 - implementation-plan dependency-alias tests: 4
-- total: 89
+- total: 90
 
 Coverage includes:
 
@@ -118,6 +145,8 @@ Coverage includes:
 - inherited object-property rule names rejected;
 - scanner remediation / id / action priority / evidence class / count / authority immutability;
 - identical-input explanation and presentation stability;
+- four distinct, exact `missing_h1` next actions that first check for an
+  existing visible headline instead of recommending a duplicate;
 - golden deterministic implementation plan;
 - explicit dependency priority crossing;
 - three-row prerequisite ordering that preserves unrelated canonical work;
@@ -152,13 +181,13 @@ Coverage includes:
 - identical-input plan stability;
 - dependency table size/version.
 
-Repository-native exact-head FixList CI #2959 / run `35844960021` passed on `2c66f0fe5855b4c1eab0a85fd38fb911ea882030`. That run passed lint, typecheck, generated release-contract verification, all frontend contract tests (including the new dependency-alias regressions), frontend build, root scanner regressions, the full scanner-api test suite, labelled corpus verification, frozen beta-revision verification, and production scanner-image build. CodeRabbit commit status is also green on that exact head.
+Fresh focused verification at code checkpoint `4dfc4c3e89bdf1649044196548e9d18931e41c28` passed all 90 Lane-D tests with `node --test` across the six role/presentation/implementation-plan suites. The last complete repository-wide lane checkpoint remains exact-head FixList CI #2961 / run `35845241862` on `ca159fdc4730192c4ae754d86f2748171a62698e`; it passed lint, typecheck, generated release-contract verification, all frontend contract tests, frontend build, root scanner regressions, the full scanner-api test suite, labelled corpus verification, frozen beta-revision verification, and production scanner-image build. The new checkpoint changes only deterministic `missing_h1` copy and its pinned tests; repository-wide CI must still run on the final pushed SHA.
 
 Earlier material review identified unrelated canonical-row drift, coercive role/rule identifiers, inherited object-property lookups, invalid `evidence_refs` filtering, and scan-alias disagreement masking; those were fixed at prior checkpoints. The current checkpoint additionally closes dependency-edge alias ambiguity without changing customer copy, the two dependency rules, grouping semantics, or scanner authority.
 
 ## Integration handoff
 
-The serialized integrator should wire these helpers only after comparing against the then-current `main` repair-presentation seam. Recommended UI behavior is a per-view role toggle; do not persist a new customer schema field just to remember the selected role.
+The serialized integrator should wire these helpers only after comparing against the then-current `main` repair-presentation seam. The lane's stale top-8 table must not replace main's top-11 library. For the new `missing_h1` slice, port the four exact role strings and focused assertion onto the current table and use a new top-11 library version. Recommended UI behavior remains the existing per-view role toggle; do not persist a new customer schema field just to remember the selected role.
 
 `implementation_plan_v1` may decorate the existing customer queue with execution grouping/order metadata, but it must not replace persisted canonical action priority or mutate repair rows. `trustedScanId` must come only from the existing exact-owner V8 authority reader; never derive it from repair copy or arbitrary client input.
 

@@ -1,5 +1,19 @@
 # Full blueprint progress
 
+## Current checkpoint — 2026-09-23
+
+The original B01–B28 scanner blueprint is complete through Stages 1–4 and landed in `main`, per the release owner's 2026-09-23 handoff. Stage 4 landed through PR #319 (`dad5722fe787d608289ecb358acd65e87258a0e8`); subsequent production recovery moved the product to V8. Do not rebuild these stages or apply the obsolete Stage-1 freeze below.
+
+Freshly read repository main: `c1080d75f7d1aacd748e74009be7a6c15aa40a93`. Current AI integration checkpoint inspected: `8faf869a66316bd7cbe3d749028853748a392944`. Integration-branch implementation is not a production release claim.
+
+The active roadmap and next integration gates are recorded in [AI-layer current checkpoint](ai-layer/2026-09-23-current-checkpoint.md). The approved AI design is [the 2026-09-22 blueprint](superpowers/specs/2026-09-22-ai-layer-architecture-blueprint.md). The single AI Integrator owns shared seams, merges and deployment. Preserve Standard 150, V8, sealed authority and historical results; keep runtime AI/chat disabled.
+
+Production acceptance in the owner's handoff: worker `fixlist-standard150-worker-00095-sn2`; Funbooker scan `6ab2abb3763febb79a7470e4` and rerun `6ab314008da962a9f8c58929` completed and rendered; rerun links to `6ab272fc6dfa7f9faf97a90f`. These live observations were supplied by the release owner, not independently repeated in this documentation run.
+
+## Archived checkpoint — 2026-09-21, superseded
+
+Everything below preserves the historical implementation/test record. Its descriptions of current main, incomplete stages, freezes, resume instructions and release gates are historical, not current instructions. Dated test results apply only to the SHAs originally recorded.
+
 Authoritative design: `docs/superpowers/specs/2026-09-19-full-scanner-blueprint-design.md`. The approved spec's exact B01–B28 semantics control over older handoff paraphrases. Detailed RED/GREEN history is retained in executable plans under `docs/superpowers/plans/`; this file is the concise current-state ledger.
 
 ## Release sequencing / freeze

@@ -188,3 +188,48 @@ def test_source_binding_does_not_mutate_candidate_or_retained_inputs():
     assert candidate == candidate_before
     assert robot_sources == robots_before
     assert llms_source == llms_before
+
+
+def test_retained_robots_source_order_is_non_authoritative():
+    raw_one = "https://example.com/product/1"
+    raw_two = "https://example.com/product/2"
+    page_ids = [opaque(raw_one), opaque(raw_two)]
+    robot_sources = [robots_page(raw_one), robots_page(raw_two)]
+    candidate = build_geo_v8_transport_candidate(
+        page_ids,
+        rows(page_ids),
+        parent_authoritative=True,
+        entry_verified=True,
+        access_limited=False,
+        robots_pages=robot_sources,
+        llms_txt_observation=None,
+    )
+    expected_bytes = serialize_geo_v8_transport_candidate(candidate)
+
+    assert validate(candidate, page_ids, list(reversed(robot_sources)), None) is True
+    assert serialize_geo_v8_transport_candidate_for_sources(
+        candidate,
+        page_ids,
+        parent_authoritative=True,
+        entry_verified=True,
+        access_limited=False,
+        robots_pages=list(reversed(robot_sources)),
+        llms_txt_observation=None,
+    ) == expected_bytes
+
+
+def test_duplicate_retained_robots_source_identity_is_rejected():
+    candidate, page_ids, robot_sources, llms_source = build_with_sources()
+    duplicate = [robot_sources[0], deepcopy(robot_sources[0])]
+
+    with pytest.raises(ValueError, match="Duplicate retained robots source identity"):
+        validate(candidate, page_ids, duplicate, llms_source)
+
+
+def test_conflicting_duplicate_retained_robots_source_identity_is_rejected():
+    candidate, page_ids, robot_sources, llms_source = build_with_sources()
+    conflicting = deepcopy(robot_sources[0])
+    conflicting["robots_txt_gptbot_allowed"] = True
+
+    with pytest.raises(ValueError, match="Duplicate retained robots source identity"):
+        validate(candidate, page_ids, [robot_sources[0], conflicting], llms_source)

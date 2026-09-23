@@ -9,6 +9,7 @@ single arithmetic source of truth during compatibility evaluation.
 from __future__ import annotations
 
 from hashlib import sha256
+import json
 
 from .geo_readiness import CHECKS, DIMENSIONS, Observation, VERSION as V1_VERSION, evaluate_geo
 
@@ -18,7 +19,12 @@ CLAIM_BOUNDARY = "structural_readiness_not_ai_citations_inclusion_visibility_or_
 
 
 def _scope_digest(page_ids: list[str] | tuple[str, ...]) -> str:
-    material = "\n".join(sorted(page_ids)).encode("utf-8")
+    """Bind the declared page-ID set with an unambiguous canonical encoding."""
+    material = json.dumps(
+        sorted(page_ids),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
     return sha256(material).hexdigest()
 
 

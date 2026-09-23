@@ -7,6 +7,7 @@ import { webcrypto } from "node:crypto";
 import { buildAuthoritySnapshot } from "../../base44/functions/persistDurableScanAuthorityV8/authoritySnapshot.js";
 import { authorityRowsFromSnapshot } from "../../base44/functions/persistDurableScanAuthorityV8/authorityRows.js";
 import { authoritySnapshotFromRows } from "../../base44/functions/getCustomerScanResultV8/projection.js";
+import { authoritySnapshotFromRows as grokAuthoritySnapshotFromRows } from "../../base44/functions/grokChat/authoritySnapshot.js";
 import {
   createAuthoritySeal,
   verifyAuthoritySeal,
@@ -95,6 +96,10 @@ test("missing-H1 comparison evidence survives signed V8 persistence and reconstr
   const restored = authoritySnapshotFromRows(data.persisted);
   assert.deepEqual(restored, data.snapshot);
   assert.equal(await verifyAuthoritySeal(restored, data.secret, data.proof, webcrypto), true);
+
+  const grokRestored = grokAuthoritySnapshotFromRows({ ...data.persisted, scan: data.persisted.run });
+  assert.deepEqual(grokRestored, data.snapshot);
+  assert.equal(await verifyAuthoritySeal(grokRestored, data.secret, data.proof, webcrypto), true);
 });
 
 test("historical authority snapshots without comparison evidence keep their exact shape", async () => {
@@ -138,5 +143,10 @@ test("writer and reader use the same missing-H1 evidence sanitizer contract", ()
     "base44/functions/getCustomerScanResultV8/comparisonEvidence.js",
     "utf8",
   );
+  const grok = readFileSync(
+    "base44/functions/grokChat/comparisonEvidence.js",
+    "utf8",
+  );
   assert.equal(reader, writer);
+  assert.equal(grok, writer);
 });

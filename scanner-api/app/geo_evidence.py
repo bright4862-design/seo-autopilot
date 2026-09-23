@@ -24,7 +24,6 @@ ARTICLE_TYPES = frozenset({"Article", "NewsArticle", "BlogPosting", "TechArticle
 CLEAR_NON_ARTICLE_TYPES = frozenset({"Product", "Offer", "Event", "LocalBusiness", "Organization", "Place", "Service", "ItemList", "CollectionPage"})
 SUBJECT_TYPES = ARTICLE_TYPES | CLEAR_NON_ARTICLE_TYPES | frozenset({"Person"})
 SUPPORT_CHECKS = frozenset({"accountability", "date_context", "source_attribution"})
-# Labels promise only what retained structure establishes.
 LABELS = {
     "search_policy": "OAI-SearchBot robots directive",
     "indexability": "Observed search indexing directives",
@@ -266,6 +265,14 @@ def extract_geo_evidence(html, page):
         signals["schema_agreement"] = None
 
     # JSON-LD positive evidence is deliberately bounded to top-level/@graph objects.
+    # Preserve v1 schema-agreement compatibility for any page-bound structured
+    # object whose explicit name/headline exactly matches the retained H1. Type
+    # is required for subject/applicability semantics, but not for agreement.
+    bound_named_schema = [
+        entity for entity in entries
+        if h1_text and _norm_text(_entity_name(entity)) == _norm_text(h1_text)
+        and _entity_page_bound(entity, final_url)
+    ]
     named_subjects = [entity for entity in entries if _schema_types(entity) & SUBJECT_TYPES and _norm_text(_entity_name(entity)) == _norm_text(h1_text) and h1_text]
     bound_named_subjects = [entity for entity in named_subjects if _entity_page_bound(entity, final_url)]
     trusted_named_subjects = bound_named_subjects or (named_subjects if len(named_subjects) == 1 else [])
@@ -273,7 +280,7 @@ def extract_geo_evidence(html, page):
         signals["subject_identity"] = True
         if any(_address_present(entity.get("address")) for entity in trusted_named_subjects):
             signals["entity_details"] = True
-    if schema_supplied and bound_named_subjects:
+    if schema_supplied and bound_named_schema:
         signals["schema_agreement"] = True
 
     article_entities = [entity for entity in entries if _schema_types(entity) & ARTICLE_TYPES]

@@ -1,5 +1,7 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.41";
 import { secrets } from "base44:runtime";
+import { readCustomerScanComparison, unavailableScanComparison, validComparisonRequest } from "./comparisonReader.js";
+import { requestScanComparison } from "./comparisonGateway.js";
 import {
   buildLimitedResultSnapshot,
   verifyLimitedResultProof,
@@ -95,8 +97,11 @@ Deno.serve(async (req) => {
     if (action === "list_all") {
       return await listAllCustomerScans({ serviceEntities, user, body });
     }
-    if (action !== "get") {
+    if (action !== "get" && action !== "compare") {
       throw new RequestProblem(400, "result_action_invalid", "Choose one supported saved-scan action.");
+    }
+    if (action === "compare" && !validComparisonRequest(body)) {
+      throw new RequestProblem(400, "comparison_request_invalid", "Choose a saved scan to compare.");
     }
 
     const scanId = cleanId(body?.scan_id || body?.scan_run_id);
@@ -122,6 +127,7 @@ Deno.serve(async (req) => {
     // Paid sealed content always requires exact current ownership on both
     // ScanRun and BusinessProject.
     if (!exactOwner || cleanId(project.owner_user_id) !== cleanId(user.id)) {
+      if (action === "compare") return Response.json(unavailableScanComparison(scanId));
       return Response.json(buildCustomerProjection({
         run,
         fixList: null,
@@ -133,6 +139,35 @@ Deno.serve(async (req) => {
 
     const accessRows = await loadAccessRows(serviceEntities.Access, user);
     const access = evaluatePaidAccess({ rows: accessRows, user });
+    if (action === "compare") {
+      const secret = String(mutableSigningKey() || "");
+      return Response.json(await readCustomerScanComparison({
+        run, user, project, access,
+        loadRun: (id) => serviceEntities.ScanRun.get(id),
+        readVerifiedSnapshot: async (candidate) => {
+          const proof = cleanProof(candidate.authority_proof);
+          if (!secret || !proof || candidate.status !== "complete"
+              || candidate.owner_user_id !== user.id || candidate.project_id !== project.id
+              || !ACCEPTED_AUTHORITY_VERSIONS.has(cleanText(candidate.authority_seal_version, 160))
+              || !cleanText(candidate.authority_sealed_at, 80) || candidate.release_gate_eligible !== true
+              || candidate.score_is_provisional === true || candidate.evidence_quality_blocking === true
+              || !isReadableAuthorityReleaseFingerprint(cleanText(candidate.beta_revision_fingerprint, 64), RELEASE_FINGERPRINT)) {
+            throw new Error("comparison_authority_unavailable");
+          }
+          const fixList = await loadFixList(serviceEntities.FixList, candidate, user, proof);
+          const fixItems = await loadFixItems(serviceEntities.FixItem, fixList, candidate, user, proof);
+          const snapshot = authoritySnapshotFromRows({ run: candidate, fixList, fixItems, userId: user.id });
+          assertSnapshotIdentity(snapshot, { run: candidate, fixList, user });
+          if (!await verifyAuthoritySeal(snapshot, secret, proof)) throw new Error("comparison_authority_invalid");
+          return { snapshot, proof };
+        },
+        requestComparison: (pair) => requestScanComparison({
+          gatewayUrl: Deno.env.get("SCAN_DISPATCH_GATEWAY_URL") || "",
+          signingKey: secret,
+          pair,
+        }),
+      }));
+    }
     if (!access.ok && access.failureCode === "paid_access_conflict") {
       throw new RequestProblem(409, "paid_access_conflict", "Your access record needs support before this result can open.");
     }

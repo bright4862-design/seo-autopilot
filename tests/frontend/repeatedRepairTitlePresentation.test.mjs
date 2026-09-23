@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import { buildCustomerRepairPlan } from "../../src/lib/customerRepairPlan.js";
 
 import {
   buildRepairCards,
@@ -208,15 +209,20 @@ test("the page actually applies the hints it renders", () => {
   // asserts a capability nothing wired up is the defect shape this file exists
   // to catch, so the wiring is pinned as well as the helper.
   const page = fs.readFileSync(new URL("../../src/pages/FixList.jsx", import.meta.url), "utf8");
-  assert.match(page, /withRepeatedTitleScopeHints\(buildRepairCards\(/,
-    "the page builds cards without ever asking which titles repeat");
+  assert.match(page, /buildCustomerPageRepairPlan\(rawCustomerRepairCards, storedNextBestStep\)/,
+    "the page must use its complete card planning and decoration pipeline");
+  const definition = page.match(/export function buildCustomerPageRepairPlan\([\s\S]*?\n\}/)?.[0];
+  assert.ok(definition, "missing page card planning pipeline");
+  const planCards = new Function("buildCustomerRepairPlan", "withRepeatedTitleScopeHints",
+    `${definition.replace(/^export /, "")}\nreturn buildCustomerPageRepairPlan;`,
+  )(buildCustomerRepairPlan, withRepeatedTitleScopeHints);
 
   // And end to end: two same-titled rows through the page's own composition
   // arrive carrying hints that tell them apart.
-  const cards = withRepeatedTitleScopeHints(buildRepairCards([
+  const cards = planCards(buildRepairCards([
     redirectRow({ fix_id: "a", page_template_family: "product_page" }),
     redirectRow({ fix_id: "b", page_template_family: "location_landing" }),
-  ]));
+  ])).cards;
   assert.equal(cards.length, 2);
   assert.deepEqual(cards.map((card) => card.scopeHint), ["Product pages", "Location pages"]);
 });

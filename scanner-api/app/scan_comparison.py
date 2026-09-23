@@ -105,6 +105,21 @@ def _current_contract_for_fix(
     return resolved
 
 
+def _current_pages_for_fix(
+    fix: dict[str, Any],
+    current_pages: list[dict[str, Any]],
+    current_contract: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Expose authenticated rule evidence only to the rule it evaluates."""
+    if not isinstance(current_contract, dict) or "rules" not in current_contract:
+        return current_pages
+    rules = current_contract.get("rules")
+    if not isinstance(rules, dict):
+        return []
+    rule = str(build_repair_identity(fix).get("rule") or "")
+    return current_pages if rule in rules else []
+
+
 def _by_reference_fingerprint(fixes: list[dict[str, Any]], *, population: str) -> tuple[dict[str, list[dict[str, Any]]], int]:
     by_fingerprint: dict[str, list[dict[str, Any]]] = {}
     unclassified = 0
@@ -198,7 +213,7 @@ def build_scan_comparison_v1(
         comparison = compare_repair_runs(
             previous_fix,
             current_fixes,
-            current_pages,
+            _current_pages_for_fix(previous_fix, current_pages, current_contract),
             current_contract=_current_contract_for_fix(previous_fix, current_contract),
             previous_scan_origin=previous_scan_origin,
             scan_origin=current_scan_origin,

@@ -91,7 +91,15 @@ def test_valid_canonical_verified_fixed_envelope_still_passes_integrity():
 )
 def test_serialized_verified_fixed_cannot_bypass_canonical_authority_invariants(field, value, message):
     comparison = fixed_comparison()
-    comparison["repair_comparisons"][0][field] = value
+    row = comparison["repair_comparisons"][0]
+    row[field] = value
+    # Keep the generic page counters internally ordered for mutations whose
+    # purpose is to reach the stronger verified-fixed-specific integrity gate.
+    if field == "previous_affected_pages":
+        row["rechecked_pages"] = 0
+        row["eligible_rechecked_pages"] = 0
+    elif field == "rechecked_pages":
+        row["eligible_rechecked_pages"] = 0
     with pytest.raises(ValueError, match=message):
         validate_scan_comparison_v1(comparison)
 

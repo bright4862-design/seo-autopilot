@@ -202,20 +202,30 @@ def _member_matches_trusted_scan(
 ) -> bool:
     if trusted_scan_state == "invalid":
         return False
-    if trusted_scan_state != "verified":
+
+    local_fields = ("scan_id", "scan_run_id")
+    asserted = [field for field in local_fields if field in fix]
+    if not asserted:
         return True
 
-    for field in ("scan_id", "scan_run_id"):
-        if field not in fix:
-            continue
-        raw = fix.get(field)
-        if raw is None:
-            continue
-        if not isinstance(raw, str):
-            return False
-        local = raw.strip()
-        if local and local != trusted_scan_id:
-            return False
+    # Repair-local scan identity is a consistency assertion only. If a repair
+    # chooses to carry it, require the same exact producer invariant as Handoff-v2:
+    # both fields must be present, strict non-empty strings, and equal. Partial,
+    # null/empty, structured, or internally mismatched local assertions cannot
+    # authorize nested root evidence or its URLs.
+    if len(asserted) != len(local_fields):
+        return False
+    raw_scan_id = fix.get("scan_id")
+    raw_scan_run_id = fix.get("scan_run_id")
+    if not isinstance(raw_scan_id, str) or not isinstance(raw_scan_run_id, str):
+        return False
+    local_scan_id = raw_scan_id.strip()
+    local_scan_run_id = raw_scan_run_id.strip()
+    if not local_scan_id or local_scan_id != local_scan_run_id:
+        return False
+
+    if trusted_scan_state == "verified":
+        return local_scan_id == trusted_scan_id
     return True
 
 

@@ -1116,6 +1116,7 @@ export function CustomerScanComparison({ scanRecord, requestedScanId }) {
         presentation={comparison?.comparison || {}}
         currentScanId={readScanId}
         authorityVerified={comparison?.comparison_status === "ready" && comparison?.comparison_verified === true}
+        supportReference={comparison?.support_reference}
       />
     </div>
   );

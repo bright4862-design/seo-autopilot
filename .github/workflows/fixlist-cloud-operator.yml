@@ -992,6 +992,14 @@ jobs:
             echo
           fi
 
+          # Comparison is read-only. Print bounded request metadata only: no
+          # request/response bodies, customer identities, headers or signatures.
+          echo '=== GATEWAY COMPARISON REQUEST METADATA (8H) ==='
+          gcloud logging read \
+            "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${GATEWAY_SERVICE}\" AND logName:\"run.googleapis.com%2Frequests\" AND httpRequest.requestMethod=\"POST\" AND httpRequest.requestUrl:\"/compare\"" \
+            --project="$GCP_PROJECT" --freshness=8h --limit=30 --order=desc \
+            --format='table(timestamp,resource.labels.revision_name,httpRequest.status,httpRequest.latency,httpRequest.requestSize,httpRequest.responseSize)' || true
+
           echo '=== CURRENT GETYOURGUIDE CANARY LOGS ==='
           gcloud logging read \
             'resource.type="cloud_run_revision" AND resource.labels.service_name="fixlist-standard150-worker" AND jsonPayload.scan_id="6a85a93ab35fa769e397f194"' \

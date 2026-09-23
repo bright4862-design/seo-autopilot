@@ -1,7 +1,5 @@
-import { REPAIR_EXPLANATION_ROLES } from "../../lib/repairRoleExplanations.js";
+import { REPAIR_EXPLANATION_ROLES, REPAIR_ROLE_VIEW_COPY } from "../../lib/repairRoleExplanations.js";
 import { repairRolePresentation } from "../../lib/repairRolePresentation.js";
-
-const ROLE_LABELS = Object.freeze({ owner: "Business owner", marketing: "Marketing", seo: "SEO", developer: "Developer" });
 
 /** Controlled per-view preference; never persisted or sent to a model. */
 export function RepairRoleSelector({ role = "owner", onRoleChange, disabled = false }) {
@@ -21,7 +19,7 @@ export function RepairRoleSelector({ role = "owner", onRoleChange, disabled = fa
         className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-400 disabled:opacity-60"
       >
         {!selected && <option value="" disabled>Choose a role</option>}
-        {REPAIR_EXPLANATION_ROLES.map((value) => <option key={value} value={value}>{ROLE_LABELS[value]}</option>)}
+        {REPAIR_EXPLANATION_ROLES.map((value) => <option key={value} value={value}>{REPAIR_ROLE_VIEW_COPY[value].label}</option>)}
       </select>
     </label>
   );
@@ -37,7 +35,7 @@ export function RepairRoleExplanation({ repair, role = "owner" }) {
   return (
     <div className="space-y-4 text-sm leading-relaxed text-slate-700">
       <div>
-        <h3 className="font-semibold text-slate-900">What this means</h3>
+        <h3 className="font-semibold text-slate-900">{model.explanation.explanationAvailable ? REPAIR_ROLE_VIEW_COPY[model.role].heading : "What this means"}</h3>
         <p className="mt-1 whitespace-pre-line">{model.explanation.explanation}</p>
       </div>
       <div>

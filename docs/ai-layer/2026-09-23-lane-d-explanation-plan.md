@@ -3,7 +3,7 @@
 Status: lane checkpoint only; not integrated, merged, published, or deployed  
 Lane branch: `agent/ai-explanation-plan-20260923`  
 Baseline refreshed from `main`: `c1080d75f7d1aacd748e74009be7a6c15aa40a93` (V8 runtime cutover merged)  
-Verified code checkpoint: `3ae11c9c9e959d2060827daf5de9a02fe17aecda`  
+Verified code checkpoint: `6e80cb15eadeff235b1a280cfa668df05bdfb45a`  
 
 ## Boundaries
 
@@ -68,7 +68,7 @@ Two hand-authored edges are registered:
 
 Both edges require the two repairs to carry the same explicit verified `root_cause_evidence_v1_verified.root_cause_id`, non-empty contributing `evidence_refs`, and exact trusted scan binding. `evidence_refs` is all-or-nothing: it must be a non-empty list and every entry must be a non-empty string. Mixed-type or blank-entry lists fail closed and cannot instantiate grouping or dependency authority. Missing trusted scan identity fails closed.
 
-Every published repair-local scan identity alias — `scan_id`, `scanId`, `scan_run_id`, and `scanRunId`, including aliases retained under `original` — is treated as a consistency assertion when present. All non-blank aliases must be strings and must match the exact trusted scan id. A matching preferred alias cannot hide a conflicting or malformed parallel alias; any conflict fails closed before root-cause dependency authority or surface/remediation grouping is granted.
+Every published repair-local scan identity alias — `scan_id`, `scanId`, `scan_run_id`, and `scanRunId`, including aliases retained under `original` — is treated as a consistency assertion when present. Every present alias must be a non-empty string and must match the exact trusted scan id. A matching alias cannot hide a conflicting, non-string, or blank parallel alias; any such malformed sibling fails closed before root-cause dependency authority or surface/remediation grouping is granted.
 
 Control identifiers that can affect ordering or grouping are string-only. Malformed array/object values cannot be coerced into a valid scanner rule, verified evidence state, repair surface, remediation family, dependency-table version, dependency-edge field, or scan identity assertion. Invalid shapes therefore fail closed to canonical ordering and/or singleton grouping rather than creating implementation authority.
 
@@ -91,14 +91,14 @@ If instantiated dependencies contain a cycle, the plan sets `cycleDetected=true`
 
 ## Verification
 
-Focused Lane-D inventory at code checkpoint `3ae11c9c9e959d2060827daf5de9a02fe17aecda`:
+Focused Lane-D inventory at code checkpoint `6e80cb15eadeff235b1a280cfa668df05bdfb45a`:
 
 - role-explanation tests: 39
 - role-presentation tests: 6
 - implementation-plan core tests: 13
 - implementation-plan authority-boundary tests: 8
-- implementation-plan input-hardening tests: 8
-- total: 74
+- implementation-plan input-hardening tests: 10
+- total: 76
 
 Coverage includes:
 
@@ -124,6 +124,8 @@ Coverage includes:
 - conflicting scan-identity aliases cannot be hidden by a matching preferred alias;
 - conflicting scan identity retained in `original` prevents surface/remediation grouping;
 - non-string scan-identity aliases fail closed;
+- blank top-level scan-identity aliases fail closed even beside a matching alias;
+- blank scan identity retained under `original` fails closed even beside a matching top-level alias;
 - page-family-only no-grouping;
 - scan-bound surface + remediation grouping;
 - verified scan-bound root-cause grouping;
@@ -134,9 +136,9 @@ Coverage includes:
 - identical-input plan stability;
 - dependency table size/version.
 
-Repository-native exact-head FixList CI #2914 / run `35827920258` passed on `3ae11c9c9e959d2060827daf5de9a02fe17aecda`. That run passed lint, typecheck, generated release-contract verification, all frontend contract tests, frontend build, root scanner regressions, the full scanner-api test suite, labelled corpus verification, frozen beta-revision verification, and production scanner-image build.
+Repository-native exact-head FixList CI #2942 / run `35833173278` passed on `6e80cb15eadeff235b1a280cfa668df05bdfb45a`. That run passed lint, typecheck, generated release-contract verification, all frontend contract tests, frontend build, root scanner regressions, the full scanner-api test suite, labelled corpus verification, frozen beta-revision verification, and production scanner-image build.
 
-Earlier material review identified unrelated canonical-row drift, coercive role/rule identifiers, inherited object-property lookups, and invalid `evidence_refs` filtering; those were fixed at prior checkpoints. This checkpoint closes a further fail-closed scan-binding gap: a trusted value in one scan identity alias can no longer mask a conflicting or malformed sibling alias, including values retained in the original repair payload. Three adversarial regressions cover those cases without changing the production dependency table, canonical priority model, scanner behavior, or customer authority paths.
+Earlier material review identified unrelated canonical-row drift, coercive role/rule identifiers, inherited object-property lookups, invalid `evidence_refs` filtering, and scan-alias disagreement masking; those were fixed at prior checkpoints. This checkpoint closes the remaining blank-alias form of the scan-binding gap: a matching scan identity can no longer mask a present-but-blank sibling alias, either at the repair top level or under `original`. Two adversarial regressions cover those cases without changing the production dependency table, canonical priority model, scanner behavior, or customer authority paths.
 
 ## Integration handoff
 

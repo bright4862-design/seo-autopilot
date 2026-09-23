@@ -25,6 +25,11 @@
         },
         "handoff_v2_source": {
           "handoff_version": "fixlist_handoff_v2",
+          "scan": {
+            "scan_id": "scan-v8-fixbench",
+            "scan_run_id": "scan-v8-fixbench",
+            "scan_origin": "https://example.com"
+          },
           "fixes": [
             {
               "rule_id": "fix:canonical-template",

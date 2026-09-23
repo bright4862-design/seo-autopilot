@@ -36,6 +36,10 @@ function clean(value = "") {
   return String(value || "").trim();
 }
 
+function strictText(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 function lower(value = "") {
   return clean(value).toLowerCase();
 }
@@ -81,21 +85,48 @@ function pageFamilyOf(item = {}) {
   );
 }
 
-function rootCauseEvidenceOf(item = {}) {
-  const evidence = item.rootCauseEvidence || item.root_cause_evidence || item.original?.root_cause_evidence;
-  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return null;
-  if (clean(evidence.version) !== VERIFIED_ROOT_CAUSE_VERSION) return null;
-  if (!VERIFIED_STATES.has(lower(evidence.state))) return null;
-  const rootCauseId = clean(evidence.root_cause_id);
-  if (!rootCauseId) return null;
+function localScanIdentityOf(item = {}) {
   return {
-    rootCauseId,
-    repairSurfaceId: clean(evidence.repair_surface_id),
+    scanId: item.scan_id ?? item.scanId ?? item.original?.scan_id ?? item.original?.scanId,
+    scanRunId: item.scan_run_id ?? item.scanRunId ?? item.original?.scan_run_id ?? item.original?.scanRunId,
   };
 }
 
-function groupingKeyOf(item = {}, index = 0) {
-  const root = rootCauseEvidenceOf(item);
+function rootCauseEvidenceOf(item = {}, trustedScanId = "") {
+  const evidence = item.rootCauseEvidence || item.root_cause_evidence || item.original?.root_cause_evidence;
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return null;
+  if (evidence.version !== VERIFIED_ROOT_CAUSE_VERSION) return null;
+  if (!VERIFIED_STATES.has(lower(evidence.state))) return null;
+
+  const rootCauseId = strictText(evidence.root_cause_id);
+  if (!rootCauseId) return null;
+
+  const refs = Array.isArray(evidence.evidence_refs)
+    ? evidence.evidence_refs.map(strictText).filter(Boolean)
+    : [];
+  if (refs.length === 0) return null;
+
+  // B20 root-cause authority is scan-bound. A pure presentation/planning helper
+  // cannot establish that boundary by itself, so callers must pass the exact
+  // scan identity already authenticated by the owner-bound V8 reader. Missing
+  // trusted identity fails closed. Repair-local identities, when present, are
+  // consistency assertions only and must match exactly.
+  const trusted = strictText(trustedScanId);
+  if (!trusted) return null;
+  const localIdentity = localScanIdentityOf(item);
+  for (const value of [localIdentity.scanId, localIdentity.scanRunId]) {
+    if (value === undefined || value === null || value === "") continue;
+    if (strictText(value) !== trusted) return null;
+  }
+
+  return {
+    rootCauseId,
+    repairSurfaceId: strictText(evidence.repair_surface_id),
+  };
+}
+
+function groupingKeyOf(item = {}, index = 0, trustedScanId = "") {
+  const root = rootCauseEvidenceOf(item, trustedScanId);
   if (root) return `root_cause:${root.rootCauseId}`;
 
   // A page/template family by itself is intentionally insufficient. Only an
@@ -110,9 +141,7 @@ function groupingKeyOf(item = {}, index = 0) {
 
 function pairHasRequiredEvidence(left, right, edge) {
   if (edge.requires !== "verified_shared_root_cause") return false;
-  const leftRoot = rootCauseEvidenceOf(left.item);
-  const rightRoot = rootCauseEvidenceOf(right.item);
-  return Boolean(leftRoot && rightRoot && leftRoot.rootCauseId === rightRoot.rootCauseId);
+  return Boolean(left.rootCauseId && right.rootCauseId && left.rootCauseId === right.rootCauseId);
 }
 
 function normalizedEdge(edge = {}) {
@@ -251,11 +280,12 @@ export function buildImplementationPlan(
   {
     dependencyEdges = IMPLEMENTATION_DEPENDENCY_EDGES,
     dependencyTableVersion = IMPLEMENTATION_DEPENDENCY_TABLE_VERSION,
+    trustedScanId = "",
   } = {},
 ) {
   const rows = Array.isArray(items) ? items.filter(Boolean) : [];
   const nodes = rows.map((item, canonicalIndex) => {
-    const rootCause = rootCauseEvidenceOf(item);
+    const rootCause = rootCauseEvidenceOf(item, trustedScanId);
     return {
       key: `node:${canonicalIndex}:${idOf(item, canonicalIndex)}`,
       item,
@@ -267,7 +297,7 @@ export function buildImplementationPlan(
       remediationFamily: remediationFamilyOf(item),
       pageFamily: pageFamilyOf(item),
       rootCauseId: rootCause?.rootCauseId || "",
-      groupingKey: groupingKeyOf(item, canonicalIndex),
+      groupingKey: groupingKeyOf(item, canonicalIndex, trustedScanId),
     };
   });
 

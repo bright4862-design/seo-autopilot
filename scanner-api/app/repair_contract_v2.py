@@ -14,6 +14,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .observability import emit
+from .missing_h1_contract import build_missing_h1_comparison_evidence
 from .repair_identity import annotate_repair_identity
 from .repair_persistence_shadow import (
     REPAIR_CONTRACT_VERSION,
@@ -902,11 +903,13 @@ def apply_canonical_repair_contract(
         and isinstance(stage3_health_score_decision, dict)
         else None
     )
+    comparison_evidence = build_missing_h1_comparison_evidence(pages, **identity_context)
 
     return {
         **review,
         **parent,
         "canonical_repairs": canonical_items,
+        **({"comparison_evidence": comparison_evidence} if comparison_evidence else {}),
         "stage3_root_cause_groups": root_cause_groups,
         "stage3_delivery": stage3_delivery,
         **({"stage3_authority_claim": stage3_authority_claim} if stage3_authority_claim is not None else {}),

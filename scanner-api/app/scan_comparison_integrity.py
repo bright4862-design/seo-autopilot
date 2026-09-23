@@ -90,6 +90,8 @@ def validate_scan_comparison_v1(comparison: dict[str, Any]) -> dict[str, Any]:
         "came_back": 0,
         "could_not_verify": 0,
     }
+    expected_previous_without_reference = 0
+    expected_previous_stable_identity = 0
     previous_fingerprints: set[str] = set()
     sort_keys: list[tuple[str, str, str]] = []
 
@@ -111,6 +113,10 @@ def validate_scan_comparison_v1(comparison: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"{field} cannot mark an empty repair fingerprint stable")
         if source == "persisted_repair_fingerprint" and not fingerprint:
             raise ValueError(f"{field} cannot claim a persisted fingerprint without one")
+        if not fingerprint:
+            expected_previous_without_reference += 1
+        if stable:
+            expected_previous_stable_identity += 1
         same_reference_observed = _exact_bool(
             row.get("same_reference_fingerprint_observed"),
             f"{field}.same_reference_fingerprint_observed",
@@ -199,6 +205,14 @@ def validate_scan_comparison_v1(comparison: dict[str, Any]) -> dict[str, Any]:
     values = {name: _nonnegative_int(summary.get(name), f"summary.{name}") for name in summary_fields}
     if values["previous_repairs_total"] != len(rows):
         raise ValueError("summary.previous_repairs_total does not match repair comparisons")
+    if values["previous_repairs_without_reference_fingerprint"] != expected_previous_without_reference:
+        raise ValueError(
+            "summary.previous_repairs_without_reference_fingerprint does not match repair comparisons"
+        )
+    if values["previous_repairs_with_stable_verification_identity"] != expected_previous_stable_identity:
+        raise ValueError(
+            "summary.previous_repairs_with_stable_verification_identity does not match repair comparisons"
+        )
     for population in ("previous", "current"):
         total = values[f"{population}_repairs_total"]
         without_reference = values[f"{population}_repairs_without_reference_fingerprint"]

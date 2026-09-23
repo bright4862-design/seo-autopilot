@@ -11,6 +11,7 @@ export const IMPLEMENTATION_DEPENDENCY_TABLE_VERSION = "implementation_dependenc
 
 export const IMPLEMENTATION_DEPENDENCY_EDGES = Object.freeze([
   Object.freeze({
+    tableVersion: IMPLEMENTATION_DEPENDENCY_TABLE_VERSION,
     id: "redirect_chain_before_sitemap_redirect",
     beforeRule: "redirect_chain",
     afterRule: "sitemap_redirect",
@@ -18,6 +19,7 @@ export const IMPLEMENTATION_DEPENDENCY_EDGES = Object.freeze([
     rationale: "Stabilize the final redirect destination before publishing that destination in the sitemap.",
   }),
   Object.freeze({
+    tableVersion: IMPLEMENTATION_DEPENDENCY_TABLE_VERSION,
     id: "redirect_chain_before_internal_link_redirect",
     beforeRule: "redirect_chain",
     afterRule: "internal_link_redirect",
@@ -114,20 +116,24 @@ function pairHasRequiredEvidence(left, right, edge) {
 }
 
 function normalizedEdge(edge = {}) {
+  const tableVersion = clean(edge.tableVersion || edge.table_version);
   const id = clean(edge.id);
   const beforeRule = lower(edge.beforeRule || edge.before_rule);
   const afterRule = lower(edge.afterRule || edge.after_rule);
   const requires = clean(edge.requires);
   const rationale = clean(edge.rationale);
-  if (!id || !beforeRule || !afterRule || !requires) return null;
-  return { id, beforeRule, afterRule, requires, rationale };
+  if (!tableVersion || !id || !beforeRule || !afterRule || !requires) return null;
+  return { tableVersion, id, beforeRule, afterRule, requires, rationale };
 }
 
-function instantiateEdges(nodes, dependencyEdges) {
+function instantiateEdges(nodes, dependencyEdges, dependencyTableVersion) {
   const instantiated = [];
+  const selectedTableVersion = clean(dependencyTableVersion);
+  if (!selectedTableVersion) return instantiated;
+
   for (const rawEdge of Array.isArray(dependencyEdges) ? dependencyEdges : []) {
     const edge = normalizedEdge(rawEdge);
-    if (!edge) continue;
+    if (!edge || edge.tableVersion !== selectedTableVersion) continue;
     for (const before of nodes) {
       if (before.rule !== edge.beforeRule) continue;
       for (const after of nodes) {
@@ -135,6 +141,7 @@ function instantiateEdges(nodes, dependencyEdges) {
         if (!pairHasRequiredEvidence(before, after, edge)) continue;
         instantiated.push({
           id: `${edge.id}:${before.key}->${after.key}`,
+          tableVersion: edge.tableVersion,
           tableEdgeId: edge.id,
           beforeKey: before.key,
           afterKey: after.key,
@@ -239,7 +246,13 @@ function inversionHasDependencyPath(ordered, edges) {
   return true;
 }
 
-export function buildImplementationPlan(items = [], { dependencyEdges = IMPLEMENTATION_DEPENDENCY_EDGES } = {}) {
+export function buildImplementationPlan(
+  items = [],
+  {
+    dependencyEdges = IMPLEMENTATION_DEPENDENCY_EDGES,
+    dependencyTableVersion = IMPLEMENTATION_DEPENDENCY_TABLE_VERSION,
+  } = {},
+) {
   const rows = Array.isArray(items) ? items.filter(Boolean) : [];
   const nodes = rows.map((item, canonicalIndex) => {
     const rootCause = rootCauseEvidenceOf(item);
@@ -258,19 +271,21 @@ export function buildImplementationPlan(items = [], { dependencyEdges = IMPLEMEN
     };
   });
 
-  const appliedEdges = instantiateEdges(nodes, dependencyEdges);
+  const selectedDependencyTableVersion = clean(dependencyTableVersion);
+  const appliedEdges = instantiateEdges(nodes, dependencyEdges, selectedDependencyTableVersion);
   const topo = stableTopologicalOrder(nodes, appliedEdges);
   const ordered = topo.cycleDetected ? nodes : topo.ordered;
   const priorityMonotonicOrExplicit = topo.cycleDetected ? true : inversionHasDependencyPath(ordered, appliedEdges);
 
   return Object.freeze({
     version: IMPLEMENTATION_PLAN_VERSION,
-    dependencyTableVersion: IMPLEMENTATION_DEPENDENCY_TABLE_VERSION,
+    dependencyTableVersion: selectedDependencyTableVersion,
     cycleDetected: topo.cycleDetected,
     fallbackUsed: topo.cycleDetected,
     priorityMonotonicOrExplicit,
     orderedRepairIds: ordered.map((node) => node.fixId),
     appliedDependencies: topo.cycleDetected ? [] : appliedEdges.map((edge) => Object.freeze({
+      tableVersion: edge.tableVersion,
       tableEdgeId: edge.tableEdgeId,
       beforeFixId: edge.beforeFixId,
       afterFixId: edge.afterFixId,

@@ -127,7 +127,7 @@ Deno.serve(async (req) => {
     // Paid sealed content always requires exact current ownership on both
     // ScanRun and BusinessProject.
     if (!exactOwner || cleanId(project.owner_user_id) !== cleanId(user.id)) {
-      if (action === "compare") return Response.json(unavailableScanComparison(scanId));
+      if (action === "compare") return Response.json(unavailableScanComparison(scanId, "CMP-ACCESS"));
       return Response.json(buildCustomerProjection({
         run,
         fixList: null,

@@ -105,6 +105,51 @@ test("mixed card coverage changes only supported explanations without joining ca
   assert.equal((html.match(new RegExp(card.whatToChange, "g")) || []).length, 2);
 });
 
+test("Funbooker repair population explains the first card and all four previously uncovered cards for each role", () => {
+  // The production 2026-09-23 scan's seven rules, in its canonical order.
+  const rules = ["redirect_chain", "canonical_missing", "meta_description_unusable", "meta_description_unusable", "missing_h1", "title_over_pixel_limit", "potential_orphan_pages"];
+  const input = props();
+  input.sourceItems = rules.map((rule, index) => ({ ...source, id: `repair:${index}`, rule, title: `Repair ${index}` }));
+  input.cards = rules.map((rule, index) => ({ ...card, rule, title: `Repair ${index}` }));
+  const before = structuredClone({ sourceItems: input.sourceItems, cards: input.cards });
+  const expectedHeadings = { owner: "Business decision", marketing: "Content review", seo: "SEO review", developer: "Implementation guidance" };
+  const copyByRole = {};
+  for (const role of Object.keys(expectedHeadings)) {
+    const html = render({ ...input, role });
+    const articles = [...html.matchAll(/<article>([\s\S]*?)<\/article>/g)].map((match) => match[1]);
+    assert.equal(articles.length, 7);
+    assert.match(html, /Owner \/ CEO/);
+    copyByRole[role] = articles.map((article) => {
+      assert.ok(article.includes(`<h5>${expectedHeadings[role]}</h5>`));
+      assert.ok(article.includes(card.whatToChange));
+      assert.ok(article.includes(escaped(JSON.stringify(card.evidence))));
+      assert.ok(!article.includes(card.whyItMatters));
+      return article.match(/<p class="explanation">([\s\S]*?)<\/p>/)[1];
+    });
+  }
+  for (let index = 0; index < rules.length; index += 1) {
+    assert.equal(new Set(Object.values(copyByRole).map((copy) => copy[index])).size, 4, rules[index]);
+  }
+  // Useful responsibility and validation changes, beyond different strings.
+  assert.match(copyByRole.owner[0], /maintainer/);
+  assert.match(copyByRole.seo[0], /indexab|canonical/i);
+  assert.match(copyByRole.developer[0], /redirect rule|routing/i);
+  assert.match(copyByRole.owner[2], /content editor|content team/i);
+  assert.match(copyByRole.seo[2], /missing|empty|malformed/i);
+  assert.match(copyByRole.developer[2], /HTML|document head/i);
+  assert.match(copyByRole.owner[5], /key message|purpose/i);
+  assert.match(copyByRole.seo[5], /pixel|width/i);
+  assert.match(copyByRole.developer[5], /template|generat/i);
+  assert.deepEqual({ sourceItems: input.sourceItems, cards: input.cards }, before);
+});
+
+test("partial role coverage is stated beside the selector", () => {
+  const input = props();
+  input.cards.push({ ...card, rule: "unmapped_rule" });
+  const html = render(input);
+  assert.match(html, /Role guidance is available for 1 of 2 repairs/);
+});
+
 for (const [label, change] of [
   ["unverified authority", (input) => { input.authorityVerified = false; }],
   ["truthy authority string", (input) => { input.authorityVerified = "true"; }],

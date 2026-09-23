@@ -30,3 +30,17 @@ Production has not been changed by preparing this candidate. Do not report it li
 The gateway deployment and Base44 publication workflows require an authenticated owner session. In this work session, the GitHub connector supports source/PR operations but has no workflow-dispatch operation; the release browser is signed out. Local Base44 `whoami` also required owner device authentication. These are deployment-access requirements, not completed acceptance.
 
 The scheduled AI Integrator was temporarily paused while this candidate was assembled. Keep one release owner, and explicitly hand ownership back or resume the scheduled task after the interactive deployment is finished or handed off.
+
+## Owner acceptance follow-up
+
+PR #356 merged as `a9a96faf24ee9a841720981dcfbcee7bf0967a84`. Gateway workflow `35856413571` and Base44 site/functions workflow `35856609911` passed, including serving revision/source and all six V8 runtime identities. Worker `fixlist-standard150-worker-00096-76l` was prepared at zero traffic; it has not been promoted by this interactive release. The previous worker remains the rollback target.
+
+The owner then observed **Comparison unavailable** on a readable saved Funbooker FixList and reported that changing roles had little visible effect. These are failed customer acceptance checks, not a completed release.
+
+The role issue is reproduced: four of the seven actual repairs had no role copy, including the first redirect repair. The follow-up adds deterministic copy for redirect chains, unusable meta descriptions and overwide titles, plus explicit role headings and a selected-role summary. All seven repairs now have role explanations. Source instructions, evidence, ranking and order remain unchanged.
+
+The comparison root cause is still unconfirmed. Both real saved pairs pass the actual V8 reconstruction, Python comparison, signed transport and UI model locally when re-sealed with a synthetic diagnostic key. This proves shape compatibility only; it does not verify the original production HMAC or the live network path. Production snapshots and keys have not been changed or published as test fixtures.
+
+The follow-up preserves fail-closed comparison behavior and adds fixed support references for the failing boundary. Arbitrary exception text, proofs, URLs and payloads are never returned. Missing, inaccessible and invalid previous results share one reference. Successful comparisons and first scans have no failure reference. The existing read-only release diagnostic also reads at most 30 gateway comparison request metadata entries from the previous eight hours; it adds no permissions, triggers or deploy operation.
+
+After the diagnostic/copy patch is published, repeat the saved comparison and inspect its support reference if it still fails. Do not claim the comparison is fixed or promote the worker on source tests alone. Keep the single integrator paused until this release is completed or explicitly handed back. Export evidence omissions and the unrelated H1 impact wording remain separately recorded follow-ups.

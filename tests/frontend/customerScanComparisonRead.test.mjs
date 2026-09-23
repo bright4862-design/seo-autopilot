@@ -74,7 +74,8 @@ async function fixture() {
   return { previous, current, paid: true, project: { id: "project", owner_user_id: "owner", website_url: "https://example.com/" } };
 }
 
-async function invoke({ mutate = () => {}, body = { action: "compare", scan_id: "current" }, gateway = responseFor } = {}) {
+async function invoke({ mutate = () => {}, body = { action: "compare", scan_id: "current" }, gateway = responseFor,
+  gatewayUrl = "https://gateway.example", signingKey = SECRET, deadlineMs = 8_000 } = {}) {
   const rows = await fixture();
   await mutate(rows);
   const reads = [];
@@ -92,8 +93,8 @@ async function invoke({ mutate = () => {}, body = { action: "compare", scan_id: 
     ...projection, ...limited, ...preview, ...compatibility, ...comparisonReader,
     RELEASE_FINGERPRINT, FUNCTION_BUILD_ID,
     createClientFromRequest: () => ({ auth: { me: async () => ({ id: "owner", email: "paid@example.com" }) }, asServiceRole: { entities } }),
-    secrets: { get: () => SECRET },
-    requestScanComparison: (args) => requestScanComparison({ ...args, now: () => NOW, fetchImpl: async (url, init) => {
+    secrets: { get: () => signingKey },
+    requestScanComparison: (args) => requestScanComparison({ ...args, now: () => NOW, deadlineMs, fetchImpl: async (url, init) => {
       assert.equal(url, "https://gateway.example/compare");
       assert.equal(init.redirect, "error");
       assert.equal(init.headers["x-fixlist-signature"], sign("fixlist-scan-comparison-request-v1", `${init.headers["x-fixlist-timestamp"]}\n${init.body}`));
@@ -106,7 +107,7 @@ async function invoke({ mutate = () => {}, body = { action: "compare", scan_id: 
   const javascript = ts.transpileModule(entrySource, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText.replace(/^import[\s\S]*?;\s*$/gm, "");
   let handler;
   const previousDeno = globalThis.Deno;
-  globalThis.Deno = { env: { get: () => "https://gateway.example" }, serve: (value) => { handler = value; } };
+  globalThis.Deno = { env: { get: () => gatewayUrl }, serve: (value) => { handler = value; } };
   globalThis[name] = harness;
   try {
     const source = `const { ${Object.keys(harness).join(",")} } = globalThis.${name};\n${javascript}\n// ${name}`;
@@ -124,6 +125,7 @@ test("actual V8 compare handler verifies both sealed row sets and returns only t
   const { result, requests } = await invoke();
   assert.equal(result.comparison_verified, true);
   assert.equal(result.comparison_status, "ready");
+  assert.equal(result.support_reference, undefined);
   assert.equal(result.comparison.new_or_came_back_label, "Unmatched or returned findings");
   assert.deepEqual(Object.keys(result).sort(), ["comparison", "comparison_status", "comparison_verified", "scan_id", "success"]);
   assert.equal(requests.length, 1);
@@ -143,15 +145,16 @@ for (const key of ["previous_scan_id", "previous_proof", "previous_snapshot", "o
   });
 }
 
-for (const [label, mutate, forbiddenPriorRead] of [
-  ["unpaid owner", (rows) => { rows.paid = false; }, true],
-  ["limited current scan", (rows) => { rows.current.run.status = "limited"; }, true],
-  ["running current scan", (rows) => { rows.current.run.status = "crawling"; }, true],
-  ["legacy current owner", (rows) => { delete rows.current.run.owner_user_id; rows.current.run.created_by_id = "owner"; }, true],
+for (const [label, mutate, forbiddenPriorRead, reference = "CMP-PREVIOUS"] of [
+  ["unpaid owner", (rows) => { rows.paid = false; }, true, "CMP-ACCESS"],
+  ["limited current scan", (rows) => { rows.current.run.status = "limited"; }, true, "CMP-CURRENT"],
+  ["running current scan", (rows) => { rows.current.run.status = "crawling"; }, true, "CMP-CURRENT"],
+  ["legacy current owner", (rows) => { delete rows.current.run.owner_user_id; rows.current.run.created_by_id = "owner"; }, true, "CMP-ACCESS"],
+  ["prior does not exist", (rows) => { rows.previous.run.id = "missing"; }],
   ["prior owned by another account", (rows) => { rows.previous.run.owner_user_id = "other"; }],
   ["prior from another project", (rows) => { rows.previous.run.project_id = "other"; }],
   ["prior limited", (rows) => { rows.previous.run.status = "limited"; }],
-  ["corrupt current HMAC", (rows) => { rows.current.run.health_score = 99; }, true],
+  ["corrupt current HMAC", (rows) => { rows.current.run.health_score = 99; }, true, "CMP-CURRENT"],
   ["corrupt prior HMAC", (rows) => { rows.previous.run.health_score = 99; }],
   ["unreadable prior release", (rows) => { rows.previous.run.beta_revision_fingerprint = "d".repeat(16); }],
   ["prior project URL differs", (rows) => { rows.previous.run.website_url = "https://other.example/"; }],
@@ -160,7 +163,7 @@ for (const [label, mutate, forbiddenPriorRead] of [
 ]) {
   test(`compare remains unavailable for ${label}`, async () => {
     const { result, requests, reads } = await invoke({ mutate });
-    assert.deepEqual(result, { success: true, scan_id: "current", comparison_verified: false, comparison_status: "unavailable" });
+    assert.deepEqual(result, { success: true, scan_id: "current", comparison_verified: false, comparison_status: "unavailable", support_reference: reference });
     assert.deepEqual(requests, []);
     if (forbiddenPriorRead) assert.deepEqual(reads, ["current"]);
   });
@@ -180,6 +183,7 @@ for (const [label, mutate] of [
       rows.previous.fixList.authority_proof = proof;
     } });
     assert.equal(result.comparison_status, "unavailable");
+    assert.equal(result.support_reference, "CMP-SCOPE");
     assert.deepEqual(requests, []);
   });
 }
@@ -187,6 +191,7 @@ for (const [label, mutate] of [
 test("first authoritative scan reports no previous scan without calling the gateway", async () => {
   const { result, requests } = await invoke({ mutate: (rows) => { delete rows.current.run.previous_scan_id; } });
   assert.equal(result.comparison_status, "no_previous_scan");
+  assert.equal(result.support_reference, undefined);
   assert.equal(result.comparison_verified, false);
   assert.deepEqual(requests, []);
 });
@@ -199,6 +204,7 @@ test("comparison failures do not affect the normal saved-result read", async () 
 });
 
 for (const [label, gateway] of [
+  ["malformed JSON", () => new Response("{private-invalid-json")],
   ["wrong nonce", (request) => responseFor(request, (payload) => { payload.nonce = "0".repeat(32); })],
   ["stale response", (request) => responseFor(request, (payload) => { payload.generated_at -= 301; })],
   ["future response", (request) => responseFor(request, (payload) => { payload.generated_at += 301; })],
@@ -217,6 +223,7 @@ for (const [label, gateway] of [
     assert.equal(result.comparison_status, "unavailable");
     assert.equal(result.comparison_verified, false);
     assert.equal(result.comparison, undefined);
+    assert.equal(result.support_reference, "CMP-RESPONSE");
   });
 }
 
@@ -228,7 +235,7 @@ test("the comparison request is bounded before network I/O", async () => {
       current_previous_scan_id: "previous", previous_snapshot: { large: "x".repeat(4_100_000) }, previous_proof: "a".repeat(64),
       current_snapshot: {}, current_proof: "b".repeat(64) },
     fetchImpl: async () => { calls += 1; return new Response(); },
-  }), /comparison_request_too_large/);
+  }), (error) => error.support_reference === "CMP-GATEWAY-LIMIT");
   assert.equal(calls, 0);
 });
 
@@ -243,6 +250,94 @@ test("comparison transport aborts an unresponsive gateway at its deadline", asyn
     fetchImpl: (_url, init) => new Promise((_resolve, reject) => {
       init.signal.addEventListener("abort", () => { aborted = true; reject(new Error("deadline")); }, { once: true });
     }),
-  }), /deadline/);
+  }), (error) => error.support_reference === "CMP-TIMEOUT" && !error.message.includes("deadline"));
   assert.equal(aborted, true);
+});
+
+
+for (const [status, expected] of [
+  [401, "CMP-GATEWAY-AUTH"], [403, "CMP-GATEWAY-AUTH"], [404, "CMP-GATEWAY-ROUTE"],
+  [413, "CMP-GATEWAY-LIMIT"], [422, "CMP-GATEWAY-INPUT"], [429, "CMP-GATEWAY-BUSY"],
+  [500, "CMP-GATEWAY-ERROR"], [503, "CMP-GATEWAY-ERROR"],
+]) {
+  test(`unavailable gateway HTTP ${status} has a bounded support reference without reflecting its body`, async () => {
+    const { result } = await invoke({ gateway: () => new Response("private-response-with-proof-and-url", { status }) });
+    assert.equal(result.support_reference, expected);
+    assert.equal(result.comparison_verified, false);
+    assert.equal(result.comparison_status, "unavailable");
+    assert.equal(JSON.stringify(result).includes("private-response"), false);
+  });
+}
+
+for (const gatewayUrl of ["", "not a URL", "http://gateway.example", "https://gateway.example/dispatch", "https://gateway.example/?private=1"]) {
+  test(`unusable gateway configuration is classified before network I/O: ${gatewayUrl}`, async () => {
+    const { result, requests } = await invoke({ gatewayUrl });
+    assert.equal(result.support_reference, "CMP-CONFIG");
+    assert.deepEqual(requests, []);
+  });
+}
+
+for (const thrown of [new Error("private-key-and-url"), "private-string", null, { support_reference: "CMP-CONFIG", message: "private-object" }]) {
+  test("unknown network throwables cannot select or leak a support reference", async () => {
+    const { result } = await invoke({ gateway: () => { throw thrown; } });
+    assert.equal(result.support_reference, "CMP-NETWORK");
+    assert.equal(JSON.stringify(result).includes("private"), false);
+  });
+}
+
+
+function transportPair(rows) {
+  return {
+    expected_owner_user_id: "owner", expected_project_id: "project", expected_current_scan_id: "current",
+    current_previous_scan_id: "previous", previous_snapshot: rows.previous.snapshot, previous_proof: rows.previous.proof,
+    current_snapshot: rows.current.snapshot, current_proof: rows.current.proof,
+  };
+}
+
+test("missing transport key is a configuration failure before network I/O", async () => {
+  const rows = await fixture();
+  let calls = 0;
+  await assert.rejects(requestScanComparison({
+    gatewayUrl: "https://gateway.example", signingKey: "", pair: transportPair(rows),
+    fetchImpl: async () => { calls += 1; return new Response(); },
+  }), (error) => error.support_reference === "CMP-CONFIG");
+  assert.equal(calls, 0);
+});
+
+test("invalid transport input has a fixed reference and no original serialization exception", async () => {
+  const rows = await fixture();
+  const circular = transportPair(rows);
+  circular.current_snapshot.circular = circular.current_snapshot;
+  for (const pair of [{ private: "private-pair" }, circular]) {
+    let calls = 0;
+    await assert.rejects(requestScanComparison({
+      gatewayUrl: "https://gateway.example", signingKey: SECRET, pair,
+      fetchImpl: async () => { calls += 1; return new Response(); },
+    }), (error) => error.support_reference === "CMP-GATEWAY-INPUT" && !error.message.includes("private") && error.cause === undefined);
+    assert.equal(calls, 0);
+  }
+});
+
+for (const [stage, reference] of [["current", "CMP-CURRENT"], ["prior-load", "CMP-PREVIOUS"], ["prior-verify", "CMP-PREVIOUS"], ["gateway", "CMP-GATEWAY-ERROR"]]) {
+  test(`unknown throwables at ${stage} cannot leak or change the reader's bounded failure stage`, async () => {
+    const rows = await fixture();
+    const throwable = { message: "private-exception", support_reference: "CMP-CONFIG", snapshot: { proof: "private-proof" } };
+    const result = await comparisonReader.readCustomerScanComparison({
+      run: rows.current.run, user: { id: "owner" }, project: rows.project, access: { ok: true },
+      loadRun: async () => { if (stage === "prior-load") throw throwable; return rows.previous.run; },
+      readVerifiedSnapshot: async (run) => {
+        if ((stage === "current" && run.id === "current") || (stage === "prior-verify" && run.id === "previous")) throw throwable;
+        return run.id === "current" ? rows.current : rows.previous;
+      },
+      requestComparison: async () => { throw throwable; },
+    });
+    assert.deepEqual(result, { success: true, scan_id: "current", comparison_verified: false,
+      comparison_status: "unavailable", support_reference: reference });
+  });
+}
+
+test("unknown support reference values are never reflected", () => {
+  const result = comparisonReader.unavailableScanComparison("current", "private-untrusted-value");
+  assert.equal(result.support_reference, "CMP-CURRENT");
+  assert.equal(JSON.stringify(result).includes("private"), false);
 });

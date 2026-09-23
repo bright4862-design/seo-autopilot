@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { scanComparisonSupportReference } from "../../src/lib/scanComparisonSupport.js";
 
 function client(invoke, clear = () => {}) {
   const source = readFileSync("src/lib/scanRuns.js", "utf8")
     .replace(/^import[\s\S]*?;\n/gm, "")
     .replace(/^export\s+/gm, "");
-  return new Function("base44", "clearCustomerAuthBoundary", `${source}\nreturn getScanComparison;`)(
-    { auth: { me: async () => ({ id: "owner" }) }, functions: { invoke } }, clear,
+  return new Function("base44", "clearCustomerAuthBoundary", "scanComparisonSupportReference", `${source}\nreturn getScanComparison;`)(
+    { auth: { me: async () => ({ id: "owner" }) }, functions: { invoke } }, clear, scanComparisonSupportReference,
   );
 }
 
@@ -43,4 +44,21 @@ test("first scans can omit the panel, while unauthorized reads clear the custome
   const unauthorized = client(async () => { throw { response: { status: 401 } }; }, () => cleared++);
   assert.equal((await unauthorized("current")).comparison_status, "unavailable");
   assert.equal(cleared, 1);
+});
+
+test("comparison failures preserve only a bounded support reference for the exact scan", async () => {
+  const failure = { success: true, scan_id: "current", comparison_status: "unavailable", comparison_verified: false };
+  const read = client(async () => ({ data: { ...failure, support_reference: "CMP-TIMEOUT", error: "private details" } }));
+  const result = await read("current");
+  assert.equal(result.support_reference, "CMP-TIMEOUT");
+  assert.equal(result.comparison_verified, false);
+  assert.equal(result.comparison, null);
+  assert.equal(result.error, undefined);
+  for (const extra of [
+    { support_reference: "private details" },
+    { support_reference: { message: "CMP-TIMEOUT" } },
+    { support_reference: "CMP-TIMEOUT", scan_id: "another" },
+  ]) {
+    assert.equal((await client(async () => ({ data: { ...failure, ...extra } }))("current")).support_reference, undefined);
+  }
 });

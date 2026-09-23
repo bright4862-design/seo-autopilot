@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { buildImplementationPlan } from "../../lib/implementationPlan.js";
-import { repairRoleExplanation, REPAIR_EXPLANATION_ROLES } from "../../lib/repairRoleExplanations.js";
+import { repairRoleExplanation, REPAIR_EXPLANATION_ROLES, REPAIR_ROLE_VIEW_COPY } from "../../lib/repairRoleExplanations.js";
 import { repairSuggestion } from "../../lib/repairSuggestions.js";
 import { RepairRoleSelector } from "./RepairRoleView.jsx";
 
@@ -94,13 +94,14 @@ export function CustomerRepairGuidanceView({
   const list = Array.isArray(cards) ? cards : [];
   const trusted = scanBound(sourceItems, cards, trustedScanId, sourceScanId, cardsScanId, authorityVerified);
   const selectedRole = REPAIR_EXPLANATION_ROLES.includes(role) ? role : "owner";
-  const hasRoleCopy = trusted && list.some((card) => object(card) && repairRoleExplanation(card, selectedRole).explanationAvailable);
+  const roleView = REPAIR_ROLE_VIEW_COPY[selectedRole];
+  const roleCopyCount = trusted ? list.filter((card) => object(card) && repairRoleExplanation(card, selectedRole).explanationAvailable).length : 0;
   const explanationForCard = (card) => {
     const fallback = { explanation: text(card?.whyItMatters), explanationAvailable: false, explanationHeading: "Why it matters" };
     if (!trusted || !object(card)) return fallback;
     const copy = repairRoleExplanation(card, selectedRole);
     return copy.explanationAvailable
-      ? { explanation: copy.explanation, explanationAvailable: true, explanationHeading: "What this means" }
+      ? { explanation: copy.explanation, explanationAvailable: true, explanationHeading: roleView.heading }
       : fallback;
   };
   const context = { role: selectedRole, explanationForCard };
@@ -111,10 +112,11 @@ export function CustomerRepairGuidanceView({
       : null;
   return (
     <>
-      {hasRoleCopy && typeof onRoleChange === "function" ? (
+      {roleCopyCount > 0 && typeof onRoleChange === "function" ? (
         <div className="mb-5">
           <RepairRoleSelector role={selectedRole} onRoleChange={onRoleChange} />
-          <p className="mt-2 text-[12px] leading-relaxed text-ink-faint">Choose the explanation that fits your work. Findings and recommended changes stay the same.</p>
+          <p role="status" className="mt-2 text-[13px] leading-relaxed text-ink-muted"><span className="font-medium text-ink">{roleView.label} view.</span> {roleView.summary}</p>
+          <p className="mt-1 text-[12px] leading-relaxed text-ink-faint">Findings and recommended changes stay the same.{roleCopyCount < list.length ? ` Role guidance is available for ${roleCopyCount} of ${list.length} repairs.` : ""}</p>
         </div>
       ) : null}
       {trusted && list.length > 0 ? <ImplementationOrder items={sourceItems} trustedScanId={trustedScanId} /> : null}

@@ -9,12 +9,37 @@ import { REPAIR_SUGGESTION_FALLBACK } from "./repairSuggestions.js";
  * role. Copy is authored/reviewed before commit; there is no runtime model call.
  */
 export const REPAIR_ROLE_EXPLANATION_VERSION = "repair_role_explanation_v1";
-export const REPAIR_ROLE_EXPLANATION_LIBRARY_VERSION = "role_explanation_copy_v2_20260923_top8";
+export const REPAIR_ROLE_EXPLANATION_LIBRARY_VERSION = "role_explanation_copy_v3_20260923_top11";
 
 export const REPAIR_EXPLANATION_ROLES = Object.freeze(["owner", "marketing", "seo", "developer"]);
 export const REPAIR_EXPLANATION_FALLBACK = REPAIR_SUGGESTION_FALLBACK;
 
+export const REPAIR_ROLE_VIEW_COPY = Object.freeze({
+  owner: Object.freeze({ label: "Owner / CEO", heading: "Business decision", summary: "Decide what needs attention and what to ask your team to check." }),
+  marketing: Object.freeze({ label: "Marketing", heading: "Content review", summary: "Focus on page messaging, visitor journeys and content changes." }),
+  seo: Object.freeze({ label: "SEO", heading: "SEO review", summary: "Review the search implications and checks behind each repair." }),
+  developer: Object.freeze({ label: "Developer", heading: "Implementation guidance", summary: "Focus on where to make each change and how to verify it." }),
+});
+
 const ROLE_EXPLANATIONS = Object.freeze({
+  redirect_chain: Object.freeze({
+    owner: "This address takes more than one redirect to reach its destination. Confirm which page it should open, then ask your website maintainer to remove unnecessary stops. Keep any redirects needed for routing or tracking.",
+    marketing: "Check that the redirect chain ends at the intended page for visitors or a campaign. Confirm any tracking requirements before asking for a direct route, then test the links people use to reach it.",
+    seo: "Review the reported chain and confirm the intended final destination, its indexability and canonical signal. Remove unnecessary hops where appropriate, then check the response sequence again.",
+    developer: "Trace the redirect rules serving the reported address. Once the destination is confirmed, consolidate unnecessary hops in the responsible routing layer, preserve required paths and query parameters, and retest the full response sequence.",
+  }),
+  meta_description_unusable: Object.freeze({
+    owner: "The scan found a missing or unusable search description. Ask your content editor to confirm each affected page’s purpose and supply an accurate summary. This gives search engines a description to consider; it does not guarantee the text they will show.",
+    marketing: "Write a short, accurate summary of what each affected page offers and why someone would visit it. Use page-specific details instead of repeating one description everywhere; search engines may still choose other text for a search result.",
+    seo: "Check whether each affected description is missing, empty or malformed, then review its relevance to the page and search intent. A valid description gives search engines a snippet option; it does not guarantee a particular snippet or a ranking improvement.",
+    developer: "Inspect the affected page’s HTML document head and the CMS field or template that emits its meta description. Check the reported missing, empty or malformed value, correct the responsible source, and verify the generated HTML after publishing.",
+  }),
+  title_over_pixel_limit: Object.freeze({
+    owner: "These page titles may be too wide to appear in full in search results. Agree on the key message for each page, then ask your content editor to remove wording that adds little value. Keep the title accurate and easy to recognize.",
+    marketing: "Keep the page’s distinctive offer, topic or location near the start of the title. Remove repetition or unnecessary brand wording while preserving a natural, accurate message; the displayed search title may still vary.",
+    seo: "Review the flagged title’s pixel width and put its most useful identifying terms early. Check intent, distinctiveness and readability rather than enforcing a fixed character count; search engines may truncate or rewrite the displayed title.",
+    developer: "Inspect the final title element and the CMS field or template that generates it. If repeated suffixes or template text add unnecessary width, adjust that source with the content owner and check representative generated titles after publishing.",
+  }),
   sitemap_redirect: Object.freeze({
     owner: "The scan found redirects in your sitemap, the list of page addresses you give search engines. Ask whoever maintains it to check the destinations and list the intended final addresses directly.",
     marketing: "Some sitemap entries redirect to another address. Confirm that each destination is the page you want people to discover before updating the entries.",

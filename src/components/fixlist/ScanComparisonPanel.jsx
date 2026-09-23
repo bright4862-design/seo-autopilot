@@ -1,5 +1,6 @@
 import { useId } from "react";
 import { buildScanComparisonPanelModel } from "../../lib/scanComparisonPanelModel.js";
+import { scanComparisonSupportReference } from "../../lib/scanComparisonSupport.js";
 
 /**
  * Presentation only. The caller must obtain presentation from the authenticated
@@ -10,6 +11,7 @@ export default function ScanComparisonPanel({
   presentation = null,
   currentScanId,
   authorityVerified = false,
+  supportReference = "",
 }) {
   const headingId = useId();
   if (presentation === null || presentation === undefined) return null;
@@ -21,12 +23,14 @@ export default function ScanComparisonPanel({
     && currentScanId === model.currentScanId;
 
   if (!ready) {
+    const reference = scanComparisonSupportReference(supportReference);
     return (
       <section aria-labelledby={headingId} className="rounded-xl border border-slate-200 bg-white p-5">
         <h2 id={headingId} className="text-base font-semibold text-slate-900">Comparison unavailable</h2>
         <p className="mt-2 text-sm text-slate-600">
           We couldn’t compare these scans. Your current FixList is still available.
         </p>
+        {reference ? <p className="mt-2 text-xs text-slate-500">Support reference: {reference}</p> : null}
       </section>
     );
   }

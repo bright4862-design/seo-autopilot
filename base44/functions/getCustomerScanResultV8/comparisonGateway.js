@@ -5,6 +5,34 @@ const RESPONSE_LIMIT = 65_536;
 const RESPONSE_SKEW_SECONDS = 300;
 const COUNT_KEYS = ["fixed", "still_detected", "new_or_came_back", "came_back", "could_not_verify"];
 const encoder = new TextEncoder();
+const GATEWAY_SUPPORT_REFERENCES = new Set([
+  "CMP-CONFIG", "CMP-TIMEOUT", "CMP-NETWORK", "CMP-GATEWAY-AUTH", "CMP-GATEWAY-ROUTE",
+  "CMP-GATEWAY-LIMIT", "CMP-GATEWAY-BUSY", "CMP-GATEWAY-ERROR", "CMP-GATEWAY-INPUT", "CMP-RESPONSE",
+]);
+
+// Carry only a fixed support code across the optional-read boundary. Never keep
+// the original exception, response body, URL or signed request on this error.
+class ComparisonGatewayError extends Error {
+  constructor(reference) {
+    super("Scan comparison is unavailable.");
+    this.name = "ComparisonGatewayError";
+    this.support_reference = GATEWAY_SUPPORT_REFERENCES.has(reference) ? reference : "CMP-GATEWAY-ERROR";
+  }
+}
+
+export function comparisonGatewaySupportReference(error) {
+  return error instanceof ComparisonGatewayError && GATEWAY_SUPPORT_REFERENCES.has(error.support_reference)
+    ? error.support_reference : "CMP-GATEWAY-ERROR";
+}
+
+function gatewayStatusReference(status) {
+  if (status === 401 || status === 403) return "CMP-GATEWAY-AUTH";
+  if (status === 404) return "CMP-GATEWAY-ROUTE";
+  if (status === 413) return "CMP-GATEWAY-LIMIT";
+  if (status === 422) return "CMP-GATEWAY-INPUT";
+  if (status === 429) return "CMP-GATEWAY-BUSY";
+  return "CMP-GATEWAY-ERROR";
+}
 
 function exactKeys(value, keys) {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -111,35 +139,42 @@ async function boundedJson(response) {
 export async function requestScanComparison({
   gatewayUrl, signingKey, pair, fetchImpl = fetch, now = Date.now, deadlineMs = 8_000,
 }) {
-  if (typeof signingKey !== "string" || !signingKey) throw new Error("comparison_not_configured");
-  if (!exactKeys(pair, [
-    "expected_owner_user_id", "expected_project_id", "expected_current_scan_id", "current_previous_scan_id",
-    "previous_snapshot", "previous_proof", "current_snapshot", "current_proof",
-  ])) throw new Error("comparison_request_invalid");
-  const target = new URL(gatewayUrl);
-  if (target.protocol !== "https:" || target.username || target.password || target.search || target.hash
-      || !["", "/"].includes(target.pathname)) throw new Error("comparison_gateway_invalid");
-  target.pathname = "/compare";
-  const nonce = hex(crypto.getRandomValues(new Uint8Array(16)));
-  const payload = { version: "scan_comparison_request_v1", nonce, ...pair };
-  if (!exactKeys(payload, [
-    "version", "nonce", "expected_owner_user_id", "expected_project_id", "expected_current_scan_id",
-    "current_previous_scan_id", "previous_snapshot", "previous_proof", "current_snapshot", "current_proof",
-  ])) throw new Error("comparison_request_invalid");
-  const body = JSON.stringify(payload);
-  if (encoder.encode(body).byteLength > REQUEST_LIMIT) throw new Error("comparison_request_too_large");
-  const timestamp = String(Math.floor(now() / 1_000));
-  const derived = await hmac(encoder.encode(signingKey), "fixlist-scan-comparison-request-v1");
-  const signature = hex(await hmac(derived, `${timestamp}\n${body}`));
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), deadlineMs);
+  let stage = "CMP-CONFIG";
+  let controller;
+  let timer;
   try {
+    if (typeof signingKey !== "string" || !signingKey) throw new ComparisonGatewayError("CMP-CONFIG");
+    if (!exactKeys(pair, [
+      "expected_owner_user_id", "expected_project_id", "expected_current_scan_id", "current_previous_scan_id",
+      "previous_snapshot", "previous_proof", "current_snapshot", "current_proof",
+    ])) throw new ComparisonGatewayError("CMP-GATEWAY-INPUT");
+    const target = new URL(gatewayUrl);
+    if (target.protocol !== "https:" || target.username || target.password || target.search || target.hash
+        || !["", "/"].includes(target.pathname)) throw new ComparisonGatewayError("CMP-CONFIG");
+    target.pathname = "/compare";
+    const nonce = hex(crypto.getRandomValues(new Uint8Array(16)));
+    const payload = { version: "scan_comparison_request_v1", nonce, ...pair };
+    if (!exactKeys(payload, [
+      "version", "nonce", "expected_owner_user_id", "expected_project_id", "expected_current_scan_id",
+      "current_previous_scan_id", "previous_snapshot", "previous_proof", "current_snapshot", "current_proof",
+    ])) throw new ComparisonGatewayError("CMP-GATEWAY-INPUT");
+    stage = "CMP-GATEWAY-INPUT";
+    const body = JSON.stringify(payload);
+    if (encoder.encode(body).byteLength > REQUEST_LIMIT) throw new ComparisonGatewayError("CMP-GATEWAY-LIMIT");
+    stage = "CMP-CONFIG";
+    const timestamp = String(Math.floor(now() / 1_000));
+    const derived = await hmac(encoder.encode(signingKey), "fixlist-scan-comparison-request-v1");
+    const signature = hex(await hmac(derived, `${timestamp}\n${body}`));
+    controller = new AbortController();
+    timer = setTimeout(() => controller.abort(), deadlineMs);
+    stage = "CMP-NETWORK";
     const response = await fetchImpl(target.href, {
       method: "POST", redirect: "error", signal: controller.signal,
       headers: { "content-type": "application/json", "x-fixlist-timestamp": timestamp, "x-fixlist-signature": signature },
       body,
     });
-    if (!response.ok) throw new Error("comparison_gateway_unavailable");
+    if (!response.ok) throw new ComparisonGatewayError(gatewayStatusReference(response.status));
+    stage = "CMP-RESPONSE";
     const envelope = await boundedJson(response);
     const result = envelope?.payload;
     if (!exactKeys(envelope, ["payload", "proof"])
@@ -150,6 +185,10 @@ export async function requestScanComparison({
         || !Number.isSafeInteger(result.generated_at) || Math.abs(Math.floor(now() / 1_000) - result.generated_at) > RESPONSE_SKEW_SECONDS
         || !await verifyResponseProof(result, envelope.proof, signingKey)) throw new Error("comparison_response_invalid");
     return safePresentation(result.presentation, pair.expected_current_scan_id, pair.current_previous_scan_id);
+  } catch (error) {
+    if (controller?.signal.aborted) throw new ComparisonGatewayError("CMP-TIMEOUT");
+    if (error instanceof ComparisonGatewayError) throw error;
+    throw new ComparisonGatewayError(stage);
   } finally {
     clearTimeout(timer);
   }

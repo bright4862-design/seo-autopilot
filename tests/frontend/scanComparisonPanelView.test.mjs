@@ -8,7 +8,8 @@ import { transform } from "esbuild";
 const componentUrl = new URL("../../src/components/fixlist/ScanComparisonPanel.jsx", import.meta.url);
 const source = (await readFile(componentUrl, "utf8"))
   .replace('from "react"', `from ${JSON.stringify(import.meta.resolve("react"))}`)
-  .replace('from "../../lib/scanComparisonPanelModel.js"', `from ${JSON.stringify(new URL("../../src/lib/scanComparisonPanelModel.js", import.meta.url).href)}`);
+  .replace('from "../../lib/scanComparisonPanelModel.js"', `from ${JSON.stringify(new URL("../../src/lib/scanComparisonPanelModel.js", import.meta.url).href)}`)
+  .replace('from "../../lib/scanComparisonSupport.js"', `from ${JSON.stringify(new URL("../../src/lib/scanComparisonSupport.js", import.meta.url).href)}`);
 const compiled = await transform(source, { loader: "jsx", jsxFactory: "React.createElement", format: "esm" });
 const moduleSource = `import React from ${JSON.stringify(import.meta.resolve("react"))};\n${compiled.code}`;
 const { default: Panel } = await import(`data:text/javascript;base64,${Buffer.from(moduleSource).toString("base64")}`);
@@ -66,6 +67,15 @@ for (const props of [
 
 test("first scan without comparison has no empty panel", () => {
   assert.equal(render({ presentation: null }), "");
+});
+
+test("unavailable comparison shows only recognized support references without adding result claims", () => {
+  const html = render({ presentation: {}, authorityVerified: false, supportReference: "CMP-TIMEOUT" });
+  assert.match(html, /Support reference: CMP-TIMEOUT/);
+  assert.match(html, /Your current FixList is still available/);
+  assert.doesNotMatch(html, /<dl|Verified fixed/);
+  assert.doesNotMatch(render({ presentation: {}, supportReference: "private details" }), /private details|Support reference/);
+  assert.doesNotMatch(render({ supportReference: "CMP-TIMEOUT" }), /Support reference/);
 });
 
 test("server-provided text is escaped and source evidence remains unchanged", () => {

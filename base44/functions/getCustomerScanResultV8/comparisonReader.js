@@ -1,11 +1,22 @@
+import { comparisonGatewaySupportReference } from "./comparisonGateway.js";
+
+const READER_SUPPORT_REFERENCES = new Set(["CMP-ACCESS", "CMP-CURRENT", "CMP-PREVIOUS", "CMP-SCOPE"]);
+const SUPPORT_REFERENCES = new Set([
+  ...READER_SUPPORT_REFERENCES, "CMP-CONFIG", "CMP-TIMEOUT", "CMP-NETWORK", "CMP-GATEWAY-AUTH", "CMP-GATEWAY-ROUTE",
+  "CMP-GATEWAY-LIMIT", "CMP-GATEWAY-BUSY", "CMP-GATEWAY-ERROR", "CMP-GATEWAY-INPUT", "CMP-RESPONSE",
+]);
+
 export function validComparisonRequest(body) {
   return body && typeof body === "object" && !Array.isArray(body)
     && Object.keys(body).length === 2 && body.action === "compare"
     && typeof body.scan_id === "string" && /^[A-Za-z0-9_-]{1,160}$/.test(body.scan_id);
 }
 
-export function unavailableScanComparison(scanId) {
-  return { success: true, scan_id: scanId, comparison_verified: false, comparison_status: "unavailable" };
+export function unavailableScanComparison(scanId, reference = "CMP-CURRENT") {
+  return {
+    success: true, scan_id: scanId, comparison_verified: false, comparison_status: "unavailable",
+    support_reference: SUPPORT_REFERENCES.has(reference) ? reference : "CMP-CURRENT",
+  };
 }
 
 function exactId(value) {
@@ -33,24 +44,28 @@ function sameScope(previous, current) {
 export async function readCustomerScanComparison({
   run, user, project, access, loadRun, readVerifiedSnapshot, requestComparison,
 }) {
-  const unavailable = unavailableScanComparison(run.id);
   if (!access.ok || run.owner_user_id !== user.id || project.owner_user_id !== user.id
-      || run.project_id !== project.id || run.status !== "complete") return unavailable;
+      || run.project_id !== project.id) return unavailableScanComparison(run.id, "CMP-ACCESS");
+  if (run.status !== "complete") return unavailableScanComparison(run.id, "CMP-CURRENT");
+  let stage = "CMP-CURRENT";
   try {
     const current = await readVerifiedSnapshot(run);
     if (run.previous_scan_id === undefined || run.previous_scan_id === null || run.previous_scan_id === "") {
-      return { ...unavailable, comparison_status: "no_previous_scan" };
+      return { success: true, scan_id: run.id, comparison_verified: false, comparison_status: "no_previous_scan" };
     }
+    stage = "CMP-PREVIOUS";
     const previousId = run.previous_scan_id;
-    if (!exactId(previousId) || previousId === run.id) return unavailable;
+    if (!exactId(previousId) || previousId === run.id) return unavailableScanComparison(run.id, stage);
     const previousRun = await loadRun(previousId);
     if (!previousRun || previousRun.id !== previousId || previousRun.owner_user_id !== user.id
-        || previousRun.project_id !== project.id || previousRun.status !== "complete") return unavailable;
+        || previousRun.project_id !== project.id || previousRun.status !== "complete") return unavailableScanComparison(run.id, stage);
     const previous = await readVerifiedSnapshot(previousRun);
+    stage = "CMP-SCOPE";
     if (!sameScope(previous.snapshot, current.snapshot)
         || !Number.isFinite(Date.parse(previous.snapshot.sealed_at))
         || !Number.isFinite(Date.parse(current.snapshot.sealed_at))
-        || Date.parse(previous.snapshot.sealed_at) >= Date.parse(current.snapshot.sealed_at)) return unavailable;
+        || Date.parse(previous.snapshot.sealed_at) >= Date.parse(current.snapshot.sealed_at)) return unavailableScanComparison(run.id, stage);
+    stage = "CMP-GATEWAY-ERROR";
     const presentation = await requestComparison({
       expected_owner_user_id: user.id,
       expected_project_id: project.id,
@@ -62,9 +77,10 @@ export async function readCustomerScanComparison({
       current_proof: current.proof,
     });
     return { success: true, scan_id: run.id, comparison_verified: true, comparison_status: "ready", comparison: presentation };
-  } catch {
+  } catch (error) {
     // Prior scans may be private, unsupported, corrupt, or temporarily unreadable.
     // None of those distinctions should leak through this optional customer read.
-    return unavailable;
+    return unavailableScanComparison(run.id, READER_SUPPORT_REFERENCES.has(stage)
+      ? stage : comparisonGatewaySupportReference(error));
   }
 }

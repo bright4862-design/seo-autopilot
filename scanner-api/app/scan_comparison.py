@@ -90,6 +90,37 @@ def _by_reference_fingerprint(fixes: list[dict[str, Any]], *, population: str) -
     return by_fingerprint, unclassified
 
 
+def _current_repair_references(fixes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Serialize deterministic current-row reference evidence without adding authority.
+
+    This list lets downstream integrity validation prove current population counts,
+    continuity observations, and candidate fingerprints against the exact envelope
+    that was produced from authenticated rows. It never classifies repair state.
+    """
+    references: list[dict[str, Any]] = []
+    for fix in fixes:
+        if not isinstance(fix, dict):
+            raise ValueError("current_fixes must contain objects")
+        reference = _reference_identity(fix)
+        references.append(
+            {
+                "repair_fingerprint": reference["reference_fingerprint"],
+                "repair_fingerprint_source": reference["reference_source"],
+                "repair_identity_stable": reference["verification_identity_stable"],
+                "finding_id": _optional_finding_id(fix),
+            }
+        )
+    references.sort(
+        key=lambda item: (
+            item["repair_fingerprint"] or "~",
+            item["finding_id"],
+            item["repair_fingerprint_source"],
+            item["repair_identity_stable"],
+        )
+    )
+    return references
+
+
 def _score_sample_context(
     *,
     previous_score: Any,
@@ -143,8 +174,9 @@ def build_scan_comparison_v1(
 
     This helper does not decide whether a repair is fixed independently. Every
     historical repair delegates that decision to ``compare_repair_runs``. New
-    current repairs are identified only as current stable fingerprints that were
-    absent from the immediately previous stable repair population.
+    current repairs are identified only as current reference fingerprints that
+    were absent from the immediately previous reference population, and remain
+    explicitly candidate-only unless the canonical comparator proves came-back.
     """
     previous_scan_id = _require_scan_id(previous_scan_id, "previous_scan_id")
     current_scan_id = _require_scan_id(current_scan_id, "current_scan_id")
@@ -160,6 +192,7 @@ def build_scan_comparison_v1(
 
     previous_by_fingerprint, previous_unclassified = _by_reference_fingerprint(previous_fixes, population="previous_fixes")
     current_by_fingerprint, current_unclassified = _by_reference_fingerprint(current_fixes, population="current_fixes")
+    current_repair_references = _current_repair_references(current_fixes)
     previous_fingerprints = set(previous_by_fingerprint)
 
     repair_comparisons: list[dict[str, Any]] = []
@@ -237,19 +270,22 @@ def build_scan_comparison_v1(
         "current_scan_id": current_scan_id,
         "current_previous_scan_id": current_previous_scan_id,
         "repair_comparisons": repair_comparisons,
+        "current_repair_references": current_repair_references,
         "new_or_came_back_repair_fingerprints": new_or_came_back_fingerprints,
         "new_or_came_back_candidate_only": True,
         "summary": {
             **counts,
             "previous_repairs_total": len(previous_fixes),
-            "current_repairs_total": len(current_fixes),
+            "current_repairs_total": len(current_repair_references),
             "previous_repairs_without_reference_fingerprint": previous_unclassified,
-            "current_repairs_without_reference_fingerprint": current_unclassified,
+            "current_repairs_without_reference_fingerprint": sum(
+                1 for reference in current_repair_references if not reference["repair_fingerprint"]
+            ),
             "previous_repairs_with_stable_verification_identity": sum(
                 1 for fix in previous_fixes if _reference_identity(fix)["verification_identity_stable"]
             ),
             "current_repairs_with_stable_verification_identity": sum(
-                1 for fix in current_fixes if _reference_identity(fix)["verification_identity_stable"]
+                1 for reference in current_repair_references if reference["repair_identity_stable"]
             ),
         },
         "score_sample_context": context,

@@ -57,6 +57,12 @@ def _fingerprint(value: Any, field: str, *, allow_empty: bool = False) -> str:
     return value
 
 
+def _finding_id(value: Any, field: str) -> str:
+    if not isinstance(value, str) or value != value.strip() or len(value) > 512:
+        raise ValueError(f"{field} must be a canonical finding ID string")
+    return value
+
+
 def validate_scan_comparison_v1(comparison: dict[str, Any]) -> dict[str, Any]:
     """Fail closed on contradictions in a serialized ``scan_comparison_v1``.
 
@@ -94,6 +100,7 @@ def validate_scan_comparison_v1(comparison: dict[str, Any]) -> dict[str, Any]:
     expected_previous_stable_identity = 0
     previous_fingerprints: set[str] = set()
     sort_keys: list[tuple[str, str, str]] = []
+    row_continuity: list[tuple[str, bool, str, str]] = []
 
     for index, row in enumerate(rows):
         field = f"repair_comparisons[{index}]"
@@ -182,9 +189,64 @@ def validate_scan_comparison_v1(comparison: dict[str, Any]) -> dict[str, Any]:
         if fingerprint:
             previous_fingerprints.add(fingerprint)
         sort_keys.append((fingerprint or "~", previous_finding_id, summary_state))
+        row_continuity.append((fingerprint, same_reference_observed, current_finding_id, field))
 
     if sort_keys != sorted(sort_keys):
         raise ValueError("repair_comparisons are not in deterministic v1 order")
+
+    current_references = comparison.get("current_repair_references")
+    if not isinstance(current_references, list):
+        raise ValueError("current_repair_references must be a list")
+    expected_current_without_reference = 0
+    expected_current_stable_identity = 0
+    current_fingerprints: set[str] = set()
+    current_finding_ids_by_fingerprint: dict[str, list[str]] = {}
+    current_sort_keys: list[tuple[str, str, str, bool]] = []
+    for index, reference in enumerate(current_references):
+        field = f"current_repair_references[{index}]"
+        if not isinstance(reference, dict):
+            raise ValueError(f"{field} must be an object")
+        fingerprint = _fingerprint(
+            reference.get("repair_fingerprint"),
+            f"{field}.repair_fingerprint",
+            allow_empty=True,
+        )
+        source = reference.get("repair_fingerprint_source")
+        if source not in _REFERENCE_SOURCES:
+            raise ValueError(f"{field}.repair_fingerprint_source is unsupported")
+        stable = _exact_bool(reference.get("repair_identity_stable"), f"{field}.repair_identity_stable")
+        finding_id = _finding_id(reference.get("finding_id"), f"{field}.finding_id")
+        if stable and not fingerprint:
+            raise ValueError(f"{field} cannot mark an empty repair fingerprint stable")
+        if source == "persisted_repair_fingerprint" and not fingerprint:
+            raise ValueError(f"{field} cannot claim a persisted fingerprint without one")
+        if source == "computed_repair_identity" and fingerprint and not stable:
+            raise ValueError(f"{field} cannot expose a provisional computed fingerprint as a reference")
+        if not fingerprint:
+            expected_current_without_reference += 1
+        else:
+            current_fingerprints.add(fingerprint)
+            current_finding_ids_by_fingerprint.setdefault(fingerprint, []).append(finding_id)
+        if stable:
+            expected_current_stable_identity += 1
+        current_sort_keys.append((fingerprint or "~", finding_id, source, stable))
+
+    if current_sort_keys != sorted(current_sort_keys):
+        raise ValueError("current_repair_references are not in deterministic v1 order")
+    for finding_ids in current_finding_ids_by_fingerprint.values():
+        finding_ids.sort()
+
+    for fingerprint, observed, current_finding_id, field in row_continuity:
+        expected_observed = bool(fingerprint and fingerprint in current_fingerprints)
+        if observed != expected_observed:
+            raise ValueError(f"{field}.same_reference_fingerprint_observed contradicts current repair references")
+        expected_current_finding_id = (
+            current_finding_ids_by_fingerprint[fingerprint][0]
+            if expected_observed
+            else ""
+        )
+        if current_finding_id != expected_current_finding_id:
+            raise ValueError(f"{field}.current_finding_id contradicts current repair references")
 
     summary = comparison.get("summary")
     if not isinstance(summary, dict):
@@ -205,14 +267,16 @@ def validate_scan_comparison_v1(comparison: dict[str, Any]) -> dict[str, Any]:
     values = {name: _nonnegative_int(summary.get(name), f"summary.{name}") for name in summary_fields}
     if values["previous_repairs_total"] != len(rows):
         raise ValueError("summary.previous_repairs_total does not match repair comparisons")
+    if values["current_repairs_total"] != len(current_references):
+        raise ValueError("summary.current_repairs_total does not match current repair references")
     if values["previous_repairs_without_reference_fingerprint"] != expected_previous_without_reference:
-        raise ValueError(
-            "summary.previous_repairs_without_reference_fingerprint does not match repair comparisons"
-        )
+        raise ValueError("summary.previous_repairs_without_reference_fingerprint does not match repair comparisons")
+    if values["current_repairs_without_reference_fingerprint"] != expected_current_without_reference:
+        raise ValueError("summary.current_repairs_without_reference_fingerprint does not match current repair references")
     if values["previous_repairs_with_stable_verification_identity"] != expected_previous_stable_identity:
-        raise ValueError(
-            "summary.previous_repairs_with_stable_verification_identity does not match repair comparisons"
-        )
+        raise ValueError("summary.previous_repairs_with_stable_verification_identity does not match repair comparisons")
+    if values["current_repairs_with_stable_verification_identity"] != expected_current_stable_identity:
+        raise ValueError("summary.current_repairs_with_stable_verification_identity does not match current repair references")
     for population in ("previous", "current"):
         total = values[f"{population}_repairs_total"]
         without_reference = values[f"{population}_repairs_without_reference_fingerprint"]
@@ -229,8 +293,9 @@ def validate_scan_comparison_v1(comparison: dict[str, Any]) -> dict[str, Any]:
     ]
     if canonical_candidates != sorted(set(canonical_candidates)):
         raise ValueError("new-or-came-back candidate fingerprints must be unique and deterministic")
-    if any(value in previous_fingerprints for value in canonical_candidates):
-        raise ValueError("new-or-came-back candidate fingerprint already exists in previous repairs")
+    expected_candidates = sorted(current_fingerprints - previous_fingerprints)
+    if canonical_candidates != expected_candidates:
+        raise ValueError("new-or-came-back candidate fingerprints contradict current repair references")
     if comparison.get("new_or_came_back_candidate_only") is not True:
         raise ValueError("new_or_came_back_candidate_only must remain true")
     expected_new_or_came_back = len(canonical_candidates) + expected_counts["came_back"]
@@ -242,14 +307,8 @@ def validate_scan_comparison_v1(comparison: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("score_sample_context must be an object")
     previous_score = _finite_score(context.get("previous_score"), "score_sample_context.previous_score")
     current_score = _finite_score(context.get("current_score"), "score_sample_context.current_score")
-    previous_pages = _nonnegative_int(
-        context.get("previous_pages_checked"),
-        "score_sample_context.previous_pages_checked",
-    )
-    current_pages = _nonnegative_int(
-        context.get("current_pages_checked"),
-        "score_sample_context.current_pages_checked",
-    )
+    previous_pages = _nonnegative_int(context.get("previous_pages_checked"), "score_sample_context.previous_pages_checked")
+    current_pages = _nonnegative_int(context.get("current_pages_checked"), "score_sample_context.current_pages_checked")
     expected_sample_changed = previous_pages != current_pages
     if _exact_bool(context.get("sample_size_changed"), "score_sample_context.sample_size_changed") != expected_sample_changed:
         raise ValueError("score sample-size flag contradicts page counts")

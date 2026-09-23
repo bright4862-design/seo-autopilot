@@ -195,6 +195,32 @@ def test_transport_rejects_internally_inconsistent_comparison_before_authority_b
         )
 
 
+def test_validator_rejects_in_range_previous_stable_identity_summary_tampering():
+    comparison = stable_comparison()
+    assert comparison["summary"]["previous_repairs_with_stable_verification_identity"] == 6
+    comparison["summary"]["previous_repairs_with_stable_verification_identity"] = 5
+    with pytest.raises(
+        ValueError,
+        match="summary.previous_repairs_with_stable_verification_identity",
+    ):
+        validate_scan_comparison_v1(comparison)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "previous_repairs_without_reference_fingerprint",
+        "previous_repairs_with_stable_verification_identity",
+    ],
+)
+def test_production_funbooker_rejects_tampered_previous_identity_coverage_summary(field):
+    _, comparison = production_funbooker_comparison()
+    assert comparison["summary"][field] == 0
+    comparison["summary"][field] = 1
+    with pytest.raises(ValueError, match=f"summary.{field}"):
+        validate_scan_comparison_v1(comparison)
+
+
 def test_production_funbooker_fixture_validates_while_remaining_fail_closed():
     fixture, comparison = production_funbooker_comparison()
     validate_scan_comparison_v1(comparison)

@@ -598,14 +598,6 @@ export default function FixList() {
 
             <CustomerScanComparison scanRecord={scanRecord} requestedScanId={requestedScanId} />
 
-            <GeoReadinessPanel
-              geoReadiness={scanRecord?.geo_readiness}
-              customerAccess={scanRecord?.customer_access}
-              cards={customerRepairCards}
-              siteOrigin={scanRecord?.website_url}
-              completedAt={scanRecord?.completed_at || scanRecord?.created_at}
-            />
-
             {summary ? (
               <p className="mt-8 max-w-[56ch] text-[14px] leading-relaxed text-ink-muted">{summary}</p>
             ) : null}
@@ -625,120 +617,6 @@ export default function FixList() {
                 limitations={handoffLimitations}
                 geoReadiness={scanRecord?.geo_readiness}
               />
-            ) : null}
-
-            <ObservedScanCoverage coverage={observedScanCoverage} />
-
-            {sampleCoverage ? (
-              <details className="mt-5 max-w-[60ch] rounded-xl border border-hairline-soft bg-white/35 px-4 py-3">
-                <summary className="cursor-pointer text-[12.5px] font-medium text-ink-muted underline decoration-hairline underline-offset-4">
-                  How this scan chose what to look at
-                </summary>
-                <div className="mt-3 space-y-2 text-[12.5px] leading-relaxed text-ink-faint">
-                  <p>
-                    Route patterns: <span className="font-medium text-ink-muted">{sampleCoverage.routesSelected} of {sampleCoverage.routesDiscovered}</span> chosen for this scan
-                    {sampleCoverage.localeVariantsCollapsed > 0
-                      ? ` · ${formatCount(sampleCoverage.localeVariantsCollapsed)} translated duplicate${sampleCoverage.localeVariantsCollapsed === 1 ? "" : "s"} treated as one page`
-                      : ""}
-                  </p>
-                  {sampleCoverage.identityDiscovered > 0 ? (
-                    <p>
-                      Business-critical pages: <span className="font-medium text-ink-muted">{sampleCoverage.identitySelected} of {sampleCoverage.identityDiscovered}</span> chosen for this scan.
-                    </p>
-                  ) : null}
-                  {sampleCoverage.marketSummary ? <p>{sampleCoverage.marketSummary}</p> : null}
-                  {sampleCoverage.familySummary ? <p>{sampleCoverage.familySummary}</p> : null}
-                  {sampleCoverage.notChosenSummary ? (
-                    <p className="text-ink-muted">{sampleCoverage.notChosenSummary}</p>
-                  ) : null}
-                  <p>These are the pages this scan set out to check, up to its 150-page limit. The counts above the fix list say how many it reached.</p>
-                </div>
-              </details>
-            ) : null}
-
-            {showPageAccounting ? (
-              <section className="mt-6 max-w-[60ch] rounded-2xl border border-hairline-soft bg-white/45 px-5 py-5" aria-labelledby="pages-found-accounting">
-                <h2 id="pages-found-accounting" className="text-[17px] font-semibold tracking-tight text-ink">
-                  Pages found
-                </h2>
-                <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
-                  FixList found {formatCount(pageAccounting.total)} pages. The counts below add up to that total; pages without a clear folder are kept in the final row.
-                </p>
-                <dl className="mt-4 divide-y divide-hairline-soft">
-                  {pageAccounting.rows.map((row) => (
-                    <div key={row.key} className="flex items-baseline justify-between gap-4 py-2.5 first:pt-1">
-                      <dt className="min-w-0 text-[13px] text-ink-muted">
-                        <span className="font-medium text-ink">{row.label}</span>
-                        {row.path ? <span className="ml-2 break-all text-[12px] text-ink-faint">{displayPathPrefix(row.path)}</span> : null}
-                      </dt>
-                      <dd className="shrink-0 text-[13px] font-medium tabular-nums text-ink">{formatCount(row.count)}</dd>
-                    </div>
-                  ))}
-                  <div className="flex items-baseline justify-between gap-4 py-2.5">
-                    <dt className="text-[13px] font-semibold text-ink">Total pages found</dt>
-                    <dd className="text-[13px] font-semibold tabular-nums text-ink">{formatCount(pageAccounting.total)}</dd>
-                  </div>
-                </dl>
-                {pageAccounting.isPartial ? (
-                  <p className="mt-3 text-[11.5px] leading-relaxed text-ink-faint">
-                    The site only supplied a partial folder breakdown. The remaining pages are included above instead of being hidden from the total.
-                  </p>
-                ) : null}
-              </section>
-            ) : null}
-
-            {focusedSections.length > 0 ? (
-              <section className="mt-6 max-w-[60ch] rounded-2xl border border-hairline-soft bg-white/45 px-5 py-5" aria-labelledby="sections-to-scan-next">
-                <div className="flex items-baseline justify-between gap-4">
-                  <h2 id="sections-to-scan-next" className="text-[17px] font-semibold tracking-tight text-ink">
-                    Sections to scan next
-                  </h2>
-                  <span className="text-[11px] uppercase tracking-[0.08em] text-ink-faint">Optional</span>
-                </div>
-                <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
-                  These suggested folders received less coverage in this FixList. You can give one its own separate 150-page scan; this is a short priority list, not the complete page breakdown above.
-                </p>
-                <div className="mt-4 divide-y divide-hairline-soft">
-                  {focusedSections.map((section) => {
-                    // "sampled" and "represented" were both computed from the
-                    // URLs chosen before the crawl, so a section could read
-                    // "30 sampled · 60% represented" on a scan that checked
-                    // seven of its pages. A percentage is shown only where an
-                    // outcome was actually recorded; a record that only knows
-                    // what it intended says exactly that.
-                    const checkedCoveragePercent = section.checkedCoverage === null
-                      ? null
-                      : Math.round(section.checkedCoverage * 100);
-                    const target = focusedSectionOnboardingPath(scanRecord?.scan_id || scanRecord?.id, section);
-                    return (
-                      <div key={section.requested_path_prefix} className="flex flex-col gap-3 py-4 first:pt-1 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                            <span className="text-[13px] font-medium text-ink">{section.label}</span>
-                            <span className="break-all text-[12px] text-ink-faint">{displayPathPrefix(section.requested_path_prefix)}</span>
-                          </div>
-                          <p className="mt-1 text-[12px] leading-relaxed text-ink-faint">
-                            {section.coverageEvidence === "checked"
-                              ? `${formatCount(section.discovered)} found · ${formatCount(section.checked)} checked here · ${checkedCoveragePercent}% checked`
-                              : `${formatCount(section.discovered)} found · ${formatCount(section.selected)} chosen for this scan`}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => target && navigate(target)}
-                          disabled={!target}
-                          className="shrink-0 self-start rounded-full border border-hairline px-3.5 py-2 text-[12px] font-medium text-ink transition-colors hover:bg-ink/[0.035] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          Scan this section separately
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-                <p className="mt-3 text-[11.5px] leading-relaxed text-ink-faint">
-                  Focused scans stay on this exact website origin and inside the selected folder. Subdomain scanning is not enabled in this release.
-                </p>
-              </section>
             ) : null}
 
             {limitationNote ? (
@@ -818,6 +696,126 @@ export default function FixList() {
             ) : null}
 
             <ExplicitPassedChecks scan={scanRecord} />
+
+            <ObservedScanCoverage coverage={observedScanCoverage} />
+
+            {sampleCoverage ? (
+              <details className="mt-5 max-w-[60ch] rounded-xl border border-hairline-soft bg-white/35 px-4 py-3">
+                <summary className="cursor-pointer text-[12.5px] font-medium text-ink-muted underline decoration-hairline underline-offset-4">
+                  How this scan chose what to look at
+                </summary>
+                <div className="mt-3 space-y-2 text-[12.5px] leading-relaxed text-ink-faint">
+                  <p>
+                    Route patterns: <span className="font-medium text-ink-muted">{sampleCoverage.routesSelected} of {sampleCoverage.routesDiscovered}</span> chosen for this scan
+                    {sampleCoverage.localeVariantsCollapsed > 0
+                      ? ` · ${formatCount(sampleCoverage.localeVariantsCollapsed)} translated duplicate${sampleCoverage.localeVariantsCollapsed === 1 ? "" : "s"} treated as one page`
+                      : ""}
+                  </p>
+                  {sampleCoverage.identityDiscovered > 0 ? (
+                    <p>
+                      Business-critical pages: <span className="font-medium text-ink-muted">{sampleCoverage.identitySelected} of {sampleCoverage.identityDiscovered}</span> chosen for this scan.
+                    </p>
+                  ) : null}
+                  {sampleCoverage.marketSummary ? <p>{sampleCoverage.marketSummary}</p> : null}
+                  {sampleCoverage.familySummary ? <p>{sampleCoverage.familySummary}</p> : null}
+                  {sampleCoverage.notChosenSummary ? (
+                    <p className="text-ink-muted">{sampleCoverage.notChosenSummary}</p>
+                  ) : null}
+                  <p>These are the pages this scan set out to check, up to its 150-page limit. The counts above the fix list say how many it reached.</p>
+                </div>
+              </details>
+            ) : null}
+
+            {showPageAccounting ? (
+              <details className="mt-5 max-w-[60ch] rounded-xl border border-hairline-soft bg-white/35 px-4 py-3" aria-labelledby="pages-found-accounting">
+                <summary id="pages-found-accounting" className="cursor-pointer text-[13px] font-medium text-ink">
+                  Pages found
+                </summary>
+                <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
+                  FixList found {formatCount(pageAccounting.total)} pages. The counts below add up to that total; pages without a clear folder are kept in the final row.
+                </p>
+                <dl className="mt-4 divide-y divide-hairline-soft">
+                  {pageAccounting.rows.map((row) => (
+                    <div key={row.key} className="flex items-baseline justify-between gap-4 py-2.5 first:pt-1">
+                      <dt className="min-w-0 text-[13px] text-ink-muted">
+                        <span className="font-medium text-ink">{row.label}</span>
+                        {row.path ? <span className="ml-2 break-all text-[12px] text-ink-faint">{displayPathPrefix(row.path)}</span> : null}
+                      </dt>
+                      <dd className="shrink-0 text-[13px] font-medium tabular-nums text-ink">{formatCount(row.count)}</dd>
+                    </div>
+                  ))}
+                  <div className="flex items-baseline justify-between gap-4 py-2.5">
+                    <dt className="text-[13px] font-semibold text-ink">Total pages found</dt>
+                    <dd className="text-[13px] font-semibold tabular-nums text-ink">{formatCount(pageAccounting.total)}</dd>
+                  </div>
+                </dl>
+                {pageAccounting.isPartial ? (
+                  <p className="mt-3 text-[11.5px] leading-relaxed text-ink-faint">
+                    The site only supplied a partial folder breakdown. The remaining pages are included above instead of being hidden from the total.
+                  </p>
+                ) : null}
+              </details>
+            ) : null}
+
+            {focusedSections.length > 0 ? (
+              <details className="mt-5 max-w-[60ch] rounded-xl border border-hairline-soft bg-white/35 px-4 py-3" aria-labelledby="sections-to-scan-next">
+                <summary id="sections-to-scan-next" className="cursor-pointer text-[13px] font-medium text-ink">
+                  Sections to scan next
+                </summary>
+                <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
+                  Run a separate scan of up to 150 pages in one of these suggested folders.
+                </p>
+                <div className="mt-4 divide-y divide-hairline-soft">
+                  {focusedSections.map((section) => {
+                    // "sampled" and "represented" were both computed from the
+                    // URLs chosen before the crawl, so a section could read
+                    // "30 sampled · 60% represented" on a scan that checked
+                    // seven of its pages. A percentage is shown only where an
+                    // outcome was actually recorded; a record that only knows
+                    // what it intended says exactly that.
+                    const checkedCoveragePercent = section.checkedCoverage === null
+                      ? null
+                      : Math.round(section.checkedCoverage * 100);
+                    const target = focusedSectionOnboardingPath(scanRecord?.scan_id || scanRecord?.id, section);
+                    return (
+                      <div key={section.requested_path_prefix} className="flex flex-col gap-3 py-4 first:pt-1 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                            <span className="text-[13px] font-medium text-ink">{section.label}</span>
+                            <span className="break-all text-[12px] text-ink-faint">{displayPathPrefix(section.requested_path_prefix)}</span>
+                          </div>
+                          <p className="mt-1 text-[12px] leading-relaxed text-ink-faint">
+                            {section.coverageEvidence === "checked"
+                              ? `${formatCount(section.discovered)} found · ${formatCount(section.checked)} checked here · ${checkedCoveragePercent}% checked`
+                              : `${formatCount(section.discovered)} found · ${formatCount(section.selected)} chosen for this scan`}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => target && navigate(target)}
+                          disabled={!target}
+                          className="shrink-0 self-start rounded-full border border-hairline px-3.5 py-2 text-[12px] font-medium text-ink transition-colors hover:bg-ink/[0.035] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          Scan this section separately
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="mt-3 text-[11.5px] leading-relaxed text-ink-faint">
+                  Each scan stays within the selected folder on this website.
+                </p>
+              </details>
+            ) : null}
+
+            <GeoReadinessPanel
+              geoReadiness={scanRecord?.geo_readiness}
+              customerAccess={scanRecord?.customer_access}
+              cards={customerRepairCards}
+              siteOrigin={scanRecord?.website_url}
+              completedAt={scanRecord?.completed_at || scanRecord?.created_at}
+            />
+
 
             {active.length > 0 && repairPresentation.canonical !== true ? <CmsPicker selectedCms={selectedCms} onChange={setSelectedCms} /> : null}
           </>

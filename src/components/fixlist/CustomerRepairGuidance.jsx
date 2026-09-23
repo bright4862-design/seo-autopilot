@@ -1,7 +1,6 @@
 import React, { useState } from "react";
 import { buildImplementationPlan } from "../../lib/implementationPlan.js";
 import { repairRoleExplanation, REPAIR_EXPLANATION_ROLES, REPAIR_ROLE_VIEW_COPY } from "../../lib/repairRoleExplanations.js";
-import { repairSuggestion } from "../../lib/repairSuggestions.js";
 import { RepairRoleSelector } from "./RepairRoleView.jsx";
 
 const text = (value) => typeof value === "string" ? value.trim() : "";
@@ -45,39 +44,19 @@ function rowTitle(item) {
 
 function ImplementationOrder({ items, trustedScanId }) {
   const model = planFor(items, trustedScanId);
-  if (!model) return null;
+  if (!model || model.plan.appliedDependencies.length === 0) return null;
   const { plan, byId } = model;
   return (
     <details className="mb-6 rounded-xl border border-hairline-soft bg-white/40 px-4 py-3">
-      <summary className="cursor-pointer text-sm font-medium text-ink">Implementation order</summary>
-      <p className="mt-2 max-w-[64ch] text-[13px] leading-relaxed text-ink-muted">
-        {plan.appliedDependencies.length > 0
-          ? "Some repairs need another step first. The reasons are shown below; the FixList still shows each repair’s priority."
-          : "Work through the repairs in their existing priority order. Check each affected page before making a change."}
-      </p>
-      <ol className="mt-3 list-decimal space-y-4 pl-5">
-        {plan.orderedRepairIds.map((id) => {
-          const item = byId.get(id);
-          const instruction = repairSuggestion(item).suggestedFix;
-          const dependencies = plan.appliedDependencies.filter((edge) => edge.afterFixId === id);
-          const group = plan.groups.find((entry) => entry.repairIds.includes(id));
-          const related = group?.repairIds.filter((other) => other !== id) || [];
-          return (
-            <li key={id} className="pl-1 text-[13px] leading-relaxed text-ink-muted">
-              <p className="font-medium text-ink">{rowTitle(item)}</p>
-              {instruction ? <p className="mt-1 whitespace-pre-line">{instruction}</p> : null}
-              {dependencies.map((edge) => (
-                <p key={`${edge.tableEdgeId}:${edge.beforeFixId}`} className="mt-1">
-                  First: {rowTitle(byId.get(edge.beforeFixId))}. {edge.rationale}
-                </p>
-              ))}
-              {related.length > 0 ? (
-                <p className="mt-1 text-ink-faint">Related work: {related.map((other) => rowTitle(byId.get(other))).join("; ")}.</p>
-              ) : null}
-            </li>
-          );
-        })}
-      </ol>
+      <summary className="cursor-pointer text-sm font-medium text-ink">Before you start</summary>
+      <ul className="mt-3 space-y-4">
+        {plan.appliedDependencies.map((edge) => (
+          <li key={`${edge.tableEdgeId}:${edge.beforeFixId}:${edge.afterFixId}`} className="text-[13px] leading-relaxed text-ink-muted">
+            <p>Complete <span className="font-medium text-ink">{rowTitle(byId.get(edge.beforeFixId))}</span> before <span className="font-medium text-ink">{rowTitle(byId.get(edge.afterFixId))}</span>.</p>
+            <p className="mt-1">{edge.rationale}</p>
+          </li>
+        ))}
+      </ul>
     </details>
   );
 }
@@ -115,8 +94,7 @@ export function CustomerRepairGuidanceView({
       {roleCopyCount > 0 && typeof onRoleChange === "function" ? (
         <div className="mb-5">
           <RepairRoleSelector role={selectedRole} onRoleChange={onRoleChange} />
-          <p role="status" className="mt-2 text-[13px] leading-relaxed text-ink-muted"><span className="font-medium text-ink">{roleView.label} view.</span> {roleView.summary}</p>
-          <p className="mt-1 text-[12px] leading-relaxed text-ink-faint">Findings and recommended changes stay the same.{roleCopyCount < list.length ? ` Role guidance is available for ${roleCopyCount} of ${list.length} repairs.` : ""}</p>
+          {roleCopyCount < list.length ? <p className="mt-1 text-[12px] leading-relaxed text-ink-faint">Role guidance is available for {roleCopyCount} of {list.length} repairs.</p> : null}
         </div>
       ) : null}
       {trusted && list.length > 0 ? <ImplementationOrder items={sourceItems} trustedScanId={trustedScanId} /> : null}

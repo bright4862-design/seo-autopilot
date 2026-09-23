@@ -1,5 +1,7 @@
 # Blueprint implementation checkpoint
 
+> **Historical checkpoint — superseded 2026-09-23.** B01–B28 are complete and production accepted. The Stage-1 freeze and Stage-3/4 partial statuses below describe an earlier checkpoint, not current release instructions. See [current roadmap status](ai-layer-current-status.md) and [scanner completion](full-blueprint-progress.md) before continuing work.
+
 Authoritative design: `docs/superpowers/specs/2026-09-19-full-scanner-blueprint-design.md`. Exact B01–B28 semantics in the approved spec control over older paraphrases. Detailed RED/GREEN history remains in dated executable plans under `docs/superpowers/plans/`; this file is the current serialized handoff.
 
 ## Release boundary

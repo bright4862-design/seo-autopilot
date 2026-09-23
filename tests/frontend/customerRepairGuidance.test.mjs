@@ -5,7 +5,6 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { transform } from "esbuild";
 import { repairRoleExplanation } from "../../src/lib/repairRoleExplanations.js";
-import { repairSuggestion } from "../../src/lib/repairSuggestions.js";
 
 async function loadJsx(relativePath, replacements = {}) {
   let source = await readFile(new URL(relativePath, import.meta.url), "utf8");
@@ -150,6 +149,13 @@ test("partial role coverage is stated beside the selector", () => {
   assert.match(html, /Role guidance is available for 1 of 2 repairs/);
 });
 
+test("a fully covered list keeps the role control compact and avoids a duplicate plan", () => {
+  const html = render(props());
+  assert.match(html, /Explain for/);
+  assert.doesNotMatch(html, /view\.|Findings and recommended changes|Before you start|Implementation order|Related work:/);
+  assert.equal((html.match(/class="instruction"/g) || []).length, 1);
+});
+
 for (const [label, change] of [
   ["unverified authority", (input) => { input.authorityVerified = false; }],
   ["truthy authority string", (input) => { input.authorityVerified = "true"; }],
@@ -168,7 +174,7 @@ for (const [label, change] of [
     const input = props();
     change(input);
     const html = render(input);
-    assert.doesNotMatch(html, /<select|Implementation order|What this means/);
+    assert.doesNotMatch(html, /<select|Before you start|What this means/);
     assert.ok(html.includes(card.whyItMatters));
     assert.ok(html.includes(card.whatToChange));
   });
@@ -179,17 +185,17 @@ test("V8 recommendation rows without local scan IDs use the exact authenticated 
   const input = { ...props(), sourceItems: [row] };
   const html = render(input);
   assert.match(html, /<select/);
-  assert.match(html, /Implementation order/);
-  assert.ok(html.includes(row.simple_next_step));
+  assert.doesNotMatch(html, /Before you start/);
+  assert.ok(html.includes(card.whatToChange));
   assert.deepEqual(row, { fix_id: "repair:v8", rule: "missing_h1", title: "Check the main heading", simple_next_step: "Use the existing heading field.", action_priority: "important" });
   for (const sourceScanId of [undefined, "scan:previous", { id: scanId }]) {
     const rejected = render({ ...input, sourceScanId });
-    assert.doesNotMatch(rejected, /<select|Implementation order|What this means/);
+    assert.doesNotMatch(rejected, /<select|Before you start|What this means/);
     assert.ok(rejected.includes(card.whatToChange));
   }
 });
 
-test("raw implementation instructions preserve existing suggestion precedence and fallback", () => {
+test("source instruction variants do not duplicate or replace the canonical card instruction", () => {
   for (const overrides of [
     { recommendation: "Scanner recommendation wins.", simple_next_step: "Lower-precedence step." },
     { recommendation: "", simple_next_step: "Scanner next step wins.", recommended_value: "Lower-precedence value." },
@@ -199,8 +205,10 @@ test("raw implementation instructions preserve existing suggestion precedence an
     { recommendation: "", simple_next_step: "", recommended_value: "", rule: "unmapped_rule" },
   ]) {
     const row = { ...source, ...overrides };
-    const html = render({ ...props(), sourceItems: [row], renderCards: () => null });
-    assert.ok(html.includes(escaped(repairSuggestion(row).suggestedFix)));
+    const html = render({ ...props(), sourceItems: [row] });
+    assert.ok(html.includes(card.whatToChange));
+    assert.equal((html.match(/class="instruction"/g) || []).length, 1);
+    assert.doesNotMatch(html, /Before you start/);
   }
 });
 
@@ -211,22 +219,21 @@ for (const [label, items] of [
 ]) {
   test(`${label} hide the implementation plan without losing cards or role copy`, () => {
     const html = render({ ...props(), sourceItems: items });
-    assert.doesNotMatch(html, /Implementation order/);
+    assert.doesNotMatch(html, /Before you start/);
     assert.match(html, /<select/);
     assert.ok(html.includes(card.whatToChange));
   });
 }
 
-const planTitles = (html) => [...html.matchAll(/<li[^>]*><p class="font-medium text-ink">([^<]*)<\/p>/g)].map((match) => match[1]);
 test("implementation groups never flatten non-adjacent repairs out of canonical sequence", () => {
   const items = [
     { ...source, id: "a", title: "First repair", repair_surface: "document_head", remediation_family: "metadata" },
     { ...source, id: "b", title: "Second repair", repair_surface: "content", remediation_family: "headings" },
     { ...source, id: "c", title: "Third repair", repair_surface: "document_head", remediation_family: "metadata" },
   ];
-  const html = render({ ...props(), sourceItems: items, renderCards: () => null });
-  assert.deepEqual(planTitles(html), ["First repair", "Second repair", "Third repair"]);
-  assert.match(html, /Related work: Third repair/);
+  const html = render({ ...props(), sourceItems: items, cards: items.map((item) => ({ ...card, title: item.title })) });
+  assert.deepEqual([...html.matchAll(/<h4>([^<]*)<\/h4>/g)].map((match) => match[1]), ["First repair", "Second repair", "Third repair"]);
+  assert.doesNotMatch(html, /Before you start|Related work:/);
 });
 
 test("verified explicit dependency changes execution sequence with a reason while card order stays intact", () => {
@@ -236,17 +243,21 @@ test("verified explicit dependency changes execution sequence with a reason whil
     { ...source, id: "redirect", title: "Stabilize redirect", rule: "redirect_chain", action_priority: "important", root_cause_evidence: root },
   ];
   const original = structuredClone(items);
-  const input = { ...props(), sourceItems: items };
+  const input = { ...props(), sourceItems: items, cards: items.map((item) => ({ ...card, title: item.title })) };
   const html = render(input);
-  assert.deepEqual(planTitles(html), ["Stabilize redirect", "Update sitemap"]);
-  assert.match(html, /First: Stabilize redirect/);
+  assert.match(html, /Before you start/);
+  assert.doesNotMatch(html, /<details[^>]*\sopen(?:[\s=>])/);
+  assert.match(html, /Complete <span[^>]*>Stabilize redirect<\/span> before <span[^>]*>Update sitemap<\/span>/);
+  assert.match(html, /Stabilize the final redirect destination before publishing that destination in the sitemap/);
+  assert.deepEqual([...html.matchAll(/<h4>([^<]*)<\/h4>/g)].map((match) => match[1]), ["Update sitemap", "Stabilize redirect"]);
+  assert.equal((html.match(/class="instruction"/g) || []).length, 2);
   assert.ok(html.includes(card.whatToChange));
   assert.deepEqual(items, original);
 });
 
 test("the default stateful wrapper starts with the owner explanation and escapes source instructions", () => {
   const input = props();
-  input.sourceItems[0].recommendation = "<script>unsafe()</script>";
+  input.cards[0].whatToChange = "<script>unsafe()</script>";
   const html = render(input, CustomerRepairGuidance);
   assert.ok(html.includes(escaped(repairRoleExplanation(card, "owner").explanation)));
   assert.match(html, /&lt;script&gt;unsafe\(\)&lt;\/script&gt;/);

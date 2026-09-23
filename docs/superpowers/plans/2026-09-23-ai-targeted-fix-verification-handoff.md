@@ -85,15 +85,15 @@ Only the integrator should wire execution:
 6. Call `evaluate_targeted_fix_verification()` with exact current scan origin/contract, complete plan-bound observations, current rule output, and the receipt.
 7. Persistence of PASS/PARTIAL/FAIL/COULD_NOT_VERIFY, customer projection, regression reopening writes, entitlement/rate policy, and any public endpoint remain serialized integrator-owned changes.
 
-No endpoint/service adapter is added in this slice. The core contract is green in the hermetic focused harness, but repository-native integration CI should run after this branch is reviewed against the real dependencies before any adapter is introduced.
+No endpoint/service adapter is added in this slice. The core contract is green in the hermetic focused harness and has also passed the repository-native CI suite through draft PR #340; execution wiring still remains serialized-integrator work.
 
 ## Verification performed in this lane run
 
 - `python -m py_compile app/targeted_fix_verification.py`: passed in the local hermetic workspace.
 - Focused H1-4 contract/abuse harness: **38 passed**.
 - The focused harness exercises the branch module against local semantic stubs matching the current `repair_identity`, published evidence identity, and shared scheduler contracts. It is not reported as repository-native CI.
-- Repository-native CI is not claimed by this lane run because the execution environment has no checked-out repository/dependency environment. The repository workflow also triggers pull-request CI only for PRs targeting `main`; this lane does not retarget or merge itself merely to obtain a green badge.
+- Repository-native CI was exercised through draft PR #340 against the lane branch. Run 2825 completed both `Scanner regression fixtures` and `Lint, typecheck, contract tests, and build` successfully, including the real Python scanner-api suite and production scanner image build. The subsequent documentation-only checkpoint is expected to receive the same PR gate and must be checked by exact head before integration.
 
 ## Next step
 
-Run the same focused test file against the real repository dependency set, then let the serialized integrator wire a non-customer shadow adapter through the existing shared scheduler and existing authority reader. Any production/customer endpoint, persistence, V8 projection, or regression-reopen write remains out of lane.
+Let the serialized integrator review/cherry-pick the pure contract and wire a non-customer shadow adapter through the existing shared scheduler and existing authority reader. Any production/customer endpoint, persistence, V8 projection, entitlement/rate policy, or regression-reopen write remains out of lane.

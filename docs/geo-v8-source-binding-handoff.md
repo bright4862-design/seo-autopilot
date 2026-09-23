@@ -17,7 +17,9 @@ This adapter closes that gap by regenerating every optional sidecar from the exa
 `validate_geo_v8_transport_sources(...)` first executes the exact page-set and readiness-gate validator. It then:
 
 - bounds retained robots source pages to Standard 150 and requires page objects;
-- re-runs `extract_named_robots_evidence` for every supplied retained robots source page, sorts by opaque page identity, and requires exact equality with `candidate.named_robots`;
+- re-runs `extract_named_robots_evidence` for every supplied retained robots source page;
+- requires each normalized retained robots source to have a unique opaque page identity, rejecting both identical and conflicting duplicates rather than silently collapsing them;
+- treats retained robots source ordering as non-authoritative, sorting by opaque page identity before requiring exact equality with `candidate.named_robots`;
 - re-runs `extract_llms_txt_evidence` for the supplied retained `llms.txt` observation and requires exact equality with `candidate.llms_txt`;
 - requires omitted sidecars to have omitted source observations as well;
 - rejects optional source observations for an access-limited candidate; and
@@ -32,7 +34,7 @@ The serialized integrator should call `serialize_geo_v8_transport_candidate_for_
 1. the exact candidate built from accepted retained GEO evidence;
 2. the exact retained page-ID set;
 3. the actual `parent_authoritative`, `entry_verified`, and `access_limited` gate facts;
-4. the exact retained robots page objects used to derive any named-crawler sidecars; and
+4. one and only one retained robots source object for each named-crawler sidecar page identity, in any input order; and
 5. the exact retained `llms.txt` observation used to derive the optional structural sidecar.
 
 The returned bytes are still **unsealed** and **non-authoritative**. A separately versioned authenticated V8 snapshot must include those exact bytes and then pass persistence/reload verification before GEO authority can become true anywhere downstream.
@@ -42,6 +44,9 @@ The returned bytes are still **unsealed** and **non-authoritative**. A separatel
 The Lane-C contract locks:
 
 - exact retained robots + `llms.txt` observations reproduce the candidate and preserve canonical candidate bytes;
+- retained robots source ordering is non-authoritative and reversed input produces the same canonical candidate bytes;
+- identical duplicate retained robots identities fail closed;
+- conflicting duplicate retained robots identities fail closed before sidecar comparison;
 - recomputed-digest named-crawler directive tampering fails source binding;
 - recomputed-digest `llms.txt` structural-count tampering fails source binding;
 - missing or extra retained robots sources fail;

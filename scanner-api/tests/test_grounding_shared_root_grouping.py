@@ -32,6 +32,13 @@ def sealed_l2() -> dict:
         "authority_proof": "shared-root-grouping-proof",
         "website_url": "https://example.com",
         "pages": [{"url": REAL_URL, "status_code": 200}],
+        "stage3_handoff_v2_source": {
+            "handoff_version": "fixlist_handoff_v2",
+            "scan": {
+                "scan_id": "scan-shared-root",
+                "scan_run_id": "scan-shared-root",
+            },
+        },
         "fixes": [
             {"fix_id": "fix-1", "root_cause_evidence": root_evidence()},
             {"fix_id": "fix-2", "root_cause_evidence": root_evidence()},

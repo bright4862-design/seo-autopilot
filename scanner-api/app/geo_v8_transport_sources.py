@@ -43,6 +43,23 @@ def _robots_source_pages(
     return normalized
 
 
+def _expected_named_robots(
+    pages: tuple[dict, ...],
+) -> list[dict]:
+    """Normalize retained pages while requiring one exact source identity each.
+
+    Source ordering is intentionally non-authoritative, but duplicate identities
+    are not. A duplicated retained observation must never be silently collapsed
+    by sorting or by equality with a single transported sidecar.
+    """
+    expected = [extract_named_robots_evidence(page) for page in pages]
+    page_ids = [item["page_id"] for item in expected]
+    if len(page_ids) != len(set(page_ids)):
+        raise ValueError("Duplicate retained robots source identity")
+    expected.sort(key=lambda item: item["page_id"])
+    return expected
+
+
 def validate_geo_v8_transport_sources(
     candidate: dict,
     page_ids: list[str] | tuple[str, ...],
@@ -76,10 +93,7 @@ def validate_geo_v8_transport_sources(
             )
         return True
 
-    expected_robots = [
-        extract_named_robots_evidence(page) for page in retained_robots
-    ]
-    expected_robots.sort(key=lambda item: item["page_id"])
+    expected_robots = _expected_named_robots(retained_robots)
     if _canonical(expected_robots) != _canonical(candidate["named_robots"]):
         raise ValueError(
             "Named-crawler GEO sidecars do not match retained source observations"

@@ -622,6 +622,30 @@ def test_current_fix_identity_conflict_fails_before_rule_truth_can_be_used():
     assert receipt["reason"] == "current_fix_identity_conflict"
 
 
+def test_provisional_current_same_persisted_fingerprint_cannot_use_rule_truth():
+    sealed, pre, prepared, post, outcomes = context(repair(["/a"]))
+    current_fixes = [
+        {
+            "rule": "missing_h1",
+            "affected_pages": ["/a"],
+            "repair_fingerprint": prepared["plan"]["repair_fingerprint"],
+        }
+    ]
+    results = rule_results(prepared, outcomes, current_fixes)
+    receipt = bound_receipt(
+        prepared,
+        sealed,
+        pre,
+        post,
+        outcomes,
+        current_fixes,
+        results,
+    )
+
+    assert receipt["state"] == "could_not_verify"
+    assert receipt["reason"] == "current_fix_identity_conflict"
+
+
 def test_matching_current_fix_cannot_expand_beyond_sealed_scope():
     sealed, pre, prepared, post, outcomes = context()
     current_fixes = [repair(["/a", "/b", "/c"])]

@@ -66,4 +66,13 @@ The new behavioral regressions cover canonical PASS/PARTIAL/FAIL preservation, r
 
 Lane E still depends on Rescan/Lane B and the serialized authority path for comparator-ready stable technical repair identity. Current persisted V8 fingerprints may be durable references while their explicit `repair_surface` and `remediation_family` remain provisional; those rows must stay `COULD_NOT_VERIFY` until an already-sealed stable source exists. Never synthesize stable identity from customer copy, categories, finding IDs, or the provisional fingerprint.
 
+Current `main` at `3609acc1be5beda86b77e95115342798f043841f`
+contains the source-type hardening reviewed in PR #351. Lane E now also pins
+the release-blocking mixed transition: a stable historical `missing_h1` repair
+plus a current repair carrying the same persisted fingerprint but no stable
+technical identity stops at `COULD_NOT_VERIFY / current_fix_identity_conflict`,
+both at the core evaluator and before execution-bound rule truth can be
+consumed. Historical provisional rows remain unchanged; this regression does
+not add producer identity or authorize runtime execution.
+
 The customer endpoint, durable authority transition, persistence/customer projection, and protected runtime execution remain serialized-integrator ownership.

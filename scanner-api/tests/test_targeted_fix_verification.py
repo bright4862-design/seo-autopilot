@@ -348,6 +348,23 @@ def test_matching_current_fix_identity_conflict_fails_closed():
     assert result["reason"] == "current_fix_identity_conflict"
 
 
+def test_stable_previous_provisional_current_same_fingerprint_cannot_be_fixed():
+    sealed = repair(["/a"])
+    plan = ready_plan(sealed)
+    current = {
+        "rule": "missing_h1",
+        "affected_pages": ["/a"],
+        "repair_fingerprint": plan["repair_fingerprint"],
+    }
+
+    assert build_repair_identity(sealed)["stable"] is True
+    assert build_repair_identity(current)["stable"] is False
+
+    result = evaluate(plan, sealed, current_fixes=[current])
+    assert result["state"] == "COULD_NOT_VERIFY"
+    assert result["reason"] == "current_fix_identity_conflict"
+
+
 def test_unrelated_provisional_or_conflicting_persistence_row_does_not_poison_target():
     sealed = repair(["/a"])
     plan = ready_plan(sealed)

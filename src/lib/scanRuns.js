@@ -670,6 +670,41 @@ export async function listAccountScanRuns(limit = 20) {
   }
 }
 
+// Comparison is a separate read: failure must not replace a verified FixList.
+// Only the current ID crosses this boundary; the server selects the prior run.
+export async function getScanComparison(scanRunId) {
+  const scanId = typeof scanRunId === "string" ? scanRunId.trim() : "";
+  const unavailable = () => ({
+    scan_id: scanId,
+    comparison_status: "unavailable",
+    comparison_verified: false,
+    comparison: null,
+  });
+  if (!scanId || scanId.length > 256) return unavailable();
+  try {
+    await currentOwner();
+    const response = await base44.functions.invoke("getCustomerScanResultV8", {
+      action: "compare",
+      scan_id: scanId,
+    });
+    const result = response?.data && typeof response.data === "object" ? response.data : response;
+    if (result?.success !== true || result.scan_id !== scanId) return unavailable();
+    if (result.comparison_status === "no_previous_scan" && result.comparison_verified === false) {
+      return { ...unavailable(), comparison_status: "no_previous_scan" };
+    }
+    if (result.comparison_verified !== true || result.comparison?.current_scan_id !== scanId) return unavailable();
+    return {
+      scan_id: scanId,
+      comparison_status: "ready",
+      comparison_verified: true,
+      comparison: result.comparison,
+    };
+  } catch (error) {
+    if (classifyCustomerRecoveryError(error).kind === "unauthorized") clearCustomerAuthBoundary({ status: 401 });
+    return unavailable();
+  }
+}
+
 // Reopen a previous scan: the run plus its saved FixList and FixItems.
 export async function getScanRunWithFixList(scanRunId) {
   const requestedScanId = String(scanRunId || "").trim();

@@ -1,12 +1,26 @@
 import base64
+from copy import deepcopy
+import hashlib
+import hmac
 import importlib.util
+import io
 import json
 import os
+import re
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 import time
 import unittest
 from unittest.mock import Mock, patch
+
+# Local tests use canonical repo sources. The production Docker context places
+# the same exact committed modules in /app/app without importing the worker.
+SCANNER_ROOT = Path(__file__).resolve().parents[1] / "scanner-api"
+if SCANNER_ROOT.is_dir():
+    sys.path.insert(0, str(SCANNER_ROOT))
 
 os.environ.setdefault(
     "SCAN_TASKS_QUEUE_PATH",
@@ -369,6 +383,209 @@ class RobotsDiagnosticsTests(unittest.TestCase):
         ).get_json()
         self.assertEqual(payload["revision"], main.GATEWAY_RUNTIME_REVISION)
         self.assertNotEqual(payload["revision"], "attacker-supplied")
+
+
+class ComparisonEndpointTests(unittest.TestCase):
+    NOW = 1_790_000_000
+
+    def setUp(self):
+        self.clock = patch.object(main.time, "time", return_value=self.NOW)
+        self.clock.start()
+        self.addCleanup(self.clock.stop)
+        self.client = main.app.test_client()
+
+    def document(self):
+        from app.authority_seal import create_authority_seal
+        from app.repair_identity import REPAIR_IDENTITY_VERSION, build_repair_identity
+
+        def snapshot(scan_id, day, score, pages):
+            fix = {
+                "fix_id": f"finding-{scan_id}", "rule": "missing_h1", "category": "heading",
+                "page_scope": "page", "page_url": "https://example.com/page",
+                "affected_pages": ["https://example.com/page"], "repair_surface": "page:/page",
+                "remediation_family": "add_semantic_h1", "rule_definition_version": "heading-v1",
+                "comparison_profile_version": "standard150-v1", "verification_state": "confirmed",
+                "raw_finding": {"published_evidence": {
+                    "evidence_url_identity_version": "evidence_url_identity_v2_published_route"}},
+            }
+            identity = build_repair_identity(fix)
+            fix.update(repair_identity_version=REPAIR_IDENTITY_VERSION,
+                       repair_identity_state=identity["state"], repair_identity_stable=identity["stable"],
+                       repair_fingerprint=identity["fingerprint"])
+            date = f"2026-09-{day}T10:00:00Z"
+            return {
+                "version": "standard_review_snapshot_hmac_identity_v1", "sealed_at": date,
+                "owner_user_id": "owner", "scan_id": scan_id, "project_id": "project",
+                "normalized_domain": "example.com", "release_fingerprint": "test-release",
+                "scan": {"status": "complete", "release_gate_eligible": True,
+                         "score_is_provisional": False, "evidence_quality_blocking": False,
+                         "website_url": "https://example.com/", "normalized_domain": "example.com",
+                         "requested_origin": "https://example.com", "scope_type": "",
+                         "requested_path_prefix": "", "completed_at": date,
+                         "health_score": score, "pages_crawled": pages},
+                "fix_list": {"is_authoritative": True, "score_is_provisional": False,
+                             "total_fixes": 1, "health_score": score},
+                "recommendations": [fix],
+            }
+        result = {
+            "version": main.COMPARISON_REQUEST_VERSION, "nonce": "ab" * 16,
+            "expected_owner_user_id": "owner", "expected_project_id": "project",
+            "expected_current_scan_id": "current", "current_previous_scan_id": "previous",
+            "previous_snapshot": snapshot("previous", "22", 75, 126),
+            "current_snapshot": snapshot("current", "23", 72, 139),
+        }
+        for side in ("previous", "current"):
+            result[f"{side}_proof"] = create_authority_seal(result[f"{side}_snapshot"], main.SIGNING_ROOT)
+        return result
+
+    @staticmethod
+    def signature(domain, message):
+        key = hmac.new(main.SIGNING_ROOT.encode(), domain, hashlib.sha256).digest()
+        return hmac.new(key, message, hashlib.sha256).hexdigest()
+
+    def post(self, document=None, *, raw=None, timestamp=None, domain=None, mutate=None):
+        if raw is None:
+            raw = json.dumps(self.document() if document is None else document, ensure_ascii=False).encode()
+        timestamp = str(self.NOW) if timestamp is None else timestamp
+        signature = self.signature(domain or main.COMPARISON_REQUEST_DOMAIN,
+                                   timestamp.encode() + b"\n" + raw)
+        if mutate is not None:
+            raw = mutate(raw)
+        return self.client.post("/compare", data=raw, content_type="application/json", headers={
+            "x-fixlist-timestamp": timestamp, "x-fixlist-signature": signature,
+        })
+
+    def test_real_comparator_returns_only_signed_presentation_bound_to_exact_pair(self):
+        original = self.document()
+        before = deepcopy(original)
+        with patch.object(main.google.auth, "default") as adc, patch.object(main.requests, "post") as network:
+            response = self.post(original)
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(original, before)
+        adc.assert_not_called()
+        network.assert_not_called()
+        envelope = response.get_json()
+        self.assertEqual(set(envelope), {"payload", "proof"})
+        payload = envelope["payload"]
+        self.assertEqual(set(payload), {"version", "nonce", "current_scan_id", "previous_scan_id",
+                                       "presentation", "source_sha", "generated_at"})
+        self.assertEqual(payload["nonce"], original["nonce"])
+        self.assertEqual(payload["current_scan_id"], "current")
+        self.assertEqual(payload["previous_scan_id"], "previous")
+        self.assertEqual(payload["generated_at"], self.NOW)
+        self.assertEqual(payload["source_sha"], main.GATEWAY_SOURCE_SHA)
+        self.assertEqual(payload["presentation"]["score_line"], "Health score changed from 75 to 72.")
+        self.assertFalse(payload["presentation"]["score_direction_claim_allowed"])
+        self.assertIn("different numbers of pages", payload["presentation"]["score_caution"])
+        expected = self.signature(main.COMPARISON_RESPONSE_DOMAIN, main.stable_serialize(payload).encode())
+        self.assertTrue(hmac.compare_digest(envelope["proof"], expected))
+        altered = deepcopy(payload)
+        altered["current_scan_id"] = "other"
+        self.assertNotEqual(envelope["proof"], self.signature(
+            main.COMPARISON_RESPONSE_DOMAIN, main.stable_serialize(altered).encode()))
+        self.assertNotIn("previous_proof", json.dumps(envelope))
+        self.assertNotIn("recommendations", json.dumps(envelope))
+
+    def test_outer_body_tampering_is_rejected_before_comparison(self):
+        response = self.post(mutate=lambda raw: raw.replace(b'"owner"', b'"other"', 1))
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.get_json()["error"], "invalid_signature")
+
+    def test_signature_domains_are_isolated_from_dispatch_and_response(self):
+        for domain in (b"fixlist-dispatch-gateway-v1", main.COMPARISON_RESPONSE_DOMAIN):
+            with self.subTest(domain=domain):
+                self.assertEqual(self.post(domain=domain).status_code, 401)
+        raw = json.dumps({"queue_path": main.QUEUE_PATH, "task": task()}).encode()
+        timestamp = str(self.NOW)
+        signature = self.signature(main.COMPARISON_REQUEST_DOMAIN, timestamp.encode() + b"\n" + raw)
+        response = self.client.post("/dispatch", data=raw, headers={
+            "x-fixlist-timestamp": timestamp, "x-fixlist-signature": signature,
+        })
+        self.assertEqual(response.status_code, 401)
+
+    def test_stale_or_future_replays_fail_freshness(self):
+        for skew in (-301, 301):
+            with self.subTest(skew=skew):
+                response = self.post(timestamp=str(self.NOW + skew))
+                self.assertEqual(response.status_code, 401)
+                self.assertEqual(response.get_json()["error"], "stale_request")
+
+    def test_timestamp_and_nonce_have_canonical_bounded_shapes(self):
+        for timestamp in ("", "0", "-1", " 1790000000", "1790000000.0", "0" + str(self.NOW), "1" * 500):
+            with self.subTest(timestamp=timestamp):
+                self.assertEqual(self.post(timestamp=timestamp).status_code, 401)
+        for nonce in (None, 2, "", "a" * 31, "a" * 33, "AB" * 16, "zz" * 16):
+            with self.subTest(nonce=nonce):
+                document = self.document()
+                document["nonce"] = nonce
+                self.assertEqual(self.post(document).status_code, 422)
+
+    def test_fresh_duplicate_is_read_only_and_each_response_keeps_its_nonce(self):
+        document = self.document()
+        self.assertEqual(self.post(document).get_json(), self.post(document).get_json())
+        document["nonce"] = "cd" * 16
+        self.assertEqual(self.post(document).get_json()["payload"]["nonce"], "cd" * 16)
+
+    def test_signed_outer_envelope_does_not_bypass_snapshot_seals_or_owner_lineage(self):
+        mutations = [
+            lambda doc: doc["current_snapshot"]["scan"].update(health_score=99),
+            lambda doc: doc.update(previous_proof="0" * 64),
+            lambda doc: doc.update(expected_owner_user_id="other-owner"),
+            lambda doc: doc.update(expected_project_id="other-project"),
+            lambda doc: doc.update(expected_current_scan_id="other-current"),
+            lambda doc: doc.update(current_previous_scan_id="other-previous"),
+            lambda doc: doc.update(signing_key="attacker-key"),
+            lambda doc: doc.update(version="unsupported"),
+        ]
+        for index, mutation in enumerate(mutations):
+            with self.subTest(index=index):
+                document = self.document()
+                mutation(document)
+                response = self.post(document)
+                self.assertEqual(response.status_code, 422)
+                self.assertEqual(response.get_json()["error"], "comparison_unavailable")
+                self.assertNotIn("snapshot", json.dumps(response.get_json()))
+
+    def test_malformed_deep_duplicate_and_nonfinite_json_fail_closed(self):
+        for raw in (b"{", b"[]", b'"text"', b'{"x":1,"x":2}', b'{"x":NaN}',
+                    b"[" * 2000 + b"0" + b"]" * 2000, b"\xff"):
+            with self.subTest(raw=raw[:30]):
+                self.assertEqual(self.post(raw=raw).status_code, 422)
+
+    def test_compare_and_dispatch_enforce_distinct_limits_including_chunked(self):
+        for route, limit in (("/compare", main.MAX_COMPARISON_BODY_BYTES),
+                             ("/dispatch", main.MAX_DISPATCH_BODY_BYTES)):
+            with self.subTest(route=route):
+                data = b"x" * (limit + 1)
+                self.assertEqual(self.client.post(route, data=data).status_code, 413)
+                response = self.client.post(route, environ_overrides={
+                    "wsgi.input": io.BytesIO(data), "wsgi.input_terminated": True,
+                    "CONTENT_LENGTH": "",
+                })
+                self.assertEqual(response.status_code, 413)
+                self.assertEqual(response.get_json()["error"], "request_too_large")
+        self.assertEqual(self.post(raw=b" " * (main.MAX_DISPATCH_BODY_BYTES + 1)).status_code, 422)
+
+
+class ComparisonPackageTests(unittest.TestCase):
+    def test_deployment_module_set_imports_without_worker_or_third_party_dependencies(self):
+        repo = Path(__file__).resolve().parents[1]
+        deploy = (repo / "scripts/deploy_dispatch_gateway.sh").read_text()
+        modules = re.search(r"COMPARISON_MODULES=\((.*?)\)", deploy, re.S).group(1).split()
+        with tempfile.TemporaryDirectory() as folder:
+            package = Path(folder) / "app"
+            package.mkdir()
+            for module in modules:
+                shutil.copyfile(repo / "scanner-api/app" / module, package / module)
+            completed = subprocess.run([
+                sys.executable, "-S", "-c",
+                "import sys; from app.scan_comparison_authority import build_authenticated_scan_comparison_v1; "
+                "from app.authority_seal import stable_serialize; "
+                "assert 'app.scan_job' not in sys.modules; assert 'httpx' not in sys.modules; "
+                "assert stable_serialize({'b': 1.0, 'a': [None, True]}) == "
+                "'{\\\"a\\\":[null,true],\\\"b\\\":1}'",
+            ], cwd=folder, capture_output=True, text=True, check=False)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
 
 
 if __name__ == "__main__":

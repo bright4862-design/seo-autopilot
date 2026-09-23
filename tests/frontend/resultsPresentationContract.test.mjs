@@ -149,9 +149,10 @@ test("customer result page hides internal debug controls and leads with prioriti
 });
 
 
-test("canonical FixLists render merged implementation-plan cards rather than raw persisted rows", () => {
+test("canonical FixLists render planned cards through the customer guidance wrapper", () => {
   assert.match(fixListSource, /buildRepairCards/);
-  assert.match(fixListSource, /repairPresentation\.canonical === true \? \(\s*<CustomerRepairList/s);
+  assert.match(fixListSource, /repairPresentation\.canonical === true \? \(\s*<CustomerCanonicalRepairs[\s\S]*?customerRepairCards=\{customerRepairCards\}/);
+  assert.match(fixListSource, /<CustomerRepairList cards=\{cards\} explanationForCard=\{explanationForCard\}/);
   assert.match(fixListSource, /Why it matters/);
   assert.match(fixListSource, />Where</);
   assert.match(fixListSource, /What to change/);

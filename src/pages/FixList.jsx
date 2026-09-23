@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { Check, Copy, Download, ExternalLink, FileText } from "lucide-react";
 
 import { isRateLimitFinding, shouldUseLegacyRateLimitPresentation } from "@/lib/reviewContract";
-import { getScanRunWithFixList, listAccountScanRuns } from "@/lib/scanRuns";
+import { getScanRunWithFixList, getScanComparison, listAccountScanRuns } from "@/lib/scanRuns";
 import { customerRecoveryFailure } from "@/lib/scanRuns";
 import { ACTIVE_SCAN_RUN_STATUSES } from "@/lib/scanRunIdentity";
 import { UNLOCK_PRICE_LABEL } from "@/lib/access";
@@ -12,6 +12,8 @@ import { CUSTOMER_BOUNDARY_EVENT } from "@/lib/customerBrowserCache";
 import ScoreRing from "@/components/fixlist/ScoreRing";
 import RecentScanRow from "@/components/fixlist/RecentScanRow";
 import RepairWorkSurface from "@/components/fixlist/RepairWorkSurface";
+import CustomerRepairGuidance from "@/components/fixlist/CustomerRepairGuidance";
+import ScanComparisonPanel from "@/components/fixlist/ScanComparisonPanel";
 import ExplicitPassedChecks from "@/components/fixlist/ExplicitPassedChecks";
 import SuggestedFix from "@/components/fixlist/SuggestedFix";
 import GeoReadinessPanel from "@/components/fixlist/GeoReadinessPanel";
@@ -370,11 +372,7 @@ export default function FixList() {
     };
   }, [requestedScanId, historyReloadToken]);
 
-  const recommendations = useMemo(() => prepareCustomerFixes(
-    mergeMetaDescriptionRecommendations(
-      getRecommendations(scanRecord).map((item) => normalizeRecommendation(item, scanRecord)),
-    ).map(applyCustomerVocabulary),
-  ), [scanRecord]);
+  const recommendations = useMemo(() => prepareCustomerPageRecommendations(scanRecord), [scanRecord]);
   const pages = useMemo(() => getPages(scanRecord), [scanRecord]);
   const healthScore = getHealthScore(scanRecord);
   const scoreUnavailable = isHealthScoreUnavailable(scanRecord);
@@ -425,13 +423,11 @@ export default function FixList() {
   });
   const repairPresentation = repairWorkSurface.presentation;
   const rawCustomerRepairCards = useMemo(
-    // The hints are applied to the finished set, not per card: whether a title
-    // needs disambiguating is a fact about the whole FixList.
-    () => repairPresentation.canonical === true ? withRepeatedTitleScopeHints(buildRepairCards(active)) : [],
+    () => repairPresentation.canonical === true ? buildRepairCards(active) : [],
     [active, repairPresentation.canonical],
   );
   const customerRepairPlan = useMemo(
-    () => buildCustomerRepairPlan(rawCustomerRepairCards, { fallbackNextBestStep: storedNextBestStep }),
+    () => buildCustomerPageRepairPlan(rawCustomerRepairCards, storedNextBestStep),
     [rawCustomerRepairCards, storedNextBestStep],
   );
   const customerRepairCards = customerRepairPlan.cards;
@@ -600,6 +596,8 @@ export default function FixList() {
 
             <ScoreExplanation explanation={healthScoreExplanation(scanRecord)} />
 
+            <CustomerScanComparison scanRecord={scanRecord} requestedScanId={requestedScanId} />
+
             <GeoReadinessPanel
               geoReadiness={scanRecord?.geo_readiness}
               customerAccess={scanRecord?.customer_access}
@@ -755,7 +753,11 @@ export default function FixList() {
                 </p>
               </div>
             ) : repairPresentation.canonical === true ? (
-              <CustomerRepairList cards={customerRepairCards} websiteUrl={scanRecord?.website_url} />
+              <CustomerCanonicalRepairs
+                scanRecord={scanRecord}
+                requestedScanId={requestedScanId}
+                customerRepairCards={customerRepairCards}
+              />
             ) : (
               <RepairWorkSurface
                 {...repairWorkSurface}
@@ -1039,7 +1041,112 @@ function ObservedScanCoverage({ coverage = {} }) {
   );
 }
 
-function CustomerRepairList({ cards = [], websiteUrl = "" }) {
+export function prepareCustomerPageRecommendations(scanRecord) {
+  return prepareCustomerFixes(
+    mergeMetaDescriptionRecommendations(
+      getRecommendations(scanRecord).map((item) => normalizeRecommendation(item, scanRecord)),
+    ).map(applyCustomerVocabulary),
+  );
+}
+
+export function buildCustomerPageRepairPlan(cards, fallbackNextBestStep = "") {
+  // Planning needs the Stage-3 origin marker. Scope hints clone cards, so apply
+  // them afterward to the finished population without losing the source order.
+  const plan = buildCustomerRepairPlan(cards, { fallbackNextBestStep });
+  return { ...plan, cards: withRepeatedTitleScopeHints(plan.cards) };
+}
+
+function isFullAuthoritativeScan(scanRecord, requestedScanId) {
+  return Boolean(
+    typeof requestedScanId === "string"
+    && requestedScanId.trim() === requestedScanId
+    && requestedScanId
+    && scanRecord?.id === requestedScanId
+    && scanRecord?.scan_id === requestedScanId
+    && scanRecord?.customer_access === "full"
+    && scanRecord?.authority_verified === true
+    && scanRecord?.status === "complete"
+    && scanRecord?.release_gate_eligible === true
+    && scanRecord?.is_authoritative === true
+    && scanRecord?.score_is_provisional !== true
+    && scanRecord?.evidence_quality_blocking !== true
+  );
+}
+
+/** Comparison has its own authenticated read; current-result authority is not comparison proof. */
+export function CustomerScanComparison({ scanRecord, requestedScanId }) {
+  const [comparison, setComparison] = useState(null);
+  const eligible = isFullAuthoritativeScan(scanRecord, requestedScanId);
+  const readScanId = eligible ? requestedScanId : "";
+
+  useEffect(() => {
+    let cancelled = false;
+    setComparison(null);
+    if (!readScanId) return undefined;
+
+    function clearComparison() {
+      cancelled = true;
+      setComparison(null);
+    }
+    async function loadComparison() {
+      try {
+        const result = await getScanComparison(readScanId);
+        if (cancelled) return;
+        setComparison(result?.scan_id === readScanId ? result : {
+          scan_id: readScanId, comparison_status: "unavailable", comparison_verified: false,
+        });
+      } catch {
+        if (!cancelled) setComparison({
+          scan_id: readScanId, comparison_status: "unavailable", comparison_verified: false,
+        });
+      }
+    }
+    window.addEventListener(CUSTOMER_BOUNDARY_EVENT, clearComparison);
+    loadComparison();
+    return () => {
+      cancelled = true;
+      window.removeEventListener(CUSTOMER_BOUNDARY_EVENT, clearComparison);
+    };
+  }, [readScanId, scanRecord]);
+
+  if (!eligible || comparison?.scan_id !== readScanId || comparison?.comparison_status === "no_previous_scan") return null;
+  return (
+    <div className="mt-6">
+      <ScanComparisonPanel
+        presentation={comparison?.comparison || {}}
+        currentScanId={readScanId}
+        authorityVerified={comparison?.comparison_status === "ready" && comparison?.comparison_verified === true}
+      />
+    </div>
+  );
+}
+
+/** Keep planner inputs in the exact authenticated row population, before legacy display normalization. */
+export function CustomerCanonicalRepairs({ scanRecord, requestedScanId, customerRepairCards = [] }) {
+  const sourceItems = Array.isArray(scanRecord?.recommendations) ? scanRecord.recommendations : [];
+  const completePopulation = isFullAuthoritativeScan(scanRecord, requestedScanId)
+    && Number.isInteger(scanRecord?.total_fixes)
+    && scanRecord.total_fixes === sourceItems.length
+    && customerRepairCards.length === sourceItems.length;
+  if (!completePopulation) {
+    return <CustomerRepairList cards={customerRepairCards} websiteUrl={scanRecord?.website_url} />;
+  }
+  return (
+    <CustomerRepairGuidance
+      sourceItems={sourceItems}
+      cards={customerRepairCards}
+      trustedScanId={requestedScanId}
+      sourceScanId={scanRecord.scan_id}
+      cardsScanId={scanRecord.scan_id}
+      authorityVerified={completePopulation}
+      renderCards={(cards, { explanationForCard }) => (
+        <CustomerRepairList cards={cards} explanationForCard={explanationForCard} websiteUrl={scanRecord.website_url} />
+      )}
+    />
+  );
+}
+
+function CustomerRepairList({ cards = [], websiteUrl = "", explanationForCard }) {
   const list = Array.isArray(cards) ? cards.filter(Boolean) : [];
   if (list.length === 0) return null;
 
@@ -1082,6 +1189,7 @@ function CustomerRepairList({ cards = [], websiteUrl = "" }) {
               <CustomerRepairCard
                 key={card.evidence?.mergedFromFixIds?.join("|") || `${section.key}-${index}`}
                 card={card}
+                explanation={explanationForCard?.(card)}
                 websiteUrl={websiteUrl}
               />
             ))}
@@ -1092,7 +1200,7 @@ function CustomerRepairList({ cards = [], websiteUrl = "" }) {
   );
 }
 
-function CustomerRepairCard({ card = {}, websiteUrl = "" }) {
+function CustomerRepairCard({ card = {}, websiteUrl = "", explanation }) {
   const pages = Array.isArray(card?.evidence?.affectedPages) ? card.evidence.affectedPages.filter(Boolean) : [];
   const reportedCount = Math.max(Number(card?.evidence?.pageCount || 0), pages.length);
   const evidenceLabel = customerEvidenceClassLabel(card.evidenceClass);
@@ -1127,8 +1235,8 @@ function CustomerRepairCard({ card = {}, websiteUrl = "" }) {
 
       <dl className="mt-5 space-y-4">
         <div>
-          <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Why it matters</dt>
-          <dd className="mt-1 max-w-[58ch] text-[14px] leading-relaxed text-ink-muted">{card.whyItMatters}</dd>
+          <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">{explanation?.explanationHeading || "Why it matters"}</dt>
+          <dd className="mt-1 max-w-[58ch] text-[14px] leading-relaxed text-ink-muted">{explanation?.explanation || card.whyItMatters}</dd>
         </div>
         {/*
           whereLine() returns "" for a card with no page count, and the row was
@@ -1986,7 +2094,7 @@ function websiteKeyOf(record) {
   return safeHostname(record?.website_url) || "";
 }
 
-function normalizeRecommendation(item = {}, scanRecord = {}) {
+export function normalizeRecommendation(item = {}, scanRecord = {}) {
   const legacyBlocked429 = shouldUseLegacyRateLimitPresentation(scanRecord, item);
   const evidence = legacyBlocked429 ? extractRecommendationEvidence(item, scanRecord) : {};
   const priority = legacyBlocked429 ? blockedPriority(item, evidence) : normalizePriority(item.priority);
@@ -2006,6 +2114,10 @@ function normalizeRecommendation(item = {}, scanRecord = {}) {
   return {
     id: item.id || item.fix_id || stableId(`${fallbackPage}|${category}|${title}`),
     original: item,
+    // Preserve the sealed Stage-3 presentation fields through this legacy
+    // wrapper. Their row-level validators still decide whether to display them.
+    stage3_priority_factors: item.stage3_priority_factors,
+    stage3_counts: item.stage3_counts,
     rule: cleanString(item.rule || item.issue_type),
     category,
     priority,
@@ -2466,7 +2578,7 @@ function formatMetadataStateBreakdown(value = {}) {
 
 // Converts a durable {run, fixList, fixItems} bundle into the flat record
 // shape this page reads from.
-function normalizeDurableScanBundle(bundle = {}) {
+export function normalizeDurableScanBundle(bundle = {}) {
   const run = bundle.run || {};
   const fixList = bundle.fixList || {};
   return {

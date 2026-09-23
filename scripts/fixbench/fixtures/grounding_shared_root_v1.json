@@ -6,6 +6,10 @@
     "authority_proof": "shared-root-fixbench",
     "website_url": "https://example.com",
     "pages": [{"url": "https://example.com/real", "status_code": 200}],
+    "stage3_handoff_v2_source": {
+      "handoff_version": "fixlist_handoff_v2",
+      "scan": {"scan_id": "scan-shared-root", "scan_run_id": "scan-shared-root"}
+    },
     "fixes": [
       {
         "fix_id": "fix-1",
@@ -54,6 +58,10 @@
         "authority_proof": "shared-root-fixbench",
         "website_url": "https://example.com",
         "pages": [{"url": "https://example.com/real", "status_code": 200}],
+        "stage3_handoff_v2_source": {
+          "handoff_version": "fixlist_handoff_v2",
+          "scan": {"scan_id": "scan-shared-root", "scan_run_id": "scan-shared-root"}
+        },
         "fixes": [
           {"fix_id": "fix-1", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/evidence-a"]}},
           {"fix_id": "fix-2", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/evidence-b"]}}
@@ -81,6 +89,10 @@
         "authority_proof": "shared-root-fixbench",
         "website_url": "https://example.com",
         "pages": [{"url": "https://example.com/real", "status_code": 200}],
+        "stage3_handoff_v2_source": {
+          "handoff_version": "fixlist_handoff_v2",
+          "scan": {"scan_id": "scan-shared-root", "scan_run_id": "scan-shared-root"}
+        },
         "fixes": [
           {"fix_id": "fix-1", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "evidence_refs": ["https://example.com/real"]}},
           {"fix_id": "fix-2", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "evidence_refs": ["https://example.com/real"]}}
@@ -106,6 +118,10 @@
         "authority_proof": "shared-root-fixbench",
         "website_url": "https://example.com",
         "pages": [{"url": "https://example.com/real", "status_code": 200}],
+        "stage3_handoff_v2_source": {
+          "handoff_version": "fixlist_handoff_v2",
+          "scan": {"scan_id": "scan-shared-root", "scan_run_id": "scan-shared-root"}
+        },
         "fixes": [
           {"fix_id": "fix-1", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}},
           {"fix_id": "fix-2", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:page", "evidence_refs": ["https://example.com/real"]}}
@@ -132,6 +148,10 @@
         "authority_proof": "shared-root-fixbench",
         "website_url": "https://example.com",
         "pages": [{"url": "https://example.com/real", "status_code": 200}],
+        "stage3_handoff_v2_source": {
+          "handoff_version": "fixlist_handoff_v2",
+          "scan": {"scan_id": "scan-shared-root", "scan_run_id": "scan-shared-root"}
+        },
         "fixes": [
           {"fix_id": "fix-1", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}},
           {"fix_id": "fix-2", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}}
@@ -159,6 +179,10 @@
         "authority_proof": "shared-root-fixbench",
         "website_url": "https://example.com",
         "pages": [{"url": "https://example.com/real", "status_code": 200}],
+        "stage3_handoff_v2_source": {
+          "handoff_version": "fixlist_handoff_v2",
+          "scan": {"scan_id": "scan-shared-root", "scan_run_id": "scan-shared-root"}
+        },
         "fixes": [
           {"fix_id": "fix-1", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}},
           {"fix_id": "fix-2", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-other", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}}

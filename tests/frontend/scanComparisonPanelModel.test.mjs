@@ -62,11 +62,11 @@ test("Funbooker score decrease is descriptive only when the assessed sample chan
 
 test("new H1 remains a new-or-returned candidate rather than a verified historical claim", () => {
   const model = buildScanComparisonPanelModel(funbookerPresentation());
-  const candidate = model.metrics.find((metric) => metric.key === "new_or_came_back");
+  const candidate = model.metrics.find((metric) => metric.key === "unmatched_current");
 
   assert.deepEqual(candidate, {
-    key: "new_or_came_back",
-    label: "New or returned candidate",
+    key: "unmatched_current",
+    label: "Not matched",
     count: 1,
   });
   assert.equal(model.newOrCameBackIsVerifiedClaim, false);
@@ -158,4 +158,22 @@ test("unavailable models keep comparison and historical mutation claims disabled
   assert.equal(model.state, "unavailable");
   assert.equal(model.comparisonClaimAllowed, false);
   assert.equal(model.historicalRowsMutable, false);
+});
+
+test("verified returned findings are not counted again as unmatched current findings", () => {
+  const data = funbookerPresentation();
+  data.counts.came_back = 2;
+  data.counts.new_or_came_back = 3;
+  const model = buildScanComparisonPanelModel(data);
+  assert.equal(model.state, "ready");
+  assert.equal(model.metrics.find((item) => item.key === "came_back")?.count, 2);
+  assert.equal(model.metrics.find((item) => item.key === "unmatched_current")?.count, 1);
+  assert.equal(model.counts.new_or_came_back, 3);
+});
+
+test("contradictory returned and candidate totals cannot become customer counts", () => {
+  const data = funbookerPresentation();
+  data.counts.came_back = 2;
+  data.counts.new_or_came_back = 1;
+  assert.equal(buildScanComparisonPanelModel(data).state, "unavailable");
 });

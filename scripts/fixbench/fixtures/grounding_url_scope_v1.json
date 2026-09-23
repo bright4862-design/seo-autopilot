@@ -1,0 +1,110 @@
+{
+  "fixture_version": "fixbench_grounding_url_scope_v1",
+  "sealed_l2": {
+    "authority_seal_version": "authority_v8",
+    "authority_sealed_at": "2026-09-23T02:00:00Z",
+    "authority_proof": "fixbench-url-scope-proof",
+    "website_url": "https://example.com",
+    "pages": [
+      {
+        "url": "https://example.com/real",
+        "final_url": "https://example.com/real",
+        "status_code": 200
+      }
+    ],
+    "fixes": [
+      {
+        "fix_id": "fix-1",
+        "evidence_refs": ["https://example.com/real"],
+        "url_provenance": {
+          "published_url": "https://example.com/fix-proof"
+        }
+      }
+    ],
+    "root_causes": [
+      {
+        "root_cause_id": "root-1",
+        "evidence_url": "https://example.com/root-proof"
+      }
+    ],
+    "diagnostics": {
+      "url": "https://example.com/plausible-live",
+      "evidence_url": "https://example.com/plausible-evidence",
+      "status_code": 200
+    }
+  },
+  "cases": [
+    {
+      "name": "clean_page_live_evidence",
+      "expected_status": "verified",
+      "expect_preserved_evidence": ["https://example.com/real#section"],
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "clean-page",
+        "text": "Observed page evidence.",
+        "evidence": [
+          {"url": "https://example.com/real#section", "require_live": true}
+        ],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": [],
+        "state_claims": []
+      }
+    },
+    {
+      "name": "nested_fix_evidence_is_preserved",
+      "expected_status": "verified",
+      "expect_preserved": {
+        "annotation_ids": ["fix-proof"],
+        "evidence": [
+          {"url": "https://example.com/fix-proof", "require_live": false}
+        ],
+        "fix_refs": ["fix-1"]
+      },
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "fix-proof",
+        "text": "Sealed Fix evidence.",
+        "evidence": [
+          {"url": "https://example.com/fix-proof", "require_live": false}
+        ],
+        "numeric_claims": [],
+        "fix_refs": ["fix-1"],
+        "root_cause_refs": [],
+        "state_claims": []
+      }
+    },
+    {
+      "name": "diagnostics_url_cannot_become_membership",
+      "expected_status": "rejected",
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "diagnostics-url",
+        "text": "Unrelated diagnostics URL.",
+        "evidence": [
+          {"url": "https://example.com/plausible-evidence", "require_live": false}
+        ],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": [],
+        "state_claims": []
+      }
+    },
+    {
+      "name": "diagnostics_status_cannot_forge_liveness",
+      "expected_status": "rejected",
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "diagnostics-live",
+        "text": "Unrelated diagnostics URL and status.",
+        "evidence": [
+          {"url": "https://example.com/plausible-live", "require_live": true}
+        ],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": [],
+        "state_claims": []
+      }
+    }
+  ]
+}

@@ -21,11 +21,19 @@ from .repair_coverage import published_evidence_url_key, scan_evidence_origin
 EVIDENCE_SET_VERSION = "ai_evidence_set_v1"
 GROUNDING_VERIFIER_VERSION = "grounding_verifier_v1"
 
-_URL_FIELDS = frozenset({
+# URL evidence is intentionally container-bound. A sealed snapshot can contain
+# diagnostics/metadata with URL-looking fields; those are not citation evidence
+# unless they live inside a known observed-page, Fix, or root-cause collection.
+_EVIDENCE_URL_FIELDS = frozenset({
     "url", "final_url", "canonical_url", "source_url", "destination_url",
     "evidence_url", "requested_url", "published_url", "request_url",
+    "verified_final_url",
 })
+_PAGE_URL_FIELDS = _EVIDENCE_URL_FIELDS | frozenset({"page_url", "path"})
 _URL_LIST_FIELDS = frozenset({"affected_urls", "evidence_urls", "verified_urls", "urls", "evidence_refs"})
+_PAGE_CONTAINERS = frozenset({"pages", "crawled_pages", "scanned_pages", "crawl_pages"})
+_STATUS_FIELDS = ("status_code", "http_status", "response_status")
+_PAGE_EVIDENCE_CHILDREN = frozenset({"redirect_fetch_evidence", "url_provenance"})
 _FIX_CONTAINERS = frozenset({"fixes", "cleaned_fixes", "recommended_actions", "findings", "repairs"})
 _ROOT_CONTAINERS = frozenset({"root_causes", "root_cause_evidence"})
 _FIX_ID_FIELDS = frozenset({"fix_id", "repair_id", "repair_fingerprint"})
@@ -100,34 +108,86 @@ def _url_key(value: Any, scan_origin: str) -> str:
     return published_evidence_url_key(value, scan_origin=scan_origin)
 
 
-def _collect_urls(node: Any, scan_origin: str, members: set[str], live: set[str]) -> None:
+def _observed_status_code(node: dict[str, Any]) -> int:
+    for field in _STATUS_FIELDS:
+        status = node.get(field)
+        if isinstance(status, int) and not isinstance(status, bool):
+            return status
+    return 0
+
+
+def _collect_urls(
+    node: Any,
+    scan_origin: str,
+    members: set[str],
+    live: set[str],
+    *,
+    container: str = "",
+    evidence_scope: bool = False,
+) -> None:
     if isinstance(node, dict):
-        for field in _URL_FIELDS:
-            if field in node:
-                key = _url_key(node.get(field), scan_origin)
-                if key:
-                    members.add(key)
-        for field in _URL_LIST_FIELDS:
-            values = node.get(field)
-            if isinstance(values, list):
-                for value in values:
-                    if isinstance(value, str):
-                        key = _url_key(value, scan_origin)
-                        if key:
-                            members.add(key)
-        status = node.get("status_code")
-        if isinstance(status, int) and not isinstance(status, bool) and 200 <= status < 400:
-            for field in ("final_url", "url"):
-                key = _url_key(node.get(field), scan_origin)
-                if key:
-                    members.add(key)
-                    live.add(key)
-                    break
-        for child in node.values():
-            _collect_urls(child, scan_origin, members, live)
+        page_record = container in _PAGE_CONTAINERS
+        authorized = (
+            evidence_scope
+            or page_record
+            or container in _FIX_CONTAINERS
+            or container in _ROOT_CONTAINERS
+        )
+
+        if authorized:
+            fields = _PAGE_URL_FIELDS if page_record else _EVIDENCE_URL_FIELDS
+            for field in fields:
+                if field in node:
+                    key = _url_key(node.get(field), scan_origin)
+                    if key:
+                        members.add(key)
+            for field in _URL_LIST_FIELDS:
+                values = node.get(field)
+                if isinstance(values, list):
+                    for value in values:
+                        if isinstance(value, str):
+                            key = _url_key(value, scan_origin)
+                            if key:
+                                members.add(key)
+
+        # Liveness belongs only to an observed page record. A diagnostics object
+        # carrying ``url`` + ``status_code`` cannot manufacture a live citation.
+        if page_record:
+            status = _observed_status_code(node)
+            if 200 <= status < 400:
+                for field in ("verified_final_url", "final_url", "url", "requested_url", "page_url", "path"):
+                    key = _url_key(node.get(field), scan_origin)
+                    if key:
+                        members.add(key)
+                        live.add(key)
+                        break
+
+        for key, child in node.items():
+            child_scope = (
+                evidence_scope
+                or container in _FIX_CONTAINERS
+                or container in _ROOT_CONTAINERS
+            )
+            if page_record and str(key) in _PAGE_EVIDENCE_CHILDREN:
+                child_scope = True
+            _collect_urls(
+                child,
+                scan_origin,
+                members,
+                live,
+                container=str(key),
+                evidence_scope=child_scope,
+            )
     elif isinstance(node, list):
         for child in node:
-            _collect_urls(child, scan_origin, members, live)
+            _collect_urls(
+                child,
+                scan_origin,
+                members,
+                live,
+                container=container,
+                evidence_scope=evidence_scope,
+            )
 
 
 def _fix_container_id_fields(container: str) -> frozenset[str]:

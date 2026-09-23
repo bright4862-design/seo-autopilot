@@ -34,24 +34,7 @@ fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$CONFIRM"
 SOURCE_ARCHIVE_DIR="$(mktemp -d)"
 trap 'rm -rf "$SOURCE_ARCHIVE_DIR"' EXIT
 SOURCE_DIR="$SOURCE_ARCHIVE_DIR/context"
-mkdir -p "$SOURCE_ARCHIVE_DIR/archive" "$SOURCE_DIR/app"
-COMPARISON_MODULES=(
-  __init__.py authority_seal.py repair_coverage.py repair_identity.py
-  scan_comparison.py scan_comparison_integrity.py scan_comparison_authority.py
-)
-ARCHIVE_PATHS=(dispatch-gateway)
-for module in "${COMPARISON_MODULES[@]}"; do
-  ARCHIVE_PATHS+=("scanner-api/app/$module")
-done
-git -C "$REPO_ROOT" archive --format=tar "$SOURCE_SHA" "${ARCHIVE_PATHS[@]}" \
-  | tar -xf - -C "$SOURCE_ARCHIVE_DIR/archive"
-for file in main.py requirements.txt Dockerfile test_gateway.py; do
-  cp "$SOURCE_ARCHIVE_DIR/archive/dispatch-gateway/$file" "$SOURCE_DIR/$file"
-done
-for module in "${COMPARISON_MODULES[@]}"; do
-  cp "$SOURCE_ARCHIVE_DIR/archive/scanner-api/app/$module" "$SOURCE_DIR/app/$module"
-done
-printf '%s\n' "$SOURCE_SHA" > "$SOURCE_DIR/.fixlist-source-sha"
+bash "$REPO_ROOT/scripts/package_dispatch_gateway.sh" "$SOURCE_SHA" "$SOURCE_DIR"
 
 BUILD_SA_RAW="${CLOUD_BUILD_SERVICE_ACCOUNT:-$(gcloud builds get-default-service-account --project="$PROJECT" --format='value(serviceAccountEmail)')}"
 BUILD_SA_EMAIL="${BUILD_SA_RAW##*/}"

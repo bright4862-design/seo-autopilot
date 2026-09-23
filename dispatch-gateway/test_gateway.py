@@ -568,24 +568,67 @@ class ComparisonEndpointTests(unittest.TestCase):
 
 
 class ComparisonPackageTests(unittest.TestCase):
-    def test_deployment_module_set_imports_without_worker_or_third_party_dependencies(self):
+    def test_gateway_pins_the_same_published_url_parser_as_scanner(self):
         repo = Path(__file__).resolve().parents[1]
-        deploy = (repo / "scripts/deploy_dispatch_gateway.sh").read_text()
-        modules = re.search(r"COMPARISON_MODULES=\((.*?)\)", deploy, re.S).group(1).split()
+        def parser_pin(path):
+            return next(line for line in path.read_text().splitlines() if line.startswith("ada-url=="))
+        self.assertEqual(parser_pin(repo / "dispatch-gateway/requirements.txt"),
+                         parser_pin(repo / "scanner-api/requirements.txt"))
+
+    def test_exact_archive_packager_ignores_dirty_sources_and_imports_without_worker(self):
+        repo = Path(__file__).resolve().parents[1]
+        helper = repo / "scripts/package_dispatch_gateway.sh"
+        modules = re.search(r"COMPARISON_MODULES=\((.*?)\)", helper.read_text(), re.S).group(1).split()
         with tempfile.TemporaryDirectory() as folder:
-            package = Path(folder) / "app"
-            package.mkdir()
-            for module in modules:
-                shutil.copyfile(repo / "scanner-api/app" / module, package / module)
-            completed = subprocess.run([
-                sys.executable, "-S", "-c",
-                "import sys; from app.scan_comparison_authority import build_authenticated_scan_comparison_v1; "
-                "from app.authority_seal import stable_serialize; "
-                "assert 'app.scan_job' not in sys.modules; assert 'httpx' not in sys.modules; "
-                "assert stable_serialize({'b': 1.0, 'a': [None, True]}) == "
-                "'{\\\"a\\\":[null,true],\\\"b\\\":1}'",
-            ], cwd=folder, capture_output=True, text=True, check=False)
+            fixture = Path(folder) / "source"
+            fixture.mkdir()
+            files = ["scripts/package_dispatch_gateway.sh"]
+            files += [f"dispatch-gateway/{name}" for name in
+                      ("main.py", "requirements.txt", "Dockerfile", "test_gateway.py")]
+            files += [f"scanner-api/app/{module}" for module in modules]
+            for name in files:
+                destination = fixture / name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(repo / name, destination)
+
+            def run(*args, cwd=fixture):
+                clean_env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+                completed = subprocess.run(args, cwd=cwd, env=clean_env, capture_output=True, text=True, check=False)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                return completed
+
+            run("git", "init", "--quiet")
+            run("git", "add", ".")
+            run("git", "-c", "user.name=Gateway Package Test", "-c", "user.email=gateway-test@example.invalid",
+                "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Fixture archive")
+            sha = run("git", "rev-parse", "HEAD").stdout.strip()
+            # The helper must package committed bytes even when the working copy
+            # later changes. Production additionally requires an exact clean main.
+            (fixture / "scanner-api/app/scan_comparison_authority.py").write_text("raise RuntimeError('dirty source')")
+            (fixture / "dispatch-gateway/main.py").write_text("dirty gateway source")
+            (fixture / "scanner-api/app/untracked.py").write_text("untracked content")
+            context = Path(folder) / "context"
+            run("bash", str(fixture / "scripts/package_dispatch_gateway.sh"), sha, str(context))
+            self.assertEqual((context / ".fixlist-source-sha").read_text().strip(), sha)
+            self.assertEqual((context / "main.py").read_bytes(), (repo / "dispatch-gateway/main.py").read_bytes())
+            self.assertEqual((context / "Dockerfile").read_bytes(), (repo / "dispatch-gateway/Dockerfile").read_bytes())
+            self.assertEqual({p.name for p in (context / "app").iterdir()}, set(modules))
+            completed = run(
+                sys.executable, "-P", "-c",
+                "import sys, unittest; sys.path.insert(0, '.'); import test_gateway; "
+                "suite = unittest.defaultTestLoader.loadTestsFromName("
+                "'ComparisonEndpointTests.test_real_comparator_returns_only_signed_presentation_bound_to_exact_pair', "
+                "test_gateway); result = unittest.TextTestRunner().run(suite); "
+                "assert result.wasSuccessful(); assert 'ada_url' in sys.modules; "
+                "assert 'app.scan_job' not in sys.modules; assert 'httpx' not in sys.modules",
+                cwd=context,
+            )
             self.assertEqual(completed.returncode, 0, completed.stderr)
+            rejected = subprocess.run([
+                "bash", str(fixture / "scripts/package_dispatch_gateway.sh"), sha, str(context),
+            ], cwd=fixture, capture_output=True, text=True, check=False)
+            self.assertEqual(rejected.returncode, 2)
+            self.assertEqual((context / ".fixlist-source-sha").read_text().strip(), sha)
 
 
 if __name__ == "__main__":

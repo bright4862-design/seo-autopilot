@@ -293,6 +293,8 @@ def validate_scan_comparison_v1(comparison: dict[str, Any]) -> dict[str, Any]:
     ]
     if canonical_candidates != sorted(set(canonical_candidates)):
         raise ValueError("new-or-came-back candidate fingerprints must be unique and deterministic")
+    if any(value in previous_fingerprints for value in canonical_candidates):
+        raise ValueError("new-or-came-back candidate fingerprint already exists in previous repairs")
     expected_candidates = sorted(current_fingerprints - previous_fingerprints)
     if canonical_candidates != expected_candidates:
         raise ValueError("new-or-came-back candidate fingerprints contradict current repair references")

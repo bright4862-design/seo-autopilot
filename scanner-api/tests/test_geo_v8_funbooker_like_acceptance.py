@@ -2,6 +2,11 @@ from copy import deepcopy
 
 from app.geo_readiness import CHECKS, Observation
 from app.geo_v8_transport_candidate import build_geo_v8_transport_candidate
+from app.geo_v8_transport_observation_binding import (
+    build_geo_v8_transport_observation_binding,
+    serialize_geo_v8_transport_observation_binding,
+    validate_geo_v8_transport_observation_binding_reload_identity,
+)
 from app.geo_v8_transport_reload import validate_geo_v8_transport_reload_identity
 from app.geo_v8_transport_sources import serialize_geo_v8_transport_candidate_for_sources
 
@@ -116,6 +121,37 @@ def test_funbooker_like_insufficient_evidence_survives_v8_transport_and_reload()
         access_limited=False,
     ) is True
 
+    observation_binding = build_geo_v8_transport_observation_binding(
+        candidate,
+        PAGE_IDS,
+        observations,
+        parent_authoritative=True,
+        entry_verified=True,
+        access_limited=False,
+    )
+    observation_bound_preseal = serialize_geo_v8_transport_observation_binding(
+        observation_binding,
+        PAGE_IDS,
+        observations,
+        parent_authoritative=True,
+        entry_verified=True,
+        access_limited=False,
+    )
+    assert observation_binding["observation_count"] == 1668
+    assert len(observation_binding["observation_population_fingerprint"]) == 64
+    assert observation_binding["candidate"] == candidate
+    assert observation_binding["authority_verified"] is False
+    assert observation_binding["seal_state"] == "unsealed_candidate"
+    assert validate_geo_v8_transport_observation_binding_reload_identity(
+        observation_bound_preseal,
+        deepcopy(observation_binding),
+        PAGE_IDS,
+        observations,
+        parent_authoritative=True,
+        entry_verified=True,
+        access_limited=False,
+    ) is True
+
     reordered = build_geo_v8_transport_candidate(
         tuple(reversed(PAGE_IDS)),
         list(reversed(observations)),
@@ -131,3 +167,21 @@ def test_funbooker_like_insufficient_evidence_survives_v8_transport_and_reload()
         access_limited=False,
     )
     assert reordered_preseal == expected_preseal
+
+    reordered_binding = build_geo_v8_transport_observation_binding(
+        reordered,
+        tuple(reversed(PAGE_IDS)),
+        list(reversed(observations)),
+        parent_authoritative=True,
+        entry_verified=True,
+        access_limited=False,
+    )
+    reordered_observation_bound_preseal = serialize_geo_v8_transport_observation_binding(
+        reordered_binding,
+        tuple(reversed(PAGE_IDS)),
+        list(reversed(observations)),
+        parent_authoritative=True,
+        entry_verified=True,
+        access_limited=False,
+    )
+    assert reordered_observation_bound_preseal == observation_bound_preseal

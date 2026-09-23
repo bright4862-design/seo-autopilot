@@ -243,12 +243,29 @@ function pairHasRequiredEvidence(left, right, edge) {
   return Boolean(left.rootCauseId && right.rootCauseId && left.rootCauseId === right.rootCauseId);
 }
 
+function consistentEdgeText(edge = {}, fields = [], { lowercase = false } = {}) {
+  let present = false;
+  let selected = "";
+  if (!edge || typeof edge !== "object" || Array.isArray(edge)) return { present, value: selected };
+
+  for (const field of fields) {
+    if (!hasOwn(edge, field)) continue;
+    present = true;
+    const normalized = lowercase ? lower(edge[field]) : strictText(edge[field]);
+    if (!normalized) return { present: true, value: "" };
+    if (selected && normalized !== selected) return { present: true, value: "" };
+    selected = normalized;
+  }
+
+  return { present, value: selected };
+}
+
 function normalizedEdge(edge = {}) {
   if (!edge || typeof edge !== "object" || Array.isArray(edge)) return null;
-  const tableVersion = strictText(edge.tableVersion || edge.table_version);
+  const tableVersion = consistentEdgeText(edge, ["tableVersion", "table_version"]).value;
   const id = strictText(edge.id);
-  const beforeRule = lower(edge.beforeRule || edge.before_rule);
-  const afterRule = lower(edge.afterRule || edge.after_rule);
+  const beforeRule = consistentEdgeText(edge, ["beforeRule", "before_rule"], { lowercase: true }).value;
+  const afterRule = consistentEdgeText(edge, ["afterRule", "after_rule"], { lowercase: true }).value;
   const requires = strictText(edge.requires);
   const rationale = strictText(edge.rationale);
   if (!tableVersion || !id || !beforeRule || !afterRule || !requires) return null;

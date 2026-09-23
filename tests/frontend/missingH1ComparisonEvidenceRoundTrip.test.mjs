@@ -59,6 +59,7 @@ async function persistedWithEvidence(evidence) {
   const emitted = emit();
   const review = structuredClone(emitted.envelope.review);
   if (evidence !== undefined) review.comparison_evidence = structuredClone(evidence);
+  else delete review.comparison_evidence;
   const snapshot = buildAuthoritySnapshot({
     scan: emitted.envelope.scan,
     review,

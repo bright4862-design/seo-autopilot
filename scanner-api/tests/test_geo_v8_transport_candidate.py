@@ -244,6 +244,32 @@ def test_llms_sidecar_tamper_is_digest_bound():
         validate_geo_v8_transport_candidate(candidate)
 
 
+def test_malformed_unknown_cell_container_fails_with_value_error():
+    candidate = deepcopy(build())
+    candidate["readiness"]["unknown_cells"] = 7
+    redigest(candidate)
+    with pytest.raises(ValueError, match="unknown-cell transport"):
+        validate_geo_v8_transport_candidate(candidate)
+
+
+def test_recomputed_digest_does_not_make_malformed_robot_sidecar_valid():
+    raw = "https://example.com/"
+    page_id = opaque(raw)
+    candidate = build((page_id,), robots_pages=[robots_page(raw)])
+    candidate["named_robots"][0]["bots"][0]["user_agent"] = "MadeUpBot"
+    redigest(candidate)
+    with pytest.raises(ValueError, match="registry metadata mismatch"):
+        validate_geo_v8_transport_candidate(candidate)
+
+
+def test_recomputed_digest_does_not_make_malformed_llms_sidecar_valid():
+    candidate = build(llms_txt_observation={"url": "https://example.com/llms.txt", "status_code": 200, "body": "# Example"})
+    candidate["llms_txt"]["presence"] = "absent"
+    redigest(candidate)
+    with pytest.raises(ValueError, match="absent llms.txt"):
+        validate_geo_v8_transport_candidate(candidate)
+
+
 def test_inputs_are_not_mutated():
     raw = "https://example.com/"
     page_id = opaque(raw)

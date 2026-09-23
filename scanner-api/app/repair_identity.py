@@ -83,19 +83,31 @@ def _affected_pages(fix: dict[str, Any], *, scan_origin: str = "", identity_vers
     return output
 
 
+def _identity_field(fix: dict[str, Any], *fields: str) -> str:
+    """Read technical identity without turning malformed evidence into text.
+
+    Missing/empty strings may use historical aliases. A present non-string
+    cannot be rescued by a lower-precedence alias into verification authority.
+    """
+    for field in fields:
+        value = fix.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            return ""
+        if value == "":
+            continue
+        return _token(value)
+    return ""
+
+
 def _repair_surface(fix: dict[str, Any]) -> str:
-    return _token(
-        fix.get("repair_surface")
-        or fix.get("implementation_surface")
-        or fix.get("fix_surface")
-    )
+    return _identity_field(fix, "repair_surface", "implementation_surface", "fix_surface")
 
 
 def _remediation_family(fix: dict[str, Any]) -> str:
-    explicit = _token(
-        fix.get("remediation_family")
-        or fix.get("recommended_action_family")
-        or fix.get("repair_action_family")
+    explicit = _identity_field(
+        fix, "remediation_family", "recommended_action_family", "repair_action_family"
     )
     if explicit:
         return explicit
@@ -119,16 +131,14 @@ def build_repair_identity(fix: dict[str, Any]) -> dict[str, Any]:
     remediation/action family. Otherwise we emit a provisional fingerprint that
     may help presentation, but it is not eligible for automatic `verified_fixed`.
     """
-    rule_id = _token(fix.get("rule_id"))
-    rule = rule_id or _token(fix.get("rule") or fix.get("type") or fix.get("issue_type"))
+    rule_id = _identity_field(fix, "rule_id")
+    rule = _identity_field(fix, "rule_id", "rule", "type", "issue_type")
     category = _token(fix.get("category"))
     family = _token(fix.get("page_template_family") or fix.get("template_family"))
     scope = _token(fix.get("page_scope") or "page")
     surface = _repair_surface(fix)
-    explicit_remediation = _token(
-        fix.get("remediation_family")
-        or fix.get("recommended_action_family")
-        or fix.get("repair_action_family")
+    explicit_remediation = _identity_field(
+        fix, "remediation_family", "recommended_action_family", "repair_action_family"
     )
     remediation = explicit_remediation or _remediation_family(fix)
 

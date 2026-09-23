@@ -3,7 +3,7 @@
 Status: lane checkpoint only; not integrated, merged, published, or deployed  
 Lane branch: `agent/ai-explanation-plan-20260923`  
 Baseline refreshed from `main`: `c1080d75f7d1aacd748e74009be7a6c15aa40a93` (V8 runtime cutover merged)  
-Verified code checkpoint: `0e7bdcd45382927448aedeac5c78f61431f97f1c`  
+Verified code checkpoint: `c9f1bb26044ebb109356b30644b33eef49b969dc`  
 
 ## Boundaries
 
@@ -68,6 +68,8 @@ Two hand-authored edges are registered:
 
 Both edges require the two repairs to carry the same explicit verified `root_cause_evidence_v1_verified.root_cause_id`, non-empty contributing `evidence_refs`, and exact trusted scan binding. Missing trusted scan identity fails closed. Repair-local `scan_id` / `scan_run_id`, when present, are consistency assertions and must match the trusted scan id exactly.
 
+Control identifiers that can affect ordering or grouping are string-only. Malformed array/object values cannot be coerced into a valid scanner rule, verified evidence state, repair surface, remediation family, dependency-table version, or dependency-edge field. Invalid shapes therefore fail closed to canonical ordering and/or singleton grouping rather than creating implementation authority.
+
 A lower action-priority repair can move ahead of a higher action-priority repair only as a prerequisite needed by a versioned dependency edge. Ordering walks canonical rows in order and recursively emits each row's prerequisites first. This matters for a three-row case such as `sitemap(fix_first), h1(important), redirect(improve)`: when verified evidence instantiates `redirect -> sitemap`, the deterministic order is `redirect, sitemap, h1`, not `h1, redirect, sitemap`. Unrelated work is not allowed to drift ahead merely because a canonical row is waiting on its prerequisite.
 
 The priority-inversion verifier treats such collateral prerequisite movement as explicit only when the moved prerequisite reaches a dependency target whose canonical position is at or before the row it crossed.
@@ -87,13 +89,14 @@ If instantiated dependencies contain a cycle, the plan sets `cycleDetected=true`
 
 ## Verification
 
-Focused Lane-D inventory at code checkpoint `0e7bdcd45382927448aedeac5c78f61431f97f1c`:
+Focused Lane-D inventory at code checkpoint `c9f1bb26044ebb109356b30644b33eef49b969dc`:
 
 - role-explanation tests: 39
 - role-presentation tests: 6
 - implementation-plan core tests: 13
 - implementation-plan authority-boundary tests: 6
-- total: 64
+- implementation-plan input-hardening tests: 5
+- total: 69
 
 Coverage includes:
 
@@ -101,7 +104,7 @@ Coverage includes:
 - role inventory and exact library version;
 - unmapped-rule fallback;
 - missing/unsupported-role fallback;
-- malformed array-shaped rule/role fail-closed behavior;
+- malformed array-shaped role/rule fail-closed behavior;
 - inherited object-property rule names rejected;
 - scanner remediation / id / action priority / evidence class / count / authority immutability;
 - identical-input explanation and presentation stability;
@@ -110,6 +113,10 @@ Coverage includes:
 - three-row prerequisite ordering that preserves unrelated canonical work;
 - no dependency => no canonical reorder;
 - unversioned or mismatched dependency edges cannot reorder;
+- malformed array-shaped repair-rule identifiers cannot instantiate dependencies;
+- malformed verified-state identifiers cannot grant root-cause authority;
+- malformed repair-surface/remediation-family identifiers cannot create a shared group;
+- malformed dependency-edge/table-version identifiers fail closed;
 - page-family-only no-grouping;
 - scan-bound surface + remediation grouping;
 - verified scan-bound root-cause grouping;
@@ -120,9 +127,9 @@ Coverage includes:
 - identical-input plan stability;
 - dependency table size/version.
 
-Repository-native exact-head FixList CI #2878 / run `35815342448` passed on `0e7bdcd45382927448aedeac5c78f61431f97f1c`. That run passed lint, typecheck, generated release-contract verification, all frontend contract tests, frontend build, root scanner regressions, the full scanner-api test suite, labelled corpus verification, frozen beta-revision verification, and production scanner-image build.
+Repository-native exact-head FixList CI #2890 / run `35819263502` passed on `c9f1bb26044ebb109356b30644b33eef49b969dc`. That run passed lint, typecheck, generated release-contract verification, all frontend contract tests, frontend build, root scanner regressions, the full scanner-api test suite, labelled corpus verification, frozen beta-revision verification, and production scanner-image build.
 
-The material review at the preceding head identified three issues: unrelated canonical rows could drift ahead while a dependent waited for a later prerequisite; non-string role/rule identifiers could coerce to valid strings; and inherited object properties could appear as mapped role entries. `0e7bdcd...` fixes all three and adds regressions for each boundary.
+The earlier material review identified three issues: unrelated canonical rows could drift ahead while a dependent waited for a later prerequisite; non-string role/rule identifiers could coerce to valid strings; and inherited object properties could appear as mapped role entries. Those were fixed at the preceding checkpoint. The current checkpoint extends the same fail-closed identifier policy across H1-3 ordering/grouping controls and adds five adversarial regressions without changing the two production dependency edges or any scanner/customer authority path.
 
 ## Integration handoff
 

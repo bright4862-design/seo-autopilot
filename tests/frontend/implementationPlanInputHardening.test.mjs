@@ -110,3 +110,31 @@ test("array-shaped dependency table version fails closed instead of selecting th
   assert.deepEqual(result.orderedRepairIds, ["sitemap", "redirect"]);
   assert.deepEqual(result.appliedDependencies, []);
 });
+
+test("mixed-type evidence refs cannot grant root-cause authority", () => {
+  const root = verifiedRoot("root:mixed-refs", {
+    evidence_refs: ["observation:root:mixed-refs", { source: "debug" }],
+  });
+
+  const result = buildImplementationPlan(dependencyPair(root), {
+    trustedScanId: TRUSTED_SCAN_ID,
+  });
+
+  assert.deepEqual(result.orderedRepairIds, ["sitemap", "redirect"]);
+  assert.deepEqual(result.appliedDependencies, []);
+  assert.equal(result.groups.length, 2);
+});
+
+test("blank evidence refs cannot grant root-cause authority", () => {
+  const root = verifiedRoot("root:blank-ref", {
+    evidence_refs: ["observation:root:blank-ref", "   "],
+  });
+
+  const result = buildImplementationPlan(dependencyPair(root), {
+    trustedScanId: TRUSTED_SCAN_ID,
+  });
+
+  assert.deepEqual(result.orderedRepairIds, ["sitemap", "redirect"]);
+  assert.deepEqual(result.appliedDependencies, []);
+  assert.equal(result.groups.length, 2);
+});

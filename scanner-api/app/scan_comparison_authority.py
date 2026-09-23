@@ -273,6 +273,8 @@ def _current_rule_evidence(snapshot: dict[str, Any], origin: str) -> tuple[list[
         return [], {}
     if not isinstance(evidence, dict):
         raise ValueError("Malformed authenticated comparison evidence")
+    if snapshot.get("version") != "standard_review_snapshot_hmac_identity_v1":
+        raise ValueError("Authenticated comparison evidence requires the published identity authority version")
     expected_keys = {
         "version", "rule", "rule_definition_version", "comparison_profile_version",
         "evidence_url_identity_version", "observation_count", "evaluated_page_count",
@@ -309,7 +311,7 @@ def _current_rule_evidence(snapshot: dict[str, Any], origin: str) -> tuple[list[
         if not isinstance(row, dict) or set(row) != observation_keys:
             raise ValueError("Malformed authenticated comparison observation")
         page_url = _string(row.get("page_url"), "comparison page_url", 2_000)
-        if key_for(page_url) != page_url or page_url in seen:
+        if not page_url.startswith(f"{origin}/") or key_for(page_url) != page_url or page_url in seen:
             raise ValueError("Authenticated comparison page identity is invalid")
         seen.add(page_url)
         status = _count(row.get("status_code"), "comparison status_code")

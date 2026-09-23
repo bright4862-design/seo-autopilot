@@ -95,7 +95,7 @@ def build_missing_h1_comparison_evidence(
         if not isinstance(page, dict):
             continue
         page_url = key_for(_page_url(page))
-        if not page_url or page_url in seen:
+        if not page_url or not page_url.startswith(f"{scan_origin}/") or page_url in seen:
             continue
         seen.add(page_url)
 

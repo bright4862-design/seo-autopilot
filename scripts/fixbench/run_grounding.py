@@ -17,6 +17,7 @@ _SUPPORTED_FIXTURES = frozenset({
     "fixbench_grounding_adversarial_v1",
     "fixbench_grounding_v8_preservation_v1",
     "fixbench_grounding_url_scope_v1",
+    "fixbench_grounding_nested_scope_v1",
 })
 
 
@@ -85,6 +86,15 @@ def _preservation_matches(case: dict[str, Any], payload: dict[str, Any] | None) 
     return all(projection[key] == value for key, value in expected.items())
 
 
+def _reasons_match(case: dict[str, Any], reasons: list[str]) -> bool:
+    expected = case.get("expected_reasons")
+    if expected is None:
+        return True
+    if not isinstance(expected, list) or any(not isinstance(reason, str) for reason in expected):
+        raise ValueError("invalid FixBench expected_reasons contract")
+    return sorted(set(reasons)) == sorted(set(expected))
+
+
 def run_fixture(path: str | Path) -> dict[str, Any]:
     fixture_path = Path(path)
     data = json.loads(fixture_path.read_text(encoding="utf-8"))
@@ -106,7 +116,7 @@ def run_fixture(path: str | Path) -> dict[str, Any]:
             raise ValueError("invalid FixBench sealed_l2_override")
         result = verify_grounded_payload(case.get("payload"), sealed_l2=case_l2)
         expected = case.get("expected_status")
-        ok = result.status == expected
+        ok = result.status == expected and _reasons_match(case, result.reasons)
         if ok:
             ok = _preservation_matches(case, result.verified_payload)
         passed += int(ok)
@@ -114,6 +124,7 @@ def run_fixture(path: str | Path) -> dict[str, Any]:
             "name": str(case.get("name") or ""),
             "expected": expected,
             "actual": result.status,
+            "reasons": list(result.reasons),
             "passed": ok,
         })
     return {

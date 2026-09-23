@@ -28,3 +28,10 @@ def test_fixbench_grounding_url_scope_gate_passes():
     report = run_fixture(fixture)
     assert report["gate_state"] == "passed"
     assert report["passed"] == report["total"] == 4
+
+
+def test_fixbench_grounding_nested_scope_gate_passes():
+    fixture = ROOT / "scripts" / "fixbench" / "fixtures" / "grounding_nested_scope_v1.json"
+    report = run_fixture(fixture)
+    assert report["gate_state"] == "passed"
+    assert report["passed"] == report["total"] == 6

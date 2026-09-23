@@ -33,7 +33,16 @@ _PAGE_URL_FIELDS = _EVIDENCE_URL_FIELDS | frozenset({"page_url", "path"})
 _URL_LIST_FIELDS = frozenset({"affected_urls", "evidence_urls", "verified_urls", "urls", "evidence_refs"})
 _PAGE_CONTAINERS = frozenset({"pages", "crawled_pages", "scanned_pages", "crawl_pages"})
 _STATUS_FIELDS = ("status_code", "http_status", "response_status")
-_PAGE_EVIDENCE_CHILDREN = frozenset({"redirect_fetch_evidence", "url_provenance"})
+_NESTED_EVIDENCE_CONTAINERS = frozenset({
+    "redirect_fetch_evidence",
+    "url_provenance",
+    "evidence",
+    "evidence_detail",
+    "evidence_details",
+    "details",
+    "source_evidence",
+    "observed_evidence",
+})
 _FIX_CONTAINERS = frozenset({"fixes", "cleaned_fixes", "recommended_actions", "findings", "repairs"})
 _ROOT_CONTAINERS = frozenset({"root_causes", "root_cause_evidence"})
 _FIX_ID_FIELDS = frozenset({"fix_id", "repair_id", "repair_fingerprint"})
@@ -58,6 +67,8 @@ class EvidenceSet:
     state_values: Mapping[str, Scalar]
     fix_refs: frozenset[str]
     root_cause_refs: frozenset[str]
+    ambiguous_fix_refs: frozenset[str]
+    ambiguous_root_cause_refs: frozenset[str]
 
 
 class GroundingResult(BaseModel):
@@ -127,12 +138,8 @@ def _collect_urls(
 ) -> None:
     if isinstance(node, dict):
         page_record = container in _PAGE_CONTAINERS
-        authorized = (
-            evidence_scope
-            or page_record
-            or container in _FIX_CONTAINERS
-            or container in _ROOT_CONTAINERS
-        )
+        evidence_record = container in _FIX_CONTAINERS or container in _ROOT_CONTAINERS
+        authorized = evidence_scope or page_record or evidence_record
 
         if authorized:
             fields = _PAGE_URL_FIELDS if page_record else _EVIDENCE_URL_FIELDS
@@ -163,19 +170,20 @@ def _collect_urls(
                         break
 
         for key, child in node.items():
-            child_scope = (
-                evidence_scope
-                or container in _FIX_CONTAINERS
-                or container in _ROOT_CONTAINERS
-            )
-            if page_record and str(key) in _PAGE_EVIDENCE_CHILDREN:
-                child_scope = True
+            child_name = str(key)
+            # Evidence scope is never inherited merely because an ancestor was a
+            # Fix/root-cause record. Only explicit evidence-shaped child
+            # containers may carry citation membership deeper into the tree.
+            # This prevents nested diagnostics/debug objects from laundering
+            # plausible URLs into the EvidenceSet while preserving V8
+            # url_provenance/details evidence.
+            child_scope = authorized and child_name in _NESTED_EVIDENCE_CONTAINERS
             _collect_urls(
                 child,
                 scan_origin,
                 members,
                 live,
-                container=str(key),
+                container=child_name,
                 evidence_scope=child_scope,
             )
     elif isinstance(node, list):
@@ -201,36 +209,65 @@ def _fix_container_id_fields(container: str) -> frozenset[str]:
     return frozenset()
 
 
-def _collect_refs(node: Any, *, container: str = "", fixes: set[str], roots: set[str]) -> None:
+def _record_strings(node: dict[str, Any], fields: frozenset[str]) -> set[str]:
+    values: set[str] = set()
+    for field in fields:
+        value = node.get(field)
+        if isinstance(value, str) and value.strip():
+            values.add(value.strip())
+    return values
+
+
+def _collect_refs(
+    node: Any,
+    *,
+    container: str = "",
+    fixes: set[str],
+    roots: set[str],
+    fix_counts: dict[str, int],
+    root_counts: dict[str, int],
+) -> None:
     if isinstance(node, dict):
         # Repair identities are evidence only when they are direct fields on a
-        # known sealed repair/Fix record. Do not let identically named fields in
-        # diagnostics, metadata, or unrelated nested objects become valid refs.
+        # known sealed repair/Fix record. Repeated aliases on one record are one
+        # identity occurrence; the same identity on multiple records is
+        # ambiguous and must fail closed at verification time.
         if container in _FIX_CONTAINERS:
-            for field in _fix_container_id_fields(container):
-                value = node.get(field)
-                if isinstance(value, str) and value.strip():
-                    fixes.add(value.strip())
+            record_fixes = _record_strings(node, _fix_container_id_fields(container))
+            for value in record_fixes:
+                fixes.add(value)
+                fix_counts[value] = fix_counts.get(value, 0) + 1
 
             # A sealed Fix may carry its verified root-cause linkage directly.
-            # Preserve that legitimate V8/Stage-3 relationship while keeping the
-            # same field outside a Fix/root-cause collection non-authoritative.
-            for field in _ROOT_ID_FIELDS:
-                value = node.get(field)
-                if isinstance(value, str) and value.strip():
-                    roots.add(value.strip())
+            # Links are valid refs but are not root-cause definitions, so
+            # repeated links across Fixes do not create false ambiguity.
+            roots.update(_record_strings(node, _ROOT_ID_FIELDS))
 
         if container in _ROOT_CONTAINERS:
-            for field in _ROOT_ID_FIELDS | {"id"}:
-                value = node.get(field)
-                if isinstance(value, str) and value.strip():
-                    roots.add(value.strip())
+            record_roots = _record_strings(node, _ROOT_ID_FIELDS | {"id"})
+            for value in record_roots:
+                roots.add(value)
+                root_counts[value] = root_counts.get(value, 0) + 1
 
         for key, child in node.items():
-            _collect_refs(child, container=str(key), fixes=fixes, roots=roots)
+            _collect_refs(
+                child,
+                container=str(key),
+                fixes=fixes,
+                roots=roots,
+                fix_counts=fix_counts,
+                root_counts=root_counts,
+            )
     elif isinstance(node, list):
         for child in node:
-            _collect_refs(child, container=container, fixes=fixes, roots=roots)
+            _collect_refs(
+                child,
+                container=container,
+                fixes=fixes,
+                roots=roots,
+                fix_counts=fix_counts,
+                root_counts=root_counts,
+            )
 
 
 def build_evidence_set(sealed_l2: dict[str, Any], *, scan_origin: str = "") -> EvidenceSet:
@@ -259,7 +296,17 @@ def build_evidence_set(sealed_l2: dict[str, Any], *, scan_origin: str = "") -> E
 
     fixes: set[str] = set()
     roots: set[str] = set()
-    _collect_refs(sealed_l2, fixes=fixes, roots=roots)
+    fix_counts: dict[str, int] = {}
+    root_counts: dict[str, int] = {}
+    _collect_refs(
+        sealed_l2,
+        fixes=fixes,
+        roots=roots,
+        fix_counts=fix_counts,
+        root_counts=root_counts,
+    )
+    ambiguous_fixes = {ref for ref, count in fix_counts.items() if count > 1}
+    ambiguous_roots = {ref for ref, count in root_counts.items() if count > 1}
 
     fingerprint = _canonical_fingerprint({
         "version": EVIDENCE_SET_VERSION,
@@ -271,6 +318,8 @@ def build_evidence_set(sealed_l2: dict[str, Any], *, scan_origin: str = "") -> E
         "state_values": sorted(state_values.items()),
         "fix_refs": sorted(fixes),
         "root_cause_refs": sorted(roots),
+        "ambiguous_fix_refs": sorted(ambiguous_fixes),
+        "ambiguous_root_cause_refs": sorted(ambiguous_roots),
     })
     return EvidenceSet(
         version=EVIDENCE_SET_VERSION,
@@ -282,6 +331,8 @@ def build_evidence_set(sealed_l2: dict[str, Any], *, scan_origin: str = "") -> E
         state_values=MappingProxyType(dict(state_values)),
         fix_refs=frozenset(fixes),
         root_cause_refs=frozenset(roots),
+        ambiguous_fix_refs=frozenset(ambiguous_fixes),
+        ambiguous_root_cause_refs=frozenset(ambiguous_roots),
     )
 
 
@@ -311,10 +362,14 @@ def _annotation_errors(annotation: AIAnnotationV1, evidence: EvidenceSet) -> lis
             errors.add("numeric_value_mismatch")
 
     for ref in annotation.fix_refs:
-        if ref not in evidence.fix_refs:
+        if ref in evidence.ambiguous_fix_refs:
+            errors.add("fix_ref_ambiguous")
+        elif ref not in evidence.fix_refs:
             errors.add("fix_ref_missing")
     for ref in annotation.root_cause_refs:
-        if ref not in evidence.root_cause_refs:
+        if ref in evidence.ambiguous_root_cause_refs:
+            errors.add("root_cause_ref_ambiguous")
+        elif ref not in evidence.root_cause_refs:
             errors.add("root_cause_ref_missing")
 
     for claim in annotation.state_claims:

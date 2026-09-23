@@ -63,12 +63,14 @@ test("golden implementation plan preserves canonical order unless dependencies r
     orderedRepairIds: ["canonical-1", "redirect-1", "sitemap-1", "links-1"],
     appliedDependencies: [
       {
+        tableVersion: IMPLEMENTATION_DEPENDENCY_TABLE_VERSION,
         tableEdgeId: "redirect_chain_before_sitemap_redirect",
         beforeFixId: "redirect-1",
         afterFixId: "sitemap-1",
         rationale: "Stabilize the final redirect destination before publishing that destination in the sitemap.",
       },
       {
+        tableVersion: IMPLEMENTATION_DEPENDENCY_TABLE_VERSION,
         tableEdgeId: "redirect_chain_before_internal_link_redirect",
         beforeFixId: "redirect-1",
         afterFixId: "links-1",
@@ -109,6 +111,7 @@ test("an explicit dependency edge may move a lower priority repair ahead of a hi
   assert.deepEqual(actual.orderedRepairIds, ["redirect", "sitemap"]);
   assert.equal(actual.priorityMonotonicOrExplicit, true);
   assert.equal(actual.appliedDependencies.length, 1);
+  assert.equal(actual.appliedDependencies[0].tableVersion, IMPLEMENTATION_DEPENDENCY_TABLE_VERSION);
   assert.equal(actual.appliedDependencies[0].tableEdgeId, "redirect_chain_before_sitemap_redirect");
 });
 
@@ -121,6 +124,35 @@ test("without an explicit satisfied dependency, canonical priority order never c
   const actual = buildImplementationPlan(input);
   assert.deepEqual(actual.orderedRepairIds, ["sitemap", "redirect", "h1"]);
   assert.deepEqual(actual.appliedDependencies, []);
+});
+
+test("unversioned or mismatched dependency edges cannot reorder canonical priority", () => {
+  const shared = verifiedRoot("root:version-gate");
+  const input = [
+    { fix_id: "sitemap", rule: "sitemap_redirect", action_priority: "fix_first", root_cause_evidence: shared },
+    { fix_id: "redirect", rule: "redirect_chain", action_priority: "important", root_cause_evidence: shared },
+  ];
+  const baseEdge = {
+    id: "redirect_before_sitemap",
+    beforeRule: "redirect_chain",
+    afterRule: "sitemap_redirect",
+    requires: "verified_shared_root_cause",
+    rationale: "test",
+  };
+
+  const unversioned = buildImplementationPlan(input, {
+    dependencyEdges: [baseEdge],
+    dependencyTableVersion: "test_dependencies_v1",
+  });
+  assert.deepEqual(unversioned.orderedRepairIds, ["sitemap", "redirect"]);
+  assert.deepEqual(unversioned.appliedDependencies, []);
+
+  const mismatched = buildImplementationPlan(input, {
+    dependencyEdges: [{ ...baseEdge, tableVersion: "other_dependencies_v1" }],
+    dependencyTableVersion: "test_dependencies_v1",
+  });
+  assert.deepEqual(mismatched.orderedRepairIds, ["sitemap", "redirect"]);
+  assert.deepEqual(mismatched.appliedDependencies, []);
 });
 
 test("page-family similarity alone never creates one implementation group", () => {
@@ -167,11 +199,13 @@ test("dependency cycles fail safely to canonical priority order", () => {
     { fix_id: "a", rule: "a", action_priority: "fix_first", root_cause_evidence: shared },
     { fix_id: "b", rule: "b", action_priority: "important", root_cause_evidence: shared },
   ];
+  const dependencyTableVersion = "test_dependencies_v1";
   const edges = [
-    { id: "a_before_b", beforeRule: "a", afterRule: "b", requires: "verified_shared_root_cause", rationale: "test" },
-    { id: "b_before_a", beforeRule: "b", afterRule: "a", requires: "verified_shared_root_cause", rationale: "test" },
+    { tableVersion: dependencyTableVersion, id: "a_before_b", beforeRule: "a", afterRule: "b", requires: "verified_shared_root_cause", rationale: "test" },
+    { tableVersion: dependencyTableVersion, id: "b_before_a", beforeRule: "b", afterRule: "a", requires: "verified_shared_root_cause", rationale: "test" },
   ];
-  const actual = buildImplementationPlan(input, { dependencyEdges: edges });
+  const actual = buildImplementationPlan(input, { dependencyEdges: edges, dependencyTableVersion });
+  assert.equal(actual.dependencyTableVersion, dependencyTableVersion);
   assert.equal(actual.cycleDetected, true);
   assert.equal(actual.fallbackUsed, true);
   assert.deepEqual(actual.orderedRepairIds, ["a", "b"]);
@@ -204,6 +238,9 @@ test("identical implementation-plan input produces byte-stable output", () => {
 test("dependency table is small, explicit and versioned", () => {
   assert.equal(IMPLEMENTATION_DEPENDENCY_EDGES.length, 2);
   assert.equal(IMPLEMENTATION_DEPENDENCY_TABLE_VERSION, "implementation_dependencies_v1_final_url_first");
+  assert.ok(IMPLEMENTATION_DEPENDENCY_EDGES.every(
+    (edge) => edge.tableVersion === IMPLEMENTATION_DEPENDENCY_TABLE_VERSION,
+  ));
   assert.deepEqual(
     IMPLEMENTATION_DEPENDENCY_EDGES.map((edge) => edge.id),
     ["redirect_chain_before_sitemap_redirect", "redirect_chain_before_internal_link_redirect"],

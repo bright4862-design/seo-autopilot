@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "release": "standard_150",
+  "go_rule": "Every required gate must be passed for the same immutable release identity.",
+  "allowed_statuses": ["unknown", "pending", "passed", "failed", "blocked", "not_applicable"],
+  "gates": [
+    {"id":"exact_head_verified","required":true,"status":"pending","evidence":"Verify active PR head SHA immediately before final verification."},
+    {"id":"focused_regressions","required":true,"status":"pending","evidence":"All blocker-specific regressions pass on exact head."},
+    {"id":"frontend_suite","required":true,"status":"pending","evidence":"Full frontend suite passes."},
+    {"id":"root_python_suite","required":true,"status":"pending","evidence":"Full root Python suite passes."},
+    {"id":"scanner_suite","required":true,"status":"pending","evidence":"Full scanner suite passes."},
+    {"id":"lint_typecheck_build","required":true,"status":"pending","evidence":"Lint, typecheck, and production build pass."},
+    {"id":"release_identity","required":true,"status":"pending","evidence":"Generated and frozen cross-runtime release identity checks agree."},
+    {"id":"exact_head_ci","required":true,"status":"pending","evidence":"GitHub CI passes on the same exact head."},
+    {"id":"independent_review","required":true,"status":"pending","evidence":"Independent reviewer has no unresolved release-blocking findings."},
+    {"id":"coderabbit_review","required":true,"status":"pending","evidence":"Fresh CodeRabbit review has no unresolved release-blocking findings."},
+    {"id":"same_sha_deployment","required":true,"status":"pending","evidence":"Approved release identity deployed consistently to required production surfaces."},
+    {"id":"production_acceptance","required":true,"status":"pending","evidence":"Same-SHA production acceptance matrix passes, including failure/limited/history/recovery boundaries."},
+    {"id":"rollback_proof","required":true,"status":"pending","evidence":"Rollback path is proven and safe before final GO."}
+  ]
+}

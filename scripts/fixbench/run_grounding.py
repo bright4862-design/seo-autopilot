@@ -21,6 +21,7 @@ _SUPPORTED_FIXTURES = frozenset({
     "fixbench_grounding_identity_scope_v1",
     "fixbench_grounding_root_contract_v1",
     "fixbench_grounding_shared_root_v1",
+    "fixbench_grounding_trusted_scan_v1",
 })
 
 

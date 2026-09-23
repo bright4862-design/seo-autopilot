@@ -87,6 +87,21 @@ def test_matching_aliases_on_one_record_remain_unambiguous():
     assert verify_grounded_payload(annotation(), evidence_set=evidence).status == "verified"
 
 
+def test_repair_fingerprint_is_secondary_ref_not_conflicting_alias():
+    source = sealed_l2()
+    source["fixes"][0]["repair_fingerprint"] = "fingerprint-1"
+
+    evidence = build_evidence_set(source)
+    assert evidence.conflicting_fix_refs == frozenset()
+    assert {"fix-1", "fingerprint-1"}.issubset(evidence.fix_refs)
+
+    result = verify_grounded_payload(
+        annotation(fix_refs=["fix-1", "fingerprint-1"]),
+        evidence_set=evidence,
+    )
+    assert result.status == "verified"
+
+
 def test_root_link_on_fix_does_not_define_root_cause():
     source = sealed_l2()
     source.pop("root_causes")

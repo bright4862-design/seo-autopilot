@@ -27,7 +27,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION, repair_evidence_key_function
-from .missing_h1_contract import (
+from .missing_h1_comparison_contract import (
     MISSING_H1_COMPARISON_EVIDENCE_VERSION,
     MISSING_H1_COMPARISON_PROFILE_VERSION,
     MISSING_H1_RULE,

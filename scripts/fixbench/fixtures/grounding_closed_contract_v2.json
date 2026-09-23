@@ -1,0 +1,651 @@
+{
+  "fixture_version": "fixbench_grounding_closed_contract_v2",
+  "sealed_l2": {
+    "authority_seal_version": "authority_v8",
+    "authority_sealed_at": "2026-09-23T00:00:00Z",
+    "authority_proof": "offline-fixture-not-a-real-proof",
+    "website_url": "https://example.com",
+    "health_score": 88,
+    "status": "complete",
+    "pages": [
+      {
+        "url": "https://example.com/real",
+        "status_code": 200
+      }
+    ],
+    "fixes": [
+      {
+        "fix_id": "fix-1",
+        "affected_urls": [
+          "https://example.com/real"
+        ]
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "reject_unconstrained_v1_1",
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "clean",
+        "evidence": [
+          {
+            "url": "https://example.com/real#section",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [
+          {
+            "source_ref": "$.health_score",
+            "value": 88,
+            "name": "health_score"
+          }
+        ],
+        "state_claims": [
+          {
+            "source_ref": "$.status",
+            "value": "complete",
+            "field": "status"
+          }
+        ],
+        "fix_refs": [
+          "fix-1"
+        ],
+        "root_cause_refs": [],
+        "text": "See https://example.com/invented."
+      },
+      "expected_status": "rejected",
+      "expected_reasons": [
+        "unconstrained_text_unsupported"
+      ]
+    },
+    {
+      "name": "reject_unconstrained_v1_2",
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "clean",
+        "evidence": [
+          {
+            "url": "https://example.com/real#section",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [
+          {
+            "source_ref": "$.health_score",
+            "value": 88,
+            "name": "health_score"
+          }
+        ],
+        "state_claims": [
+          {
+            "source_ref": "$.status",
+            "value": "complete",
+            "field": "status"
+          }
+        ],
+        "fix_refs": [
+          "fix-1"
+        ],
+        "root_cause_refs": [],
+        "text": "The health score is 999."
+      },
+      "expected_status": "rejected",
+      "expected_reasons": [
+        "unconstrained_text_unsupported"
+      ]
+    },
+    {
+      "name": "reject_unconstrained_v1_3",
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "clean",
+        "evidence": [
+          {
+            "url": "https://example.com/real#section",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [
+          {
+            "source_ref": "$.health_score",
+            "value": 88,
+            "name": "health_score"
+          }
+        ],
+        "state_claims": [
+          {
+            "source_ref": "$.status",
+            "value": "complete",
+            "field": "status"
+          }
+        ],
+        "fix_refs": [
+          "fix-1"
+        ],
+        "root_cause_refs": [],
+        "text": "FixList applied the repair."
+      },
+      "expected_status": "rejected",
+      "expected_reasons": [
+        "unconstrained_text_unsupported"
+      ]
+    },
+    {
+      "name": "reject_unconstrained_v1_4",
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "clean",
+        "evidence": [
+          {
+            "url": "https://example.com/real#section",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [
+          {
+            "source_ref": "$.health_score",
+            "value": 88,
+            "name": "health_score"
+          }
+        ],
+        "state_claims": [
+          {
+            "source_ref": "$.status",
+            "value": "complete",
+            "field": "status"
+          }
+        ],
+        "fix_refs": [
+          "fix-1"
+        ],
+        "root_cause_refs": [],
+        "text": "Grounded claim."
+      },
+      "expected_status": "rejected",
+      "expected_reasons": [
+        "unconstrained_text_unsupported"
+      ]
+    },
+    {
+      "name": "reject_diagnostics_collection_laundering",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8",
+        "authority_sealed_at": "2026-09-23T00:00:00Z",
+        "authority_proof": "offline-fixture-not-a-real-proof",
+        "website_url": "https://example.com",
+        "health_score": 88,
+        "status": "complete",
+        "pages": [
+          {
+            "url": "https://example.com/real",
+            "status_code": 200
+          }
+        ],
+        "fixes": [
+          {
+            "fix_id": "fix-1",
+            "affected_urls": [
+              "https://example.com/real"
+            ]
+          }
+        ],
+        "diagnostics": {
+          "pages": [
+            {
+              "url": "https://example.com/forged",
+              "status_code": 200
+            }
+          ],
+          "fixes": [
+            {
+              "fix_id": "forged-fix"
+            }
+          ],
+          "root_causes": [
+            {
+              "root_cause_id": "forged-root"
+            }
+          ]
+        }
+      },
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "clean",
+        "evidence": [
+          {
+            "url": "https://example.com/forged",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [
+          {
+            "source_ref": "$.health_score",
+            "value": 88
+          }
+        ],
+        "state_claims": [
+          {
+            "source_ref": "$.status",
+            "value": "complete"
+          }
+        ],
+        "fix_refs": [
+          "forged-fix"
+        ],
+        "root_cause_refs": [
+          "forged-root"
+        ]
+      },
+      "expected_status": "rejected",
+      "expected_reasons": [
+        "fix_ref_missing",
+        "root_cause_ref_missing",
+        "url_not_in_evidence"
+      ]
+    },
+    {
+      "name": "reject_metadata_collection_laundering",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8",
+        "authority_sealed_at": "2026-09-23T00:00:00Z",
+        "authority_proof": "offline-fixture-not-a-real-proof",
+        "website_url": "https://example.com",
+        "health_score": 88,
+        "status": "complete",
+        "pages": [
+          {
+            "url": "https://example.com/real",
+            "status_code": 200
+          }
+        ],
+        "fixes": [
+          {
+            "fix_id": "fix-1",
+            "affected_urls": [
+              "https://example.com/real"
+            ]
+          }
+        ],
+        "metadata": {
+          "pages": [
+            {
+              "url": "https://example.com/forged",
+              "status_code": 200
+            }
+          ],
+          "fixes": [
+            {
+              "fix_id": "forged-fix"
+            }
+          ],
+          "root_causes": [
+            {
+              "root_cause_id": "forged-root"
+            }
+          ]
+        }
+      },
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "clean",
+        "evidence": [
+          {
+            "url": "https://example.com/forged",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [
+          {
+            "source_ref": "$.health_score",
+            "value": 88
+          }
+        ],
+        "state_claims": [
+          {
+            "source_ref": "$.status",
+            "value": "complete"
+          }
+        ],
+        "fix_refs": [
+          "forged-fix"
+        ],
+        "root_cause_refs": [
+          "forged-root"
+        ]
+      },
+      "expected_status": "rejected",
+      "expected_reasons": [
+        "fix_ref_missing",
+        "root_cause_ref_missing",
+        "url_not_in_evidence"
+      ]
+    },
+    {
+      "name": "constrained_claims_preserved_and_rendered",
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "clean",
+        "evidence": [
+          {
+            "url": "https://example.com/real#section",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [
+          {
+            "source_ref": "$.health_score",
+            "value": 88
+          }
+        ],
+        "state_claims": [
+          {
+            "source_ref": "$.status",
+            "value": "complete"
+          }
+        ],
+        "fix_refs": [
+          "fix-1"
+        ],
+        "root_cause_refs": []
+      },
+      "expected_status": "verified",
+      "expect_preserved": {
+        "evidence": [
+          {
+            "url": "https://example.com/real#section",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [
+          {
+            "source_ref": "$.health_score",
+            "value": 88
+          }
+        ],
+        "state_claims": [
+          {
+            "source_ref": "$.status",
+            "value": "complete"
+          }
+        ],
+        "fix_refs": [
+          "fix-1"
+        ]
+      },
+      "expected_rendered_annotations": [
+        "Evidence URL: \"https://example.com/real\".\nRecorded value at \"$.health_score\": 88.\nRecorded value at \"$.status\": \"complete\".\nRepair reference: \"fix-1\"."
+      ]
+    },
+    {
+      "name": "reject_v2_text",
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "clean",
+        "evidence": [
+          {
+            "url": "https://example.com/real#section",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [
+          {
+            "source_ref": "$.health_score",
+            "value": 88
+          }
+        ],
+        "state_claims": [
+          {
+            "source_ref": "$.status",
+            "value": "complete"
+          }
+        ],
+        "fix_refs": [
+          "fix-1"
+        ],
+        "root_cause_refs": [],
+        "text": "FixList applied the repair."
+      },
+      "expected_status": "rejected",
+      "expected_reasons": [
+        "schema_invalid"
+      ]
+    },
+    {
+      "name": "reject_v2_headline",
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "clean",
+        "evidence": [
+          {
+            "url": "https://example.com/real#section",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [
+          {
+            "source_ref": "$.health_score",
+            "value": 88
+          }
+        ],
+        "state_claims": [
+          {
+            "source_ref": "$.status",
+            "value": "complete"
+          }
+        ],
+        "fix_refs": [
+          "fix-1"
+        ],
+        "root_cause_refs": [],
+        "headline": "FixList applied the repair."
+      },
+      "expected_status": "rejected",
+      "expected_reasons": [
+        "schema_invalid"
+      ]
+    },
+    {
+      "name": "reject_v2_claim_relabelling",
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "clean",
+        "evidence": [
+          {
+            "url": "https://example.com/real#section",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [
+          {
+            "source_ref": "$.health_score",
+            "value": 88,
+            "name": "score 999"
+          }
+        ],
+        "state_claims": [
+          {
+            "source_ref": "$.status",
+            "value": "complete"
+          }
+        ],
+        "fix_refs": [
+          "fix-1"
+        ],
+        "root_cause_refs": []
+      },
+      "expected_status": "rejected",
+      "expected_reasons": [
+        "schema_invalid"
+      ]
+    },
+    {
+      "name": "redact_only_invalid_independent_v2_annotation",
+      "payload": {
+        "schema_version": "chat_answer_v2",
+        "answer_id": "redaction",
+        "annotations": [
+          {
+            "schema_version": "ai_annotation_v2",
+            "annotation_id": "clean",
+            "evidence": [
+              {
+                "url": "https://example.com/real#section",
+                "require_live": true
+              }
+            ],
+            "numeric_claims": [
+              {
+                "source_ref": "$.health_score",
+                "value": 88
+              }
+            ],
+            "state_claims": [
+              {
+                "source_ref": "$.status",
+                "value": "complete"
+              }
+            ],
+            "fix_refs": [
+              "fix-1"
+            ],
+            "root_cause_refs": []
+          },
+          {
+            "schema_version": "ai_annotation_v2",
+            "annotation_id": "bad",
+            "evidence": [
+              {
+                "url": "https://example.com/real#section",
+                "require_live": true
+              }
+            ],
+            "numeric_claims": [
+              {
+                "source_ref": "$.health_score",
+                "value": 999
+              }
+            ],
+            "state_claims": [
+              {
+                "source_ref": "$.status",
+                "value": "complete"
+              }
+            ],
+            "fix_refs": [
+              "fix-1"
+            ],
+            "root_cause_refs": []
+          }
+        ]
+      },
+      "expected_status": "rejected",
+      "expected_reasons": [
+        "deterministic_conflict"
+      ]
+    },
+    {
+      "name": "preserve_clean_v2_after_independent_redaction",
+      "payload": {
+        "schema_version": "chat_answer_v2",
+        "answer_id": "redaction",
+        "annotations": [
+          {
+            "schema_version": "ai_annotation_v2",
+            "annotation_id": "clean",
+            "evidence": [
+              {
+                "url": "https://example.com/real#section",
+                "require_live": true
+              }
+            ],
+            "numeric_claims": [
+              {
+                "source_ref": "$.health_score",
+                "value": 88
+              }
+            ],
+            "state_claims": [
+              {
+                "source_ref": "$.status",
+                "value": "complete"
+              }
+            ],
+            "fix_refs": [
+              "fix-1"
+            ],
+            "root_cause_refs": []
+          },
+          {
+            "schema_version": "ai_annotation_v2",
+            "annotation_id": "bad",
+            "evidence": [
+              {
+                "url": "https://example.com/real#section",
+                "require_live": true
+              }
+            ],
+            "numeric_claims": [
+              {
+                "source_ref": "$.health_score",
+                "value": 88
+              }
+            ],
+            "state_claims": [
+              {
+                "source_ref": "$.status",
+                "value": "complete"
+              }
+            ],
+            "fix_refs": [
+              "missing"
+            ],
+            "root_cause_refs": []
+          }
+        ]
+      },
+      "expected_status": "redacted",
+      "expected_reasons": [
+        "fix_ref_missing"
+      ],
+      "expect_preserved": {
+        "annotation_ids": [
+          "clean"
+        ]
+      }
+    },
+    {
+      "name": "large_integer_rejects_without_overflow",
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "clean",
+        "evidence": [
+          {
+            "url": "https://example.com/real#section",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [
+          {
+            "source_ref": "$.health_score",
+            "value": 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+          }
+        ],
+        "state_claims": [
+          {
+            "source_ref": "$.status",
+            "value": "complete"
+          }
+        ],
+        "fix_refs": [
+          "fix-1"
+        ],
+        "root_cause_refs": []
+      },
+      "expected_status": "rejected",
+      "expected_reasons": [
+        "numeric_value_mismatch"
+      ]
+    }
+  ]
+}

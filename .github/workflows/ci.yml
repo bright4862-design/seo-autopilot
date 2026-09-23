@@ -101,6 +101,9 @@ jobs:
         working-directory: scanner-api
         run: pytest tests/
 
+      - name: Verify offline grounding FixBench
+        run: python scripts/fixbench/run_grounding.py --all
+
       - name: Verify labelled stage-one synthetic corpus
         run: |
           python scanner-api/tests/test_stage1_blueprint_corpus.py --output /tmp/stage1-corpus.json

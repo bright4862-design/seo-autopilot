@@ -1,0 +1,281 @@
+{
+  "fixture_version": "fixbench_grounding_nested_scope_v1",
+  "sealed_l2": {
+    "authority_seal_version": "authority_v8",
+    "authority_sealed_at": "2026-09-23T03:00:00Z",
+    "authority_proof": "nested-scope-proof",
+    "website_url": "https://example.com",
+    "pages": [
+      {
+        "url": "https://example.com/real",
+        "status_code": 200
+      }
+    ],
+    "fixes": [
+      {
+        "fix_id": "fix-1",
+        "root_cause_id": "root-1",
+        "evidence_refs": [
+          "https://example.com/real"
+        ],
+        "url_provenance": {
+          "published_url": "https://example.com/real"
+        },
+        "diagnostics": {
+          "evidence_url": "https://example.com/fake-fix-diagnostic"
+        }
+      }
+    ],
+    "root_causes": [
+      {
+        "root_cause_id": "root-1",
+        "details": {
+          "evidence_url": "https://example.com/real",
+          "diagnostics": {
+            "published_url": "https://example.com/fake-root-diagnostic"
+          }
+        }
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "clean_control_preserves_refs",
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "clean",
+        "evidence": [
+          {
+            "url": "https://example.com/real",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [],
+        "fix_refs": [
+          "fix-1"
+        ],
+        "root_cause_refs": [
+          "root-1"
+        ],
+        "state_claims": []
+      },
+      "expected_status": "verified",
+      "expected_reasons": [],
+      "expect_preserved": {
+        "evidence": [
+          {
+            "url": "https://example.com/real",
+            "require_live": true
+          }
+        ],
+        "fix_refs": [
+          "fix-1"
+        ],
+        "root_cause_refs": [
+          "root-1"
+        ]
+      }
+    },
+    {
+      "name": "nested_fix_diagnostics_url_rejected",
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "fake-fix-url",
+        "evidence": [
+          {
+            "url": "https://example.com/fake-fix-diagnostic",
+            "require_live": false
+          }
+        ],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": [],
+        "state_claims": []
+      },
+      "expected_status": "rejected",
+      "expected_reasons": [
+        "url_not_in_evidence"
+      ]
+    },
+    {
+      "name": "nested_root_diagnostics_url_rejected",
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "fake-root-url",
+        "evidence": [
+          {
+            "url": "https://example.com/fake-root-diagnostic",
+            "require_live": false
+          }
+        ],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": [],
+        "state_claims": []
+      },
+      "expected_status": "rejected",
+      "expected_reasons": [
+        "url_not_in_evidence"
+      ]
+    },
+    {
+      "name": "duplicate_fix_identity_rejected_as_ambiguous",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8",
+        "authority_sealed_at": "2026-09-23T03:00:00Z",
+        "authority_proof": "dup-fix-proof",
+        "website_url": "https://example.com",
+        "pages": [
+          {
+            "url": "https://example.com/real",
+            "status_code": 200
+          }
+        ],
+        "fixes": [
+          {
+            "fix_id": "fix-1",
+            "evidence_refs": [
+              "https://example.com/real"
+            ]
+          },
+          {
+            "fix_id": "fix-1",
+            "evidence_refs": [
+              "https://example.com/real"
+            ]
+          }
+        ],
+        "root_causes": [
+          {
+            "root_cause_id": "root-1",
+            "evidence_refs": [
+              "https://example.com/real"
+            ]
+          }
+        ]
+      },
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "dup-fix",
+        "evidence": [
+          {
+            "url": "https://example.com/real",
+            "require_live": false
+          }
+        ],
+        "numeric_claims": [],
+        "fix_refs": [
+          "fix-1"
+        ],
+        "root_cause_refs": [],
+        "state_claims": []
+      },
+      "expected_status": "rejected",
+      "expected_reasons": [
+        "fix_ref_ambiguous"
+      ]
+    },
+    {
+      "name": "duplicate_root_identity_rejected_as_ambiguous",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8",
+        "authority_sealed_at": "2026-09-23T03:00:00Z",
+        "authority_proof": "dup-root-proof",
+        "website_url": "https://example.com",
+        "pages": [
+          {
+            "url": "https://example.com/real",
+            "status_code": 200
+          }
+        ],
+        "fixes": [
+          {
+            "fix_id": "fix-1",
+            "root_cause_id": "root-1",
+            "evidence_refs": [
+              "https://example.com/real"
+            ]
+          }
+        ],
+        "root_causes": [
+          {
+            "root_cause_id": "root-1",
+            "evidence_refs": [
+              "https://example.com/real"
+            ]
+          },
+          {
+            "root_cause_id": "root-1",
+            "evidence_refs": [
+              "https://example.com/real"
+            ]
+          }
+        ]
+      },
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "dup-root",
+        "evidence": [
+          {
+            "url": "https://example.com/real",
+            "require_live": false
+          }
+        ],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": [
+          "root-1"
+        ],
+        "state_claims": []
+      },
+      "expected_status": "rejected",
+      "expected_reasons": [
+        "root_cause_ref_ambiguous"
+      ]
+    },
+    {
+      "name": "incomplete_fix_record_cannot_invent_identity",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8",
+        "authority_sealed_at": "2026-09-23T03:00:00Z",
+        "authority_proof": "incomplete-fix-proof",
+        "website_url": "https://example.com",
+        "pages": [
+          {
+            "url": "https://example.com/real",
+            "status_code": 200
+          }
+        ],
+        "fixes": [
+          {
+            "title": "missing id",
+            "evidence_refs": [
+              "https://example.com/real"
+            ]
+          }
+        ],
+        "root_causes": []
+      },
+      "payload": {
+        "schema_version": "ai_annotation_v2",
+        "annotation_id": "missing-fix",
+        "evidence": [
+          {
+            "url": "https://example.com/real",
+            "require_live": false
+          }
+        ],
+        "numeric_claims": [],
+        "fix_refs": [
+          "fix-1"
+        ],
+        "root_cause_refs": [],
+        "state_claims": []
+      },
+      "expected_status": "rejected",
+      "expected_reasons": [
+        "fix_ref_missing"
+      ]
+    }
+  ]
+}

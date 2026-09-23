@@ -121,6 +121,7 @@ def build_missing_h1_comparison_evidence(
         })
 
     observations.sort(key=lambda item: item["page_url"])
+    observations = observations[:150]
     evaluated = [item for item in observations if item["evaluated"] is True]
     present = [item for item in evaluated if item["finding_present"] is True]
     absent = [item for item in evaluated if item["finding_present"] is False]
@@ -135,5 +136,5 @@ def build_missing_h1_comparison_evidence(
         "evaluated_page_count": len(evaluated),
         "finding_present_count": len(present),
         "finding_absent_count": len(absent),
-        "observations": observations[:150],
+        "observations": observations,
     }

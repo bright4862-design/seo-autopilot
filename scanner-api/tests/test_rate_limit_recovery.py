@@ -1,4 +1,5 @@
 import time
+from datetime import datetime, timezone
 
 import httpx
 import pytest
@@ -6,6 +7,85 @@ import pytest
 import app.scanner as scanner
 from app.extract import extract_page
 from tests import fixtures as fx
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("server", ["cloudflare", "nginx", ""])
+@pytest.mark.parametrize(
+    ("retry_after", "expected_waits", "expected_attempts", "retry_outcome"),
+    [
+        ("60", [60.0], 2, "throttled"),
+        ("Wed, 23 Sep 2026 12:01:00 GMT", [60.0], 2, "throttled"),
+        ("invalid", [30.0], 2, "throttled"),
+        # This fits the old deadline-minus-20 guard but leaves too little
+        # time for the retry, useful crawling and response assembly.
+        ("92", [], 1, "throttled"),
+        ("3600", [], 1, "throttled"),
+        ("1", [30.0], 2, "timeout"),
+        ("1", [30.0], 2, "unavailable"),
+    ],
+)
+async def test_initial_throttle_respects_retry_after_and_remaining_budget(
+    mock_network, monkeypatch, retry_after, expected_waits, expected_attempts, retry_outcome, server,
+):
+    origin = "https://retry-after.example"
+    requests = mock_network({
+        f"{origin}/robots.txt": {"body": "", "status": 404, "content_type": "text/plain"},
+    })
+    original_safe_get = scanner.safe_get
+    landing_calls = 0
+    waits = []
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 9, 23, 12, 0, tzinfo=timezone.utc)
+
+    async def throttled_landing(client, url, *args, **kwargs):
+        nonlocal landing_calls
+        if url == f"{origin}/":
+            landing_calls += 1
+            if landing_calls > 1:
+                if retry_outcome == "timeout":
+                    raise httpx.ReadTimeout("fixture timeout")
+                if retry_outcome == "unavailable":
+                    return None
+            return httpx.Response(
+                429,
+                headers={"server": server, "content-type": "text/html", "retry-after": retry_after},
+                text="<html><title>Verifying your connection...</title></html>",
+                request=httpx.Request("GET", url),
+            )
+        return await original_safe_get(client, url, *args, **kwargs)
+
+    async def record_wait(seconds):
+        waits.append(seconds)
+
+    async def sitemap_must_not_run(*args, **kwargs):
+        raise AssertionError("a throttled landing must not fan out into sitemap discovery")
+
+    monkeypatch.setattr(scanner, "datetime", FixedDateTime)
+    monkeypatch.setattr(scanner, "safe_get", throttled_landing)
+    monkeypatch.setattr(scanner.asyncio, "sleep", record_wait)
+    monkeypatch.setattr(scanner, "load_sitemap_urls", sitemap_must_not_run)
+
+    result = await scanner.run_scan(
+        f"{origin}/", scan_mode="advanced", concurrency=8,
+        timeout_seconds=120, job_mode=True,
+    )
+
+    assert waits == expected_waits
+    assert landing_calls == expected_attempts
+    assert result["crawl_timing"]["rate_limit_initial_retry_count"] == expected_attempts - 1
+    assert result["crawl_timing"]["rate_limit_initial_blocked"] is True
+    assert result["crawl_timing"]["sitemap_fetch_count"] == 0
+    assert result["pages_crawled"] == 1
+    assert result["pages"][0]["status_code"] == 429
+    # Landing responses are injected above. No discovery or follow-up probe may
+    # reach the actual transport while the site is asking us to wait.
+    assert [request.url.path for request in requests] == ["/robots.txt"]
+    assert result["coverage_probe_evidence"]["stage2_orchestration_state"] == "not_verified"
+    assert result["coverage_probe_evidence"]["stage2_orchestration_reason"] == "initial_rate_limited"
 
 
 @pytest.mark.asyncio

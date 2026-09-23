@@ -92,6 +92,48 @@ test("array-shaped rule or role identifiers fail closed instead of coercing into
   assert.equal(arrayRule.explanation, REPAIR_EXPLANATION_FALLBACK);
 });
 
+test("conflicting published rule aliases fail closed instead of selecting one explanation", () => {
+  const actual = repairRoleExplanation({
+    rule: "missing_h1",
+    rule_id: "canonical_missing",
+  }, "owner");
+
+  assert.equal(actual.rule, "");
+  assert.equal(actual.explanationAvailable, false);
+  assert.equal(actual.explanation, REPAIR_EXPLANATION_FALLBACK);
+  assert.equal(actual.explanationSource, "manual_review_fallback");
+});
+
+test("blank published rule aliases fail closed beside a valid alias", () => {
+  const actual = repairRoleExplanation({
+    rule: "missing_h1",
+    rule_id: "   ",
+  }, "seo");
+
+  assert.equal(actual.rule, "");
+  assert.equal(actual.explanationAvailable, false);
+  assert.equal(actual.explanation, REPAIR_EXPLANATION_FALLBACK);
+});
+
+test("matching published rule aliases preserve the deterministic mapped explanation", () => {
+  const actual = repairRoleExplanation({
+    rule: "missing_h1",
+    rule_id: "MISSING_H1",
+    original: { rule: "missing_h1", rule_id: "missing_h1" },
+  }, "developer");
+
+  assert.equal(actual.rule, "missing_h1");
+  assert.equal(actual.explanationAvailable, true);
+  assert.equal(actual.explanationSource, "fixlist_role_library");
+});
+
+test("issue_type remains a deterministic fallback when no published rule alias exists", () => {
+  const actual = repairRoleExplanation({ issue_type: "missing_h1" }, "marketing");
+  assert.equal(actual.rule, "missing_h1");
+  assert.equal(actual.explanationAvailable, true);
+  assert.equal(actual.explanationSource, "fixlist_role_library");
+});
+
 test("direct role entry lookup rejects inherited object-property names", () => {
   assert.ok(roleExplanationEntry("missing_h1"));
   for (const inheritedName of ["constructor", "toString", "__proto__"]) {

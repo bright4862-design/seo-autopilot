@@ -22,3 +22,18 @@ This candidate edits no FixList/V8/persistence/release seam. Product activation 
 - One initial test expected raw apostrophe text instead of React-escaped HTML; corrected the assertion to compare escaped text, without changing production behavior.
 - Component ESLint, repository typecheck, `git diff --check`: passed.
 - No browser visual test, full app suite, deployment or runtime AI enablement claimed.
+
+## Wording review
+
+Reviewed all 32 explanations across eight rules and four roles. Copy library is now `role_explanation_copy_v2_20260923_top8`; the envelope version is unchanged. Snapshot changes are intentional editorial changes, not evidence changes.
+
+- Missing H1 means no H1 was observed, not that no visible headline exists.
+- Missing canonical does not establish lost rankings or competing pages; inspect existing signals before changing them.
+- Potential orphan pages stay scoped to the crawl sample.
+- Repeated titles and redirecting sitemap entries do not prove a template or generator defect.
+- Redirect guidance checks destination and routing purpose before replacement.
+- A failed scanner request does not prove that visitors cannot open a page.
+- Informative-image wording retains the confirmed rule’s meaning; decorative images remain exempt from descriptive alt text.
+- Role guidance differs in task focus: owner understanding, marketing content/journeys, SEO interpretation, developer investigation/implementation.
+
+Section labels are now “What this means” and “Recommended next step”, covering both repairs and verification tasks without prematurely demanding a change. All 52 focused role/library/view tests pass after updating the 32 reviewed copy snapshots. These checks preserve scanner instructions and source data but do not establish live browser acceptance.

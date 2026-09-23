@@ -37,11 +37,11 @@ export function RepairRoleExplanation({ repair, role = "owner" }) {
   return (
     <div className="space-y-4 text-sm leading-relaxed text-slate-700">
       <div>
-        <h3 className="font-semibold text-slate-900">Why this matters</h3>
+        <h3 className="font-semibold text-slate-900">What this means</h3>
         <p className="mt-1 whitespace-pre-line">{model.explanation.explanation}</p>
       </div>
       <div>
-        <h3 className="font-semibold text-slate-900">What to change</h3>
+        <h3 className="font-semibold text-slate-900">Recommended next step</h3>
         <p className="mt-1 whitespace-pre-line">{model.suggestion.suggestedFix}</p>
       </div>
     </div>

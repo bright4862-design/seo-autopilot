@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .repair_identity import REPAIR_VERIFICATION_VERSION
 from .scan_comparison import (
     SCAN_COMPARISON_VERSION,
     build_customer_scan_comparison_presentation,
@@ -13,6 +14,7 @@ SCAN_COMPARISON_INTEGRITY_VERSION = "scan_comparison_integrity_v1"
 _COMPARATOR_STATES = frozenset({"verified_fixed", "still_detected", "came_back", "could_not_verify"})
 _SUMMARY_STATES = frozenset({"fixed", "still_detected", "came_back", "could_not_verify"})
 _REFERENCE_SOURCES = frozenset({"persisted_repair_fingerprint", "computed_repair_identity"})
+_VERIFIED_FIXED_CONTRACT_STATES = frozenset({"compatible", "legacy_compatible"})
 
 
 def _exact_scan_id(value: Any, field: str) -> str:
@@ -109,7 +111,7 @@ def validate_scan_comparison_v1(comparison: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"{field} cannot mark an empty repair fingerprint stable")
         if source == "persisted_repair_fingerprint" and not fingerprint:
             raise ValueError(f"{field} cannot claim a persisted fingerprint without one")
-        _exact_bool(
+        same_reference_observed = _exact_bool(
             row.get("same_reference_fingerprint_observed"),
             f"{field}.same_reference_fingerprint_observed",
         )
@@ -118,6 +120,8 @@ def validate_scan_comparison_v1(comparison: dict[str, Any]) -> dict[str, Any]:
         current_finding_id = row.get("current_finding_id")
         if not isinstance(previous_finding_id, str) or not isinstance(current_finding_id, str):
             raise ValueError(f"{field} finding IDs must be strings")
+        if current_finding_id and not same_reference_observed:
+            raise ValueError(f"{field} cannot name a current finding without observing the same reference fingerprint")
 
         state = row.get("state")
         if state not in _COMPARATOR_STATES:
@@ -126,13 +130,48 @@ def validate_scan_comparison_v1(comparison: dict[str, Any]) -> dict[str, Any]:
         expected_summary_state = "fixed" if state == "verified_fixed" else state
         if summary_state != expected_summary_state or summary_state not in _SUMMARY_STATES:
             raise ValueError(f"{field}.summary_state contradicts comparator state")
+
+        # Positive cross-scan states are emitted by the canonical comparator only
+        # from a stable historical technical identity. Persisted fingerprints are
+        # useful continuity references, but never authority on their own.
+        if state in {"verified_fixed", "still_detected", "came_back"} and not stable:
+            raise ValueError(f"{field}.{state} requires a stable historical repair identity")
+        if state == "verified_fixed" and same_reference_observed:
+            raise ValueError(f"{field}.verified_fixed contradicts a same-fingerprint observation in the current scan")
+        if state in {"still_detected", "came_back"} and not same_reference_observed:
+            raise ValueError(f"{field}.{state} requires the same stable repair fingerprint in the current scan")
+
         expected_counts[summary_state] += 1
 
-        for name in ("previous_affected_pages", "rechecked_pages", "eligible_rechecked_pages"):
-            _nonnegative_int(row.get(name), f"{field}.{name}")
-        for name in ("reason", "verification_version", "comparison_contract_state"):
-            if not isinstance(row.get(name), str):
-                raise ValueError(f"{field}.{name} must be a string")
+        previous_affected_pages = _nonnegative_int(
+            row.get("previous_affected_pages"),
+            f"{field}.previous_affected_pages",
+        )
+        rechecked_pages = _nonnegative_int(row.get("rechecked_pages"), f"{field}.rechecked_pages")
+        eligible_rechecked_pages = _nonnegative_int(
+            row.get("eligible_rechecked_pages"),
+            f"{field}.eligible_rechecked_pages",
+        )
+        if rechecked_pages > previous_affected_pages or eligible_rechecked_pages > rechecked_pages:
+            raise ValueError(f"{field} page verification accounting is contradictory")
+
+        reason = row.get("reason")
+        verification_version = row.get("verification_version")
+        comparison_contract_state = row.get("comparison_contract_state")
+        if not isinstance(reason, str) or not isinstance(verification_version, str) or not isinstance(comparison_contract_state, str):
+            raise ValueError(f"{field} reason/version/contract state must be strings")
+        if verification_version != REPAIR_VERIFICATION_VERSION:
+            raise ValueError(f"{field}.verification_version is not the canonical repair verification version")
+
+        if state == "verified_fixed":
+            if previous_affected_pages <= 0:
+                raise ValueError(f"{field}.verified_fixed requires at least one previously affected page")
+            if rechecked_pages != previous_affected_pages or eligible_rechecked_pages != previous_affected_pages:
+                raise ValueError(f"{field}.verified_fixed requires every previously affected page to be rechecked and eligible")
+            if comparison_contract_state not in _VERIFIED_FIXED_CONTRACT_STATES:
+                raise ValueError(f"{field}.verified_fixed requires a compatible comparison contract")
+        elif state in {"still_detected", "came_back"} and eligible_rechecked_pages != 0:
+            raise ValueError(f"{field}.{state} cannot claim page-level fixed verification evidence")
 
         if fingerprint:
             previous_fingerprints.add(fingerprint)

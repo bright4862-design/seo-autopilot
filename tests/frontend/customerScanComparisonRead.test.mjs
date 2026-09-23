@@ -80,6 +80,7 @@ async function invoke({ mutate = () => {}, body = { action: "compare", scan_id: 
   await mutate(rows);
   const reads = [];
   const requests = [];
+  const diagnostics = [];
   const access = { id: "access", owner_user_id: "owner", user_email: "paid@example.com", access_status: "active", has_full_access: true,
     plan_id: "standard150_lifetime", grant_source: "manual_grant", app_id: "6a498732ec779dfaaeab0e53", granted_at: "2026-09-22T09:00:00Z" };
   const entities = {
@@ -92,11 +93,12 @@ async function invoke({ mutate = () => {}, body = { action: "compare", scan_id: 
   const harness = {
     ...projection, ...limited, ...preview, ...compatibility, ...comparisonReader,
     RELEASE_FINGERPRINT, FUNCTION_BUILD_ID,
+    console: { error: (record) => diagnostics.push(JSON.parse(record)) },
     createClientFromRequest: () => ({ auth: { me: async () => ({ id: "owner", email: "paid@example.com" }) }, asServiceRole: { entities } }),
     secrets: { get: () => signingKey },
     requestScanComparison: (args) => requestScanComparison({ ...args, now: () => NOW, deadlineMs, fetchImpl: async (url, init) => {
       assert.equal(url, "https://gateway.example/compare");
-      assert.equal(init.redirect, "error");
+      assert.equal(init.redirect, "manual");
       assert.equal(init.headers["x-fixlist-signature"], sign("fixlist-scan-comparison-request-v1", `${init.headers["x-fixlist-timestamp"]}\n${init.body}`));
       const payload = JSON.parse(init.body);
       requests.push(payload);
@@ -113,7 +115,7 @@ async function invoke({ mutate = () => {}, body = { action: "compare", scan_id: 
     const source = `const { ${Object.keys(harness).join(",")} } = globalThis.${name};\n${javascript}\n// ${name}`;
     await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
     const response = await handler(new Request("https://reader.example", { method: "POST", body: JSON.stringify(body) }));
-    return { status: response.status, result: await response.json(), requests, reads, rows };
+    return { status: response.status, result: await response.json(), requests, reads, rows, diagnostics };
   } finally {
     delete globalThis[name];
     if (previousDeno === undefined) delete globalThis.Deno;
@@ -340,4 +342,128 @@ test("unknown support reference values are never reflected", () => {
   const result = comparisonReader.unavailableScanComparison("current", "private-untrusted-value");
   assert.equal(result.support_reference, "CMP-CURRENT");
   assert.equal(JSON.stringify(result).includes("private"), false);
+});
+
+for (const status of [300, 301, 302, 303, 304, 307, 308, 399]) {
+  test(`HTTP ${status} is diagnosed without following or exposing a redirect`, async () => {
+    let cancelled = false;
+    const { result, requests, diagnostics } = await invoke({ gateway: () => new Response(status === 304 ? null : new ReadableStream({
+      cancel() { cancelled = true; },
+    }), { status, headers: { location: "https://private-destination.example/?proof=private-proof" } }) });
+    assert.equal(result.support_reference, "CMP-GATEWAY-REDIRECT");
+    assert.equal(requests.length, 1);
+    assert.equal(cancelled, status !== 304);
+    assert.equal(diagnostics.length, 1);
+    assert.equal(diagnostics[0].http_status, status);
+    assert.equal(diagnostics[0].build_id, FUNCTION_BUILD_ID);
+    assert.equal(diagnostics[0].runtime_activation_id, "getCustomerScanResultV8-fresh-runtime-20260922-v1");
+    assert.equal(JSON.stringify({ result, diagnostics }).includes("private"), false);
+  });
+}
+
+test("actual fetch never forwards signed evidence to a redirect destination", async () => {
+  const { createServer } = await import("node:http");
+  const paths = [];
+  const server = createServer((req, res) => {
+    paths.push(req.url);
+    req.resume();
+    res.writeHead(307, { location: "/private-destination" }).end();
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    await assert.rejects(requestScanComparison({
+      gatewayUrl: "https://gateway.example", signingKey: SECRET, pair: transportPair(await fixture()),
+      fetchImpl: (_url, init) => fetch(`http://127.0.0.1:${server.address().port}/compare`, init),
+    }), (error) => error.support_reference === "CMP-GATEWAY-REDIRECT");
+    assert.deepEqual(paths, ["/compare"]);
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+for (const [error, expectedKind] of [
+  [new TypeError("private-url", { cause: { code: "ENOTFOUND", message: "private-proof" } }), "dns"],
+  [new TypeError("error sending request: dns error for private-host"), "dns"],
+  [new TypeError("invalid peer certificate: private-host"), "tls"],
+  [new TypeError("connection reset by peer at private-host"), "connection_reset"],
+  [new TypeError("request entity too large private-body"), "request_size"],
+  [new TypeError("private-only"), "unknown"],
+  [{ name: "private-name", code: "private-code", message: "private-message" }, "unknown"],
+  [Object.defineProperty({}, "cause", { get() { throw new Error("private-getter"); } }), "unknown"],
+  [new Proxy({}, { getPrototypeOf() { throw new Error("private-proxy"); }, get() { throw new Error("private-getter"); } }), "unknown"],
+]) {
+  test(`transport diagnostics classify ${expectedKind} without retaining error contents`, async () => {
+    const { result, requests, diagnostics } = await invoke({ gateway: () => { throw error; } });
+    assert.equal(result.support_reference, "CMP-NETWORK");
+    assert.equal(diagnostics.length, 1);
+    const record = diagnostics[0];
+    assert.equal(record.network_error_kind, expectedKind);
+    assert.equal(record.request_bytes, Buffer.byteLength(JSON.stringify(requests[0])));
+    assert.equal(record.local_aborted, false);
+    assert.equal(record.http_status, null);
+    assert.ok(Number.isInteger(record.elapsed_ms) && record.elapsed_ms >= 0 && record.elapsed_ms <= 300_000);
+    assert.match(record.gateway_origin_fingerprint, /^[a-f0-9]{16}$/);
+    assert.equal(JSON.stringify(record).includes("private"), false);
+    assert.equal(JSON.stringify(record).includes(SECRET), false);
+    assert.equal(JSON.stringify(record).includes("gateway.example"), false);
+    assert.deepEqual(Object.keys(record).sort(), ["event", "reference", "stage", "request_bytes", "elapsed_ms",
+      "local_aborted", "http_status", "gateway_origin_fingerprint", "network_error_kind", "build_id", "runtime_activation_id"].sort());
+  });
+}
+
+test("local deadline is diagnosed separately from a transport rejection", async () => {
+  const diagnostics = [];
+  await assert.rejects(requestScanComparison({
+    gatewayUrl: "https://gateway.example", signingKey: SECRET, pair: transportPair(await fixture()), deadlineMs: 5,
+    onDiagnostic: (record) => diagnostics.push(record),
+    fetchImpl: (_url, init) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener("abort", () => reject(new Error("private-deadline")), { once: true });
+    }),
+  }), (error) => error.support_reference === "CMP-TIMEOUT");
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0].reference, "CMP-TIMEOUT");
+  assert.equal(diagnostics[0].local_aborted, true);
+});
+
+test("diagnostic callback failures do not change the optional comparison failure", async () => {
+  const pair = transportPair(await fixture());
+  for (const onDiagnostic of [() => { throw new Error("private-log-failure"); }, () => Promise.reject(new Error("private-log-failure"))]) {
+    await assert.rejects(requestScanComparison({
+      gatewayUrl: "https://gateway.example", signingKey: SECRET, pair, onDiagnostic,
+      fetchImpl: async () => { throw new TypeError("private-transport-failure"); },
+    }), (error) => error.support_reference === "CMP-NETWORK");
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+});
+
+test("origin fingerprints normalize equivalent URLs and distinguish a different gateway", async () => {
+  const records = [];
+  const pair = transportPair(await fixture());
+  for (const gatewayUrl of ["https://gateway.example", "https://GATEWAY.example:443/", "https://other.example"]) {
+    await assert.rejects(requestScanComparison({ gatewayUrl, signingKey: SECRET, pair,
+      onDiagnostic: (record) => records.push(record), fetchImpl: async () => { throw new Error("offline"); },
+    }));
+  }
+  assert.equal(records[0].gateway_origin_fingerprint, records[1].gateway_origin_fingerprint);
+  assert.notEqual(records[0].gateway_origin_fingerprint, records[2].gateway_origin_fingerprint);
+});
+
+test("a request over 2 MiB retains all authenticated snapshot bytes", async () => {
+  const pair = transportPair(await fixture());
+  pair.current_snapshot.report = "é".repeat(1_100_000);
+  const diagnostics = [];
+  const result = await requestScanComparison({ gatewayUrl: "https://gateway.example", signingKey: SECRET, pair,
+    now: () => NOW, onDiagnostic: (record) => diagnostics.push(record),
+    fetchImpl: async (_url, init) => {
+      assert.ok(Buffer.byteLength(init.body) > 2 * 1024 * 1024);
+      assert.equal(init.headers["x-fixlist-signature"], sign("fixlist-scan-comparison-request-v1", `${init.headers["x-fixlist-timestamp"]}\n${init.body}`));
+      const payload = JSON.parse(init.body);
+      assert.deepEqual(payload.current_snapshot, pair.current_snapshot);
+      assert.deepEqual(payload.previous_snapshot, pair.previous_snapshot);
+      return responseFor(payload);
+    },
+  });
+  assert.equal(result.version, "scan_comparison_presentation_v1");
+  assert.deepEqual(diagnostics, []);
 });

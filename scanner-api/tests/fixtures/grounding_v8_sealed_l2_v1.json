@@ -39,6 +39,13 @@
             {
               "rule_id": "fix:canonical-template",
               "root_cause_id": "root:canonical-template",
+              "root_cause_evidence": {
+                "version": "root_cause_evidence_v1_verified",
+                "state": "verified",
+                "root_cause_id": "root:canonical-template",
+                "repair_surface_id": "surface:canonical-template",
+                "evidence_refs": ["https://example.com/products/CaseSensitive?variant=1"]
+              },
               "url_provenance": {
                 "published_url": "https://example.com/products/CaseSensitive?variant=1",
                 "request_url": "https://example.com/products/CaseSensitive?variant=1&utm_source=x",

@@ -21,6 +21,7 @@ from .stage3_root_causes import validate_root_cause_evidence
 
 EVIDENCE_SET_VERSION = "ai_evidence_set_v1"
 GROUNDING_VERIFIER_VERSION = "grounding_verifier_v1"
+_STAGE3_HANDOFF_VERSION = "fixlist_handoff_v2"
 
 # URL evidence is intentionally container-bound. A sealed snapshot can contain
 # diagnostics/metadata with URL-looking fields; those are not citation evidence
@@ -130,20 +131,117 @@ def _observed_status_code(node: dict[str, Any]) -> int:
     return 0
 
 
+def _strict_text(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _stage3_handoff_sources(sealed_l2: dict[str, Any]) -> list[dict[str, Any]]:
+    """Read only known sealed Stage-3 handoff placements.
+
+    Grounding does not infer scan identity from arbitrary ``scan_id`` fields.
+    The producer identity is accepted only from the existing signed/persisted
+    Handoff-v2 surfaces used by V8.
+    """
+    sources: list[dict[str, Any]] = []
+
+    direct = sealed_l2.get("stage3_handoff_v2_source")
+    if isinstance(direct, dict):
+        sources.append(direct)
+
+    review = sealed_l2.get("review")
+    if isinstance(review, dict):
+        review_source = review.get("stage3_handoff_v2_source")
+        if isinstance(review_source, dict):
+            sources.append(review_source)
+
+    explanation = sealed_l2.get("health_score_explanation")
+    if isinstance(explanation, dict):
+        delivery = explanation.get("stage3_delivery")
+        if isinstance(delivery, dict):
+            delivery_source = delivery.get("handoff_v2_source")
+            if isinstance(delivery_source, dict):
+                sources.append(delivery_source)
+
+    return sources
+
+
+def _trusted_stage3_scan_identity(sealed_l2: dict[str, Any]) -> tuple[str, str]:
+    """Return ``(scan_id, state)`` for known sealed Handoff-v2 sources.
+
+    States are ``verified``, ``absent``, and ``invalid``. Any recognized source
+    with a malformed/version-mismatched identity, or multiple recognized sources
+    that disagree, fails closed to ``invalid``.
+    """
+    sources = _stage3_handoff_sources(sealed_l2)
+    if not sources:
+        return "", "absent"
+
+    identities: set[str] = set()
+    for source in sources:
+        if source.get("handoff_version") != _STAGE3_HANDOFF_VERSION:
+            return "", "invalid"
+        scan = source.get("scan")
+        if not isinstance(scan, dict):
+            return "", "invalid"
+        scan_id = _strict_text(scan.get("scan_id"))
+        scan_run_id = _strict_text(scan.get("scan_run_id"))
+        if not scan_id or scan_id != scan_run_id:
+            return "", "invalid"
+        identities.add(scan_id)
+
+    if len(identities) != 1:
+        return "", "invalid"
+    return next(iter(identities)), "verified"
+
+
+def _member_matches_trusted_scan(
+    node: dict[str, Any],
+    *,
+    trusted_scan_id: str,
+    trusted_scan_state: str,
+) -> bool:
+    if trusted_scan_state == "invalid":
+        return False
+    if trusted_scan_state != "verified":
+        return True
+
+    for field in ("scan_id", "scan_run_id"):
+        if field not in node:
+            continue
+        raw = node.get(field)
+        if raw is None:
+            continue
+        if not isinstance(raw, str):
+            return False
+        local = raw.strip()
+        if local and local != trusted_scan_id:
+            return False
+    return True
+
+
 def _verified_root_cause_evidence_identity(
     node: Any,
     *,
     parent_container: str,
+    trusted_scan_id: str = "",
+    trusted_scan_state: str = "absent",
 ) -> tuple[str, str] | None:
-    """Return Stage-3 root/surface identity only for verified producer evidence.
+    """Return Stage-3 root/surface identity only for trusted producer evidence.
 
-    Grounding intentionally reuses the existing Stage-3 validator. Repeated
-    evidence for one ``root_cause_id + repair_surface_id`` pair inside a single
-    sealed EvidenceSet represents the producer's shared-root group, not multiple
-    competing root definitions. Different surfaces stay distinct and therefore
-    make a bare root reference ambiguous.
+    Grounding reuses the existing Stage-3 evidence validator and, when a sealed
+    Handoff-v2 producer identity is present, applies the same repair-local scan
+    consistency rule as Stage-3 grouping. A malformed recognized producer
+    identity fails closed. Legacy/synthetic sealed fixtures without a recognized
+    producer identity may still contribute a single verified root definition, but
+    repeated definitions cannot coalesce without exact sealed scan identity.
     """
     if parent_container not in _FIX_CONTAINERS or not isinstance(node, dict):
+        return None
+    if not _member_matches_trusted_scan(
+        node if parent_container == "root_cause_evidence" else {},
+        trusted_scan_id=trusted_scan_id,
+        trusted_scan_state=trusted_scan_state,
+    ):
         return None
     validated = validate_root_cause_evidence({"root_cause_evidence": node})
     if validated.get("state") != "verified":
@@ -156,10 +254,18 @@ def _verified_root_cause_evidence_identity(
     return root_id.strip(), surface
 
 
-def _verified_root_cause_evidence_id(node: Any, *, parent_container: str) -> str:
+def _verified_root_cause_evidence_id(
+    node: Any,
+    *,
+    parent_container: str,
+    trusted_scan_id: str = "",
+    trusted_scan_state: str = "absent",
+) -> str:
     identity = _verified_root_cause_evidence_identity(
         node,
         parent_container=parent_container,
+        trusted_scan_id=trusted_scan_id,
+        trusted_scan_state=trusted_scan_state,
     )
     return identity[0] if identity else ""
 
@@ -181,12 +287,21 @@ def _collect_urls(
     container: str = "",
     parent_container: str = "",
     evidence_scope: bool = False,
+    trusted_scan_id: str = "",
+    trusted_scan_state: str = "absent",
 ) -> None:
     if isinstance(node, dict):
         page_record = container in _PAGE_CONTAINERS
         verified_root_evidence = (
             container == "root_cause_evidence"
-            and bool(_verified_root_cause_evidence_id(node, parent_container=parent_container))
+            and bool(
+                _verified_root_cause_evidence_id(
+                    node,
+                    parent_container=parent_container,
+                    trusted_scan_id=trusted_scan_id,
+                    trusted_scan_state=trusted_scan_state,
+                )
+            )
         )
         evidence_record = (
             container in _FIX_CONTAINERS
@@ -243,6 +358,8 @@ def _collect_urls(
                 container=child_name,
                 parent_container=container,
                 evidence_scope=child_scope,
+                trusted_scan_id=trusted_scan_id,
+                trusted_scan_state=trusted_scan_state,
             )
     elif isinstance(node, list):
         for child in node:
@@ -254,6 +371,8 @@ def _collect_urls(
                 container=container,
                 parent_container=parent_container,
                 evidence_scope=evidence_scope,
+                trusted_scan_id=trusted_scan_id,
+                trusted_scan_state=trusted_scan_state,
             )
 
 
@@ -297,6 +416,8 @@ def _collect_refs(
     grouped_root_surfaces: dict[str, set[str]],
     conflicting_fixes: set[str],
     conflicting_roots: set[str],
+    trusted_scan_id: str = "",
+    trusted_scan_state: str = "absent",
 ) -> None:
     if isinstance(node, dict):
         # Repair identities are evidence only when they are direct fields on a
@@ -329,23 +450,26 @@ def _collect_refs(
                 root_counts[value] = root_counts.get(value, 0) + 1
         elif container == "root_cause_evidence":
             # Nested producer evidence defines a root only when it satisfies the
-            # exact Stage-3 signed evidence contract. Stage-3 intentionally groups
-            # multiple Fixes that share the same root_cause_id + repair_surface_id
-            # within one trusted scan. An EvidenceSet is derived from one sealed
-            # L2 snapshot, so repeated verified evidence for that same pair is one
-            # root definition, not ambiguity. Different repair surfaces remain
-            # distinct definitions because ai_annotation_v1 carries only a bare
-            # root_cause_ref and cannot disambiguate them.
+            # exact Stage-3 evidence contract and any sealed Handoff-v2 scan
+            # identity. Repeated evidence may coalesce only when the exact trusted
+            # producer identity is available; without it, each occurrence remains
+            # a separate definition and therefore fails closed if duplicated.
             identity = _verified_root_cause_evidence_identity(
                 node,
                 parent_container=parent_container,
+                trusted_scan_id=trusted_scan_id,
+                trusted_scan_state=trusted_scan_state,
             )
             if identity:
                 root_id, surface_id = identity
                 roots.add(root_id)
-                seen_surfaces = grouped_root_surfaces.setdefault(root_id, set())
-                if surface_id not in seen_surfaces:
-                    seen_surfaces.add(surface_id)
+                if trusted_scan_state == "verified":
+                    grouping_key = f"{trusted_scan_id}\u0000{surface_id}"
+                    seen_groups = grouped_root_surfaces.setdefault(root_id, set())
+                    if grouping_key not in seen_groups:
+                        seen_groups.add(grouping_key)
+                        root_counts[root_id] = root_counts.get(root_id, 0) + 1
+                else:
                     root_counts[root_id] = root_counts.get(root_id, 0) + 1
 
         for key, child in node.items():
@@ -360,6 +484,8 @@ def _collect_refs(
                 grouped_root_surfaces=grouped_root_surfaces,
                 conflicting_fixes=conflicting_fixes,
                 conflicting_roots=conflicting_roots,
+                trusted_scan_id=trusted_scan_id,
+                trusted_scan_state=trusted_scan_state,
             )
     elif isinstance(node, list):
         for child in node:
@@ -374,6 +500,8 @@ def _collect_refs(
                 grouped_root_surfaces=grouped_root_surfaces,
                 conflicting_fixes=conflicting_fixes,
                 conflicting_roots=conflicting_roots,
+                trusted_scan_id=trusted_scan_id,
+                trusted_scan_state=trusted_scan_state,
             )
 
 
@@ -388,9 +516,18 @@ def build_evidence_set(sealed_l2: dict[str, Any], *, scan_origin: str = "") -> E
     if not origin:
         raise EvidenceUnavailable("sealed_l2_scan_origin_missing")
 
+    trusted_scan_id, trusted_scan_state = _trusted_stage3_scan_identity(sealed_l2)
+
     members: set[str] = set()
     live: set[str] = set()
-    _collect_urls(sealed_l2, origin, members, live)
+    _collect_urls(
+        sealed_l2,
+        origin,
+        members,
+        live,
+        trusted_scan_id=trusted_scan_id,
+        trusted_scan_state=trusted_scan_state,
+    )
 
     state_values: dict[str, Scalar] = {}
     numeric_values: dict[str, int | float] = {}
@@ -417,6 +554,8 @@ def build_evidence_set(sealed_l2: dict[str, Any], *, scan_origin: str = "") -> E
         grouped_root_surfaces=grouped_root_surfaces,
         conflicting_fixes=conflicting_fixes,
         conflicting_roots=conflicting_roots,
+        trusted_scan_id=trusted_scan_id,
+        trusted_scan_state=trusted_scan_state,
     )
     ambiguous_fixes = {ref for ref, count in fix_counts.items() if count > 1}
     ambiguous_roots = {ref for ref, count in root_counts.items() if count > 1}
@@ -425,6 +564,8 @@ def build_evidence_set(sealed_l2: dict[str, Any], *, scan_origin: str = "") -> E
         "version": EVIDENCE_SET_VERSION,
         "seal": {field: sealed_l2[field] for field in _SEAL_FIELDS},
         "scan_origin": origin,
+        "trusted_stage3_scan_id": trusted_scan_id,
+        "trusted_stage3_scan_state": trusted_scan_state,
         "url_members": sorted(members),
         "live_urls": sorted(live),
         "numeric_values": sorted(numeric_values.items()),

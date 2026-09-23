@@ -194,6 +194,44 @@ def _trusted_stage3_scan_identity(sealed_l2: dict[str, Any]) -> tuple[str, str]:
     return next(iter(identities)), "verified"
 
 
+def _trusted_stage3_fix_membership(
+    sealed_l2: dict[str, Any],
+    *,
+    trusted_scan_state: str,
+) -> tuple[frozenset[int], str]:
+    """Return exact recognized Handoff-v2 Fix members for producer binding.
+
+    A verified producer identity must not authorize a different sibling ``fixes``
+    collection merely because it lives inside the same sealed snapshot. When at
+    least one recognized Handoff-v2 source declares its ``fixes`` list, nested
+    Stage-3 root evidence is bound to those exact member objects. Older synthetic
+    snapshots that carry producer identity but no Handoff ``fixes`` field retain
+    the pre-binding compatibility path. Malformed declared membership fails closed.
+    """
+    if trusted_scan_state == "invalid":
+        return frozenset(), "invalid"
+    if trusted_scan_state != "verified":
+        return frozenset(), "inactive"
+
+    member_ids: set[int] = set()
+    declared = False
+    for source in _stage3_handoff_sources(sealed_l2):
+        if "fixes" not in source:
+            continue
+        declared = True
+        fixes = source.get("fixes")
+        if not isinstance(fixes, list):
+            return frozenset(), "invalid"
+        for fix in fixes:
+            if not isinstance(fix, dict):
+                return frozenset(), "invalid"
+            member_ids.add(id(fix))
+
+    if not declared:
+        return frozenset(), "legacy_unbound"
+    return frozenset(member_ids), "enforced"
+
+
 def _member_matches_trusted_scan(
     fix: dict[str, Any],
     *,
@@ -236,17 +274,27 @@ def _verified_root_cause_evidence_identity(
     parent_fix: dict[str, Any] | None = None,
     trusted_scan_id: str = "",
     trusted_scan_state: str = "absent",
+    trusted_member_ids: frozenset[int] = frozenset(),
+    trusted_membership_state: str = "inactive",
 ) -> tuple[str, str] | None:
     """Return Stage-3 root/surface identity only for trusted producer evidence.
 
     Grounding reuses the existing Stage-3 evidence validator and, when a sealed
-    Handoff-v2 producer identity is present, applies the same repair-local scan
-    consistency rule as Stage-3 grouping. A malformed recognized producer
-    identity fails closed. Legacy/synthetic sealed fixtures without a recognized
-    producer identity may still contribute a single verified root definition, but
-    repeated definitions cannot coalesce without exact sealed scan identity.
+    Handoff-v2 producer identity is present, applies both the repair-local scan
+    consistency rule and the signed Handoff ``fixes`` containment rule. A sibling
+    Fix collection cannot borrow producer identity to manufacture root authority or
+    citation URLs. Legacy/synthetic snapshots with no declared Handoff members keep
+    their prior single-definition compatibility behavior.
     """
     if parent_container not in _FIX_CONTAINERS or not isinstance(node, dict) or not isinstance(parent_fix, dict):
+        return None
+    if trusted_membership_state == "invalid":
+        return None
+    if (
+        trusted_scan_state == "verified"
+        and trusted_membership_state == "enforced"
+        and id(parent_fix) not in trusted_member_ids
+    ):
         return None
     if not _member_matches_trusted_scan(
         parent_fix,
@@ -284,6 +332,8 @@ def _collect_urls(
     evidence_scope: bool = False,
     trusted_scan_id: str = "",
     trusted_scan_state: str = "absent",
+    trusted_member_ids: frozenset[int] = frozenset(),
+    trusted_membership_state: str = "inactive",
 ) -> None:
     if isinstance(node, dict):
         page_record = container in _PAGE_CONTAINERS
@@ -328,6 +378,8 @@ def _collect_urls(
                         parent_fix=node,
                         trusted_scan_id=trusted_scan_id,
                         trusted_scan_state=trusted_scan_state,
+                        trusted_member_ids=trusted_member_ids,
+                        trusted_membership_state=trusted_membership_state,
                     )
                 )
             else:
@@ -351,6 +403,8 @@ def _collect_urls(
                 evidence_scope=child_scope,
                 trusted_scan_id=trusted_scan_id,
                 trusted_scan_state=trusted_scan_state,
+                trusted_member_ids=trusted_member_ids,
+                trusted_membership_state=trusted_membership_state,
             )
     elif isinstance(node, list):
         for child in node:
@@ -364,6 +418,8 @@ def _collect_urls(
                 evidence_scope=evidence_scope,
                 trusted_scan_id=trusted_scan_id,
                 trusted_scan_state=trusted_scan_state,
+                trusted_member_ids=trusted_member_ids,
+                trusted_membership_state=trusted_membership_state,
             )
 
 
@@ -409,6 +465,8 @@ def _collect_refs(
     conflicting_roots: set[str],
     trusted_scan_id: str = "",
     trusted_scan_state: str = "absent",
+    trusted_member_ids: frozenset[int] = frozenset(),
+    trusted_membership_state: str = "inactive",
 ) -> None:
     if isinstance(node, dict):
         # Repair identities are evidence only when they are direct fields on a
@@ -426,8 +484,9 @@ def _collect_refs(
 
             # ``root_cause_id`` on a Fix is only a link. It does not establish a
             # sealed root-cause definition. A nested producer evidence object may
-            # establish one only after the existing Stage-3 contract and trusted
-            # scan-identity checks succeed for this exact repair record.
+            # establish one only after the existing Stage-3 contract, trusted
+            # scan-identity checks, and Handoff-member binding succeed for this
+            # exact repair record.
             root_evidence = node.get("root_cause_evidence")
             identity = _verified_root_cause_evidence_identity(
                 root_evidence,
@@ -435,6 +494,8 @@ def _collect_refs(
                 parent_fix=node,
                 trusted_scan_id=trusted_scan_id,
                 trusted_scan_state=trusted_scan_state,
+                trusted_member_ids=trusted_member_ids,
+                trusted_membership_state=trusted_membership_state,
             )
             if identity:
                 root_id, surface_id = identity
@@ -475,6 +536,8 @@ def _collect_refs(
                 conflicting_roots=conflicting_roots,
                 trusted_scan_id=trusted_scan_id,
                 trusted_scan_state=trusted_scan_state,
+                trusted_member_ids=trusted_member_ids,
+                trusted_membership_state=trusted_membership_state,
             )
     elif isinstance(node, list):
         for child in node:
@@ -491,6 +554,8 @@ def _collect_refs(
                 conflicting_roots=conflicting_roots,
                 trusted_scan_id=trusted_scan_id,
                 trusted_scan_state=trusted_scan_state,
+                trusted_member_ids=trusted_member_ids,
+                trusted_membership_state=trusted_membership_state,
             )
 
 
@@ -506,6 +571,10 @@ def build_evidence_set(sealed_l2: dict[str, Any], *, scan_origin: str = "") -> E
         raise EvidenceUnavailable("sealed_l2_scan_origin_missing")
 
     trusted_scan_id, trusted_scan_state = _trusted_stage3_scan_identity(sealed_l2)
+    trusted_member_ids, trusted_membership_state = _trusted_stage3_fix_membership(
+        sealed_l2,
+        trusted_scan_state=trusted_scan_state,
+    )
 
     members: set[str] = set()
     live: set[str] = set()
@@ -516,6 +585,8 @@ def build_evidence_set(sealed_l2: dict[str, Any], *, scan_origin: str = "") -> E
         live,
         trusted_scan_id=trusted_scan_id,
         trusted_scan_state=trusted_scan_state,
+        trusted_member_ids=trusted_member_ids,
+        trusted_membership_state=trusted_membership_state,
     )
 
     state_values: dict[str, Scalar] = {}
@@ -545,6 +616,8 @@ def build_evidence_set(sealed_l2: dict[str, Any], *, scan_origin: str = "") -> E
         conflicting_roots=conflicting_roots,
         trusted_scan_id=trusted_scan_id,
         trusted_scan_state=trusted_scan_state,
+        trusted_member_ids=trusted_member_ids,
+        trusted_membership_state=trusted_membership_state,
     )
     ambiguous_fixes = {ref for ref, count in fix_counts.items() if count > 1}
     ambiguous_roots = {ref for ref, count in root_counts.items() if count > 1}
@@ -555,6 +628,7 @@ def build_evidence_set(sealed_l2: dict[str, Any], *, scan_origin: str = "") -> E
         "scan_origin": origin,
         "trusted_stage3_scan_id": trusted_scan_id,
         "trusted_stage3_scan_state": trusted_scan_state,
+        "trusted_stage3_membership_state": trusted_membership_state,
         "url_members": sorted(members),
         "live_urls": sorted(live),
         "numeric_values": sorted(numeric_values.items()),

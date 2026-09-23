@@ -17,6 +17,13 @@ from app.geo_v8_transport_scope import (
 from app.geo_v8_transport_serialization import serialize_geo_v8_transport_candidate
 
 
+DEFAULT_GATES = {
+    "parent_authoritative": True,
+    "entry_verified": True,
+    "access_limited": False,
+}
+
+
 def rows(page_ids):
     return [
         Observation(page_id, check_id, "pass", "evidence-ref", "")
@@ -57,17 +64,29 @@ def redigest(candidate):
     return candidate
 
 
+def validate(candidate, page_ids, **overrides):
+    gates = dict(DEFAULT_GATES)
+    gates.update(overrides)
+    return validate_geo_v8_transport_scope(candidate, page_ids, **gates)
+
+
+def serialize(candidate, page_ids, **overrides):
+    gates = dict(DEFAULT_GATES)
+    gates.update(overrides)
+    return serialize_geo_v8_transport_candidate_for_scope(candidate, page_ids, **gates)
+
+
 def test_scope_bound_serializer_preserves_existing_canonical_bytes():
     candidate = build()
-    assert serialize_geo_v8_transport_candidate_for_scope(candidate, ["page-1"]) == serialize_geo_v8_transport_candidate(candidate)
+    assert serialize(candidate, ["page-1"]) == serialize_geo_v8_transport_candidate(candidate)
 
 
 def test_scope_binding_is_order_independent_but_set_exact():
     ids = ["page-a", "page-b"]
     candidate = build(ids)
-    assert validate_geo_v8_transport_scope(candidate, list(reversed(ids))) is True
+    assert validate(candidate, list(reversed(ids))) is True
     with pytest.raises(ValueError, match="does not match declared page set"):
-        validate_geo_v8_transport_scope(candidate, ["page-a", "page-c"])
+        validate(candidate, ["page-a", "page-c"])
 
 
 def test_collision_safe_scope_rejects_old_newline_join_aliases():
@@ -77,7 +96,7 @@ def test_collision_safe_scope_rejects_old_newline_join_aliases():
     assert _scope_digest(first) != _scope_digest(second)
     candidate = build(first)
     with pytest.raises(ValueError, match="does not match declared page set"):
-        validate_geo_v8_transport_scope(candidate, second)
+        validate(candidate, second)
 
 
 def test_recomputed_candidate_digest_cannot_rebind_unknown_cell_to_foreign_page():
@@ -86,7 +105,7 @@ def test_recomputed_candidate_digest_cannot_rebind_unknown_cell_to_foreign_page(
     redigest(candidate)
     assert validate_geo_v8_transport_candidate(candidate) is True
     with pytest.raises(ValueError, match="unknown cell is outside"):
-        validate_geo_v8_transport_scope(candidate, ["page-1"])
+        validate(candidate, ["page-1"])
 
 
 def test_recomputed_candidate_digest_cannot_rebind_named_robot_sidecar_to_foreign_page():
@@ -97,23 +116,23 @@ def test_recomputed_candidate_digest_cannot_rebind_named_robot_sidecar_to_foreig
     redigest(candidate)
     assert validate_geo_v8_transport_candidate(candidate) is True
     with pytest.raises(ValueError, match="sidecar is outside"):
-        validate_geo_v8_transport_scope(candidate, [page_id])
+        validate(candidate, [page_id])
 
 
 def test_scope_binding_rejects_duplicate_declared_page_ids():
     candidate = build(("page-1",))
     with pytest.raises(ValueError, match="Duplicate declared"):
-        validate_geo_v8_transport_scope(candidate, ["page-1", "page-1"])
+        validate(candidate, ["page-1", "page-1"])
 
 
 def test_scope_binding_rejects_malformed_or_oversized_page_ids():
     candidate = build(("page-1",))
     with pytest.raises(ValueError, match="Malformed declared"):
-        validate_geo_v8_transport_scope(candidate, [""])
+        validate(candidate, [""])
     with pytest.raises(ValueError, match="Malformed declared"):
-        validate_geo_v8_transport_scope(candidate, ["x" * 201])
+        validate(candidate, ["x" * 201])
     with pytest.raises(ValueError, match="at most 150"):
-        validate_geo_v8_transport_scope(candidate, [f"page-{i}" for i in range(151)])
+        validate(candidate, [f"page-{i}" for i in range(151)])
 
 
 def test_access_limited_candidate_still_binds_exact_page_set_without_exposing_sidecars():
@@ -122,14 +141,58 @@ def test_access_limited_candidate_still_binds_exact_page_set_without_exposing_si
     assert candidate["readiness"]["score"] is None
     assert candidate["named_robots"] == []
     assert candidate["llms_txt"] is None
-    assert validate_geo_v8_transport_scope(candidate, ["page-1"]) is True
+    assert validate(candidate, ["page-1"], access_limited=True) is True
 
 
 def test_scope_bound_serialization_rejects_digest_invalid_candidate_first():
     candidate = build()
     candidate["candidate_digest"] = "0" * 64
     with pytest.raises(ValueError, match="candidate digest mismatch"):
-        serialize_geo_v8_transport_candidate_for_scope(candidate, ["page-1"])
+        serialize(candidate, ["page-1"])
+
+
+def test_scope_binding_requires_boolean_upstream_gate_facts():
+    candidate = build()
+    with pytest.raises(ValueError, match="three boolean gate facts"):
+        validate_geo_v8_transport_scope(
+            candidate,
+            ["page-1"],
+            parent_authoritative=True,
+            entry_verified=True,
+            access_limited=None,
+        )
+
+
+def test_scope_binding_rejects_recomputed_parent_gate_reason_tamper():
+    ids = ["page-1"]
+    candidate = build_geo_v8_transport_candidate(
+        ids,
+        rows(ids),
+        parent_authoritative=False,
+        entry_verified=True,
+    )
+    assert candidate["readiness"]["assessment_status"] == "insufficient_evidence"
+    candidate["readiness"]["assessment_status"] = "assessed"
+    candidate["readiness"]["score"] = 100
+    candidate["readiness"]["reasons"] = []
+    redigest(candidate)
+
+    # Shape/digest validation cannot authenticate upstream gate facts.
+    assert validate_geo_v8_transport_candidate(candidate) is True
+    with pytest.raises(ValueError, match="arithmetic/gate semantics mismatch"):
+        validate_geo_v8_transport_scope(
+            candidate,
+            ids,
+            parent_authoritative=False,
+            entry_verified=True,
+            access_limited=False,
+        )
+
+
+def test_scope_binding_rejects_access_limited_gate_tamper():
+    candidate = build(("page-1",), access_limited=True)
+    with pytest.raises(ValueError, match="access-limited gate mismatch"):
+        validate(candidate, ["page-1"], access_limited=False)
 
 
 def test_scope_bound_validation_and_serialization_do_not_mutate_inputs():
@@ -137,7 +200,7 @@ def test_scope_bound_validation_and_serialization_do_not_mutate_inputs():
     candidate = build(ids)
     before_candidate = deepcopy(candidate)
     before_ids = deepcopy(ids)
-    validate_geo_v8_transport_scope(candidate, ids)
-    serialize_geo_v8_transport_candidate_for_scope(candidate, ids)
+    validate(candidate, ids)
+    serialize(candidate, ids)
     assert candidate == before_candidate
     assert ids == before_ids

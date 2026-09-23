@@ -101,6 +101,12 @@ def test_scope_is_explicit_bounded_and_order_independent():
     assert len(forward["observation_scope"]["page_set_digest"]) == 64
 
 
+def test_scope_digest_is_unambiguous_when_page_ids_contain_delimiters():
+    split = assess(("a", "b"), rows(("a", "b")))
+    embedded = assess(("a\nb",), rows(("a\nb",)))
+    assert split["observation_scope"]["page_set_digest"] != embedded["observation_scope"]["page_set_digest"]
+
+
 def test_exact_eighty_percent_gate_matches_v1():
     pages = [f"p{i}" for i in range(5)]
     complete = [Observation(p, c, "pass", "e") for p in pages for c in CHECKS]

@@ -83,6 +83,13 @@ function stage3Fields(item) {
   return priorityFactors && stage3Counts ? { priorityFactors, stage3Counts } : null;
 }
 
+function hasStage3PresentationSignal(item) {
+  return Boolean(
+    item?.stage3_priority_factors !== undefined
+      || item?.stage3_counts !== undefined,
+  );
+}
+
 export function buildRepairCard(item = {}) {
   const base = legacy.buildRepairCard(item);
   const stage3 = stage3Fields(item);
@@ -90,13 +97,16 @@ export function buildRepairCard(item = {}) {
 }
 
 /**
- * Stage-3 rows arrive in Python-owned rank order after the authenticated V7
- * reader. Do not merge or re-rank them in the browser. Historical rows retain
- * the existing repair-fingerprint merge behavior unchanged.
+ * Current Stage-3 rows arrive in Python-owned rank order after the authenticated
+ * V8 reader. Do not merge or re-rank them in the browser. If one Stage-3 row is
+ * malformed, degrade that row only: valid neighbouring rows must keep their
+ * authenticated Stage-3 presentation fields and source order. Historical
+ * batches with no Stage-3 signal retain the existing repair-fingerprint merge
+ * behavior unchanged.
  */
 export function buildRepairCards(items = []) {
   const source = Array.isArray(items) ? items.filter((item) => item && typeof item === "object") : [];
-  if (source.length > 0 && source.every((item) => stage3Fields(item))) {
+  if (source.length > 0 && source.some((item) => hasStage3PresentationSignal(item))) {
     return source.map((item) => buildRepairCard(item));
   }
   return legacy.buildRepairCards(items);

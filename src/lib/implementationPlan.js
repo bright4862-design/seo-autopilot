@@ -114,9 +114,9 @@ function rootCauseEvidenceOf(item = {}, trustedScanId = "") {
   if (!rootCauseId) return null;
 
   const refs = Array.isArray(evidence.evidence_refs)
-    ? evidence.evidence_refs.map(strictText).filter(Boolean)
+    ? evidence.evidence_refs.map(strictText)
     : [];
-  if (refs.length === 0) return null;
+  if (refs.length === 0 || refs.some((ref) => !ref)) return null;
 
   // B20 root-cause authority is scan-bound. A pure presentation/planning helper
   // cannot establish that boundary by itself, so callers must pass the exact

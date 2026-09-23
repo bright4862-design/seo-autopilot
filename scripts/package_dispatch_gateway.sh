@@ -22,6 +22,7 @@ ARCHIVE_DIR="$(mktemp -d)"
 trap 'rm -rf "$ARCHIVE_DIR"' EXIT
 COMPARISON_MODULES=(
   __init__.py authority_seal.py repair_coverage.py repair_identity.py
+  missing_h1_comparison_contract.py
   scan_comparison.py scan_comparison_integrity.py scan_comparison_authority.py
 )
 ARCHIVE_PATHS=(dispatch-gateway)

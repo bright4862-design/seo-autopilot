@@ -109,7 +109,7 @@ function matchesTrustedScanIdentity(item = {}, trustedScanId = "") {
     if (value === undefined || value === null) continue;
     if (typeof value !== "string") return false;
     const local = value.trim();
-    if (!local) continue;
+    if (!local) return false;
     if (local !== trusted) return false;
   }
   return true;

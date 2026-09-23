@@ -3,7 +3,7 @@
 Status: lane checkpoint only; not integrated, merged, published, or deployed  
 Lane branch: `agent/ai-explanation-plan-20260923`  
 Baseline refreshed from `main`: `c1080d75f7d1aacd748e74009be7a6c15aa40a93` (V8 runtime cutover merged)  
-Verified code checkpoint: `6e80cb15eadeff235b1a280cfa668df05bdfb45a`  
+Verified code checkpoint: `64e002919072e0be00e8ddcac25b10fc34ce9395`  
 
 ## Boundaries
 
@@ -15,7 +15,7 @@ No dedicated tracked H1-2/H1-3 blueprint file was present on refreshed `main`. T
 
 ## Production frequency refresh
 
-Source: `docs/audit/2026-08-21-production-50-site/results.jsonl`, counting every entry in each authoritative result's `top_rules` list. The eight most frequent rules in that production audit are:
+Source: `docs/audit/2026-08-21-production-50-site/results.jsonl`, counting every entry in each authoritative result's `top_rules` list. The source file and refreshed `main` are unchanged from the prior lane checkpoint. The eight most frequent rules in that production audit remain:
 
 | Rank | Rule | Observations |
 | --- | --- | ---: |
@@ -47,6 +47,8 @@ Versioning:
 
 The role module imports `REPAIR_SUGGESTION_FALLBACK` from the existing deterministic suggestion library instead of creating a competing fallback. Missing roles and unmapped rules fail closed to that existing fallback; the helper never guesses a viewer role. Identifiers are string-only, so array/object coercion cannot turn malformed input into a supported role or rule. Direct rule-entry lookup is restricted to own registered keys, so inherited object properties cannot masquerade as mapped rules.
 
+Published scanner-rule aliases now fail closed atomically before explanation lookup. `rule`, `rule_id`, and `ruleId` (plus retained original rule aliases) must agree if more than one is present; a blank, malformed, or conflicting sibling alias cannot be hidden by a preferred field. `issue_type` remains a deterministic fallback only when no published rule alias is present. Matching aliases remain accepted and normal valid-row wording is unchanged, so the pinned copy-library version remains reconstructable without a wording bump.
+
 `repairRolePresentation()` returns the existing `repairSuggestion()` result intact and adds role explanation as separate presentation context. Scanner-authored remediation therefore retains its existing precedence and source metadata. No repair row is mutated.
 
 Integration recommendation: the serialized integrator may add a per-view role toggle that passes one of the four viewer-role ids into `repairRolePresentation()`. No schema migration is required: role selection is presentation state and the wording version is returned by the helper.
@@ -70,7 +72,7 @@ Both edges require the two repairs to carry the same explicit verified `root_cau
 
 Every published repair-local scan identity alias — `scan_id`, `scanId`, `scan_run_id`, and `scanRunId`, including aliases retained under `original` — is treated as a consistency assertion when present. Every present alias must be a non-empty string and must match the exact trusted scan id. A matching alias cannot hide a conflicting, non-string, or blank parallel alias; any such malformed sibling fails closed before root-cause dependency authority or surface/remediation grouping is granted.
 
-Control identifiers that can affect ordering or grouping are string-only. Malformed array/object values cannot be coerced into a valid scanner rule, verified evidence state, repair surface, remediation family, dependency-table version, dependency-edge field, or scan identity assertion. Invalid shapes therefore fail closed to canonical ordering and/or singleton grouping rather than creating implementation authority.
+Control identifiers that can affect ordering or grouping are string-only. Malformed array/object values cannot be coerced into a valid scanner rule, verified evidence state, repair surface, remediation family, dependency-table version, dependency-edge field, or scan identity assertion. Published `rule` / `rule_id` aliases, `repair_surface` aliases, `remediation_family` aliases, and accepted root-cause-evidence aliases must also agree when repeated across the normalized row/original payload. Conflicting or malformed siblings fail closed to canonical ordering and/or singleton grouping instead of creating implementation authority.
 
 A lower action-priority repair can move ahead of a higher action-priority repair only as a prerequisite needed by a versioned dependency edge. Ordering walks canonical rows in order and recursively emits each row's prerequisites first. This matters for a three-row case such as `sitemap(fix_first), h1(important), redirect(improve)`: when verified evidence instantiates `redirect -> sitemap`, the deterministic order is `redirect, sitemap, h1`, not `h1, redirect, sitemap`. Unrelated work is not allowed to drift ahead merely because a canonical row is waiting on its prerequisite.
 
@@ -91,14 +93,14 @@ If instantiated dependencies contain a cycle, the plan sets `cycleDetected=true`
 
 ## Verification
 
-Focused Lane-D inventory at code checkpoint `6e80cb15eadeff235b1a280cfa668df05bdfb45a`:
+Focused Lane-D inventory at exact code checkpoint `64e002919072e0be00e8ddcac25b10fc34ce9395`:
 
-- role-explanation tests: 39
+- role-explanation tests: 43
 - role-presentation tests: 6
 - implementation-plan core tests: 13
 - implementation-plan authority-boundary tests: 8
-- implementation-plan input-hardening tests: 10
-- total: 76
+- implementation-plan input-hardening tests: 15
+- total: 85
 
 Coverage includes:
 
@@ -107,6 +109,9 @@ Coverage includes:
 - unmapped-rule fallback;
 - missing/unsupported-role fallback;
 - malformed array-shaped role/rule fail-closed behavior;
+- conflicting and blank published role-explanation rule aliases fail closed;
+- matching rule aliases preserve mapped deterministic copy;
+- `issue_type` fallback remains available only when published rule aliases are absent;
 - inherited object-property rule names rejected;
 - scanner remediation / id / action priority / evidence class / count / authority immutability;
 - identical-input explanation and presentation stability;
@@ -116,8 +121,12 @@ Coverage includes:
 - no dependency => no canonical reorder;
 - unversioned or mismatched dependency edges cannot reorder;
 - malformed array-shaped repair-rule identifiers cannot instantiate dependencies;
+- conflicting published repair-rule aliases cannot instantiate dependencies;
 - malformed verified-state identifiers cannot grant root-cause authority;
+- conflicting accepted root-cause-evidence aliases fail closed;
+- malformed retained root-cause evidence cannot be hidden by a valid preferred alias;
 - malformed repair-surface/remediation-family identifiers cannot create a shared group;
+- conflicting repair-surface/remediation-family aliases cannot create a shared group;
 - malformed dependency-edge/table-version identifiers fail closed;
 - mixed-type root-cause `evidence_refs` fail closed;
 - blank root-cause `evidence_refs` fail closed;
@@ -136,9 +145,9 @@ Coverage includes:
 - identical-input plan stability;
 - dependency table size/version.
 
-Repository-native exact-head FixList CI #2942 / run `35833173278` passed on `6e80cb15eadeff235b1a280cfa668df05bdfb45a`. That run passed lint, typecheck, generated release-contract verification, all frontend contract tests, frontend build, root scanner regressions, the full scanner-api test suite, labelled corpus verification, frozen beta-revision verification, and production scanner-image build.
+Repository-native exact-head FixList CI #2950 / run `35841808429` passed on `64e002919072e0be00e8ddcac25b10fc34ce9395`. That run passed lint, typecheck, generated release-contract verification, all frontend contract tests (including the 43 role-explanation tests), frontend build, root scanner regressions, the full scanner-api test suite, labelled corpus verification, frozen beta-revision verification, and production scanner-image build. CodeRabbit commit status is also green on that exact head.
 
-Earlier material review identified unrelated canonical-row drift, coercive role/rule identifiers, inherited object-property lookups, invalid `evidence_refs` filtering, and scan-alias disagreement masking; those were fixed at prior checkpoints. This checkpoint closes the remaining blank-alias form of the scan-binding gap: a matching scan identity can no longer mask a present-but-blank sibling alias, either at the repair top level or under `original`. Two adversarial regressions cover those cases without changing the production dependency table, canonical priority model, scanner behavior, or customer authority paths.
+Earlier material review identified unrelated canonical-row drift, coercive role/rule identifiers, inherited object-property lookups, invalid `evidence_refs` filtering, and scan-alias disagreement masking; those were fixed at prior checkpoints. The current checkpoint additionally closes two presentation/planning alias-consistency gaps without changing customer copy or scanner authority: implementation-plan rule/root-cause/surface/remediation aliases now fail closed on disagreement, and role-specific explanation lookup no longer selects one arbitrary scanner-rule alias when published aliases disagree.
 
 ## Integration handoff
 

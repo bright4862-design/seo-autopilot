@@ -76,8 +76,8 @@ test("actual canonical FixList renderer receives raw authenticated rows and chan
   assert.deepEqual(mounted.props.sourceItems[0].root_cause_evidence, row.root_cause_evidence);
   const html = render(input);
   assert.match(html, /Explain for/);
-  assert.match(html, /Implementation order/);
-  assert.ok(html.includes(row.recommendation), "plan uses raw scanner instruction");
+  assert.doesNotMatch(html, /Before you start|Implementation order/);
+  assert.ok(html.includes(card.whatToChange), "the existing card remains the instruction surface");
   assert.ok(html.includes(escaped(repairRoleExplanation(card, "owner").explanation)));
   const originalList = mounted.props.renderCards(input.customerRepairCards, { explanationForCard: () => ({ explanation: card.whyItMatters, explanationHeading: "Why it matters" }) });
   const ownerList = mounted.props.renderCards(input.customerRepairCards, { explanationForCard: () => ({ explanation: repairRoleExplanation(card, "owner").explanation, explanationHeading: "What this means" }) });
@@ -108,7 +108,7 @@ for (const [reason, mutate] of [
   test(`${reason} cannot enable extra role or implementation guidance`, () => {
     const input = props(); mutate(input);
     const html = render(input);
-    assert.doesNotMatch(html, /<select|Implementation order|What this means/);
+    assert.doesNotMatch(html, /<select|Before you start|What this means/);
     assert.ok(html.includes(card.whatToChange));
   });
 }

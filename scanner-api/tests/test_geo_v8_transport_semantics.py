@@ -122,6 +122,23 @@ def test_unknown_cells_must_match_not_verified_counts_per_check():
         validate(candidate)
 
 
+def test_recomputed_digest_cannot_forge_dimension_na_vs_verified_summary():
+    candidate = build()
+    summary = candidate["readiness"]["dimension_scores"]["access"]
+    assert summary["unknown_cells"] == 0
+    assert summary["not_applicable_cells"] == 0
+    assert summary["verified_cells"] == 3
+
+    summary["not_applicable_cells"] = 1
+    summary["verified_cells"] = 2
+    redigest(candidate)
+
+    # Shape accounting alone accepts the rewritten 0 + 1 + 2 == 3 summary.
+    assert validate_geo_v8_transport_candidate(candidate) is True
+    with pytest.raises(ValueError, match="dimension summary disagrees"):
+        validate(candidate)
+
+
 def test_access_limited_explicit_gate_mismatch_fails_closed():
     candidate = build(access_limited=True)
     with pytest.raises(ValueError, match="access-limited gate mismatch"):

@@ -78,6 +78,17 @@ def _count_equivalent_matrix(readiness: dict) -> tuple[list[str], list[Observati
     return page_ids, observations
 
 
+def _derived_dimension_summary(detail: dict) -> dict:
+    counts = [item["counts"] for item in detail["checks"].values()]
+    return {
+        "score": detail["score"],
+        "coverage": detail["coverage"],
+        "unknown_cells": sum(item["not_verified"] for item in counts),
+        "not_applicable_cells": sum(item["not_applicable"] for item in counts),
+        "verified_cells": sum(item["pass"] + item["fail"] for item in counts),
+    }
+
+
 def validate_geo_v8_transport_semantics(
     candidate: dict,
     *,
@@ -109,15 +120,16 @@ def validate_geo_v8_transport_semantics(
     if _canonical(actual_subset) != _canonical(expected_subset):
         raise ValueError("GEO readiness arithmetic/gate semantics mismatch")
 
-    # v2 summaries are redundant by design; they must agree with the
-    # independently reconstructed v1-compatible dimension output.
+    # v2 summaries are redundant by design. Recompute the complete summary from
+    # independently reconstructed v1 check counts rather than trusting the
+    # transported N/A/verified split merely because its cell total is valid.
     if not access_limited:
         summaries = readiness["dimension_scores"]
         for dimension in DIMENSIONS:
-            detail = expected["dimensions"][dimension]
             summary = summaries.get(dimension)
             if not isinstance(summary, dict):
                 raise ValueError("Malformed GEO dimension summary")
-            if summary.get("score") != detail["score"] or summary.get("coverage") != detail["coverage"]:
+            expected_summary = _derived_dimension_summary(expected["dimensions"][dimension])
+            if _canonical(summary) != _canonical(expected_summary):
                 raise ValueError("GEO dimension summary disagrees with derived arithmetic")
     return True

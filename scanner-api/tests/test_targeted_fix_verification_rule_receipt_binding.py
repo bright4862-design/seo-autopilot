@@ -333,7 +333,8 @@ def test_disappeared_url_remains_could_not_verify_even_with_empty_current_fixes(
     assert receipt["state"] == "ready"
     result = evaluate(prepared, sealed, pre, post, outcomes, [], receipt=receipt)
     assert result["state"] == "COULD_NOT_VERIFY"
-    assert result["reason"] == "not_observed"
+    assert result["reason"] == "recheck_not_verified"
+    assert result["blocked_reason"] == "not_observed"
 
 
 def test_robots_denial_remains_could_not_verify_after_rule_receipt_binding():

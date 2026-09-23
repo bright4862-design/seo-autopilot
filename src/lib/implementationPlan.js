@@ -92,6 +92,18 @@ function localScanIdentityOf(item = {}) {
   };
 }
 
+function matchesTrustedScanIdentity(item = {}, trustedScanId = "") {
+  const trusted = strictText(trustedScanId);
+  if (!trusted) return false;
+
+  const localIdentity = localScanIdentityOf(item);
+  for (const value of [localIdentity.scanId, localIdentity.scanRunId]) {
+    if (value === undefined || value === null || value === "") continue;
+    if (strictText(value) !== trusted) return false;
+  }
+  return true;
+}
+
 function rootCauseEvidenceOf(item = {}, trustedScanId = "") {
   const evidence = item.rootCauseEvidence || item.root_cause_evidence || item.original?.root_cause_evidence;
   if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return null;
@@ -111,13 +123,7 @@ function rootCauseEvidenceOf(item = {}, trustedScanId = "") {
   // scan identity already authenticated by the owner-bound V8 reader. Missing
   // trusted identity fails closed. Repair-local identities, when present, are
   // consistency assertions only and must match exactly.
-  const trusted = strictText(trustedScanId);
-  if (!trusted) return null;
-  const localIdentity = localScanIdentityOf(item);
-  for (const value of [localIdentity.scanId, localIdentity.scanRunId]) {
-    if (value === undefined || value === null || value === "") continue;
-    if (strictText(value) !== trusted) return null;
-  }
+  if (!matchesTrustedScanIdentity(item, trustedScanId)) return null;
 
   return {
     rootCauseId,
@@ -128,6 +134,14 @@ function rootCauseEvidenceOf(item = {}, trustedScanId = "") {
 function groupingKeyOf(item = {}, index = 0, trustedScanId = "") {
   const root = rootCauseEvidenceOf(item, trustedScanId);
   if (root) return `root_cause:${root.rootCauseId}`;
+
+  // Surface/remediation grouping is presentation-only, but it still must be
+  // bounded to the authenticated scan context. Missing trusted identity or a
+  // conflicting repair-local identity fails closed to a singleton group rather
+  // than allowing work from another run to be bundled together accidentally.
+  if (!matchesTrustedScanIdentity(item, trustedScanId)) {
+    return `repair:${idOf(item, index)}\u0000${index}`;
+  }
 
   // A page/template family by itself is intentionally insufficient. Only an
   // explicit repair surface plus an explicit remediation family can form a

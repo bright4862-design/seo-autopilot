@@ -32,6 +32,27 @@ function dependencyPair(rootCauseEvidence, extra = {}) {
   ];
 }
 
+function surfacePair(extra = {}) {
+  return [
+    {
+      fix_id: "heading-a",
+      rule: "missing_h1",
+      action_priority: "important",
+      repair_surface: "cms_field",
+      remediation_family: "heading_template",
+      ...extra,
+    },
+    {
+      fix_id: "heading-b",
+      rule: "missing_h1",
+      action_priority: "important",
+      repair_surface: "cms_field",
+      remediation_family: "heading_template",
+      ...extra,
+    },
+  ];
+}
+
 test("root-cause dependency cannot reorder without a trusted producer scan identity", () => {
   const result = buildImplementationPlan(dependencyPair(rootEvidence("root:shared")));
   assert.deepEqual(result.orderedRepairIds, ["sitemap", "redirect"]);
@@ -68,4 +89,23 @@ test("root-cause dependency is allowed only with evidence refs and exact trusted
   assert.equal(result.appliedDependencies.length, 1);
   assert.equal(result.groups.length, 1);
   assert.equal(result.groups[0].rootCauseId, "root:shared");
+});
+
+test("surface/remediation grouping cannot combine work without trusted producer scan identity", () => {
+  const result = buildImplementationPlan(surfacePair());
+  assert.deepEqual(result.orderedRepairIds, ["heading-a", "heading-b"]);
+  assert.equal(result.groups.length, 2);
+});
+
+test("surface/remediation grouping rejects a repair-local scan identity mismatch", () => {
+  const input = surfacePair();
+  input[0].scan_id = "scan:trusted";
+  input[0].scan_run_id = "scan:trusted";
+  input[1].scan_id = "scan:other";
+  input[1].scan_run_id = "scan:other";
+
+  const result = buildImplementationPlan(input, { trustedScanId: "scan:trusted" });
+  assert.deepEqual(result.orderedRepairIds, ["heading-a", "heading-b"]);
+  assert.equal(result.groups.length, 2);
+  assert.notEqual(result.groups[0].key, result.groups[1].key);
 });

@@ -18,6 +18,7 @@ _SUPPORTED_FIXTURES = frozenset({
     "fixbench_grounding_v8_preservation_v1",
     "fixbench_grounding_url_scope_v1",
     "fixbench_grounding_nested_scope_v1",
+    "fixbench_grounding_identity_scope_v1",
 })
 
 

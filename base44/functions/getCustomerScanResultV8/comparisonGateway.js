@@ -7,8 +7,40 @@ const COUNT_KEYS = ["fixed", "still_detected", "new_or_came_back", "came_back", 
 const encoder = new TextEncoder();
 const GATEWAY_SUPPORT_REFERENCES = new Set([
   "CMP-CONFIG", "CMP-TIMEOUT", "CMP-NETWORK", "CMP-GATEWAY-AUTH", "CMP-GATEWAY-ROUTE",
-  "CMP-GATEWAY-LIMIT", "CMP-GATEWAY-BUSY", "CMP-GATEWAY-ERROR", "CMP-GATEWAY-INPUT", "CMP-RESPONSE",
+  "CMP-GATEWAY-LIMIT", "CMP-GATEWAY-BUSY", "CMP-GATEWAY-ERROR", "CMP-GATEWAY-INPUT", "CMP-GATEWAY-REDIRECT", "CMP-RESPONSE",
 ]);
+
+// Diagnostics are fixed classifications, never exception text or customer data.
+function networkErrorKind(error) {
+  try {
+    const code = typeof error?.cause?.code === "string" ? error.cause.code : error?.code;
+    const codes = { ENOTFOUND: "dns", EAI_AGAIN: "dns", ECONNREFUSED: "connection_refused",
+      ECONNRESET: "connection_reset", ENETUNREACH: "unreachable", EHOSTUNREACH: "unreachable",
+      ETIMEDOUT: "network_timeout", CERT_HAS_EXPIRED: "tls", DEPTH_ZERO_SELF_SIGNED_CERT: "tls" };
+    if (typeof code === "string" && Object.hasOwn(codes, code)) return codes[code];
+    // Deno commonly supplies a TypeError with a message instead of a cause code.
+    // Match bounded text locally; only the fixed category can leave this helper.
+    const message = [error?.message, error?.cause?.message]
+      .filter((value) => typeof value === "string").map((value) => value.slice(0, 4096)).join(" ");
+    for (const [kind, pattern] of [
+      ["dns", /\bdns\b|\bgetaddrinfo\b/i],
+      ["tls", /\bcertificate\b|\btls\b|\bssl\b/i],
+      ["connection_refused", /connection refused/i],
+      ["connection_reset", /connection reset|connection closed|connection interrupted/i],
+      ["unreachable", /network unreachable|host unreachable/i],
+      ["permission", /permission denied|requires net access|notcapable/i],
+      ["request_size", /(?:body|payload|request entity) too large/i],
+      ["binding", /illegal invocation/i],
+    ]) if (pattern.test(message)) return kind;
+  } catch { /* Even an unusual thrown object must preserve the safe failure. */ }
+  return "unknown";
+}
+
+function emitDiagnostic(callback, record) {
+  try {
+    if (typeof callback === "function") Promise.resolve(callback(record)).catch(() => {});
+  } catch { /* Logging must not affect the optional comparison read. */ }
+}
 
 // Carry only a fixed support code across the optional-read boundary. Never keep
 // the original exception, response body, URL or signed request on this error.
@@ -26,6 +58,7 @@ export function comparisonGatewaySupportReference(error) {
 }
 
 function gatewayStatusReference(status) {
+  if (status >= 300 && status < 400) return "CMP-GATEWAY-REDIRECT";
   if (status === 401 || status === 403) return "CMP-GATEWAY-AUTH";
   if (status === 404) return "CMP-GATEWAY-ROUTE";
   if (status === 413) return "CMP-GATEWAY-LIMIT";
@@ -137,9 +170,13 @@ async function boundedJson(response) {
 
 /** Service-only transport. Inputs come exclusively from verified entity reads. */
 export async function requestScanComparison({
-  gatewayUrl, signingKey, pair, fetchImpl = fetch, now = Date.now, deadlineMs = 8_000,
+  gatewayUrl, signingKey, pair, fetchImpl = fetch, now = Date.now, deadlineMs = 8_000, onDiagnostic,
 }) {
+  const startedAt = performance.now();
   let stage = "CMP-CONFIG";
+  let requestBytes = 0;
+  let httpStatus = null;
+  let gatewayOriginFingerprint = null;
   let controller;
   let timer;
   try {
@@ -151,6 +188,7 @@ export async function requestScanComparison({
     const target = new URL(gatewayUrl);
     if (target.protocol !== "https:" || target.username || target.password || target.search || target.hash
         || !["", "/"].includes(target.pathname)) throw new ComparisonGatewayError("CMP-CONFIG");
+    gatewayOriginFingerprint = hex(new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(target.origin)))).slice(0, 16);
     target.pathname = "/compare";
     const nonce = hex(crypto.getRandomValues(new Uint8Array(16)));
     const payload = { version: "scan_comparison_request_v1", nonce, ...pair };
@@ -160,7 +198,8 @@ export async function requestScanComparison({
     ])) throw new ComparisonGatewayError("CMP-GATEWAY-INPUT");
     stage = "CMP-GATEWAY-INPUT";
     const body = JSON.stringify(payload);
-    if (encoder.encode(body).byteLength > REQUEST_LIMIT) throw new ComparisonGatewayError("CMP-GATEWAY-LIMIT");
+    requestBytes = encoder.encode(body).byteLength;
+    if (requestBytes > REQUEST_LIMIT) throw new ComparisonGatewayError("CMP-GATEWAY-LIMIT");
     stage = "CMP-CONFIG";
     const timestamp = String(Math.floor(now() / 1_000));
     const derived = await hmac(encoder.encode(signingKey), "fixlist-scan-comparison-request-v1");
@@ -169,11 +208,17 @@ export async function requestScanComparison({
     timer = setTimeout(() => controller.abort(), deadlineMs);
     stage = "CMP-NETWORK";
     const response = await fetchImpl(target.href, {
-      method: "POST", redirect: "error", signal: controller.signal,
+      // Observe the redirect status but never forward signed evidence elsewhere.
+      method: "POST", redirect: "manual", signal: controller.signal,
       headers: { "content-type": "application/json", "x-fixlist-timestamp": timestamp, "x-fixlist-signature": signature },
       body,
     });
-    if (!response.ok) throw new ComparisonGatewayError(gatewayStatusReference(response.status));
+    httpStatus = response.status;
+    if (!response.ok) {
+      // Do not read the body or Location. Cancellation must not delay failure.
+      try { Promise.resolve(response.body?.cancel()).catch(() => {}); } catch { /* Best effort. */ }
+      throw new ComparisonGatewayError(gatewayStatusReference(response.status));
+    }
     stage = "CMP-RESPONSE";
     const envelope = await boundedJson(response);
     const result = envelope?.payload;
@@ -186,9 +231,20 @@ export async function requestScanComparison({
         || !await verifyResponseProof(result, envelope.proof, signingKey)) throw new Error("comparison_response_invalid");
     return safePresentation(result.presentation, pair.expected_current_scan_id, pair.current_previous_scan_id);
   } catch (error) {
-    if (controller?.signal.aborted) throw new ComparisonGatewayError("CMP-TIMEOUT");
-    if (error instanceof ComparisonGatewayError) throw error;
-    throw new ComparisonGatewayError(stage);
+    let reference = stage;
+    try { if (error instanceof ComparisonGatewayError) reference = comparisonGatewaySupportReference(error); } catch { /* Unknown throwable. */ }
+    const localAborted = controller?.signal.aborted === true;
+    if (localAborted) reference = "CMP-TIMEOUT";
+    emitDiagnostic(onDiagnostic, {
+      event: "scan_comparison_transport_failure_v1", reference, stage,
+      request_bytes: requestBytes,
+      elapsed_ms: Math.min(300_000, Math.max(0, Math.round(performance.now() - startedAt))),
+      local_aborted: localAborted,
+      http_status: Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? httpStatus : null,
+      gateway_origin_fingerprint: gatewayOriginFingerprint,
+      network_error_kind: stage === "CMP-NETWORK" && httpStatus === null ? networkErrorKind(error) : "not_applicable",
+    });
+    throw new ComparisonGatewayError(reference);
   } finally {
     clearTimeout(timer);
   }

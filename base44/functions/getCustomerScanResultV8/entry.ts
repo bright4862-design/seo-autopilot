@@ -165,6 +165,9 @@ Deno.serve(async (req) => {
           gatewayUrl: Deno.env.get("SCAN_DISPATCH_GATEWAY_URL") || "",
           signingKey: secret,
           pair,
+          onDiagnostic: (diagnostic) => console.error(JSON.stringify({
+            ...diagnostic, build_id: FUNCTION_BUILD_ID, runtime_activation_id: BASE44_RUNTIME_ACTIVATION_ID,
+          })),
         }),
       }));
     }

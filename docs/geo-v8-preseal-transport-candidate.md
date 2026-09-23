@@ -22,14 +22,14 @@ The V8 handoff already requires one exact GEO block to be included inside a futu
 - optionally attaches already-retained named-crawler robots evidence for pages inside the same observation scope;
 - optionally attaches an already-retained `llms.txt` structural observation;
 - keeps both sidecars outside the scored readiness matrix, so they cannot rescue insufficient evidence or change the numeric score;
-- rejects malformed/tampered internal counts, scope metadata, versions, unknown-cell accounting, sidecars, claim boundaries, or authority state; and
+- rejects malformed/tampered internal counts, scope metadata, versions, unknown-cell accounting, named-crawler registry metadata/states, `llms.txt` structural-state combinations, claim boundaries, or authority state; and
 - strips optional sidecars on globally access-limited assessments to preserve the existing fail-closed diagnostic boundary.
 
 ## Integrator use
 
 The serialized integrator may call `build_geo_v8_transport_candidate(...)` only from trusted server-side retained evidence. It must not accept a client-provided candidate. The integrator should validate the candidate, then include the **exact candidate object** inside a newly versioned authenticated V8 snapshot and verify persistence/reload equality.
 
-`validate_geo_v8_transport_candidate(...)` is a structural validator only. It is not a substitute for the repository's authority verifier. A passing Lane-C validation must never set `authority_verified=true`.
+`validate_geo_v8_transport_candidate(...)` is a structural validator only. It is not a substitute for the repository's authority verifier. A passing Lane-C validation must never set `authority_verified=true`. Recomputing the ordinary candidate digest cannot legitimize malformed sidecar semantics; the validator independently checks the fixed named-crawler registry and coherent `llms.txt` state combinations.
 
 The integrator still owns all shared changes required by `docs/geo-v8-authority-handoff.md`: authenticated snapshot versioning, persistence, historical compatibility, tamper rejection through the real authority path, customer projection/entitlement, generated contract propagation, staged acceptance, and any eventual authority=true projection.
 
@@ -51,7 +51,7 @@ Authority sealing, when eventually implemented by the integrator, will prove onl
 
 ## Verification in this checkpoint
 
-Before push, a hermetic Lane-C harness passed **31/31 focused transport regressions** and **54/54 broader relevant GEO compatibility checks**. Coverage included v1/v2 compatibility, 80% coverage-gate behavior, unknown/N/A handling, access-limited behavior, exact named-crawler policy evidence, GPTBot neutrality, `llms.txt` valid/invalid/absent/unknown states, sidecar score isolation, scope binding, deterministic candidate generation, authority=false invariants, and tamper rejection.
+Before push, a hermetic Lane-C harness passed **34/34 focused transport regressions** and **57/57 broader relevant GEO compatibility checks**. Coverage included v1/v2 compatibility, 80% coverage-gate behavior, unknown/N/A handling, malformed unknown transport, access-limited behavior, exact named-crawler policy evidence, GPTBot neutrality, `llms.txt` valid/invalid/absent/unknown states, sidecar score isolation, scope binding, deterministic candidate generation, authority=false invariants, digest tampering, and semantic sidecar tampering even after recomputing the non-authoritative digest. `py_compile` also passed for the transport module and focused test file.
 
 Repository exact-head CI remains authoritative after push.
 
@@ -63,4 +63,4 @@ The scan ID `6ab314008da962a9f8c58929` was searched in the repository/issue surf
 
 ## Next step
 
-Wait for exact-head CI on this branch, then hand the pure pre-seal candidate plus `docs/geo-v8-authority-handoff.md` to the serialized integrator. The integrator should add authenticated V8 transport only after historical compatibility, tamper rejection, reload equality, entitlement, and claim-boundary tests are green. No production deployment belongs to Lane C.
+Require exact-head CI on this branch to pass, then hand the pure pre-seal candidate plus `docs/geo-v8-authority-handoff.md` to the serialized integrator. The integrator should add authenticated V8 transport only after historical compatibility, tamper rejection, reload equality, entitlement, and claim-boundary tests are green. No production deployment belongs to Lane C.

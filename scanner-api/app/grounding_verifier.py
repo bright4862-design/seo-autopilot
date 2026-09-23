@@ -143,23 +143,29 @@ def _fix_container_id_fields(container: str) -> frozenset[str]:
 
 def _collect_refs(node: Any, *, container: str = "", fixes: set[str], roots: set[str]) -> None:
     if isinstance(node, dict):
-        for field in _fix_container_id_fields(container):
-            value = node.get(field)
-            if isinstance(value, str) and value.strip():
-                fixes.add(value.strip())
+        # Repair identities are evidence only when they are direct fields on a
+        # known sealed repair/Fix record. Do not let identically named fields in
+        # diagnostics, metadata, or unrelated nested objects become valid refs.
+        if container in _FIX_CONTAINERS:
+            for field in _fix_container_id_fields(container):
+                value = node.get(field)
+                if isinstance(value, str) and value.strip():
+                    fixes.add(value.strip())
+
+            # A sealed Fix may carry its verified root-cause linkage directly.
+            # Preserve that legitimate V8/Stage-3 relationship while keeping the
+            # same field outside a Fix/root-cause collection non-authoritative.
+            for field in _ROOT_ID_FIELDS:
+                value = node.get(field)
+                if isinstance(value, str) and value.strip():
+                    roots.add(value.strip())
+
         if container in _ROOT_CONTAINERS:
             for field in _ROOT_ID_FIELDS | {"id"}:
                 value = node.get(field)
                 if isinstance(value, str) and value.strip():
                     roots.add(value.strip())
-        for field in _FIX_ID_FIELDS:
-            value = node.get(field)
-            if isinstance(value, str) and value.strip():
-                fixes.add(value.strip())
-        for field in _ROOT_ID_FIELDS:
-            value = node.get(field)
-            if isinstance(value, str) and value.strip():
-                roots.add(value.strip())
+
         for key, child in node.items():
             _collect_refs(child, container=str(key), fixes=fixes, roots=roots)
     elif isinstance(node, list):

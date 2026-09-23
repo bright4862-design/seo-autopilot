@@ -52,7 +52,8 @@ export function sanitizeComparisonEvidence(value, { scanOrigin = "", identityVer
   for (const row of rows) {
     if (!exactKeys(row, observationKeys)) throw new Error("Missing-H1 comparison observation shape is invalid");
     const pageUrl = text(row.page_url, 2_000);
-    if (!pageUrl || publishedEvidenceUrlKey(pageUrl, { scanOrigin }) !== pageUrl || seen.has(pageUrl)) {
+    if (!pageUrl || !pageUrl.startsWith(`${scanOrigin}/`)
+        || publishedEvidenceUrlKey(pageUrl, { scanOrigin }) !== pageUrl || seen.has(pageUrl)) {
       throw new Error("Missing-H1 comparison page identity is invalid");
     }
     seen.add(pageUrl);

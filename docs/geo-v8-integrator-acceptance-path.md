@@ -29,6 +29,37 @@ or caller assertion is not source authentication. If the authenticated source
 does not contain the exact retained observations, integration stops with GEO
 unavailable and `authority_verified=false`.
 
+## Retained source package
+
+The derived candidate and observation binding are not a substitute for their
+inputs. The binding retains an observation count and fingerprint, not the typed
+observation rows; the normalized robots and `llms.txt` sidecars do not retain
+all source fields needed to reproduce them. A reload therefore cannot satisfy
+the validation steps below unless the new authority snapshot also retains one
+bounded source package containing:
+
+- the exact retained page-ID array;
+- every typed GEO observation field (`page_id`, `check_id`, `state`,
+  `evidence_ref`, and `reason`), including an explicit empty array when there
+  are no content observations;
+- only the allowlisted robots inputs consumed by
+  `extract_named_robots_evidence(...)`: source page identity, robots status and
+  status code, rules-known state, and the three named-crawler decisions;
+- either an explicit absent `llms.txt` source or the exact bounded fields
+  consumed by `extract_llms_txt_evidence(...)`, including body bytes when a
+  retained body produced the structural result;
+- the three typed assessment gate facts and the exact extractor/evaluator
+  contract versions; and
+- exact parent owner, project, scan, normalized-domain, scope, authority
+  version, and proof identity.
+
+Unknown fields, coercion, missing-versus-empty substitution, duplicate
+page/check observations, and lossy reconstruction from counts or normalized
+sidecars must fail closed. Do not retain unrelated page payloads merely to make
+this package convenient. If retaining the bounded `llms.txt` body or another
+required source field is not authorized, that sidecar cannot pass reload
+rebinding and GEO remains unavailable.
+
 ## Pre-seal construction
 
 Using only that authenticated source population:
@@ -52,15 +83,18 @@ numeric score `null`.
 ## Authority and persistence boundary
 
 Only the serialized integrator may introduce a new versioned V8 authority
-snapshot. Its HMAC must cover the complete observation-binding object/canonical
-bytes and the exact parent scan/source identity—not merely the binding digest,
-page-set digest, observation count, or coverage totals.
+snapshot. Its HMAC must cover the complete retained source package, the complete
+observation-binding object/canonical bytes, and the exact parent scan/source
+identity—not merely the binding digest, page-set digest, observation count, or
+coverage totals.
 
 Persist atomically:
 
 - the complete versioned authority snapshot;
 - its authority proof and accepted authority version;
 - the complete GEO observation binding;
+- the complete bounded retained source package described above, including
+  explicit absence markers; and
 - the exact source scan identity and contract versions needed for historical
   verification.
 
@@ -75,8 +109,11 @@ For the exact saved scan, the authenticated reader must:
 1. enforce exact owner/project/scan access;
 2. verify the snapshot HMAC and accepted version before reading GEO;
 3. recover the complete persisted observation binding and retained source
-   population;
-4. re-run source, scope, semantic and observation binding validation;
+   package from the authenticated snapshot, never by refetching or consulting
+   mutable current scan state;
+4. reconstruct the typed observation and optional source-normalizer inputs only
+   from that strict persisted package, then re-run source, scope, semantic and
+   observation binding validation;
 5. call
    `validate_geo_v8_transport_observation_binding_reload_identity(...)` with
    the original canonical pre-seal bytes;

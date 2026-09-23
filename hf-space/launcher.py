@@ -83,10 +83,32 @@ def verify_scanner_connection() -> tuple[bool, str]:
     return False, last_error
 
 
+def disable_direct_model_fallback() -> None:
+    """Force the active HF UI to use the scanner `/chat` contract only.
+
+    ``app.py`` historically had a second, weaker direct-to-Vertex prompt that
+    became reachable when a service-account JSON blob was configured but the
+    scanner connection was unavailable. The Docker entrypoint is this launcher,
+    and ``app.Settings`` is constructed only after ``app_redesign.py`` imports
+    ``app`` below. Clearing the legacy credential before that import makes the
+    direct provider branch unreachable in the active HF runtime: with a verified
+    scanner connection, chat goes through scanner ``/chat``; without one, the UI
+    can only use its deterministic guided fallback. Customer chat remains gated
+    by the scanner's own GROK_PROXY_ENABLED switch.
+    """
+    os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"] = ""
+    os.environ["FIXLIST_HF_DIRECT_MODEL_DISABLED"] = "1"
+
+
 def main() -> None:
     connected, detail = verify_scanner_connection()
     os.environ["SCANNER_CONNECTION_VERIFIED"] = "1" if connected else "0"
     os.environ["SCANNER_CONNECTION_DETAIL"] = detail
+
+    # R0-C: one grounding contract. The active HF runtime must never fall back
+    # to its historical direct-to-model prompt; model-backed chat, when enabled
+    # later, is allowed only through the authenticated scanner `/chat` route.
+    disable_direct_model_fallback()
 
     if connected:
         print(f"[FixList launcher] {detail}", flush=True)

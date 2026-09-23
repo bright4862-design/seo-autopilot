@@ -1,0 +1,48 @@
+{
+  "fixture_version": "funbooker_rescan_comparison_production_shape_v1",
+  "site": "funbooker.com",
+  "previous": {
+    "scan_id": "6ab272fc6dfa7f9faf97a90f",
+    "health_score": 75,
+    "repair_count": 6,
+    "pages_checked": 126,
+    "fix_list_id": "6ab273848d11c45f44f5fbc4",
+    "authority_seal_version": "standard_review_snapshot_hmac_identity_v1",
+    "is_authoritative": true
+  },
+  "current": {
+    "scan_id": "6ab314008da962a9f8c58929",
+    "previous_scan_id": "6ab272fc6dfa7f9faf97a90f",
+    "health_score": 72,
+    "repair_count": 7,
+    "pages_checked": 139,
+    "fix_list_id": "6ab31484e137e6a837d03cf2",
+    "authority_seal_version": "standard_review_snapshot_hmac_identity_v1",
+    "is_authoritative": true
+  },
+  "previous_repairs": [
+    {"fix_id":"finding_b8b08f309c2c","rule":"redirect_chain","repair_fingerprint":"4d616c4d5fc0d04dea00becc","repair_identity_version":"repair_identity_v2_technical","repair_identity_state":"provisional","repair_identity_stable":false},
+    {"fix_id":"finding_6bdb58f322","rule":"canonical_missing","repair_fingerprint":"8bca8ca7dbba3db13f62786a","repair_identity_version":"repair_identity_v2_technical","repair_identity_state":"provisional","repair_identity_stable":false},
+    {"fix_id":"finding_50ea3ed80a","rule":"meta_description_unusable","repair_fingerprint":"8ed09e861fa8d04bc18ee355","repair_identity_version":"repair_identity_v2_technical","repair_identity_state":"provisional","repair_identity_stable":false},
+    {"fix_id":"finding_748e257263","rule":"meta_description_unusable","repair_fingerprint":"e86f5cafadbb215bc8b17984","repair_identity_version":"repair_identity_v2_technical","repair_identity_state":"provisional","repair_identity_stable":false},
+    {"fix_id":"finding_8251823760a7","rule":"title_over_pixel_limit","repair_fingerprint":"13210690056c5849af176e4e","repair_identity_version":"repair_identity_v2_technical","repair_identity_state":"provisional","repair_identity_stable":false},
+    {"fix_id":"finding_3c9a27f684e6","rule":"potential_orphan_pages","repair_fingerprint":"89d008db70708423fb4b6dc2","repair_identity_version":"repair_identity_v2_technical","repair_identity_state":"provisional","repair_identity_stable":false}
+  ],
+  "current_repairs": [
+    {"fix_id":"finding_b8b08f309c2c","rule":"redirect_chain","repair_fingerprint":"4d616c4d5fc0d04dea00becc","repair_identity_version":"repair_identity_v2_technical","repair_identity_state":"provisional","repair_identity_stable":false},
+    {"fix_id":"finding_6bdb58f322","rule":"canonical_missing","repair_fingerprint":"8bca8ca7dbba3db13f62786a","repair_identity_version":"repair_identity_v2_technical","repair_identity_state":"provisional","repair_identity_stable":false},
+    {"fix_id":"finding_191c17db74","rule":"meta_description_unusable","repair_fingerprint":"8ed09e861fa8d04bc18ee355","repair_identity_version":"repair_identity_v2_technical","repair_identity_state":"provisional","repair_identity_stable":false},
+    {"fix_id":"finding_d364eb0440","rule":"meta_description_unusable","repair_fingerprint":"e86f5cafadbb215bc8b17984","repair_identity_version":"repair_identity_v2_technical","repair_identity_state":"provisional","repair_identity_stable":false},
+    {"fix_id":"finding_99853931a5","rule":"missing_h1","repair_fingerprint":"0a083526db4cd92724b71932","repair_identity_version":"repair_identity_v2_technical","repair_identity_state":"provisional","repair_identity_stable":false},
+    {"fix_id":"finding_8251823760a7","rule":"title_over_pixel_limit","repair_fingerprint":"13210690056c5849af176e4e","repair_identity_version":"repair_identity_v2_technical","repair_identity_state":"provisional","repair_identity_stable":false},
+    {"fix_id":"finding_3c9a27f684e6","rule":"potential_orphan_pages","repair_fingerprint":"89d008db70708423fb4b6dc2","repair_identity_version":"repair_identity_v2_technical","repair_identity_state":"provisional","repair_identity_stable":false}
+  ],
+  "production_observations": {
+    "same_reference_fingerprints_across_scans": 6,
+    "finding_ids_changed_while_fingerprint_survived": 2,
+    "new_h1_reference_fingerprint": "0a083526db4cd92724b71932",
+    "score_delta_must_not_imply_direction_when_sample_size_changes": true,
+    "persisted_repair_identity_state": "provisional"
+  },
+  "note": "Read-only production-shaped evidence. Authority proofs are intentionally excluded; this fixture cannot create or verify authority."
+}

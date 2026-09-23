@@ -1,0 +1,242 @@
+{
+  "fixture_version": "fixbench_grounding_v8_preservation_v1",
+  "sealed_l2": {
+    "authority_seal_version": "standard_review_snapshot_hmac_stage3_delivery_v1",
+    "authority_sealed_at": "2026-09-22T16:00:00Z",
+    "authority_proof": "fixbench-v8-proof",
+    "website_url": "https://example.com",
+    "status": "complete",
+    "health_score": 73,
+    "pages": [
+      {
+        "url": "https://example.com/products/CaseSensitive?variant=1",
+        "final_url": "https://example.com/products/CaseSensitive?variant=1",
+        "status_code": 200
+      }
+    ],
+    "health_score_explanation": {
+      "stage3_delivery": {
+        "health_score_decision": {
+          "adjusted_health_score": 73,
+          "coverage_state": "sufficient",
+          "applied_root_cause_caps": [
+            {"root_cause_id": "root:canonical-template", "score_cap": 80}
+          ]
+        },
+        "handoff_v2_source": {
+          "handoff_version": "fixlist_handoff_v2",
+          "fixes": [
+            {
+              "rule_id": "fix:canonical-template",
+              "root_cause_id": "root:canonical-template",
+              "url_provenance": {
+                "published_url": "https://example.com/products/CaseSensitive?variant=1",
+                "request_url": "https://example.com/products/CaseSensitive?variant=1&utm_source=x",
+                "final_url": "https://example.com/products/CaseSensitive?variant=1"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "cases": [
+    {
+      "name": "v8_clean_exact_preservation",
+      "expected_status": "verified",
+      "expect_preserved": {
+        "annotation_ids": ["v8-clean"],
+        "evidence": [
+          {
+            "url": "https://example.com/products/CaseSensitive?variant=1#hero",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [
+          {
+            "name": "adjusted_health_score",
+            "value": 73,
+            "source_ref": "$.health_score_explanation.stage3_delivery.health_score_decision.adjusted_health_score"
+          }
+        ],
+        "fix_refs": ["fix:canonical-template"],
+        "root_cause_refs": ["root:canonical-template"],
+        "state_claims": [
+          {"field": "status", "value": "complete", "source_ref": "$.status"}
+        ]
+      },
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "v8-clean",
+        "text": "Grounded V8 evidence.",
+        "evidence": [
+          {
+            "url": "https://example.com/products/CaseSensitive?variant=1#hero",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [
+          {
+            "name": "adjusted_health_score",
+            "value": 73,
+            "source_ref": "$.health_score_explanation.stage3_delivery.health_score_decision.adjusted_health_score"
+          }
+        ],
+        "fix_refs": ["fix:canonical-template"],
+        "root_cause_refs": ["root:canonical-template"],
+        "state_claims": [
+          {"field": "status", "value": "complete", "source_ref": "$.status"}
+        ]
+      }
+    },
+    {
+      "name": "v8_request_url_is_sealed_membership",
+      "expected_status": "verified",
+      "expect_preserved_evidence": [
+        "https://example.com/products/CaseSensitive?variant=1&utm_source=x"
+      ],
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "v8-request-url",
+        "text": "Grounded request URL.",
+        "evidence": [
+          {
+            "url": "https://example.com/products/CaseSensitive?variant=1&utm_source=x",
+            "require_live": false
+          }
+        ],
+        "numeric_claims": [],
+        "fix_refs": ["fix:canonical-template"],
+        "root_cause_refs": [],
+        "state_claims": []
+      }
+    },
+    {
+      "name": "v8_fabricated_published_url",
+      "expected_status": "rejected",
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "v8-fake-url",
+        "text": "Fabricated URL.",
+        "evidence": [
+          {"url": "https://example.com/products/plausible-but-fake", "require_live": false}
+        ],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": [],
+        "state_claims": []
+      }
+    },
+    {
+      "name": "v8_fabricated_handoff_fix_id",
+      "expected_status": "rejected",
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "v8-fake-fix",
+        "text": "Fabricated Fix.",
+        "evidence": [
+          {
+            "url": "https://example.com/products/CaseSensitive?variant=1",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [],
+        "fix_refs": ["fix:canonical-template-fake"],
+        "root_cause_refs": [],
+        "state_claims": []
+      }
+    },
+    {
+      "name": "v8_numeric_type_drift",
+      "expected_status": "rejected",
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "v8-type-drift",
+        "text": "Type drift.",
+        "evidence": [
+          {
+            "url": "https://example.com/products/CaseSensitive?variant=1",
+            "require_live": true
+          }
+        ],
+        "numeric_claims": [
+          {"name": "health_score", "value": 73.0, "source_ref": "$.health_score"}
+        ],
+        "fix_refs": [],
+        "root_cause_refs": [],
+        "state_claims": []
+      }
+    },
+    {
+      "name": "v8_malformed_seal_is_unavailable",
+      "expected_status": "unavailable",
+      "sealed_l2_override": {
+        "authority_seal_version": "standard_review_snapshot_hmac_stage3_delivery_v1",
+        "authority_sealed_at": "2026-09-22T16:00:00Z",
+        "website_url": "https://example.com"
+      },
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "v8-unavailable",
+        "text": "No usable seal.",
+        "evidence": [
+          {"url": "https://example.com/", "require_live": false}
+        ],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": [],
+        "state_claims": []
+      }
+    },
+    {
+      "name": "v8_redaction_preserves_only_grounded_clause",
+      "expected_status": "redacted",
+      "expect_preserved": {
+        "annotation_ids": ["good"],
+        "evidence": [
+          {
+            "url": "https://example.com/products/CaseSensitive?variant=1#good",
+            "require_live": true
+          }
+        ],
+        "fix_refs": ["fix:canonical-template"]
+      },
+      "payload": {
+        "schema_version": "chat_answer_v1",
+        "answer_id": "v8-redaction",
+        "annotations": [
+          {
+            "schema_version": "ai_annotation_v1",
+            "annotation_id": "good",
+            "text": "Grounded clause.",
+            "evidence": [
+              {
+                "url": "https://example.com/products/CaseSensitive?variant=1#good",
+                "require_live": true
+              }
+            ],
+            "numeric_claims": [],
+            "fix_refs": ["fix:canonical-template"],
+            "root_cause_refs": [],
+            "state_claims": []
+          },
+          {
+            "schema_version": "ai_annotation_v1",
+            "annotation_id": "bad",
+            "text": "Ungrounded clause.",
+            "evidence": [
+              {
+                "url": "https://example.com/products/CaseSensitive?variant=1",
+                "require_live": true
+              }
+            ],
+            "numeric_claims": [],
+            "fix_refs": ["fix:fake"],
+            "root_cause_refs": [],
+            "state_claims": []
+          }
+        ]
+      }
+    }
+  ]
+}

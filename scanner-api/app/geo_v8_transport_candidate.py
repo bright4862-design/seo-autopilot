@@ -24,7 +24,11 @@ from .geo_readiness_v2 import (
     VERSION as READINESS_VERSION,
     evaluate_geo_v2,
 )
-from .geo_robots_evidence import VERSION as ROBOTS_VERSION, extract_named_robots_evidence
+from .geo_robots_evidence import (
+    NAMED_CRAWLERS,
+    VERSION as ROBOTS_VERSION,
+    extract_named_robots_evidence,
+)
 
 VERSION = "geo_v8_transport_candidate_v1"
 CLAIM_BOUNDARY = "fixlist_structural_readiness_not_ai_provider_outcomes"
@@ -36,6 +40,13 @@ _TOP_KEYS = frozenset({
     "version", "readiness", "evidence_adapter_version", "named_robots",
     "llms_txt", "seal_state", "authority_verified", "claim_boundary",
     "candidate_digest",
+})
+_ROBOT_SIDECAR_KEYS = frozenset({"version", "page_id", "robots_status", "rules_known", "bots", "claim_boundary"})
+_ROBOT_KEYS = frozenset({"crawler_id", "user_agent", "purpose", "state", "directive", "evidence_ref", "reason"})
+_LLMS_SIDECAR_KEYS = frozenset({
+    "version", "url", "scope_path", "presence", "format_status", "title",
+    "has_summary", "section_count", "linked_resource_count", "content_digest",
+    "evidence_ref", "validation_scope", "claim_boundary",
 })
 _READINESS_KEYS = frozenset({
     "geo_readiness_version", "compatibility_base_version", "assessment_status",
@@ -78,13 +89,15 @@ def _validate_readiness_shape(readiness: dict) -> None:
         raise ValueError("Unexpected GEO observation scope")
     if scope["page_count"] != sample_pages or type(scope["access_limited"]) is not bool or not _HEX64.fullmatch(scope["page_set_digest"] or ""):
         raise ValueError("Inconsistent GEO observation scope")
-    if readiness["unknown_cell_count"] != len(readiness["unknown_cells"]):
-        raise ValueError("Inconsistent GEO unknown-cell count")
-    if not isinstance(readiness["unknown_cells"], list) or len(readiness["unknown_cells"]) > 150 * len(CHECKS):
+    unknown_cells = readiness["unknown_cells"]
+    unknown_count = readiness["unknown_cell_count"]
+    if not isinstance(unknown_cells, list) or len(unknown_cells) > 150 * len(CHECKS):
         raise ValueError("Malformed GEO unknown-cell transport")
+    if type(unknown_count) is not int or unknown_count != len(unknown_cells):
+        raise ValueError("Inconsistent GEO unknown-cell count")
     unknown_keys = set()
     unknown_by_dimension = {dimension: 0 for dimension in DIMENSIONS}
-    for row in readiness["unknown_cells"]:
+    for row in unknown_cells:
         if not isinstance(row, dict) or set(row) != {"page_id", "check_id", "dimension", "reason"}:
             raise ValueError("Malformed GEO unknown cell")
         if not _bounded_string(row["page_id"], 200) or row["check_id"] not in CHECKS or row["dimension"] != CHECKS[row["check_id"]]:
@@ -151,29 +164,87 @@ def _validate_robots_sidecars(sidecars: list, page_ids: set[str] | None = None) 
     if not isinstance(sidecars, list) or len(sidecars) > MAX_ROBOTS_SIDECARS:
         raise ValueError("Malformed named-crawler sidecar collection")
     seen = set()
+    expected_ids = set(NAMED_CRAWLERS)
     for sidecar in sidecars:
-        if not isinstance(sidecar, dict) or sidecar.get("version") != ROBOTS_VERSION:
+        if not isinstance(sidecar, dict) or set(sidecar) != _ROBOT_SIDECAR_KEYS or sidecar["version"] != ROBOTS_VERSION:
             raise ValueError("Malformed named-crawler sidecar")
-        page_id = sidecar.get("page_id")
+        page_id = sidecar["page_id"]
         if not _bounded_string(page_id, 200) or page_id in seen:
             raise ValueError("Duplicate or malformed named-crawler page identity")
         if page_ids is not None and page_id not in page_ids:
             raise ValueError("Named-crawler sidecar is outside the GEO observation scope")
         seen.add(page_id)
-        if sidecar.get("claim_boundary") != "robots_policy_only_not_provider_fetch_indexing_citations_ranking_visibility_or_traffic":
+        if sidecar["claim_boundary"] != "robots_policy_only_not_provider_fetch_indexing_citations_ranking_visibility_or_traffic":
             raise ValueError("Named-crawler claim boundary mismatch")
-        bots = sidecar.get("bots")
-        if not isinstance(bots, list) or len(bots) != 3:
+        if not isinstance(sidecar["robots_status"], str) or sidecar["robots_status"] not in {"available", "missing", "unavailable", "access_limited", "unknown"}:
+            raise ValueError("Malformed named-crawler robots status")
+        if type(sidecar["rules_known"]) is not bool:
+            raise ValueError("Malformed named-crawler rules-known state")
+        bots = sidecar["bots"]
+        if not isinstance(bots, list) or len(bots) != len(NAMED_CRAWLERS):
             raise ValueError("Malformed named-crawler bot registry")
+        seen_bots = set()
+        for bot in bots:
+            if not isinstance(bot, dict) or set(bot) != _ROBOT_KEYS:
+                raise ValueError("Malformed named-crawler bot evidence")
+            crawler_id = bot["crawler_id"]
+            if crawler_id not in expected_ids or crawler_id in seen_bots:
+                raise ValueError("Malformed named-crawler bot identity")
+            seen_bots.add(crawler_id)
+            spec = NAMED_CRAWLERS[crawler_id]
+            if bot["user_agent"] != spec["user_agent"] or bot["purpose"] != spec["purpose"]:
+                raise ValueError("Named-crawler registry metadata mismatch")
+            if bot["state"] not in {"observed", "not_verified"} or not _bounded_string(bot["reason"], 500):
+                raise ValueError("Malformed named-crawler evidence state")
+            if bot["state"] == "observed":
+                if sidecar["rules_known"] is not True or bot["directive"] not in {"allow", "disallow"} or not _bounded_string(bot["evidence_ref"], 200):
+                    raise ValueError("Malformed observed named-crawler evidence")
+            elif bot["directive"] is not None or bot["evidence_ref"] != "":
+                raise ValueError("Unverified named-crawler evidence must not carry a directive")
+        if seen_bots != expected_ids:
+            raise ValueError("Incomplete named-crawler bot registry")
 
 
 def _validate_llms_sidecar(sidecar: dict | None) -> None:
     if sidecar is None:
         return
-    if not isinstance(sidecar, dict) or sidecar.get("version") != LLMS_VERSION:
+    if not isinstance(sidecar, dict) or set(sidecar) != _LLMS_SIDECAR_KEYS or sidecar["version"] != LLMS_VERSION:
         raise ValueError("Malformed llms.txt sidecar")
-    if sidecar.get("claim_boundary") != "optional_structural_metadata_not_provider_fetch_indexing_inclusion_citations_ranking_visibility_or_traffic":
+    if sidecar["claim_boundary"] != "optional_structural_metadata_not_provider_fetch_indexing_inclusion_citations_ranking_visibility_or_traffic":
         raise ValueError("llms.txt claim boundary mismatch")
+    if sidecar["validation_scope"] != "required_h1_and_bounded_structure_only":
+        raise ValueError("Unexpected llms.txt validation scope")
+    if not _bounded_string(sidecar["url"], 8192) or not _bounded_string(sidecar["scope_path"], 8192):
+        raise ValueError("Malformed llms.txt identity")
+    if type(sidecar["has_summary"]) is not bool:
+        raise ValueError("Malformed llms.txt summary state")
+    for key, maximum in (("section_count", 10_000), ("linked_resource_count", 500)):
+        if type(sidecar[key]) is not int or not 0 <= sidecar[key] <= maximum:
+            raise ValueError("Malformed llms.txt structural count")
+    presence = sidecar["presence"]
+    format_status = sidecar["format_status"]
+    if presence not in {"present", "absent", "not_verified"} or format_status not in {"valid", "invalid", "not_applicable", "not_verified"}:
+        raise ValueError("Malformed llms.txt state")
+    title = sidecar["title"]
+    if not isinstance(title, str) or len(title) > 4096:
+        raise ValueError("Malformed llms.txt title")
+    digest = sidecar["content_digest"]
+    evidence_ref = sidecar["evidence_ref"]
+    if not isinstance(digest, str) or not isinstance(evidence_ref, str) or len(evidence_ref) > 200:
+        raise ValueError("Malformed llms.txt evidence identity")
+    if presence == "present":
+        if format_status not in {"valid", "invalid"} or not _HEX64.fullmatch(digest) or not _bounded_string(evidence_ref, 200):
+            raise ValueError("Malformed present llms.txt evidence")
+        if format_status == "valid" and not _bounded_string(title, 4096):
+            raise ValueError("Valid llms.txt evidence requires a bounded title")
+        if format_status == "invalid" and title != "":
+            raise ValueError("Invalid llms.txt evidence must not transport a title")
+    elif presence == "absent":
+        if format_status != "not_applicable" or digest or evidence_ref or title or sidecar["has_summary"] or sidecar["section_count"] or sidecar["linked_resource_count"]:
+            raise ValueError("Malformed absent llms.txt evidence")
+    else:
+        if format_status != "not_verified" or digest or evidence_ref or title or sidecar["has_summary"] or sidecar["section_count"] or sidecar["linked_resource_count"]:
+            raise ValueError("Malformed unverified llms.txt evidence")
 
 
 def build_geo_v8_transport_candidate(

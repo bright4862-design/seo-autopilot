@@ -8,6 +8,7 @@ import {
   REPAIR_ROLE_EXPLANATION_LIBRARY_VERSION,
   REPAIR_ROLE_EXPLANATION_VERSION,
   repairRoleExplanation,
+  roleExplanationEntry,
 } from "../../src/lib/repairRoleExplanations.js";
 
 const SNAPSHOTS = Object.freeze({
@@ -76,6 +77,25 @@ test("missing or unsupported role fails closed instead of guessing an audience",
     assert.equal(actual.explanationAvailable, false);
     assert.equal(actual.role, "");
     assert.equal(actual.explanation, REPAIR_EXPLANATION_FALLBACK);
+  }
+});
+
+test("array-shaped rule or role identifiers fail closed instead of coercing into supported values", () => {
+  const arrayRole = repairRoleExplanation({ rule: "missing_h1" }, ["owner"]);
+  assert.equal(arrayRole.role, "");
+  assert.equal(arrayRole.explanationAvailable, false);
+  assert.equal(arrayRole.explanation, REPAIR_EXPLANATION_FALLBACK);
+
+  const arrayRule = repairRoleExplanation({ rule: ["missing_h1"] }, "owner");
+  assert.equal(arrayRule.rule, "");
+  assert.equal(arrayRule.explanationAvailable, false);
+  assert.equal(arrayRule.explanation, REPAIR_EXPLANATION_FALLBACK);
+});
+
+test("direct role entry lookup rejects inherited object-property names", () => {
+  assert.ok(roleExplanationEntry("missing_h1"));
+  for (const inheritedName of ["constructor", "toString", "__proto__"]) {
+    assert.equal(roleExplanationEntry(inheritedName), null);
   }
 });
 

@@ -66,7 +66,7 @@ const ROLE_EXPLANATIONS = Object.freeze({
 });
 
 function clean(value = "") {
-  return String(value || "").trim();
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function ruleOf(item = {}) {
@@ -89,7 +89,7 @@ function ruleOf(item = {}) {
 export function repairRoleExplanation(item = {}, role = "") {
   const normalizedRole = clean(role).toLowerCase();
   const rule = ruleOf(item);
-  const entry = ROLE_EXPLANATIONS[rule];
+  const entry = Object.hasOwn(ROLE_EXPLANATIONS, rule) ? ROLE_EXPLANATIONS[rule] : null;
   const roleSupported = REPAIR_EXPLANATION_ROLES.includes(normalizedRole);
   const explanation = roleSupported ? clean(entry?.[normalizedRole]) : "";
   const explanationAvailable = Boolean(explanation);
@@ -107,5 +107,6 @@ export function repairRoleExplanation(item = {}, role = "") {
 }
 
 export function roleExplanationEntry(rule = "") {
-  return ROLE_EXPLANATIONS[clean(rule).toLowerCase()] || null;
+  const normalizedRule = clean(rule).toLowerCase();
+  return Object.hasOwn(ROLE_EXPLANATIONS, normalizedRule) ? ROLE_EXPLANATIONS[normalizedRule] : null;
 }

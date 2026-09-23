@@ -122,6 +122,20 @@ test("an explicit dependency edge may move a lower priority repair ahead of a hi
   assert.equal(actual.appliedDependencies[0].tableEdgeId, "redirect_chain_before_sitemap_redirect");
 });
 
+test("dependency ordering pulls only the prerequisite ahead of an earlier dependent, not unrelated canonical rows", () => {
+  const root = verifiedRoot("root:three-row");
+  const input = [
+    { fix_id: "sitemap", rule: "sitemap_redirect", action_priority: "fix_first", root_cause_evidence: root },
+    { fix_id: "h1", rule: "missing_h1", action_priority: "important" },
+    { fix_id: "redirect", rule: "redirect_chain", action_priority: "improve", root_cause_evidence: root },
+  ];
+  const actual = plan(input);
+  assert.deepEqual(actual.orderedRepairIds, ["redirect", "sitemap", "h1"]);
+  assert.equal(actual.priorityMonotonicOrExplicit, true);
+  assert.equal(actual.appliedDependencies.length, 1);
+  assert.equal(actual.appliedDependencies[0].tableEdgeId, "redirect_chain_before_sitemap_redirect");
+});
+
 test("without an explicit satisfied dependency, canonical priority order never changes", () => {
   const input = [
     { fix_id: "sitemap", rule: "sitemap_redirect", action_priority: "fix_first" },

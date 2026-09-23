@@ -200,33 +200,48 @@ function instantiateEdges(nodes, dependencyEdges, dependencyTableVersion) {
 
 function stableTopologicalOrder(nodes, edges) {
   const byKey = new Map(nodes.map((node) => [node.key, node]));
-  const indegree = new Map(nodes.map((node) => [node.key, 0]));
-  const outgoing = new Map(nodes.map((node) => [node.key, []]));
+  const prerequisites = new Map(nodes.map((node) => [node.key, []]));
 
   for (const edge of edges) {
     if (!byKey.has(edge.beforeKey) || !byKey.has(edge.afterKey)) continue;
-    outgoing.get(edge.beforeKey).push(edge.afterKey);
-    indegree.set(edge.afterKey, (indegree.get(edge.afterKey) || 0) + 1);
+    prerequisites.get(edge.afterKey).push(edge.beforeKey);
+  }
+  for (const requiredKeys of prerequisites.values()) {
+    requiredKeys.sort((left, right) => byKey.get(left).canonicalIndex - byKey.get(right).canonicalIndex);
   }
 
-  const ready = nodes.filter((node) => indegree.get(node.key) === 0)
-    .sort((a, b) => a.canonicalIndex - b.canonicalIndex);
+  // Walk the canonical rows in order and pull only each row's prerequisites
+  // forward. This avoids Kahn-style ready queues delaying a high-priority
+  // dependent behind unrelated rows just because its prerequisite was later in
+  // canonical order. A cycle still fails closed to the untouched input order.
+  const state = new Map();
   const ordered = [];
+  let cycleDetected = false;
 
-  while (ready.length > 0) {
-    const node = ready.shift();
-    ordered.push(node);
-    for (const targetKey of outgoing.get(node.key) || []) {
-      const next = (indegree.get(targetKey) || 0) - 1;
-      indegree.set(targetKey, next);
-      if (next === 0) {
-        ready.push(byKey.get(targetKey));
-        ready.sort((a, b) => a.canonicalIndex - b.canonicalIndex);
-      }
+  function visit(node) {
+    const currentState = state.get(node.key) || 0;
+    if (currentState === 2 || cycleDetected) return;
+    if (currentState === 1) {
+      cycleDetected = true;
+      return;
     }
+
+    state.set(node.key, 1);
+    for (const prerequisiteKey of prerequisites.get(node.key) || []) {
+      const prerequisite = byKey.get(prerequisiteKey);
+      if (prerequisite) visit(prerequisite);
+      if (cycleDetected) return;
+    }
+    state.set(node.key, 2);
+    ordered.push(node);
   }
 
-  return ordered.length === nodes.length ? { ordered, cycleDetected: false } : { ordered: nodes, cycleDetected: true };
+  for (const node of [...nodes].sort((a, b) => a.canonicalIndex - b.canonicalIndex)) {
+    visit(node);
+    if (cycleDetected) break;
+  }
+
+  return cycleDetected ? { ordered: nodes, cycleDetected: true } : { ordered, cycleDetected: false };
 }
 
 function groupOrderedNodes(ordered) {
@@ -257,17 +272,19 @@ function groupOrderedNodes(ordered) {
 }
 
 function inversionHasDependencyPath(ordered, edges) {
+  const byKey = new Map(ordered.map((node) => [node.key, node]));
   const adjacency = new Map(ordered.map((node) => [node.key, []]));
   for (const edge of edges) adjacency.get(edge.beforeKey)?.push(edge.afterKey);
 
-  function hasPath(fromKey, toKey) {
+  function reachesCanonicalBoundary(fromKey, maxCanonicalIndex) {
     const seen = new Set();
-    const stack = [fromKey];
+    const stack = [...(adjacency.get(fromKey) || [])];
     while (stack.length) {
       const current = stack.pop();
-      if (current === toKey) return true;
       if (seen.has(current)) continue;
       seen.add(current);
+      const node = byKey.get(current);
+      if (node && node.canonicalIndex <= maxCanonicalIndex) return true;
       stack.push(...(adjacency.get(current) || []));
     }
     return false;
@@ -283,7 +300,10 @@ function inversionHasDependencyPath(ordered, edges) {
       // Only a real priority inversion needs justification: the higher-priority
       // row originally preceded the lower-priority row in canonical order.
       if (a.canonicalIndex < b.canonicalIndex) continue;
-      if (!hasPath(a.key, b.key)) return false;
+      // A prerequisite may move ahead of unrelated rows only when it is needed
+      // to unlock a dependent that was canonically at or before the row it
+      // crossed. This keeps collateral movement tied to a real dependency.
+      if (!reachesCanonicalBoundary(a.key, b.canonicalIndex)) return false;
     }
   }
   return true;

@@ -23,7 +23,7 @@ GROUNDING_VERIFIER_VERSION = "grounding_verifier_v1"
 
 _URL_FIELDS = frozenset({
     "url", "final_url", "canonical_url", "source_url", "destination_url",
-    "evidence_url", "requested_url",
+    "evidence_url", "requested_url", "published_url", "request_url",
 })
 _URL_LIST_FIELDS = frozenset({"affected_urls", "evidence_urls", "verified_urls", "urls", "evidence_refs"})
 _FIX_CONTAINERS = frozenset({"fixes", "cleaned_fixes", "recommended_actions", "findings", "repairs"})
@@ -130,13 +130,23 @@ def _collect_urls(node: Any, scan_origin: str, members: set[str], live: set[str]
             _collect_urls(child, scan_origin, members, live)
 
 
+def _fix_container_id_fields(container: str) -> frozenset[str]:
+    # Stage-3 Handoff v2 calls the canonical Fix identity ``rule_id`` inside its
+    # ``fixes`` collection. Keep that compatibility deliberately container-bound
+    # so unrelated ``rule_id`` fields elsewhere cannot become Fix identities.
+    if container == "fixes":
+        return _FIX_ID_FIELDS | frozenset({"id", "rule_id"})
+    if container in _FIX_CONTAINERS:
+        return _FIX_ID_FIELDS | frozenset({"id"})
+    return frozenset()
+
+
 def _collect_refs(node: Any, *, container: str = "", fixes: set[str], roots: set[str]) -> None:
     if isinstance(node, dict):
-        if container in _FIX_CONTAINERS:
-            for field in _FIX_ID_FIELDS | {"id"}:
-                value = node.get(field)
-                if isinstance(value, str) and value.strip():
-                    fixes.add(value.strip())
+        for field in _fix_container_id_fields(container):
+            value = node.get(field)
+            if isinstance(value, str) and value.strip():
+                fixes.add(value.strip())
         if container in _ROOT_CONTAINERS:
             for field in _ROOT_ID_FIELDS | {"id"}:
                 value = node.get(field)
@@ -213,6 +223,12 @@ def _annotations(model: AIAnnotationV1 | ChatAnswerV1) -> list[AIAnnotationV1]:
     return [model] if isinstance(model, AIAnnotationV1) else list(model.annotations)
 
 
+def _exact_scalar_equal(left: Scalar, right: Scalar) -> bool:
+    # JSON distinguishes integer and fractional numeric provenance in the sealed
+    # snapshot. Fail closed rather than accepting Python's ``1 == 1.0`` coercion.
+    return type(left) is type(right) and left == right
+
+
 def _annotation_errors(annotation: AIAnnotationV1, evidence: EvidenceSet) -> list[str]:
     errors: set[str] = set()
     for ref in annotation.evidence:
@@ -225,7 +241,7 @@ def _annotation_errors(annotation: AIAnnotationV1, evidence: EvidenceSet) -> lis
     for claim in annotation.numeric_claims:
         if claim.source_ref not in evidence.numeric_values:
             errors.add("numeric_source_missing")
-        elif evidence.numeric_values[claim.source_ref] != claim.value:
+        elif not _exact_scalar_equal(evidence.numeric_values[claim.source_ref], claim.value):
             errors.add("numeric_value_mismatch")
 
     for ref in annotation.fix_refs:
@@ -238,7 +254,7 @@ def _annotation_errors(annotation: AIAnnotationV1, evidence: EvidenceSet) -> lis
     for claim in annotation.state_claims:
         if claim.source_ref not in evidence.state_values:
             errors.add("state_source_missing")
-        elif evidence.state_values[claim.source_ref] != claim.value:
+        elif not _exact_scalar_equal(evidence.state_values[claim.source_ref], claim.value):
             errors.add("state_value_mismatch")
     return sorted(errors)
 
@@ -251,10 +267,10 @@ def _conflict_key_value(annotation: AIAnnotationV1):
 
 
 def _has_deterministic_conflict(annotations: list[AIAnnotationV1]) -> bool:
-    seen: dict[tuple[str, str], Any] = {}
+    seen: dict[tuple[str, str], Scalar] = {}
     for annotation in annotations:
         for key, value in _conflict_key_value(annotation):
-            if key in seen and seen[key] != value:
+            if key in seen and not _exact_scalar_equal(seen[key], value):
                 return True
             seen[key] = value
     return False

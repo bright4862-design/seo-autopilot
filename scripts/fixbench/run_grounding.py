@@ -13,11 +13,82 @@ if str(SCANNER_API) not in sys.path:
 
 from app.grounding_verifier import verify_grounded_payload
 
+_SUPPORTED_FIXTURES = frozenset({
+    "fixbench_grounding_adversarial_v1",
+    "fixbench_grounding_v8_preservation_v1",
+})
+
+
+def _verified_annotations(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+    annotations = payload.get("annotations")
+    if isinstance(annotations, list):
+        return [item for item in annotations if isinstance(item, dict)]
+    return [payload]
+
+
+def _preservation_projection(payload: dict[str, Any] | None) -> dict[str, Any]:
+    annotations = _verified_annotations(payload)
+    return {
+        "annotation_ids": [str(item.get("annotation_id") or "") for item in annotations],
+        "evidence": [
+            ref
+            for annotation in annotations
+            for ref in (annotation.get("evidence") or [])
+            if isinstance(ref, dict)
+        ],
+        "numeric_claims": [
+            claim
+            for annotation in annotations
+            for claim in (annotation.get("numeric_claims") or [])
+            if isinstance(claim, dict)
+        ],
+        "fix_refs": [
+            ref
+            for annotation in annotations
+            for ref in (annotation.get("fix_refs") or [])
+            if isinstance(ref, str)
+        ],
+        "root_cause_refs": [
+            ref
+            for annotation in annotations
+            for ref in (annotation.get("root_cause_refs") or [])
+            if isinstance(ref, str)
+        ],
+        "state_claims": [
+            claim
+            for annotation in annotations
+            for claim in (annotation.get("state_claims") or [])
+            if isinstance(claim, dict)
+        ],
+    }
+
+
+def _preservation_matches(case: dict[str, Any], payload: dict[str, Any] | None) -> bool:
+    expected_evidence = case.get("expect_preserved_evidence")
+    projection = _preservation_projection(payload)
+    if isinstance(expected_evidence, list):
+        observed = [ref.get("url") for ref in projection["evidence"]]
+        if observed != expected_evidence:
+            return False
+
+    expected = case.get("expect_preserved")
+    if expected is None:
+        return True
+    if not isinstance(expected, dict):
+        raise ValueError("invalid FixBench expect_preserved contract")
+    unknown = set(expected) - set(projection)
+    if unknown:
+        raise ValueError("unsupported FixBench preservation field: " + ",".join(sorted(unknown)))
+    return all(projection[key] == value for key, value in expected.items())
+
 
 def run_fixture(path: str | Path) -> dict[str, Any]:
     fixture_path = Path(path)
     data = json.loads(fixture_path.read_text(encoding="utf-8"))
-    if data.get("fixture_version") != "fixbench_grounding_adversarial_v1":
+    fixture_version = data.get("fixture_version")
+    if fixture_version not in _SUPPORTED_FIXTURES:
         raise ValueError("unsupported FixBench fixture version")
     sealed_l2 = data.get("sealed_l2")
     cases = data.get("cases")
@@ -29,26 +100,24 @@ def run_fixture(path: str | Path) -> dict[str, Any]:
     for case in cases:
         if not isinstance(case, dict):
             raise ValueError("invalid FixBench case")
-        result = verify_grounded_payload(case.get("payload"), sealed_l2=sealed_l2)
+        case_l2 = case.get("sealed_l2_override", sealed_l2)
+        if case_l2 is not None and not isinstance(case_l2, dict):
+            raise ValueError("invalid FixBench sealed_l2_override")
+        result = verify_grounded_payload(case.get("payload"), sealed_l2=case_l2)
         expected = case.get("expected_status")
         ok = result.status == expected
-        preserved = case.get("expect_preserved_evidence")
-        if ok and isinstance(preserved, list):
-            payload_out = result.verified_payload or {}
-            annotations = payload_out.get("annotations") if isinstance(payload_out, dict) else None
-            if not isinstance(annotations, list):
-                annotations = [payload_out] if isinstance(payload_out, dict) else []
-            observed = [
-                ref.get("url")
-                for annotation in annotations if isinstance(annotation, dict)
-                for ref in (annotation.get("evidence") or []) if isinstance(ref, dict)
-            ]
-            ok = observed == preserved
+        if ok:
+            ok = _preservation_matches(case, result.verified_payload)
         passed += int(ok)
-        rows.append({"name": str(case.get("name") or ""), "expected": expected, "actual": result.status, "passed": ok})
+        rows.append({
+            "name": str(case.get("name") or ""),
+            "expected": expected,
+            "actual": result.status,
+            "passed": ok,
+        })
     return {
         "fixbench_version": "fixbench_grounding_v1",
-        "fixture_version": data["fixture_version"],
+        "fixture_version": fixture_version,
         "gate_state": "passed" if passed == len(rows) else "failed",
         "passed": passed,
         "total": len(rows),

@@ -118,6 +118,50 @@ test("mixed Stage-3 presentation preserves authenticated source order and report
   assert.equal(plan.fixFirstCount, 1);
 });
 
+test("an all-malformed Stage-3 batch preserves Python order and reports zero complete rows", () => {
+  const rankedFirst = stage3Repair({
+    id: "all-bad-first",
+    title: "Ranked first although improve",
+    page: "https://example.com/all-bad-first",
+    actionPriority: "improve",
+    fingerprint: "all-bad-first-fingerprint",
+  });
+  const rankedSecond = stage3Repair({
+    id: "all-bad-second",
+    title: "Ranked second although fix first",
+    page: "https://example.com/all-bad-second",
+    actionPriority: "fix_first",
+    fingerprint: "all-bad-second-fingerprint",
+  });
+  rankedFirst.stage3_priority_factors = {
+    ...rankedFirst.stage3_priority_factors,
+    confidence: "invalid",
+  };
+  rankedSecond.stage3_counts = {
+    ...rankedSecond.stage3_counts,
+    displayed_sample_count: 2,
+  };
+
+  const cards = buildRepairCards([rankedFirst, rankedSecond]);
+  const plan = buildCustomerRepairPlan(cards);
+
+  assert.deepEqual(
+    plan.cards.map((card) => card.title),
+    ["Ranked first although improve", "Ranked second although fix first"],
+    "all-malformed Stage-3 batches must not fall back to the legacy action-band sorter",
+  );
+  assert.equal(plan.presentation_mode, "stage3_per_row_degraded_v1");
+  assert.deepEqual(plan.row_coverage, {
+    total_rows: 2,
+    stage3_complete_rows: 0,
+    degraded_rows: 2,
+  });
+  assert.equal(plan.fixFirstCount, 1);
+  assert.equal(cards[0].priorityFactors, undefined);
+  assert.equal(cards[1].stage3Counts, undefined);
+  assert.equal(JSON.stringify(cards).includes("presentation_origin"), false, "Stage-3 origin marker must not leak into customer JSON");
+});
+
 test("healthy Stage-3 and purely historical batches retain their existing presentation contracts", () => {
   const first = stage3Repair({
     id: "healthy-first",

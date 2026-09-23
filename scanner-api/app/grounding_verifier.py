@@ -195,7 +195,7 @@ def _trusted_stage3_scan_identity(sealed_l2: dict[str, Any]) -> tuple[str, str]:
 
 
 def _member_matches_trusted_scan(
-    node: dict[str, Any],
+    fix: dict[str, Any],
     *,
     trusted_scan_id: str,
     trusted_scan_state: str,
@@ -206,9 +206,9 @@ def _member_matches_trusted_scan(
         return True
 
     for field in ("scan_id", "scan_run_id"):
-        if field not in node:
+        if field not in fix:
             continue
-        raw = node.get(field)
+        raw = fix.get(field)
         if raw is None:
             continue
         if not isinstance(raw, str):
@@ -223,6 +223,7 @@ def _verified_root_cause_evidence_identity(
     node: Any,
     *,
     parent_container: str,
+    parent_fix: dict[str, Any] | None = None,
     trusted_scan_id: str = "",
     trusted_scan_state: str = "absent",
 ) -> tuple[str, str] | None:
@@ -235,10 +236,10 @@ def _verified_root_cause_evidence_identity(
     producer identity may still contribute a single verified root definition, but
     repeated definitions cannot coalesce without exact sealed scan identity.
     """
-    if parent_container not in _FIX_CONTAINERS or not isinstance(node, dict):
+    if parent_container not in _FIX_CONTAINERS or not isinstance(node, dict) or not isinstance(parent_fix, dict):
         return None
     if not _member_matches_trusted_scan(
-        node if parent_container == "root_cause_evidence" else {},
+        parent_fix,
         trusted_scan_id=trusted_scan_id,
         trusted_scan_state=trusted_scan_state,
     ):
@@ -252,22 +253,6 @@ def _verified_root_cause_evidence_identity(
     surface_id = validated.get("repair_surface_id")
     surface = surface_id.strip() if isinstance(surface_id, str) else ""
     return root_id.strip(), surface
-
-
-def _verified_root_cause_evidence_id(
-    node: Any,
-    *,
-    parent_container: str,
-    trusted_scan_id: str = "",
-    trusted_scan_state: str = "absent",
-) -> str:
-    identity = _verified_root_cause_evidence_identity(
-        node,
-        parent_container=parent_container,
-        trusted_scan_id=trusted_scan_id,
-        trusted_scan_state=trusted_scan_state,
-    )
-    return identity[0] if identity else ""
 
 
 def _nested_evidence_scope_allowed(*, container: str, child_name: str, evidence_scope: bool) -> bool:
@@ -292,22 +277,7 @@ def _collect_urls(
 ) -> None:
     if isinstance(node, dict):
         page_record = container in _PAGE_CONTAINERS
-        verified_root_evidence = (
-            container == "root_cause_evidence"
-            and bool(
-                _verified_root_cause_evidence_id(
-                    node,
-                    parent_container=parent_container,
-                    trusted_scan_id=trusted_scan_id,
-                    trusted_scan_state=trusted_scan_state,
-                )
-            )
-        )
-        evidence_record = (
-            container in _FIX_CONTAINERS
-            or container == "root_causes"
-            or verified_root_evidence
-        )
+        evidence_record = container in _FIX_CONTAINERS or container == "root_causes"
         authorized = evidence_scope or page_record or evidence_record
 
         if authorized:
@@ -340,16 +310,27 @@ def _collect_urls(
 
         for key, child in node.items():
             child_name = str(key)
-            # Evidence scope is never inherited merely because an ancestor was a
-            # Fix/root-cause record. Only explicit evidence-shaped child
-            # containers may carry citation membership deeper into the tree.
-            # Generic ``details`` is intentionally root-only; permitting it on a
-            # Fix would let prose/diagnostic metadata launder arbitrary URLs.
-            child_scope = authorized and _nested_evidence_scope_allowed(
-                container=container,
-                child_name=child_name,
-                evidence_scope=evidence_scope,
-            )
+            if child_name == "root_cause_evidence" and container in _FIX_CONTAINERS:
+                child_scope = bool(
+                    _verified_root_cause_evidence_identity(
+                        child,
+                        parent_container=container,
+                        parent_fix=node,
+                        trusted_scan_id=trusted_scan_id,
+                        trusted_scan_state=trusted_scan_state,
+                    )
+                )
+            else:
+                # Evidence scope is never inherited merely because an ancestor
+                # was a Fix/root-cause record. Only explicit evidence-shaped child
+                # containers may carry citation membership deeper into the tree.
+                # Generic ``details`` is intentionally root-only; permitting it
+                # on a Fix would let prose/diagnostic metadata launder URLs.
+                child_scope = authorized and _nested_evidence_scope_allowed(
+                    container=container,
+                    child_name=child_name,
+                    evidence_scope=evidence_scope,
+                )
             _collect_urls(
                 child,
                 scan_origin,
@@ -434,29 +415,14 @@ def _collect_refs(
                 fix_counts[value] = fix_counts.get(value, 0) + 1
 
             # ``root_cause_id`` on a Fix is only a link. It does not establish a
-            # sealed root-cause definition and therefore cannot authorize an AI
-            # root_cause_ref by itself. A definition must appear in a recognized
-            # root-cause evidence container below or elsewhere in sealed L2.
-
-        if container == "root_causes":
-            record_roots = _record_strings(node, _ROOT_ID_FIELDS | {"id"})
-            if len(record_roots) > 1:
-                conflicting_roots.update(record_roots)
-            for value in record_roots:
-                roots.add(value)
-                # Each explicit root_causes record is an independent definition.
-                # Duplicate explicit definitions remain ambiguous even if their
-                # IDs match exactly.
-                root_counts[value] = root_counts.get(value, 0) + 1
-        elif container == "root_cause_evidence":
-            # Nested producer evidence defines a root only when it satisfies the
-            # exact Stage-3 evidence contract and any sealed Handoff-v2 scan
-            # identity. Repeated evidence may coalesce only when the exact trusted
-            # producer identity is available; without it, each occurrence remains
-            # a separate definition and therefore fails closed if duplicated.
+            # sealed root-cause definition. A nested producer evidence object may
+            # establish one only after the existing Stage-3 contract and trusted
+            # scan-identity checks succeed for this exact repair record.
+            root_evidence = node.get("root_cause_evidence")
             identity = _verified_root_cause_evidence_identity(
-                node,
-                parent_container=parent_container,
+                root_evidence,
+                parent_container=container,
+                parent_fix=node,
                 trusted_scan_id=trusted_scan_id,
                 trusted_scan_state=trusted_scan_state,
             )
@@ -470,7 +436,20 @@ def _collect_refs(
                         seen_groups.add(grouping_key)
                         root_counts[root_id] = root_counts.get(root_id, 0) + 1
                 else:
+                    # Without exact sealed producer identity, repeated equivalent
+                    # evidence objects cannot be assumed to belong to one run.
                     root_counts[root_id] = root_counts.get(root_id, 0) + 1
+
+        if container == "root_causes":
+            record_roots = _record_strings(node, _ROOT_ID_FIELDS | {"id"})
+            if len(record_roots) > 1:
+                conflicting_roots.update(record_roots)
+            for value in record_roots:
+                roots.add(value)
+                # Each explicit root_causes record is an independent definition.
+                # Duplicate explicit definitions remain ambiguous even if their
+                # IDs match exactly.
+                root_counts[value] = root_counts.get(value, 0) + 1
 
         for key, child in node.items():
             _collect_refs(

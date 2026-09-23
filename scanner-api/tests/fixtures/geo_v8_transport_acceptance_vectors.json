@@ -1,0 +1,46 @@
+{
+  "version": "geo_v8_transport_acceptance_vectors_v1",
+  "canonicalization": "utf8_json_sort_keys_compact_ensure_ascii_false",
+  "vectors": [
+    {
+      "name": "assessed_full_pass",
+      "scenario": "full_pass",
+      "candidate_digest": "1e148ac9d6d087fcf28fa0264bd0535277260cc916592642aabf7675a5d75a30",
+      "serialized_sha256": "2934983abda0b7056c877cf60cf03ea028d78612dad6003d521f335eb58ec927",
+      "serialized_length": 3012,
+      "assessment_status": "assessed",
+      "score": 100,
+      "coverage": 1.0
+    },
+    {
+      "name": "all_unknown_insufficient_evidence",
+      "scenario": "all_unknown",
+      "candidate_digest": "940a657c917464f59d19ce0d6c614abf056f12414296079a8a47a6490542d562",
+      "serialized_sha256": "18bf695b497c8e77a35b463391047db407bcd2570d4997313df605c55176e7d3",
+      "serialized_length": 4407,
+      "assessment_status": "insufficient_evidence",
+      "score": null,
+      "coverage": 0.0
+    },
+    {
+      "name": "marketplace_support_not_applicable",
+      "scenario": "marketplace_support_not_applicable",
+      "candidate_digest": "d26c9f6b311b2aa24752200a234524853a22b2b78b3450f58fa9ced7d45241af",
+      "serialized_sha256": "17673287a94d77c539668e0894bd1655fa195e1126c753d402ce9286c55462d5",
+      "serialized_length": 3095,
+      "assessment_status": "insufficient_evidence",
+      "score": null,
+      "coverage": 0.75
+    },
+    {
+      "name": "access_limited",
+      "scenario": "access_limited",
+      "candidate_digest": "6ac606849f3af353bdbcbea9983e726ab755fae58dcea61a4daeb32727fa287d",
+      "serialized_sha256": "1ced2c17042faef5414a9fbe91b339388f9e32acc4b7ce43fa45ab6d2534b29b",
+      "serialized_length": 1524,
+      "assessment_status": "access_limited",
+      "score": null,
+      "coverage": 0.0
+    }
+  ]
+}

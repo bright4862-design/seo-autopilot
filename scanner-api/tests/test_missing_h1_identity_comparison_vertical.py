@@ -7,6 +7,7 @@ from app.missing_h1_contract import (
     missing_h1_contract_fields,
 )
 from app.repair_identity import annotate_repair_identity, compare_repair_runs
+from app.scan_comparison import build_scan_comparison_v1
 
 EVIDENCE = "evidence_url_identity_v2_published_route"
 
@@ -173,3 +174,56 @@ def test_rule_evidence_that_still_detects_issue_cannot_be_fixed_if_repair_popula
     )
     assert result["state"] == "could_not_verify"
     assert result["comparison_contract_state"] == "current_repair_population_conflict"
+
+
+def test_missing_h1_evidence_builder_excludes_cross_origin_pages():
+    evidence = build_missing_h1_comparison_evidence(
+        [
+            {"url": "https://example.com/local", "status_code": 200, "content_type": "text/html",
+             "page_evidence_class": "usable_html", "h1_count": 1},
+            {"url": "https://other.example/foreign", "status_code": 200, "content_type": "text/html",
+             "page_evidence_class": "usable_html", "h1_count": 1},
+        ],
+        scan_origin="https://example.com",
+        identity_version=EVIDENCE,
+    )
+    assert evidence["observation_count"] == 1
+    assert evidence["observations"][0]["page_url"] == "https://example.com/local"
+
+
+def test_h1_page_evidence_cannot_verify_an_unrelated_repair_fixed():
+    previous = annotate_repair_identity({
+        "fix_id": "meta",
+        "rule": "missing_meta_description",
+        "category": "meta_description",
+        "page_url": "https://example.com/page",
+        "affected_pages": ["https://example.com/page"],
+        "repair_surface": "cms_meta_description_field",
+        "remediation_family": "write_meta_description",
+        "evidence_url_identity_version": EVIDENCE,
+    })
+    result = build_scan_comparison_v1(
+        previous_scan_id="previous",
+        current_scan_id="current",
+        current_previous_scan_id="previous",
+        previous_fixes=[previous],
+        current_fixes=[],
+        current_pages=[page(finding_present=False)],
+        current_contract={
+            "evidence_url_identity_version": EVIDENCE,
+            "rules": {
+                "missing_h1": {
+                    "rule_definition_version": MISSING_H1_RULE_DEFINITION_VERSION,
+                    "comparison_profile_version": MISSING_H1_COMPARISON_PROFILE_VERSION,
+                }
+            },
+        },
+        previous_score=80,
+        current_score=80,
+        previous_pages_checked=1,
+        current_pages_checked=1,
+        previous_scan_origin="https://example.com",
+        current_scan_origin="https://example.com",
+    )
+    assert result["summary"]["fixed"] == 0
+    assert result["summary"]["could_not_verify"] == 1

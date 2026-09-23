@@ -41,7 +41,7 @@ function strictText(value) {
 }
 
 function lower(value = "") {
-  return clean(value).toLowerCase();
+  return strictText(value).toLowerCase();
 }
 
 function idOf(item = {}, index = 0) {
@@ -159,19 +159,20 @@ function pairHasRequiredEvidence(left, right, edge) {
 }
 
 function normalizedEdge(edge = {}) {
-  const tableVersion = clean(edge.tableVersion || edge.table_version);
-  const id = clean(edge.id);
+  if (!edge || typeof edge !== "object" || Array.isArray(edge)) return null;
+  const tableVersion = strictText(edge.tableVersion || edge.table_version);
+  const id = strictText(edge.id);
   const beforeRule = lower(edge.beforeRule || edge.before_rule);
   const afterRule = lower(edge.afterRule || edge.after_rule);
-  const requires = clean(edge.requires);
-  const rationale = clean(edge.rationale);
+  const requires = strictText(edge.requires);
+  const rationale = strictText(edge.rationale);
   if (!tableVersion || !id || !beforeRule || !afterRule || !requires) return null;
   return { tableVersion, id, beforeRule, afterRule, requires, rationale };
 }
 
 function instantiateEdges(nodes, dependencyEdges, dependencyTableVersion) {
   const instantiated = [];
-  const selectedTableVersion = clean(dependencyTableVersion);
+  const selectedTableVersion = strictText(dependencyTableVersion);
   if (!selectedTableVersion) return instantiated;
 
   for (const rawEdge of Array.isArray(dependencyEdges) ? dependencyEdges : []) {
@@ -335,7 +336,7 @@ export function buildImplementationPlan(
     };
   });
 
-  const selectedDependencyTableVersion = clean(dependencyTableVersion);
+  const selectedDependencyTableVersion = strictText(dependencyTableVersion);
   const appliedEdges = instantiateEdges(nodes, dependencyEdges, selectedDependencyTableVersion);
   const topo = stableTopologicalOrder(nodes, appliedEdges);
   const ordered = topo.cycleDetected ? nodes : topo.ordered;

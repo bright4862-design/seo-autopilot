@@ -1,4 +1,5 @@
 import * as legacy from "./customerRepairPlanLegacy.js";
+import { hasStage3PresentationOrigin } from "./repairCardModel.js";
 
 export * from "./customerRepairPlanLegacy.js";
 
@@ -47,14 +48,20 @@ function stage3Plan(source, { fallbackNextBestStep = "", completeCount = source.
  * rank-before-truncate. Preserve that order exactly; the browser must not
  * reconstruct priority from legacy action bands. A malformed Stage-3 row may
  * lose only its own Stage-3 presentation fields; it must not force valid
- * neighbours through the historical sorter. Historical card batches with no
- * valid Stage-3 row keep the existing plan ordering unchanged.
+ * neighbours through the historical sorter. An all-malformed Stage-3 batch
+ * still retains its Stage-3 origin and therefore preserves source order while
+ * reporting zero complete rows. Only batches with no Stage-3 origin use the
+ * historical repair-plan path.
  */
 export function buildCustomerRepairPlan(cards = [], { fallbackNextBestStep = "" } = {}) {
   const source = Array.isArray(cards) ? cards.filter(Boolean) : [];
-  const completeCount = source.filter(isStage3Card).length;
-  if (source.length === 0 || completeCount === 0) {
+  if (source.length === 0) {
     return legacy.buildCustomerRepairPlan(cards, { fallbackNextBestStep });
   }
+  const hasStage3Origin = source.some((card) => hasStage3PresentationOrigin(card));
+  if (!hasStage3Origin) {
+    return legacy.buildCustomerRepairPlan(cards, { fallbackNextBestStep });
+  }
+  const completeCount = source.filter(isStage3Card).length;
   return stage3Plan(source, { fallbackNextBestStep, completeCount });
 }

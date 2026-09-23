@@ -1,4 +1,4 @@
-export const SCAN_COMPARISON_PANEL_MODEL_VERSION = "scan_comparison_panel_model_v1";
+export const SCAN_COMPARISON_PANEL_MODEL_VERSION = "scan_comparison_panel_model_v2_disjoint_counts";
 export const TRUSTED_SCAN_COMPARISON_PRESENTATION_VERSION = "scan_comparison_presentation_v1";
 
 const COUNT_KEYS = Object.freeze([
@@ -31,7 +31,7 @@ function exactScanId(value) {
 }
 
 function nonnegativeInteger(value) {
-  return Number.isInteger(value) && value >= 0;
+  return Number.isSafeInteger(value) && value >= 0;
 }
 
 function nonemptyString(value) {
@@ -83,11 +83,16 @@ export function buildScanComparisonPanelModel(presentation = {}) {
     if (!nonnegativeInteger(counts[key])) return unavailable("invalid_counts");
   }
 
+  // The server aggregate includes verified returns. Separate it for display
+  // without counting those repairs twice or deciding any comparison state here.
+  if (counts.came_back > counts.new_or_came_back) return unavailable("contradictory_counts");
+
   const safeCounts = Object.freeze(Object.fromEntries(COUNT_KEYS.map((key) => [key, counts[key]])));
   const metrics = Object.freeze([
-    Object.freeze({ key: "fixed", label: "Fixed", count: safeCounts.fixed }),
+    Object.freeze({ key: "fixed", label: "Verified fixed", count: safeCounts.fixed }),
     Object.freeze({ key: "still_detected", label: "Still detected", count: safeCounts.still_detected }),
-    Object.freeze({ key: "new_or_came_back", label: "New or returned candidate", count: safeCounts.new_or_came_back }),
+    Object.freeze({ key: "came_back", label: "Returned", count: safeCounts.came_back }),
+    Object.freeze({ key: "unmatched_current", label: "Not matched", count: safeCounts.new_or_came_back - safeCounts.came_back }),
     Object.freeze({ key: "could_not_verify", label: "Could not verify", count: safeCounts.could_not_verify }),
   ]);
 

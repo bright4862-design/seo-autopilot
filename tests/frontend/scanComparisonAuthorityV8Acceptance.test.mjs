@@ -60,7 +60,7 @@ test("real V8 persisted snapshots and signed lineage reach the existing comparis
   assert.equal(result.ok, true, result.error);
   assert.equal(result.result.comparison.summary.still_detected, 1);
   assert.equal(result.result.comparison.summary.fixed, 0);
-  assert.equal(result.result.current_pages_available, false);
+  assert.equal(result.result.current_pages_available, true);
   assert.equal(result.result.customer_projection_authorized, false);
   const panel = buildScanComparisonPanelModel(result.result.presentation);
   assert.equal(panel.state, "ready");

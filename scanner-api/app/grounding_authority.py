@@ -38,12 +38,23 @@ def _json_copy(value: Any) -> Any:
         raise EvidenceUnavailable("v8_grounding_projection_unavailable") from None
 
 
-def _authenticate_v8_snapshot(snapshot: Any, proof: Any, signing_key: Any) -> dict[str, Any]:
+def _authenticate_v8_snapshot(
+    snapshot: Any,
+    proof: Any,
+    signing_key: Any,
+    *,
+    expected_owner_user_id: Any,
+    expected_project_id: Any,
+    expected_scan_id: Any,
+) -> dict[str, Any]:
     if not isinstance(snapshot, dict) or snapshot.get("version") != GROUNDING_V8_AUTHORITY_VERSION:
         _fail_auth()
     if not isinstance(proof, str) or not _PROOF.fullmatch(proof):
         _fail_auth()
     if not isinstance(signing_key, str) or not signing_key:
+        _fail_auth()
+    expected = (expected_owner_user_id, expected_project_id, expected_scan_id)
+    if any(not isinstance(value, str) or not value or value != value.strip() for value in expected):
         _fail_auth()
 
     candidate = _json_copy(snapshot)
@@ -59,6 +70,12 @@ def _authenticate_v8_snapshot(snapshot: Any, proof: Any, signing_key: Any) -> di
     except Exception:
         _fail_auth()
     if not hmac.compare_digest(expected, proof):
+        _fail_auth()
+    if (
+        candidate.get("owner_user_id") != expected_owner_user_id
+        or candidate.get("project_id") != expected_project_id
+        or candidate.get("scan_id") != expected_scan_id
+    ):
         _fail_auth()
     return candidate
 
@@ -123,6 +140,9 @@ def build_evidence_set_from_v8_authority(
     *,
     proof: Any,
     signing_key: Any,
+    expected_owner_user_id: Any,
+    expected_project_id: Any,
+    expected_scan_id: Any,
 ) -> EvidenceSet:
     """Verify one current V8 snapshot, then derive Grounding evidence from it.
 
@@ -130,6 +150,13 @@ def build_evidence_set_from_v8_authority(
     It does not accept a pre-asserted authority_verified marker and does not
     expose a path that skips HMAC verification.
     """
-    authenticated = _authenticate_v8_snapshot(snapshot, proof, signing_key)
+    authenticated = _authenticate_v8_snapshot(
+        snapshot,
+        proof,
+        signing_key,
+        expected_owner_user_id=expected_owner_user_id,
+        expected_project_id=expected_project_id,
+        expected_scan_id=expected_scan_id,
+    )
     projected = _project_authenticated_v8_snapshot(authenticated, proof)
     return build_evidence_set(projected)

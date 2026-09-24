@@ -1,6 +1,6 @@
-# Cloud Build artifact for the PRIVATE durable Standard 150 worker.
-# The caller must submit a clean git archive of the exact release commit and
-# include .fixlist-source-sha containing that same 40-character SHA.
+# Cloud Build artifact for a ZERO-TRAFFIC Standard 150 static-egress canary.
+# This config must never be used for ordinary worker promotion. It preserves the
+# exact worker image/runtime contract while adding Direct VPC all-traffic egress.
 
 substitutions:
   _RELEASE_SHA: ""
@@ -13,6 +13,8 @@ substitutions:
   _BASE44_API_URL: ""
   _SIGNING_KEY_SECRET: ""
   _SIGNING_KEY_VERSION: ""
+  _EGRESS_NETWORK: ""
+  _EGRESS_SUBNET: ""
 
 steps:
   - id: require-substitutions
@@ -33,7 +35,9 @@ steps:
           "_BASE44_APP_ID=${_BASE44_APP_ID}" \
           "_BASE44_API_URL=${_BASE44_API_URL}" \
           "_SIGNING_KEY_SECRET=${_SIGNING_KEY_SECRET}" \
-          "_SIGNING_KEY_VERSION=${_SIGNING_KEY_VERSION}"; do
+          "_SIGNING_KEY_VERSION=${_SIGNING_KEY_VERSION}" \
+          "_EGRESS_NETWORK=${_EGRESS_NETWORK}" \
+          "_EGRESS_SUBNET=${_EGRESS_SUBNET}"; do
           name="${pair%%=*}"; value="${pair#*=}"
           if [ -z "$value" ]; then echo "MISSING required substitution: $name"; missing=1; fi
         done
@@ -47,6 +51,11 @@ steps:
         fi
         if ! printf '%s' "${_SIGNING_KEY_VERSION}" | grep -Eq '^[0-9]+$'; then
           echo "Invalid _SIGNING_KEY_VERSION: expected a numeric pinned version."
+          exit 1
+        fi
+        if ! printf '%s' "${_EGRESS_NETWORK}" | grep -Eq '^[a-z][a-z0-9-]{0,62}$' \
+          || ! printf '%s' "${_EGRESS_SUBNET}" | grep -Eq '^[a-z][a-z0-9-]{0,62}$'; then
+          echo "Invalid static-egress network/subnet names."
           exit 1
         fi
         echo "All required substitutions supplied."
@@ -100,7 +109,7 @@ steps:
     name: gcr.io/cloud-builders/docker
     args: ["push", "${_IMAGE}:${_RELEASE_SHA}"]
 
-  - id: deploy-private-worker
+  - id: deploy-private-static-egress-canary
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -117,8 +126,10 @@ steps:
       - --min-instances=0
       - --max-instances=40
       - --no-traffic
-      - --clear-network
-      - --set-env-vars=TASKS_INVOKER_SERVICE_ACCOUNT=${_INVOKER_SA},BASE44_APP_ID=${_BASE44_APP_ID},BASE44_API_URL=${_BASE44_API_URL},GROK_PROXY_ENABLED=false,FIXLIST_WORKER_SOURCE_SHA=${_RELEASE_SHA}
+      - --network=${_EGRESS_NETWORK}
+      - --subnet=${_EGRESS_SUBNET}
+      - --vpc-egress=all-traffic
+      - --set-env-vars=TASKS_INVOKER_SERVICE_ACCOUNT=${_INVOKER_SA},BASE44_APP_ID=${_BASE44_APP_ID},BASE44_API_URL=${_BASE44_API_URL},GROK_PROXY_ENABLED=false,FIXLIST_WORKER_SOURCE_SHA=${_RELEASE_SHA},FIXLIST_EGRESS_MODE=static-canary
       - --set-secrets=SCAN_EVIDENCE_SIGNING_KEY=${_SIGNING_KEY_SECRET}:${_SIGNING_KEY_VERSION}
 
 images:

@@ -105,7 +105,7 @@ steps:
       - -c
       - |
         set -euo pipefail
-        args=(
+        deploy_args=(
           run deploy "${_WORKER_SERVICE}"
           "--image=${_IMAGE}:${_RELEASE_SHA}"
           "--region=${_REGION}"
@@ -122,10 +122,10 @@ steps:
         )
         case "${_EGRESS_MODE}" in
           none)
-            args+=(--clear-network)
+            deploy_args+=(--clear-network)
             ;;
           static-canary)
-            args+=(
+            deploy_args+=(
               "--network=${_EGRESS_NETWORK}"
               "--subnet=${_EGRESS_SUBNET}"
               --vpc-egress=all-traffic
@@ -136,7 +136,7 @@ steps:
             exit 1
             ;;
         esac
-        gcloud "${args[@]}"
+        gcloud "${deploy_args[@]}"
 
 images:
   - ${_IMAGE}:${_RELEASE_SHA}

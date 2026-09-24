@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import test from "node:test";
 
 import {
+  MISSING_H1_ROLE_COPY_VERSION,
   REPAIR_EXPLANATION_FALLBACK,
   REPAIR_EXPLANATION_ROLES,
   REPAIR_ROLE_EXPLANATION_LIBRARY_VERSION,
@@ -31,10 +32,10 @@ const SNAPSHOTS = Object.freeze({
   "image_alt_text|marketing": "66aaa393654f35bfbe4e5fbd72c4933170150315569841dc23d3d54152a4932d",
   "image_alt_text|seo": "cb6c5efe2493975068930fa852142e5a1aa8afbef6dadae2f9b08235152c989c",
   "image_alt_text|developer": "ad2b30d17ed55aa53475d98f0e6937fe544f34d75f7f1cd89cce118415a09948",
-  "missing_h1|owner": "b9a98f02bd88e90a0409bd974e406a4cd15fb6e6cb226e1ce410bc07088ad6c7",
-  "missing_h1|marketing": "d091005013ad2b1ecc1cd070ce26787874cd50b0c8cab5c1bb5b310270942e47",
-  "missing_h1|seo": "67bc86e56aa9d3106ba048e29c55d39fd1df2f368d73829c63f51cc6e0ddce85",
-  "missing_h1|developer": "243937193140b685fdecd1342e449d2634f291602d69f2fc5e28d9bd1b8b04af",
+  "missing_h1|owner": "7137f4af07e80d4cf1f385369dbec490d9e9aef08e7025719c470605b25d3d37",
+  "missing_h1|marketing": "38f07dfaba5315e623ee8c2f5d2d31d0187c6124ba0856abf28f2ef3e6deac9c",
+  "missing_h1|seo": "7f8a8d2df9c97bfa1956b4df352584ff3b052c9ec0217a5bf48e507d3b398b82",
+  "missing_h1|developer": "58e1418ffada73071f87da212707ff080cd8088442a03f1ba09425ed767c5cb4",
   "canonical_missing|owner": "cef5b55a807b4e607db4f508cdf159750d98f7a4f6cb7e1d79e5f1880cfa48cc",
   "canonical_missing|marketing": "73d8933eeab480970eccac367c5abb3b6a34e319c1b49f81413346d171377aad",
   "canonical_missing|seo": "4f1b7ee7be6f9bc2bd20d778e03da10d8cd41bd88c822bf765258e9943171421",
@@ -72,6 +73,33 @@ for (const [key, expectedDigest] of Object.entries(SNAPSHOTS)) {
 
 test("role inventory is the four viewer roles only", () => {
   assert.deepEqual(REPAIR_EXPLANATION_ROLES, ["owner", "marketing", "seo", "developer"]);
+});
+
+
+test("missing_h1 gives each role a distinct actionable next step without inventing a second headline", () => {
+  assert.equal(MISSING_H1_ROLE_COPY_VERSION, "missing_h1_role_copy_v2_20260924_actionable");
+  const expected = {
+    owner: "FixList did not find an H1. Ask the page owner to confirm whether the visible headline is already the main heading; do not add a second headline until they check.",
+    marketing: "FixList did not find an H1. Confirm that the visible headline clearly states the page’s purpose. If the wording is right, keep it and ask for H1 markup; otherwise write one clear main headline.",
+    seo: "No H1 was found in the collected evidence. Check the rendered page for a descriptive main heading that matches its topic, then confirm it is marked as an H1 before recommending new copy.",
+    developer: "No H1 was found in the collected evidence. Inspect the rendered DOM and the page or template source. If the approved headline already exists, mark it up as an H1; otherwise add it once and verify the final HTML.",
+  };
+
+  for (const role of REPAIR_EXPLANATION_ROLES) {
+    const repair = {
+      rule: "missing_h1",
+      recommendation: "Preserve this scanner-authored recommendation.",
+      affected_pages: ["https://example.com/page"],
+      evidence: { evidence_ref: "page:/example#heading" },
+    };
+    const before = structuredClone(repair);
+    const actual = repairRoleExplanation(repair, role);
+    assert.equal(actual.explanation, expected[role]);
+    assert.equal(actual.ruleCopyVersion, MISSING_H1_ROLE_COPY_VERSION);
+    assert.deepEqual(repair, before);
+  }
+
+  assert.equal(new Set(Object.values(expected)).size, REPAIR_EXPLANATION_ROLES.length);
 });
 
 test("unmapped rule preserves the existing generic fallback wording", () => {

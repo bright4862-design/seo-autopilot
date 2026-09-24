@@ -70,8 +70,17 @@ traffic=service.get("status",{}).get("traffic",[]) or []
 percent=sum(int(t.get("percent") or 0) for t in traffic if t.get("revisionName")==name)
 if percent != 0:
     raise SystemExit("candidate unexpectedly serves customer traffic")
-image=str(rev.get("status",{}).get("imageDigest") or container.get("image") or "")
-if "@sha256:" not in image:
+raw_image=str(container.get("image") or "")
+digest=str(rev.get("status",{}).get("imageDigest") or "")
+if "@sha256:" in raw_image:
+    image=raw_image
+elif digest.startswith("sha256:") and raw_image:
+    base=raw_image.split("@",1)[0]
+    last=base.rsplit("/",1)[-1]
+    if ":" in last:
+        base=base.rsplit(":",1)[0]
+    image=base + "@" + digest
+else:
     raise SystemExit("candidate immutable image digest unavailable")
 sa=str(spec.get("serviceAccountName") or "")
 if not sa:
@@ -84,7 +93,7 @@ PY
 IMAGE="${values[0]}"
 RUNTIME_SA="${values[1]}"
 EXPECTED_IP="$(gcloud compute addresses describe "$ADDRESS" --project="$PROJECT" --region="$REGION" --format='value(address)')"
-[[ "$EXPECTED_IP" =~ ^[0-9]+.[0-9]+.[0-9]+.[0-9]+$ ]] || { echo "Refusing: reserved egress IPv4 unavailable." >&2; exit 2; }
+[[ "$EXPECTED_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Refusing: reserved egress IPv4 unavailable." >&2; exit 2; }
 
 probe_python='import json, urllib.request; ip=urllib.request.urlopen("https://api.ipify.org", timeout=20).read().decode().strip(); print("FIXLIST_STATIC_EGRESS_PROBE="+json.dumps({"source_ip":ip}, separators=(",",":")), flush=True)'
 encoded="$(printf '%s' "$probe_python" | base64 | tr -d '\n')"

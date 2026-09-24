@@ -48,7 +48,31 @@ steps:
           echo "Invalid _RELEASE_SHA: expected exactly 40 lowercase hexadecimal characters."
           exit 1
         fi
-        if ! printf '%s' "${_SIGNING_KEY_VERSION}" | grep -Eq '^[0-9]+        echo "Release identity pinned to ${_RELEASE_SHA}."
+        if ! printf '%s' "${_SIGNING_KEY_VERSION}" | grep -Eq '^[0-9]+$'; then
+          echo "Invalid _SIGNING_KEY_VERSION: expected a numeric pinned version."
+          exit 1
+        fi
+        case "${_EGRESS_MODE}" in
+          none)
+            if [ -n "${_EGRESS_NETWORK}" ] || [ -n "${_EGRESS_SUBNET}" ]; then
+              echo "Refusing: egress network/subnet supplied while _EGRESS_MODE=none."
+              exit 1
+            fi
+            ;;
+          static-canary)
+            if ! printf '%s' "${_EGRESS_NETWORK}" | grep -Eq '^[a-z][a-z0-9-]{0,62}$' \
+              || ! printf '%s' "${_EGRESS_SUBNET}" | grep -Eq '^[a-z][a-z0-9-]{0,62}$'; then
+              echo "Refusing: static-canary requires exact safe network and subnet names."
+              exit 1
+            fi
+            ;;
+          *)
+            echo "Refusing unsupported _EGRESS_MODE=${_EGRESS_MODE}."
+            exit 1
+            ;;
+        esac
+        echo "All required substitutions supplied."
+        echo "Release identity pinned to ${_RELEASE_SHA}."
 
   # The GitHub-side operator has already verified HEAD == current origin/main,
   # CONFIRM == SOURCE_SHA, and a clean checkout, then submitted `git archive`
@@ -137,255 +161,6 @@ steps:
             ;;
         esac
         gcloud "${deploy_args[@]}"
-
-images:
-  - ${_IMAGE}:${_RELEASE_SHA}
-
-options:
-  logging: CLOUD_LOGGING_ONLY
-; then
-          echo "Invalid _SIGNING_KEY_VERSION: expected a numeric pinned version."
-          exit 1
-        fi
-        case "${_EGRESS_MODE}" in
-          none)
-            if [ -n "${_EGRESS_NETWORK}" ] || [ -n "${_EGRESS_SUBNET}" ]; then
-              echo "Refusing: egress network/subnet supplied while _EGRESS_MODE=none."
-              exit 1
-            fi
-            ;;
-          static-canary)
-            if ! printf '%s' "${_EGRESS_NETWORK}" | grep -Eq '^[a-z][a-z0-9-]{0,62}        echo "Release identity pinned to ${_RELEASE_SHA}."
-
-  # The GitHub-side operator has already verified HEAD == current origin/main,
-  # CONFIRM == SOURCE_SHA, and a clean checkout, then submitted `git archive`
-  # output from that exact commit. Verify the archive stamp here and copy only
-  # the Dockerfile inputs into an isolated build context. This avoids requiring
-  # a GitHub credential inside Cloud Build while preserving exact-source build
-  # provenance and rejecting mismatched release labels.
-  - id: verify-release-source
-    name: gcr.io/cloud-builders/gcloud
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        set -euo pipefail
-        readonly stamp=/workspace/.fixlist-source-sha
-        readonly verified_context=/workspace/.verified-context
-        test -f "$stamp" || { echo "Missing exact-source stamp." >&2; exit 1; }
-        actual_sha="$(tr -d '[:space:]' < "$stamp")"
-        if [ "$actual_sha" != "${_RELEASE_SHA}" ]; then
-          echo "Release source mismatch: archive stamp $actual_sha, expected ${_RELEASE_SHA}." >&2
-          exit 1
-        fi
-        for path in \
-          Dockerfile \
-          scanner-api/requirements.txt \
-          scanner-api/app/main.py \
-          data/cross-runtime-release-components.json; do
-          test -e "/workspace/$path" || { echo "Missing worker build input: $path" >&2; exit 1; }
-        done
-        rm -rf "$verified_context"
-        mkdir -p "$verified_context/scanner-api" "$verified_context/data"
-        cp /workspace/Dockerfile "$verified_context/Dockerfile"
-        cp /workspace/scanner-api/requirements.txt "$verified_context/scanner-api/requirements.txt"
-        cp -a /workspace/scanner-api/app "$verified_context/scanner-api/app"
-        cp /workspace/data/cross-runtime-release-components.json "$verified_context/data/cross-runtime-release-components.json"
-        main_sha="$(sha256sum "$verified_context/scanner-api/app/main.py" | cut -d ' ' -f 1)"
-        components_sha="$(sha256sum "$verified_context/data/cross-runtime-release-components.json" | cut -d ' ' -f 1)"
-        echo "Verified archived worker context for ${_RELEASE_SHA}."
-        echo "Verified scanner-api/app/main.py sha256=$main_sha"
-        echo "Verified data/cross-runtime-release-components.json sha256=$components_sha"
-
-  - id: build
-    name: gcr.io/cloud-builders/docker
-    args: ["build", "--tag", "${_IMAGE}:${_RELEASE_SHA}", "/workspace/.verified-context"]
-
-  - id: push
-    name: gcr.io/cloud-builders/docker
-    args: ["push", "${_IMAGE}:${_RELEASE_SHA}"]
-
-  - id: deploy-private-worker
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: gcloud
-    args:
-      - run
-      - deploy
-      - ${_WORKER_SERVICE}
-      - --image=${_IMAGE}:${_RELEASE_SHA}
-      - --region=${_REGION}
-      - --no-allow-unauthenticated
-      - --service-account=${_RUNTIME_SA}
-      - --memory=1Gi
-      - --timeout=480
-      - --concurrency=1
-      - --min-instances=0
-      - --max-instances=40
-      - --no-traffic
-      - --set-env-vars=TASKS_INVOKER_SERVICE_ACCOUNT=${_INVOKER_SA},BASE44_APP_ID=${_BASE44_APP_ID},BASE44_API_URL=${_BASE44_API_URL},GROK_PROXY_ENABLED=false,FIXLIST_WORKER_SOURCE_SHA=${_RELEASE_SHA}
-      - --set-secrets=SCAN_EVIDENCE_SIGNING_KEY=${_SIGNING_KEY_SECRET}:${_SIGNING_KEY_VERSION}
-
-images:
-  - ${_IMAGE}:${_RELEASE_SHA}
-
-options:
-  logging: CLOUD_LOGGING_ONLY
- \
-              || ! printf '%s' "${_EGRESS_SUBNET}" | grep -Eq '^[a-z][a-z0-9-]{0,62}        echo "Release identity pinned to ${_RELEASE_SHA}."
-
-  # The GitHub-side operator has already verified HEAD == current origin/main,
-  # CONFIRM == SOURCE_SHA, and a clean checkout, then submitted `git archive`
-  # output from that exact commit. Verify the archive stamp here and copy only
-  # the Dockerfile inputs into an isolated build context. This avoids requiring
-  # a GitHub credential inside Cloud Build while preserving exact-source build
-  # provenance and rejecting mismatched release labels.
-  - id: verify-release-source
-    name: gcr.io/cloud-builders/gcloud
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        set -euo pipefail
-        readonly stamp=/workspace/.fixlist-source-sha
-        readonly verified_context=/workspace/.verified-context
-        test -f "$stamp" || { echo "Missing exact-source stamp." >&2; exit 1; }
-        actual_sha="$(tr -d '[:space:]' < "$stamp")"
-        if [ "$actual_sha" != "${_RELEASE_SHA}" ]; then
-          echo "Release source mismatch: archive stamp $actual_sha, expected ${_RELEASE_SHA}." >&2
-          exit 1
-        fi
-        for path in \
-          Dockerfile \
-          scanner-api/requirements.txt \
-          scanner-api/app/main.py \
-          data/cross-runtime-release-components.json; do
-          test -e "/workspace/$path" || { echo "Missing worker build input: $path" >&2; exit 1; }
-        done
-        rm -rf "$verified_context"
-        mkdir -p "$verified_context/scanner-api" "$verified_context/data"
-        cp /workspace/Dockerfile "$verified_context/Dockerfile"
-        cp /workspace/scanner-api/requirements.txt "$verified_context/scanner-api/requirements.txt"
-        cp -a /workspace/scanner-api/app "$verified_context/scanner-api/app"
-        cp /workspace/data/cross-runtime-release-components.json "$verified_context/data/cross-runtime-release-components.json"
-        main_sha="$(sha256sum "$verified_context/scanner-api/app/main.py" | cut -d ' ' -f 1)"
-        components_sha="$(sha256sum "$verified_context/data/cross-runtime-release-components.json" | cut -d ' ' -f 1)"
-        echo "Verified archived worker context for ${_RELEASE_SHA}."
-        echo "Verified scanner-api/app/main.py sha256=$main_sha"
-        echo "Verified data/cross-runtime-release-components.json sha256=$components_sha"
-
-  - id: build
-    name: gcr.io/cloud-builders/docker
-    args: ["build", "--tag", "${_IMAGE}:${_RELEASE_SHA}", "/workspace/.verified-context"]
-
-  - id: push
-    name: gcr.io/cloud-builders/docker
-    args: ["push", "${_IMAGE}:${_RELEASE_SHA}"]
-
-  - id: deploy-private-worker
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: gcloud
-    args:
-      - run
-      - deploy
-      - ${_WORKER_SERVICE}
-      - --image=${_IMAGE}:${_RELEASE_SHA}
-      - --region=${_REGION}
-      - --no-allow-unauthenticated
-      - --service-account=${_RUNTIME_SA}
-      - --memory=1Gi
-      - --timeout=480
-      - --concurrency=1
-      - --min-instances=0
-      - --max-instances=40
-      - --no-traffic
-      - --set-env-vars=TASKS_INVOKER_SERVICE_ACCOUNT=${_INVOKER_SA},BASE44_APP_ID=${_BASE44_APP_ID},BASE44_API_URL=${_BASE44_API_URL},GROK_PROXY_ENABLED=false,FIXLIST_WORKER_SOURCE_SHA=${_RELEASE_SHA}
-      - --set-secrets=SCAN_EVIDENCE_SIGNING_KEY=${_SIGNING_KEY_SECRET}:${_SIGNING_KEY_VERSION}
-
-images:
-  - ${_IMAGE}:${_RELEASE_SHA}
-
-options:
-  logging: CLOUD_LOGGING_ONLY
-; then
-              echo "Refusing: static-canary requires exact safe network and subnet names."
-              exit 1
-            fi
-            ;;
-          *)
-            echo "Refusing unsupported _EGRESS_MODE=${_EGRESS_MODE}."
-            exit 1
-            ;;
-        esac
-        echo "All required substitutions supplied."
-        echo "Release identity pinned to ${_RELEASE_SHA}."
-
-  # The GitHub-side operator has already verified HEAD == current origin/main,
-  # CONFIRM == SOURCE_SHA, and a clean checkout, then submitted `git archive`
-  # output from that exact commit. Verify the archive stamp here and copy only
-  # the Dockerfile inputs into an isolated build context. This avoids requiring
-  # a GitHub credential inside Cloud Build while preserving exact-source build
-  # provenance and rejecting mismatched release labels.
-  - id: verify-release-source
-    name: gcr.io/cloud-builders/gcloud
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        set -euo pipefail
-        readonly stamp=/workspace/.fixlist-source-sha
-        readonly verified_context=/workspace/.verified-context
-        test -f "$stamp" || { echo "Missing exact-source stamp." >&2; exit 1; }
-        actual_sha="$(tr -d '[:space:]' < "$stamp")"
-        if [ "$actual_sha" != "${_RELEASE_SHA}" ]; then
-          echo "Release source mismatch: archive stamp $actual_sha, expected ${_RELEASE_SHA}." >&2
-          exit 1
-        fi
-        for path in \
-          Dockerfile \
-          scanner-api/requirements.txt \
-          scanner-api/app/main.py \
-          data/cross-runtime-release-components.json; do
-          test -e "/workspace/$path" || { echo "Missing worker build input: $path" >&2; exit 1; }
-        done
-        rm -rf "$verified_context"
-        mkdir -p "$verified_context/scanner-api" "$verified_context/data"
-        cp /workspace/Dockerfile "$verified_context/Dockerfile"
-        cp /workspace/scanner-api/requirements.txt "$verified_context/scanner-api/requirements.txt"
-        cp -a /workspace/scanner-api/app "$verified_context/scanner-api/app"
-        cp /workspace/data/cross-runtime-release-components.json "$verified_context/data/cross-runtime-release-components.json"
-        main_sha="$(sha256sum "$verified_context/scanner-api/app/main.py" | cut -d ' ' -f 1)"
-        components_sha="$(sha256sum "$verified_context/data/cross-runtime-release-components.json" | cut -d ' ' -f 1)"
-        echo "Verified archived worker context for ${_RELEASE_SHA}."
-        echo "Verified scanner-api/app/main.py sha256=$main_sha"
-        echo "Verified data/cross-runtime-release-components.json sha256=$components_sha"
-
-  - id: build
-    name: gcr.io/cloud-builders/docker
-    args: ["build", "--tag", "${_IMAGE}:${_RELEASE_SHA}", "/workspace/.verified-context"]
-
-  - id: push
-    name: gcr.io/cloud-builders/docker
-    args: ["push", "${_IMAGE}:${_RELEASE_SHA}"]
-
-  - id: deploy-private-worker
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: gcloud
-    args:
-      - run
-      - deploy
-      - ${_WORKER_SERVICE}
-      - --image=${_IMAGE}:${_RELEASE_SHA}
-      - --region=${_REGION}
-      - --no-allow-unauthenticated
-      - --service-account=${_RUNTIME_SA}
-      - --memory=1Gi
-      - --timeout=480
-      - --concurrency=1
-      - --min-instances=0
-      - --max-instances=40
-      - --no-traffic
-      - --set-env-vars=TASKS_INVOKER_SERVICE_ACCOUNT=${_INVOKER_SA},BASE44_APP_ID=${_BASE44_APP_ID},BASE44_API_URL=${_BASE44_API_URL},GROK_PROXY_ENABLED=false,FIXLIST_WORKER_SOURCE_SHA=${_RELEASE_SHA}
-      - --set-secrets=SCAN_EVIDENCE_SIGNING_KEY=${_SIGNING_KEY_SECRET}:${_SIGNING_KEY_VERSION}
 
 images:
   - ${_IMAGE}:${_RELEASE_SHA}

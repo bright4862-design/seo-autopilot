@@ -1,0 +1,78 @@
+{
+  "fixture_version": "grounding_v8_sealed_l2_v1",
+  "sealed_l2": {
+    "authority_seal_version": "standard_review_snapshot_hmac_stage3_delivery_v1",
+    "authority_sealed_at": "2026-09-22T16:00:00Z",
+    "authority_proof": "fixture-proof-v8",
+    "website_url": "https://example.com",
+    "crawl_scope": {"requested_origin": "https://example.com"},
+    "status": "complete",
+    "health_score": 73,
+    "pages": [
+      {
+        "url": "/products/CaseSensitive?variant=1",
+        "final_url": "https://example.com/products/CaseSensitive?variant=1",
+        "status_code": 200
+      },
+      {"url": "/gone", "status_code": 404}
+    ],
+    "health_score_explanation": {
+      "stage3_delivery": {
+        "version": "stage3_v7_delivery_v1",
+        "health_score_decision": {
+          "version": "stage3_health_score_caps_v1_verified_root_cause",
+          "state": "decided",
+          "adjusted_health_score": 73,
+          "coverage_state": "sufficient",
+          "applied_root_cause_caps": [
+            {"root_cause_id": "root:canonical-template", "score_cap": 80}
+          ]
+        },
+        "handoff_v2_source": {
+          "handoff_version": "fixlist_handoff_v2",
+          "scan": {
+            "scan_id": "scan-v8-fixture",
+            "scan_run_id": "scan-v8-fixture",
+            "scan_origin": "https://example.com"
+          },
+          "fixes": [
+            {
+              "rule_id": "fix:canonical-template",
+              "root_cause_id": "root:canonical-template",
+              "root_cause_evidence": {
+                "version": "root_cause_evidence_v1_verified",
+                "state": "verified",
+                "root_cause_id": "root:canonical-template",
+                "repair_surface_id": "surface:canonical-template",
+                "evidence_refs": ["https://example.com/products/CaseSensitive?variant=1"]
+              },
+              "url_provenance": {
+                "published_url": "https://example.com/products/CaseSensitive?variant=1",
+                "request_url": "https://example.com/products/CaseSensitive?variant=1&utm_source=x",
+                "final_url": "https://example.com/products/CaseSensitive?variant=1"
+              },
+              "counts": {
+                "unique_affected_pages": 1,
+                "observations": 2,
+                "known_population": 10,
+                "displayed_examples": 1,
+                "indexable_affected": 1
+              },
+              "examples": ["https://example.com/products/CaseSensitive?variant=1"],
+              "evidence_refs": ["https://example.com/products/CaseSensitive?variant=1"]
+            }
+          ],
+          "fix_count": 1
+        }
+      }
+    },
+    "diagnostics": {
+      "count.total": 2,
+      "coverage-state": "sufficient"
+    },
+    "duplicate_evidence": [
+      {"evidence_url": "https://example.com/products/CaseSensitive?variant=1#first"},
+      {"evidence_url": "https://example.com/products/CaseSensitive?variant=1#second"}
+    ]
+  }
+}

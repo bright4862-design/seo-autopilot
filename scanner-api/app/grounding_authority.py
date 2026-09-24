@@ -80,6 +80,42 @@ def _authenticate_v8_snapshot(
     return candidate
 
 
+def _project_signed_health_score_explanation(value: Any) -> dict[str, Any]:
+    """Map only signed Stage-3 sample URLs into Grounding's URL vocabulary.
+
+    Handoff-v2 names its bounded affected-page sample ``examples``. Grounding
+    deliberately does not treat generic ``examples`` arrays as URL evidence.
+    After the containing V8 snapshot has passed HMAC verification, copy those
+    exact signed strings to the explicit ``affected_urls`` field on the same
+    authenticated Handoff-v2 Fix records. No new URL is synthesized and no
+    liveness is inferred.
+    """
+    explanation = deepcopy(value) if isinstance(value, dict) else {}
+    delivery = explanation.get("stage3_delivery")
+    if not isinstance(delivery, dict):
+        return explanation
+    handoff = delivery.get("handoff_v2_source")
+    if not isinstance(handoff, dict) or handoff.get("handoff_version") != "fixlist_handoff_v2":
+        return explanation
+    fixes = handoff.get("fixes")
+    if not isinstance(fixes, list) or len(fixes) > 100:
+        raise EvidenceUnavailable("v8_grounding_projection_unavailable")
+    for fix in fixes:
+        if not isinstance(fix, dict):
+            raise EvidenceUnavailable("v8_grounding_projection_unavailable")
+        examples = fix.get("examples")
+        if examples is None:
+            continue
+        if (
+            not isinstance(examples, list)
+            or len(examples) > 100
+            or any(not isinstance(url, str) or not url or len(url) > 2_000 for url in examples)
+        ):
+            raise EvidenceUnavailable("v8_grounding_projection_unavailable")
+        fix["affected_urls"] = list(examples)
+    return explanation
+
+
 def _project_authenticated_v8_snapshot(snapshot: dict[str, Any], proof: str) -> dict[str, Any]:
     scan = snapshot.get("scan")
     fix_list = snapshot.get("fix_list")
@@ -129,7 +165,7 @@ def _project_authenticated_v8_snapshot(snapshot: dict[str, Any], proof: str) -> 
         "evidence_quality_blocking": scan.get("evidence_quality_blocking"),
         "score_is_provisional": scan.get("score_is_provisional"),
         "fix_count": fix_list.get("total_fixes"),
-        "health_score_explanation": deepcopy(scan.get("health_score_explanation") or {}),
+        "health_score_explanation": _project_signed_health_score_explanation(scan.get("health_score_explanation")),
         "fixes": deepcopy(recommendations),
     }
     return _json_copy(source)

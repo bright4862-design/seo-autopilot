@@ -20,6 +20,7 @@ test("static egress canary is one dedicated network, /26 subnet, and one manual 
   assert.match(verify, /natIpAllocateOption/);
   assert.match(verify, /MANUAL_ONLY/);
   assert.match(verify, /LIST_OF_SUBNETWORKS/);
+  assert.doesNotMatch(provision, /add-iam-policy-binding|set-iam-policy|roles\/compute\.networkUser/);
 });
 
 test("normal worker builds explicitly clear Direct VPC while canary builds route all traffic through exact network", () => {

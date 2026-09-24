@@ -84,17 +84,34 @@ printf 'worker=%s\nimage=%s\nruntime_sa=%s\ninvoker_sa=%s\nbuild_sa=%s\nsource_s
   "$WORKER" "$IMAGE" "$RUNTIME_SA" "$INVOKER_SA" "$BUILD_SA_EMAIL" "$SOURCE_SHA" "$EGRESS_MODE"
 
 # Submit only a clean archive of the exact verified commit. The generated stamp
-# is provenance metadata consumed by cloudbuild.durable-worker.yaml and is not
-# copied into the worker image.
+# is provenance metadata consumed by the selected immutable worker build config
+# and is not copied into the worker image.
 git -C "$REPO_ROOT" archive --format=tar "$SOURCE_SHA" | tar -xf - -C "$BUILD_CONTEXT"
 printf '%s\n' "$SOURCE_SHA" > "$BUILD_CONTEXT/.fixlist-source-sha"
+
+common_substitutions="_RELEASE_SHA=$SOURCE_SHA,_WORKER_SERVICE=$WORKER,_REGION=$REGION,_IMAGE=$IMAGE,_RUNTIME_SA=$RUNTIME_SA,_INVOKER_SA=$INVOKER_SA,_BASE44_APP_ID=$BASE44_APP,_BASE44_API_URL=$BASE44_API,_SIGNING_KEY_SECRET=$SIGNING_SECRET,_SIGNING_KEY_VERSION=$SIGNING_VERSION"
+case "$EGRESS_MODE" in
+  none)
+    BUILD_CONFIG="$BUILD_CONTEXT/cloudbuild.durable-worker.yaml"
+    BUILD_SUBSTITUTIONS="$common_substitutions"
+    ;;
+  static-canary)
+    BUILD_CONFIG="$BUILD_CONTEXT/cloudbuild.durable-worker-static-egress-canary.yaml"
+    BUILD_SUBSTITUTIONS="$common_substitutions,_EGRESS_NETWORK=$EGRESS_NETWORK,_EGRESS_SUBNET=$EGRESS_SUBNET"
+    ;;
+  *)
+    echo "Refusing unsupported worker build egress mode." >&2
+    exit 2
+    ;;
+esac
+test -f "$BUILD_CONFIG" || { echo "Worker build config missing: $BUILD_CONFIG" >&2; exit 2; }
 
 gcloud builds submit "$BUILD_CONTEXT" \
   --project="$PROJECT" \
   --region="$REGION" \
-  --config="$BUILD_CONTEXT/cloudbuild.durable-worker.yaml" \
+  --config="$BUILD_CONFIG" \
   --service-account="$BUILD_SA_RESOURCE" \
-  --substitutions="_RELEASE_SHA=$SOURCE_SHA,_WORKER_SERVICE=$WORKER,_REGION=$REGION,_IMAGE=$IMAGE,_RUNTIME_SA=$RUNTIME_SA,_INVOKER_SA=$INVOKER_SA,_BASE44_APP_ID=$BASE44_APP,_BASE44_API_URL=$BASE44_API,_SIGNING_KEY_SECRET=$SIGNING_SECRET,_SIGNING_KEY_VERSION=$SIGNING_VERSION,_EGRESS_MODE=$EGRESS_MODE,_EGRESS_NETWORK=$EGRESS_NETWORK,_EGRESS_SUBNET=$EGRESS_SUBNET"
+  --substitutions="$BUILD_SUBSTITUTIONS"
 
 gcloud run revisions list --service="$WORKER" --project="$PROJECT" --region="$REGION" --format=json > "$REVISIONS_JSON"
 CANDIDATE="$(python3 - "$REVISIONS_JSON" "$SOURCE_SHA" "$EGRESS_MODE" "$EGRESS_NETWORK" "$EGRESS_SUBNET" <<'PY'

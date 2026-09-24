@@ -402,6 +402,267 @@ jobs:
             ${{ runner.temp }}/ironwood-evidence/result.json
             ${{ runner.temp }}/ironwood-evidence/failure.json
 
+  provision-static-egress-canary-on-owner-comment:
+    if: >-
+      github.event_name == 'issue_comment'
+      && github.event.issue.pull_request
+      && github.event.comment.user.login == 'bright4862-design'
+      && startsWith(github.event.comment.body, '/provision-static-egress-canary ')
+    name: Provision one-IP static egress canary
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact default-branch SHA bound to the comment event
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate exact owner command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_USER: ${{ github.event.comment.user.login }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$COMMENT_USER" = "bright4862-design"
+          source_sha="$(git rev-parse HEAD)"
+          expected="/provision-static-egress-canary $source_sha"
+          test "$COMMENT_BODY" = "$expected"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$source_sha"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate cloud operator
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Validate egress infrastructure scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/provision-fixlist-static-egress-canary.sh
+          bash -n scripts/verify-fixlist-static-egress-canary.sh
+          bash -n scripts/verify-fixlist-static-egress-source-ip.sh
+
+      - name: Provision exact one-IP egress canary
+        env:
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+          CONFIRM: STATIC-EGRESS-CANARY:${{ steps.command.outputs.source_sha }}
+        shell: bash
+        run: bash scripts/provision-fixlist-static-egress-canary.sh
+
+  stage-static-egress-worker-on-owner-comment:
+    if: >-
+      github.event_name == 'issue_comment'
+      && github.event.issue.pull_request
+      && github.event.comment.user.login == 'bright4862-design'
+      && startsWith(github.event.comment.body, '/stage-static-egress-worker ')
+    name: Stage exact static-egress worker at 0%
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout exact default-branch SHA bound to the comment event
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate exact owner command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_USER: ${{ github.event.comment.user.login }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$COMMENT_USER" = "bright4862-design"
+          source_sha="$(git rev-parse HEAD)"
+          expected="/stage-static-egress-worker $source_sha"
+          test "$COMMENT_BODY" = "$expected"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$source_sha"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate cloud operator
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Verify static egress infrastructure
+        shell: bash
+        run: bash scripts/verify-fixlist-static-egress-canary.sh
+
+      - name: Validate static-egress worker build path
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/build-worker-candidate.sh
+          bash -n scripts/lib/release-source-guard.sh
+
+      - name: Build zero-traffic static-egress worker candidate
+        id: stage
+        env:
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+          CONFIRM: ${{ steps.command.outputs.source_sha }}
+          FIXLIST_EGRESS_MODE: static-canary
+          FIXLIST_EGRESS_NETWORK: fixlist-scanner-egress
+          FIXLIST_EGRESS_SUBNET: fixlist-scanner-egress-euw1
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/build-worker-candidate.sh | tee /tmp/fixlist-static-egress-stage.log
+          revision="$(sed -n 's/^WORKER_CANDIDATE_READY=//p' /tmp/fixlist-static-egress-stage.log | tail -1)"
+          mode="$(sed -n 's/^WORKER_CANDIDATE_EGRESS_MODE=//p' /tmp/fixlist-static-egress-stage.log | tail -1)"
+          test -n "$revision"
+          test "$mode" = "static-canary"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Publish static-egress candidate status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.command.outputs.source_sha }}
+          REVISION: ${{ steps.stage.outputs.revision }}
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -n "$TARGET_SHA" ] || exit 0
+          if [ "$JOB_STATUS" = "success" ] && [ -n "$REVISION" ]; then
+            state=success
+            description="0% static-egress worker ready: $REVISION"
+          else
+            state=failure
+            description="Static-egress worker staging failed"
+          fi
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${TARGET_SHA}"             -f state="$state"             -f context="fixlist/static-egress-candidate-stage"             -f description="$description"
+
+  verify-static-egress-source-ip-on-owner-comment:
+    if: >-
+      github.event_name == 'issue_comment'
+      && github.event.issue.pull_request
+      && github.event.comment.user.login == 'bright4862-design'
+      && startsWith(github.event.comment.body, '/verify-static-egress-source-ip ')
+    name: Verify exact static egress source IP
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact default-branch SHA bound to the comment event
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate exact owner command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_USER: ${{ github.event.comment.user.login }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$COMMENT_USER" = "bright4862-design"
+          source_sha="$(git rev-parse HEAD)"
+          expected="/verify-static-egress-source-ip $source_sha"
+          test "$COMMENT_BODY" = "$expected"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$source_sha"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate cloud operator
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Resolve exact zero-traffic static-egress candidate
+        id: candidate
+        env:
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run revisions list --service="$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > /tmp/revisions.json
+          gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > /tmp/service.json
+          revision="$(python3 - "$SOURCE_SHA" /tmp/revisions.json /tmp/service.json <<'PY'
+          import json, sys
+          source_sha, revisions_path, service_path = sys.argv[1:]
+          rows=json.load(open(revisions_path))
+          service=json.load(open(service_path))
+          traffic=service.get('status',{}).get('traffic',[]) or []
+          candidates=[]
+          for row in rows:
+              spec=row.get('spec',{}) or {}
+              container=(spec.get('containers') or [{}])[0]
+              env={item.get('name'):item.get('value','') for item in container.get('env',[])}
+              if env.get('FIXLIST_WORKER_SOURCE_SHA') != source_sha or env.get('FIXLIST_EGRESS_MODE') != 'static-canary':
+                  continue
+              name=row.get('metadata',{}).get('name','')
+              percent=sum(int(t.get('percent') or 0) for t in traffic if t.get('revisionName')==name)
+              if percent != 0:
+                  continue
+              candidates.append((row.get('metadata',{}).get('creationTimestamp',''), name))
+          candidates.sort()
+          print(candidates[-1][1] if candidates else '')
+          PY
+          )"
+          test -n "$revision"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Verify candidate source IP equals reserved NAT IP
+        env:
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+          TARGET_REVISION: ${{ steps.candidate.outputs.revision }}
+          CONFIRM: STATIC-EGRESS-PROBE:${{ steps.candidate.outputs.revision }}:${{ steps.command.outputs.source_sha }}
+        shell: bash
+        run: bash scripts/verify-fixlist-static-egress-source-ip.sh
+
+      - name: Publish source-IP verification status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.command.outputs.source_sha }}
+          REVISION: ${{ steps.candidate.outputs.revision }}
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -n "$TARGET_SHA" ] || exit 0
+          if [ "$JOB_STATUS" = "success" ] && [ -n "$REVISION" ]; then
+            state=success
+            description="Static egress IP verified: $REVISION"
+          else
+            state=failure
+            description="Static egress IP verification failed"
+          fi
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${TARGET_SHA}"             -f state="$state"             -f context="fixlist/static-egress-source-ip"             -f description="$description"
+
   verify-admission-identity:
     if: >-
       github.event_name == 'workflow_dispatch'

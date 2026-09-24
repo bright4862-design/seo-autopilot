@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const cloudbuild = readFileSync("cloudbuild.durable-worker.yaml", "utf8");
+const canaryCloudbuild = readFileSync("cloudbuild.durable-worker-static-egress-canary.yaml", "utf8");
 const build = readFileSync("scripts/build-worker-candidate.sh", "utf8");
 const provision = readFileSync("scripts/provision-fixlist-static-egress-canary.sh", "utf8");
 const verify = readFileSync("scripts/verify-fixlist-static-egress-canary.sh", "utf8");
@@ -14,7 +15,11 @@ test("worker Cloud Build remains structurally singular after egress-mode extensi
   assert.equal((cloudbuild.match(/id: deploy-private-worker/g) || []).length, 1);
   assert.equal((cloudbuild.match(/id: verify-release-source/g) || []).length, 1);
   assert.equal((cloudbuild.match(/logging: CLOUD_LOGGING_ONLY/g) || []).length, 1);
-  assert.ok(cloudbuild.split("\n").length < 200, "worker Cloud Build unexpectedly duplicated");
+  assert.ok(cloudbuild.split("\n").length < 160, "normal worker Cloud Build unexpectedly duplicated");
+  assert.equal((canaryCloudbuild.match(/id: deploy-private-static-egress-canary/g) || []).length, 1);
+  assert.equal((canaryCloudbuild.match(/id: verify-release-source/g) || []).length, 1);
+  assert.equal((canaryCloudbuild.match(/logging: CLOUD_LOGGING_ONLY/g) || []).length, 1);
+  assert.ok(canaryCloudbuild.split("\n").length < 180, "canary Cloud Build unexpectedly duplicated");
 });
 
 test("static egress canary is one dedicated network, /24 subnet, and one manual NAT IP", () => {
@@ -35,15 +40,19 @@ test("static egress canary is one dedicated network, /24 subnet, and one manual 
 });
 
 test("normal worker builds explicitly clear Direct VPC while canary builds route all traffic through exact network", () => {
-  assert.match(cloudbuild, /_EGRESS_MODE: "none"/);
-  assert.match(cloudbuild, /none\)[\s\S]*deploy_args\+\=\(--clear-network\)/);
-  assert.match(
-    cloudbuild,
-    /static-canary\)[\s\S]*--network=\$\{_EGRESS_NETWORK\}[\s\S]*--subnet=\$\{_EGRESS_SUBNET\}[\s\S]*--vpc-egress=all-traffic/,
-  );
+  assert.match(cloudbuild, /--clear-network/);
+  assert.doesNotMatch(cloudbuild, /--network=\$\{_EGRESS_NETWORK\}|--subnet=\$\{_EGRESS_SUBNET\}|FIXLIST_EGRESS_MODE=static-canary/);
+  assert.match(canaryCloudbuild, /--network=\$\{_EGRESS_NETWORK\}/);
+  assert.match(canaryCloudbuild, /--subnet=\$\{_EGRESS_SUBNET\}/);
+  assert.match(canaryCloudbuild, /--vpc-egress=all-traffic/);
+  assert.match(canaryCloudbuild, /FIXLIST_EGRESS_MODE=static-canary/);
+  assert.match(build, /cloudbuild\.durable-worker\.yaml/);
+  assert.match(build, /cloudbuild\.durable-worker-static-egress-canary\.yaml/);
   assert.match(build, /FIXLIST_EGRESS_MODE:-none/);
   assert.match(build, /unexpected static-egress canary network/);
   assert.match(build, /unexpected static-egress canary subnet/);
+});
+
 });
 
 test("candidate selection and verification bind source SHA to egress mode and Direct VPC annotations", () => {

@@ -50,10 +50,10 @@ if not str(value.get("network") or "").endswith("/networks/" + network):
     raise SystemExit("Refusing: existing egress subnet belongs to another network")
 PY
 
-project_number="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
-[[ "$project_number" =~ ^[0-9]+$ ]] || { echo "Refusing: could not resolve project number." >&2; exit 2; }
-serverless_agent="service-${project_number}@serverless-robot-prod.iam.gserviceaccount.com"
-gcloud compute networks subnets add-iam-policy-binding "$SUBNET"   --project="$PROJECT"   --region="$REGION"   --member="serviceAccount:$serverless_agent"   --role="roles/compute.networkUser"   --condition=None   --quiet >/dev/null
+# Same-project Direct VPC egress uses the existing Cloud Run service-agent
+# permissions. This canary provisioner deliberately does not mutate project or
+# subnet IAM; a missing service-agent permission must fail at worker staging
+# rather than broadening operator access here.
 
 if ! gcloud compute addresses describe "$ADDRESS" --project="$PROJECT" --region="$REGION" >/dev/null 2>&1; then
   gcloud compute addresses create "$ADDRESS"     --project="$PROJECT"     --region="$REGION"     --network-tier=PREMIUM     --quiet

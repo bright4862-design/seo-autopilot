@@ -82,7 +82,7 @@ router_network="$(gcloud compute routers describe "$ROUTER" --project="$PROJECT"
 }
 
 if ! gcloud compute routers nats describe "$NAT" --router="$ROUTER" --project="$PROJECT" --region="$REGION" >/dev/null 2>&1; then
-  gcloud compute routers nats create "$NAT"     --router="$ROUTER"     --project="$PROJECT"     --region="$REGION"     --nat-custom-subnet-ip-ranges="$SUBNET:ALL"     --nat-external-ip-pool="$ADDRESS"     --enable-dynamic-port-allocation     --min-ports-per-vm=64     --max-ports-per-vm=4096     --quiet
+  gcloud compute routers nats create "$NAT"     --router="$ROUTER"     --project="$PROJECT"     --region="$REGION"     --nat-custom-subnet-ip-ranges="$SUBNET:ALL"     --nat-external-ip-pool="$ADDRESS"     --min-ports-per-vm=256     --quiet
 fi
 
 "$REPO_ROOT/scripts/verify-fixlist-static-egress-canary.sh"

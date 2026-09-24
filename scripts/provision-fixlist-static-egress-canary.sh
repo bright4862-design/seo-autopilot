@@ -7,7 +7,7 @@ SOURCE_SHA="${SOURCE_SHA:-}"
 CONFIRM="${CONFIRM:-}"
 NETWORK="${FIXLIST_EGRESS_NETWORK:-fixlist-scanner-egress}"
 SUBNET="${FIXLIST_EGRESS_SUBNET:-fixlist-scanner-egress-euw1}"
-SUBNET_CIDR="${FIXLIST_EGRESS_SUBNET_CIDR:-10.210.0.0/26}"
+SUBNET_CIDR="${FIXLIST_EGRESS_SUBNET_CIDR:-10.210.0.0/24}"
 ROUTER="${FIXLIST_EGRESS_ROUTER:-fixlist-scanner-egress-router}"
 NAT="${FIXLIST_EGRESS_NAT:-fixlist-scanner-egress-nat-a}"
 ADDRESS="${FIXLIST_EGRESS_ADDRESS:-fixlist-scanner-egress-ip-a}"
@@ -21,7 +21,7 @@ if [[ "$CONFIRM" != "STATIC-EGRESS-CANARY:$SOURCE_SHA" ]]; then
   exit 2
 fi
 [[ "$REGION" == "europe-west1" ]] || { echo "Refusing: static egress canary is pinned to europe-west1." >&2; exit 2; }
-[[ "$SUBNET_CIDR" == */26 ]] || { echo "Refusing: Direct VPC egress subnet must be /26 for this canary." >&2; exit 2; }
+[[ "$SUBNET_CIDR" == */24 ]] || { echo "Refusing: Direct VPC egress subnet must be /24 for this canary." >&2; exit 2; }
 
 gcloud config set project "$PROJECT" >/dev/null
 

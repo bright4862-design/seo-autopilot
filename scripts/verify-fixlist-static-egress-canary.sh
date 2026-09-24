@@ -50,6 +50,10 @@ if not any(x.endswith("/addresses/" + address_name) for x in nat_ips):
     raise SystemExit("static egress NAT does not use the reserved canary IP")
 if nat.get("sourceSubnetworkIpRangesToNat") != "LIST_OF_SUBNETWORKS":
     raise SystemExit("static egress NAT is not subnet-scoped")
+if nat.get("enableDynamicPortAllocation") is True:
+    raise SystemExit("static egress NAT unexpectedly uses dynamic port allocation")
+if int(nat.get("minPortsPerVm") or 0) != 256:
+    raise SystemExit("static egress NAT minPortsPerVm differs from canary contract")
 subnets = nat.get("subnetworks") or []
 if len(subnets) != 1 or not str(subnets[0].get("name") or "").endswith("/subnetworks/" + subnet):
     raise SystemExit("static egress NAT subnet scope mismatch")

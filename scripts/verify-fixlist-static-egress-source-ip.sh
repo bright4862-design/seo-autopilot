@@ -90,7 +90,33 @@ probe_python='import json, urllib.request; ip=urllib.request.urlopen("https://ap
 encoded="$(printf '%s' "$probe_python" | base64 | tr -d '\n')"
 args="import base64; exec(compile(base64.b64decode('$encoded'), 'fixlist_static_egress_probe.py', 'exec'))"
 
-gcloud run jobs create "$job"   --project="$PROJECT" --region="$REGION"   --image="$IMAGE"   --service-account="$RUNTIME_SA"   --tasks=1 --parallelism=1 --max-retries=0 --task-timeout=90s   --cpu=1 --memory=512Mi   --command=python   --args=-c,"$args"   --network="$NETWORK"   --subnet="$SUBNET"   --vpc-egress=all-traffic   --labels=purpose=fixlist-static-egress-probe   --quiet
+python3 - "$tmp/job-flags.json" "$IMAGE" "$RUNTIME_SA" "$NETWORK" "$SUBNET" "$args" <<'PY'
+import json, sys
+path, image, service_account, network, subnet, code = sys.argv[1:]
+value = {
+    "--image": image,
+    "--service-account": service_account,
+    "--tasks": "1",
+    "--parallelism": "1",
+    "--max-retries": "0",
+    "--task-timeout": "90s",
+    "--cpu": "1",
+    "--memory": "512Mi",
+    "--command": ["python"],
+    "--args": ["-c", code],
+    "--network": network,
+    "--subnet": subnet,
+    "--vpc-egress": "all-traffic",
+    "--labels": {"purpose": "fixlist-static-egress-probe"},
+}
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(value, handle)
+PY
+
+gcloud run jobs create "$job" \
+  --project="$PROJECT" --region="$REGION" \
+  --flags-file="$tmp/job-flags.json" \
+  --quiet
 
 execution="$(gcloud run jobs execute "$job" --project="$PROJECT" --region="$REGION" --wait --format='value(metadata.name)')"
 [[ -n "$execution" ]] || { echo "Static egress probe execution identity missing." >&2; exit 2; }

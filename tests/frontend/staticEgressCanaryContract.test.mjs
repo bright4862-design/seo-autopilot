@@ -10,7 +10,14 @@ const probe = readFileSync("scripts/verify-fixlist-static-egress-source-ip.sh", 
 const operator = readFileSync("scripts/fixlist-cloud-operator.sh", "utf8");
 const workflow = readFileSync(".github/workflows/fixlist-cloud-operator.yml", "utf8");
 
-test("static egress canary is one dedicated network, /26 subnet, and one manual NAT IP", () => {
+test("worker Cloud Build remains structurally singular after egress-mode extension", () => {
+  assert.equal((cloudbuild.match(/id: deploy-private-worker/g) || []).length, 1);
+  assert.equal((cloudbuild.match(/id: verify-release-source/g) || []).length, 1);
+  assert.equal((cloudbuild.match(/logging: CLOUD_LOGGING_ONLY/g) || []).length, 1);
+  assert.ok(cloudbuild.split("\n").length < 200, "worker Cloud Build unexpectedly duplicated");
+});
+
+test("static egress canary is one dedicated network, /24 subnet, and one manual NAT IP", () => {
   assert.match(provision, /fixlist-scanner-egress/);
   assert.match(provision, /fixlist-scanner-egress-euw1/);
   assert.match(provision, /10\.210\.0\.0\/26/);

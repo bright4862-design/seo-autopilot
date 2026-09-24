@@ -75,6 +75,51 @@ def _reference_identity(fix: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _current_contract_for_fix(
+    fix: dict[str, Any], current_contract: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """Resolve one rule-specific comparison contract without applying it to unrelated repairs."""
+    if not isinstance(current_contract, dict):
+        return current_contract
+    resolved: dict[str, Any] = {}
+    evidence_version = current_contract.get("evidence_url_identity_version")
+    if isinstance(evidence_version, str):
+        resolved["evidence_url_identity_version"] = evidence_version
+
+    rules = current_contract.get("rules")
+    if isinstance(rules, dict):
+        rule = str(build_repair_identity(fix).get("rule") or "")
+        rule_contract = rules.get(rule)
+        if isinstance(rule_contract, dict):
+            for key in ("rule_definition_version", "comparison_profile_version"):
+                value = rule_contract.get(key)
+                if isinstance(value, str) and value.strip():
+                    resolved[key] = value.strip()
+        return resolved
+
+    # Backwards-compatible direct contract shape used by existing focused tests.
+    for key in ("rule_definition_version", "comparison_profile_version"):
+        value = current_contract.get(key)
+        if isinstance(value, str) and value.strip():
+            resolved[key] = value.strip()
+    return resolved
+
+
+def _current_pages_for_fix(
+    fix: dict[str, Any],
+    current_pages: list[dict[str, Any]],
+    current_contract: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Expose authenticated rule evidence only to the rule it evaluates."""
+    if not isinstance(current_contract, dict) or "rules" not in current_contract:
+        return current_pages
+    rules = current_contract.get("rules")
+    if not isinstance(rules, dict):
+        return []
+    rule = str(build_repair_identity(fix).get("rule") or "")
+    return current_pages if rule in rules else []
+
+
 def _by_reference_fingerprint(fixes: list[dict[str, Any]], *, population: str) -> tuple[dict[str, list[dict[str, Any]]], int]:
     by_fingerprint: dict[str, list[dict[str, Any]]] = {}
     unclassified = 0
@@ -168,8 +213,8 @@ def build_scan_comparison_v1(
         comparison = compare_repair_runs(
             previous_fix,
             current_fixes,
-            current_pages,
-            current_contract=current_contract,
+            _current_pages_for_fix(previous_fix, current_pages, current_contract),
+            current_contract=_current_contract_for_fix(previous_fix, current_contract),
             previous_scan_origin=previous_scan_origin,
             scan_origin=current_scan_origin,
         )

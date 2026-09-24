@@ -10,9 +10,10 @@ server-owned lineage lookup, routing and customer delivery.
 
 The consumer verifies both original result seals and this separate HMAC domain.
 Only authenticated snapshot recommendations enter the canonical comparator.
-Durable snapshots omit the complete observed-page population, so this adapter
-always passes an empty page population: a missing finding cannot prove a fix.
-No historic snapshot, score, repair identity, or customer row is rewritten.
+Durable snapshots may carry a bounded, signed rule-evaluation population for
+explicitly integrated rules. Only that authenticated page/rule evidence enters
+the comparator; absent or malformed evidence remains non-proof. No historic
+snapshot, score, repair identity, or customer row is rewritten.
 """
 from __future__ import annotations
 
@@ -25,7 +26,13 @@ import re
 from typing import Any
 from urllib.parse import urlsplit
 
-from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
+from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION, repair_evidence_key_function
+from .missing_h1_comparison_contract import (
+    MISSING_H1_COMPARISON_EVIDENCE_VERSION,
+    MISSING_H1_COMPARISON_PROFILE_VERSION,
+    MISSING_H1_RULE,
+    MISSING_H1_RULE_DEFINITION_VERSION,
+)
 from .repair_identity import (
     REPAIR_IDENTITY_VERSION,
     build_repair_identity,
@@ -259,6 +266,115 @@ def _repairs(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     return repairs
 
 
+def _current_rule_evidence(snapshot: dict[str, Any], origin: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Extract only the exact signed missing-H1 evidence contract from the current snapshot."""
+    evidence = snapshot.get("scan", {}).get("comparison_evidence")
+    if evidence in (None, {}):
+        return [], {}
+    if not isinstance(evidence, dict):
+        raise ValueError("Malformed authenticated comparison evidence")
+    if snapshot.get("version") != "standard_review_snapshot_hmac_identity_v1":
+        raise ValueError("Authenticated comparison evidence requires the published identity authority version")
+    expected_keys = {
+        "version", "rule", "rule_definition_version", "comparison_profile_version",
+        "evidence_url_identity_version", "observation_count", "evaluated_page_count",
+        "finding_present_count", "finding_absent_count", "observations",
+    }
+    if set(evidence) != expected_keys:
+        raise ValueError("Unsupported authenticated comparison evidence fields")
+    if evidence.get("version") != MISSING_H1_COMPARISON_EVIDENCE_VERSION or evidence.get("rule") != MISSING_H1_RULE:
+        raise ValueError("Unsupported authenticated comparison evidence version")
+    if evidence.get("rule_definition_version") != MISSING_H1_RULE_DEFINITION_VERSION:
+        raise ValueError("Authenticated missing-H1 rule definition is incompatible")
+    if evidence.get("comparison_profile_version") != MISSING_H1_COMPARISON_PROFILE_VERSION:
+        raise ValueError("Authenticated missing-H1 comparison profile is incompatible")
+    if evidence.get("evidence_url_identity_version") != PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION:
+        raise ValueError("Authenticated comparison evidence URL identity is incompatible")
+    observations = evidence.get("observations")
+    if not isinstance(observations, list) or len(observations) > 150:
+        raise ValueError("Authenticated comparison observation population is invalid")
+    if _count(evidence.get("observation_count"), "comparison observation_count") != len(observations):
+        raise ValueError("Authenticated comparison observation count mismatch")
+
+    key_for = repair_evidence_key_function(
+        scan_origin=origin,
+        identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION,
+    )
+    pages: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    evaluated_count = present_count = absent_count = 0
+    observation_keys = {
+        "page_url", "status_code", "content_type", "page_evidence_class", "indexable",
+        "robots", "h1_count", "evaluated", "applicable", "finding_present",
+    }
+    for row in observations:
+        if not isinstance(row, dict) or set(row) != observation_keys:
+            raise ValueError("Malformed authenticated comparison observation")
+        page_url = _string(row.get("page_url"), "comparison page_url", 2_000)
+        if not page_url.startswith(f"{origin}/") or key_for(page_url) != page_url or page_url in seen:
+            raise ValueError("Authenticated comparison page identity is invalid")
+        seen.add(page_url)
+        status = _count(row.get("status_code"), "comparison status_code")
+        if status > 599:
+            raise ValueError("Authenticated comparison status code is invalid")
+        content_type = _string(row.get("content_type"), "comparison content_type", 200, empty=True)
+        evidence_class = _string(row.get("page_evidence_class"), "comparison page_evidence_class", 80)
+        indexable = row.get("indexable")
+        if indexable is not None and type(indexable) is not bool:
+            raise ValueError("Authenticated comparison indexability is invalid")
+        robots = _string(row.get("robots"), "comparison robots", 500, empty=True)
+        h1_count = row.get("h1_count")
+        if h1_count is not None and (type(h1_count) is not int or h1_count < 0 or h1_count > 10_000):
+            raise ValueError("Authenticated comparison H1 count is invalid")
+        evaluated = row.get("evaluated")
+        applicable = row.get("applicable")
+        finding_present = row.get("finding_present")
+        if type(evaluated) is not bool or type(applicable) is not bool:
+            raise ValueError("Authenticated comparison rule evaluation flags are invalid")
+        if evaluated:
+            if applicable is not True or evidence_class != "usable_html" or status != 200 or h1_count is None or type(finding_present) is not bool:
+                raise ValueError("Authenticated comparison evaluated state is inconsistent")
+            if finding_present is not (h1_count == 0):
+                raise ValueError("Authenticated comparison H1 finding state contradicts its count")
+            evaluated_count += 1
+            if finding_present:
+                present_count += 1
+            else:
+                absent_count += 1
+        elif applicable is not False or finding_present is not None:
+            raise ValueError("Authenticated comparison unevaluated state is inconsistent")
+
+        pages.append({
+            "url": page_url,
+            "status_code": status,
+            "content_type": content_type,
+            "page_evidence_class": evidence_class,
+            "indexable": indexable,
+            "robots": robots,
+            "comparison_rule_evaluation": {
+                "rule": MISSING_H1_RULE,
+                "rule_definition_version": MISSING_H1_RULE_DEFINITION_VERSION,
+                "comparison_profile_version": MISSING_H1_COMPARISON_PROFILE_VERSION,
+                "evaluated": evaluated,
+                "applicable": applicable,
+                "finding_present": finding_present,
+            },
+        })
+
+    if _count(evidence.get("evaluated_page_count"), "comparison evaluated_page_count") != evaluated_count:
+        raise ValueError("Authenticated comparison evaluated-page count mismatch")
+    if _count(evidence.get("finding_present_count"), "comparison finding_present_count") != present_count:
+        raise ValueError("Authenticated comparison finding-present count mismatch")
+    if _count(evidence.get("finding_absent_count"), "comparison finding_absent_count") != absent_count:
+        raise ValueError("Authenticated comparison finding-absent count mismatch")
+    return pages, {
+        MISSING_H1_RULE: {
+            "rule_definition_version": MISSING_H1_RULE_DEFINITION_VERSION,
+            "comparison_profile_version": MISSING_H1_COMPARISON_PROFILE_VERSION,
+        }
+    }
+
+
 def build_authenticated_scan_comparison_v1(*, lineage_artifact: dict[str, Any], **pair: Any) -> dict[str, Any]:
     """Verify exact snapshot/pair bytes and derive a comparison, without I/O."""
     expected = _pair(**pair)
@@ -291,11 +407,15 @@ def build_authenticated_scan_comparison_v1(*, lineage_artifact: dict[str, Any], 
             if identity["stable"] and identity["fingerprint"] == prior_identity["fingerprint"]:
                 if verification_contract_comparability(prior, current_fix)[0] == "incomparable":
                     raise ValueError("Matching repairs have incompatible comparison contracts")
+    current_pages, current_rule_contracts = _current_rule_evidence(current, expected["scope"]["origin"])
     comparison = build_scan_comparison_v1(
         previous_scan_id=expected["previous_scan_id"], current_scan_id=expected["current_scan_id"],
         current_previous_scan_id=expected["previous_scan_id"], previous_fixes=previous_fixes,
-        current_fixes=current_fixes, current_pages=[],
-        current_contract={"evidence_url_identity_version": current_evidence_version},
+        current_fixes=current_fixes, current_pages=current_pages,
+        current_contract={
+            "evidence_url_identity_version": current_evidence_version,
+            "rules": current_rule_contracts,
+        },
         previous_score=previous["scan"]["health_score"], current_score=current["scan"]["health_score"],
         previous_pages_checked=previous["scan"]["pages_crawled"], current_pages_checked=current["scan"]["pages_crawled"],
         previous_scan_origin=expected["scope"]["origin"], current_scan_origin=expected["scope"]["origin"],
@@ -310,6 +430,6 @@ def build_authenticated_scan_comparison_v1(*, lineage_artifact: dict[str, Any], 
         "transport": build_validated_scan_comparison_transport_v1(
             comparison, previous_authority_receipt=receipt(previous, pair["previous_proof"]),
             current_authority_receipt=receipt(current, pair["current_proof"])),
-        "current_pages_available": False,
+        "current_pages_available": bool(current_pages),
         "customer_projection_authorized": False,
     }

@@ -2,6 +2,7 @@ import { GEO_SNAPSHOT_VERSION, geoReadinessSnapshotFields, customerGeoReadiness 
 import { sanitizeReportRawFindingEvidence, sanitizeScanCoverage } from "./repairEvidence.js";
 import { PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION } from "./evidenceUrlIdentity.js";
 import { PUBLISHED_REVIEW_ATTESTATION_VERSION, publishedIdentityContext, publishedRepairEvidenceFields, publishedPriorityContext } from "./publishedRepairEvidence.js";
+import { sanitizeComparisonEvidence } from "./comparisonEvidence.js";
 export const REPAIR_CONTRACT_V2 = "repair_contract_v2_shadow_calibrated";
 export const REPAIR_PRIORITY_MODEL_V2 = "repair_priority_v2_technical_severity";
 
@@ -12,6 +13,7 @@ export function authoritySnapshotFromRows({ scan, fixList, fixItems, userId }) {
     && fixList?.repair_priority_model_version === REPAIR_PRIORITY_MODEL_V2;
   const version = text(scan?.authority_seal_version, 160);
   const publishedContext = { ...publishedIdentityContext(scan, version === PUBLISHED_REVIEW_ATTESTATION_VERSION ? PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION : ""), persisted: true };
+  const comparisonEvidence = sanitizeComparisonEvidence(scan?.comparison_evidence, publishedContext);
   const recommendations = (fixItems || []).map((item) => authorityFixFromRow(item, { canonical, version, publishedContext }));
   if (canonical) {
     recommendations.sort((left, right) => number(left.canonical_action_rank) - number(right.canonical_action_rank));
@@ -62,6 +64,7 @@ export function authoritySnapshotFromRows({ scan, fixList, fixItems, userId }) {
       ...coverageSnapshotFields(scan),
       ...acceptanceEvidenceSnapshotFields(scan),
       ...reportEvidenceSnapshotFields(scan),
+      ...(comparisonEvidence.version ? { comparison_evidence: comparisonEvidence } : {}),
       health_score: number(scan?.health_score),
       health_grade: text(scan?.health_grade, 80),
       ...scoreExplanationSnapshotFields(scan),

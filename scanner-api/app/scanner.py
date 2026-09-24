@@ -41,6 +41,7 @@ from .search_applicability import search_applicability, search_metadata_applicab
 from .stage2_shared_probe_orchestration import run_stage2_shared_probe_orchestration
 from .content_evidence_findings import content_evidence_findings
 from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
+from .missing_h1_contract import apply_missing_h1_contract
 from .sampling import SAMPLING_VERSION, enrich_checked_coverage, sampling_report, select_balanced_urls
 from .scan_timing import (
     SITEMAP_TIME_RESERVATION_VERSION,
@@ -1701,7 +1702,7 @@ def sitemap_indexability_conflict(page: dict) -> bool:
 def create_finding(rule: str, category: str, priority: str, title: str, page_url: str, current_value: str = "", explanation: str = "", recommendation: str = "", difficulty: str = "easy", source_pages: list[str] | None = None, link_text_samples: list[str] | None = None) -> dict:
     developer = difficulty == "developer" or any(token in f"{rule} {category} {title}" for token in ["429", "schema", "canonical", "web_dev"])
     finding_id = stable_id(f"{rule}|{page_url}|{title}")
-    return {
+    finding = {
         "id": finding_id,
         "fix_id": finding_id,
         "rule": rule,
@@ -1731,6 +1732,7 @@ def create_finding(rule: str, category: str, priority: str, title: str, page_url
         "who_can_do_this": "your_web_person" if developer else "you",
         "confidence_score": 88,
     }
+    return apply_missing_h1_contract(finding)
 
 
 FAILURE_RULES = {"rate_limited_page", "failed_page", "server_error", "404_error", "410_error"}

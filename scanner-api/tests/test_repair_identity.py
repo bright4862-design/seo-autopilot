@@ -270,7 +270,7 @@ def test_comparison_profile_change_cannot_be_reported_as_verified_fixed():
     assert "comparison profile changed" in result["reason"].lower()
 
 
-def test_matching_rule_and_profile_versions_allow_eligible_verification():
+def test_matching_non_capability_rule_and_profile_versions_keep_legacy_comparable_verification():
     previous = search_fix(
         rule_definition_version="missing_meta_description_v3",
         comparison_profile_version="standard150_review_v2",
@@ -289,3 +289,5 @@ def test_matching_rule_and_profile_versions_allow_eligible_verification():
     )
     assert result["state"] == "verified_fixed"
     assert result["comparison_contract_state"] == "compatible"
+    assert "stable repair fingerprint was no longer detected" in result["reason"]
+    assert "authenticated originating-rule evidence" not in result["reason"]

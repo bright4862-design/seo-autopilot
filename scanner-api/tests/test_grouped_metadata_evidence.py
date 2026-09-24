@@ -136,3 +136,56 @@ def test_real_python_canonical_evidence_survives_all_signed_readers(routes):
                                input=json.dumps({"scan": scan, "review": review, "expectedUrls": [p["url"] for p in pages]}), text=True,
                                capture_output=True, cwd=Path(__file__).resolve().parents[2], timeout=30)
     assert completed.returncode == 0, completed.stderr
+
+
+def test_missing_h1_producer_contract_survives_review_grouping_and_builds_rule_evidence():
+    from app.missing_h1_contract import (
+        MISSING_H1_COMPARISON_EVIDENCE_VERSION,
+        MISSING_H1_COMPARISON_PROFILE_VERSION,
+        MISSING_H1_REMEDIATION_FAMILY,
+        MISSING_H1_REPAIR_SURFACE,
+        MISSING_H1_RULE_DEFINITION_VERSION,
+    )
+    from app.repair_contract_v2 import apply_canonical_repair_contract
+    from app.review import run_review
+
+    first = page("https://example.com/a", '<meta name="description" content="Useful A">')
+    second = page("https://example.com/b", '<meta name="description" content="Useful B">')
+    first["h1_count"] = 0
+    second["h1_count"] = 0
+    first["h1"] = ""
+    second["h1"] = ""
+    first["page_template_family"] = "activity_detail"
+    second["page_template_family"] = "product_detail"
+    scan = {
+        "website_url": "https://example.com",
+        "pages": [first, second],
+        "crawl_scope": {"requested_origin": "https://example.com"},
+    }
+
+    review = run_review(scan, identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
+    result = apply_canonical_repair_contract(
+        review,
+        scan,
+        identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION,
+    )
+
+    h1_repairs = [item for item in result["canonical_repairs"] if item["rule"] == "missing_h1"]
+    assert len(h1_repairs) == 1
+    [repair] = h1_repairs
+    assert repair["repair_identity_stable"] is True
+    assert repair["repair_surface"] == MISSING_H1_REPAIR_SURFACE
+    assert repair["remediation_family"] == MISSING_H1_REMEDIATION_FAMILY
+    assert repair["rule_definition_version"] == MISSING_H1_RULE_DEFINITION_VERSION
+    assert repair["comparison_profile_version"] == MISSING_H1_COMPARISON_PROFILE_VERSION
+    assert repair["affected_pages"] == ["https://example.com/a", "https://example.com/b"]
+
+    evidence = result["comparison_evidence"]
+    assert evidence["version"] == MISSING_H1_COMPARISON_EVIDENCE_VERSION
+    assert evidence["evaluated_page_count"] == 2
+    assert evidence["finding_present_count"] == 2
+    assert evidence["finding_absent_count"] == 0
+    assert [row["page_url"] for row in evidence["observations"]] == [
+        "https://example.com/a",
+        "https://example.com/b",
+    ]

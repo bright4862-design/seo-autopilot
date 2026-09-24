@@ -6,6 +6,11 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION, repair_evidence_key_function
+from .missing_h1_comparison_contract import (
+    MISSING_H1_COMPARISON_PROFILE_VERSION,
+    MISSING_H1_RULE,
+    MISSING_H1_RULE_DEFINITION_VERSION,
+)
 
 REPAIR_IDENTITY_VERSION = "repair_identity_v2_technical"
 REPAIR_VERIFICATION_VERSION = "repair_verification_v3_contract_comparable"
@@ -224,6 +229,24 @@ def _provisional_current_conflicts(
         return False
     current_affected = set(_affected_pages(current, scan_origin=scan_origin, identity_version=identity_version))
     return bool(current_affected & set(previous_affected))
+
+
+def _requires_authenticated_rule_evidence(
+    fix: dict[str, Any], current_contract: dict[str, Any] | None
+) -> bool:
+    """Opt in only the signed missing-H1 capability implemented end to end."""
+    if _identity_field(fix, "rule_id", "rule", "type", "issue_type") != MISSING_H1_RULE:
+        return False
+    if _clean(fix.get("rule_definition_version")) != MISSING_H1_RULE_DEFINITION_VERSION:
+        return False
+    if _clean(fix.get("comparison_profile_version")) != MISSING_H1_COMPARISON_PROFILE_VERSION:
+        return False
+    if not isinstance(current_contract, dict):
+        return False
+    return (
+        _clean(current_contract.get("rule_definition_version")) == MISSING_H1_RULE_DEFINITION_VERSION
+        and _clean(current_contract.get("comparison_profile_version")) == MISSING_H1_COMPARISON_PROFILE_VERSION
+    )
 
 
 def _rule_evaluation_state(
@@ -510,12 +533,12 @@ def compare_repair_runs(
             "comparison_contract_state": contract_state,
         }
 
-    rule_evaluations = {key: _rule_evaluation_state(previous_fix, lookup[key], current_contract) for key in previous_set}
-    required_rule_evidence = bool(
-        _clean(previous_fix.get("rule_definition_version"))
-        or _clean(previous_fix.get("comparison_profile_version"))
-    )
+    required_rule_evidence = _requires_authenticated_rule_evidence(previous_fix, current_contract)
     if required_rule_evidence:
+        rule_evaluations = {
+            key: _rule_evaluation_state(previous_fix, lookup[key], current_contract)
+            for key in previous_set
+        }
         present = [key for key, (state, _) in rule_evaluations.items() if state == "finding_present"]
         unavailable = [
             {"page": key, "state": state, "reason": reason}
@@ -544,10 +567,16 @@ def compare_repair_runs(
                 "comparison_contract_state": contract_state,
             }
 
+    success_reason = (
+        "All previously affected pages were checked again under compatible rules, remained comparable, "
+        "and authenticated originating-rule evidence no longer detected the stable repair."
+        if required_rule_evidence
+        else "All previously affected pages were checked again in a comparable eligible state and the stable repair fingerprint was no longer detected."
+    )
     return {
         "version": REPAIR_VERIFICATION_VERSION,
         "state": "verified_fixed",
-        "reason": "All previously affected pages were checked again under compatible rules, remained comparable, and authenticated originating-rule evidence no longer detected the stable repair.",
+        "reason": success_reason,
         "rechecked_pages": len(observed),
         "eligible_rechecked_pages": len(eligible),
         "previous_affected_pages": len(previous_affected),

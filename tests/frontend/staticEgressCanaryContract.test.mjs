@@ -26,6 +26,8 @@ test("static egress canary is one dedicated network, /24 subnet, and one manual 
   assert.match(provision, /fixlist-scanner-egress/);
   assert.match(provision, /fixlist-scanner-egress-euw1/);
   assert.match(provision, /10\.210\.0\.0\/24/);
+  assert.match(verify, /10\.210\.0\.0\/24/);
+  assert.doesNotMatch(provision + verify, /10\.210\.0\.0\/26/);
   assert.match(provision, /fixlist-scanner-egress-ip-a/);
   assert.match(provision, /--nat-custom-subnet-ip-ranges="\$SUBNET:ALL"/);
   assert.match(provision, /--nat-external-ip-pool="\$ADDRESS"/);
@@ -46,6 +48,11 @@ test("normal worker builds explicitly clear Direct VPC while canary builds route
   assert.match(canaryCloudbuild, /--subnet=\$\{_EGRESS_SUBNET\}/);
   assert.match(canaryCloudbuild, /--vpc-egress=all-traffic/);
   assert.match(canaryCloudbuild, /FIXLIST_EGRESS_MODE=static-canary/);
+  assert.match(canaryCloudbuild, /--memory=1Gi/);
+  assert.match(canaryCloudbuild, /--timeout=480/);
+  assert.match(canaryCloudbuild, /--concurrency=1/);
+  assert.match(canaryCloudbuild, /--max-instances=40/);
+  assert.match(canaryCloudbuild, /--no-traffic/);
   assert.match(build, /cloudbuild\.durable-worker\.yaml/);
   assert.match(build, /cloudbuild\.durable-worker-static-egress-canary\.yaml/);
   assert.match(build, /FIXLIST_EGRESS_MODE:-none/);

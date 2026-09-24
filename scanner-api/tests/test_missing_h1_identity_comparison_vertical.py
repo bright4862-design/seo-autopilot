@@ -148,6 +148,7 @@ def test_missing_h1_becomes_verified_fixed_only_with_authenticated_absent_rule_e
         scan_origin="https://example.com",
     )
     assert result["state"] == "verified_fixed"
+    assert "authenticated originating-rule evidence no longer detected" in result["reason"]
 
 
 def test_page_reobservation_without_originating_rule_evaluation_is_not_fixed():

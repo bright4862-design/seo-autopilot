@@ -53,8 +53,6 @@ test("normal worker builds explicitly clear Direct VPC while canary builds route
   assert.match(build, /unexpected static-egress canary subnet/);
 });
 
-});
-
 test("candidate selection and verification bind source SHA to egress mode and Direct VPC annotations", () => {
   assert.match(build, /FIXLIST_WORKER_SOURCE_SHA/);
   assert.match(build, /FIXLIST_EGRESS_MODE/);

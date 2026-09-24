@@ -10,8 +10,10 @@ import { authoritySnapshotFromRows } from "../../base44/functions/getCustomerSca
 import { authoritySnapshotFromRows as grokAuthoritySnapshotFromRows } from "../../base44/functions/grokChat/authoritySnapshot.js";
 import {
   createAuthoritySeal,
+  stableSerialize,
   verifyAuthoritySeal,
 } from "../../base44/functions/persistDurableScanAuthorityV8/authoritySeal.js";
+import { sanitizeComparisonEvidence } from "../../base44/functions/getCustomerScanResultV8/comparisonEvidence.js";
 
 const OWNER = "owner-stage3-v7";
 const PROJECT = "project-stage3-v7";
@@ -54,6 +56,30 @@ function missingH1Evidence({ findingPresent = false } = {}) {
     }],
   };
 }
+
+function pythonOrderingEvidence() {
+  const pages = [
+    { url: "https://example.com/z?b=2&a=1", status_code: 200, content_type: "text/html", page_evidence_class: "usable_html", h1_count: 1, indexable: true },
+    { url: "https://example.com/a", status_code: 200, content_type: "text/html", page_evidence_class: "usable_html", h1_count: 1, indexable: true },
+    { url: "https://example.com/%C3%A9", status_code: 200, content_type: "text/html", page_evidence_class: "usable_html", h1_count: 1, indexable: true },
+    { url: "https://example.com/A", status_code: 200, content_type: "text/html", page_evidence_class: "usable_html", h1_count: 1, indexable: true },
+  ];
+  const code = [
+    "import json, sys",
+    "from app.missing_h1_contract import build_missing_h1_comparison_evidence",
+    "pages = json.load(sys.stdin)",
+    "value = build_missing_h1_comparison_evidence(pages, scan_origin='https://example.com', identity_version='evidence_url_identity_v2_published_route')",
+    "print(json.dumps(value, separators=(',', ':'), ensure_ascii=False))",
+  ].join("; ");
+  const result = spawnSync("python", ["-c", code], {
+    encoding: "utf8",
+    input: JSON.stringify(pages),
+    env: { ...process.env, PYTHONPATH: "scanner-api" },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
+}
+
 
 async function persistedWithEvidence(evidence) {
   const emitted = emit();
@@ -134,6 +160,33 @@ test("coherently changed persisted comparison evidence cannot retain the origina
   assert.notDeepEqual(rebuilt, data.snapshot);
   assert.equal(await verifyAuthoritySeal(rebuilt, data.secret, data.proof, webcrypto), false);
 });
+
+test("Python and V8 use the same locale-independent observation order and authority bytes", async () => {
+  const pythonEvidence = pythonOrderingEvidence();
+  const sanitized = sanitizeComparisonEvidence(pythonEvidence, {
+    scanOrigin: "https://example.com",
+    identityVersion: URL_IDENTITY,
+  });
+
+  const expectedOrder = [
+    "https://example.com/%C3%A9",
+    "https://example.com/A",
+    "https://example.com/a",
+    "https://example.com/z?b=2&a=1",
+  ];
+  assert.deepEqual(pythonEvidence.observations.map((row) => row.page_url), expectedOrder);
+  assert.deepEqual(sanitized.observations.map((row) => row.page_url), expectedOrder);
+
+  const data = await persistedWithEvidence(sanitized);
+  const restored = authoritySnapshotFromRows(data.persisted);
+  const grokRestored = grokAuthoritySnapshotFromRows({ ...data.persisted, scan: data.persisted.run });
+
+  assert.equal(stableSerialize(restored), stableSerialize(data.snapshot));
+  assert.equal(stableSerialize(grokRestored), stableSerialize(data.snapshot));
+  assert.equal(await verifyAuthoritySeal(restored, data.secret, data.proof, webcrypto), true);
+  assert.equal(await verifyAuthoritySeal(grokRestored, data.secret, data.proof, webcrypto), true);
+});
+
 
 test("writer and reader use the same missing-H1 evidence sanitizer contract", () => {
   const writer = readFileSync(

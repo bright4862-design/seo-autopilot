@@ -8,6 +8,7 @@ before calling the offline builder.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
 import json
@@ -843,18 +844,24 @@ def build_evidence_set_from_authenticated_snapshot(
 
     The callback is supplied by the future serialized integrator and must wrap
     the existing version-aware authority/HMAC verifier. Only the literal boolean
-    ``True`` authorizes construction. Callback errors are converted to a bounded
-    unavailable result so verifier details are not exposed.
+    ``True`` authorizes construction. The callback receives a private copy, and
+    the exact copy must remain canonically unchanged across authentication before
+    a second private copy enters the offline builder. Callback errors, mutation,
+    and non-JSON snapshot values are converted to a bounded unavailable result so
+    verifier details are not exposed.
     """
     if not callable(authenticate_snapshot):
         raise EvidenceUnavailable("sealed_l2_authentication_failed")
     try:
-        authenticated = authenticate_snapshot(sealed_l2)
+        candidate = deepcopy(sealed_l2)
+        before_authentication = _canonical_fingerprint(candidate)
+        authenticated = authenticate_snapshot(candidate)
+        after_authentication = _canonical_fingerprint(candidate)
     except Exception:
         raise EvidenceUnavailable("sealed_l2_authentication_failed") from None
-    if authenticated is not True:
+    if authenticated is not True or before_authentication != after_authentication:
         raise EvidenceUnavailable("sealed_l2_authentication_failed")
-    return build_evidence_set(sealed_l2, scan_origin=scan_origin)
+    return build_evidence_set(deepcopy(candidate), scan_origin=scan_origin)
 
 
 def _annotations(model: AIAnnotationV1 | ChatAnswerV1) -> list[AIAnnotationV1]:

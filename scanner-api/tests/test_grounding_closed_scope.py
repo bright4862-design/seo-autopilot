@@ -111,6 +111,21 @@ def test_authenticated_adapter_accepts_only_explicit_true_and_preserves_input():
     assert evidence == build_evidence_set(source)
 
 
+def test_authenticated_adapter_rejects_snapshot_mutation_during_authentication():
+    source = snapshot()
+
+    def mutate_after_verification(candidate: dict) -> bool:
+        candidate["health_score"] = 999
+        return True
+
+    with pytest.raises(EvidenceUnavailable, match="sealed_l2_authentication_failed"):
+        build_evidence_set_from_authenticated_snapshot(
+            source,
+            authenticate_snapshot=mutate_after_verification,
+        )
+    assert source["health_score"] == 88
+
+
 @pytest.mark.parametrize("outcome", [1, "true", None])
 def test_authenticated_adapter_rejects_truthy_non_boolean_results(outcome):
     with pytest.raises(EvidenceUnavailable, match="sealed_l2_authentication_failed"):

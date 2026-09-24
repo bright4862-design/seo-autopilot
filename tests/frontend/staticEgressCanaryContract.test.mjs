@@ -27,6 +27,10 @@ test("static egress canary is one dedicated network, /24 subnet, and one manual 
   assert.match(verify, /natIpAllocateOption/);
   assert.match(verify, /MANUAL_ONLY/);
   assert.match(verify, /LIST_OF_SUBNETWORKS/);
+  assert.match(provision, /--min-ports-per-vm=256/);
+  assert.doesNotMatch(provision, /--enable-dynamic-port-allocation|--max-ports-per-vm/);
+  assert.match(verify, /enableDynamicPortAllocation/);
+  assert.match(verify, /minPortsPerVm/);
   assert.doesNotMatch(provision, /add-iam-policy-binding|set-iam-policy|roles\/compute\.networkUser/);
 });
 

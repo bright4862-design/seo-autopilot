@@ -169,9 +169,9 @@ def build_verification_criteria(
         blockers.append("published_evidence_url_identity_required")
 
     capability_matches = (
-        _exact_string(sealed_repair.get("rule")) == MISSING_H1_RULE
-        and _exact_string(sealed_repair.get("repair_surface")) == MISSING_H1_REPAIR_SURFACE
-        and _exact_string(sealed_repair.get("remediation_family")) == MISSING_H1_REMEDIATION_FAMILY
+        identity.get("rule") == MISSING_H1_RULE
+        and identity.get("repair_surface") == MISSING_H1_REPAIR_SURFACE
+        and identity.get("remediation_family") == MISSING_H1_REMEDIATION_FAMILY
         and rule_version == MISSING_H1_RULE_DEFINITION_VERSION
         and comparison_version == MISSING_H1_COMPARISON_PROFILE_VERSION
         and evidence_version == PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION

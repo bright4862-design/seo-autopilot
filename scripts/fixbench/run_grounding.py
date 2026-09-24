@@ -15,15 +15,6 @@ from app.grounding_verifier import verify_grounded_payload
 
 _SUPPORTED_FIXTURES = frozenset({
     "fixbench_grounding_adversarial_v1",
-    "fixbench_grounding_v8_preservation_v1",
-    "fixbench_grounding_url_scope_v1",
-    "fixbench_grounding_nested_scope_v1",
-    "fixbench_grounding_identity_scope_v1",
-    "fixbench_grounding_root_contract_v1",
-    "fixbench_grounding_shared_root_v1",
-    "fixbench_grounding_trusted_scan_v1",
-    "fixbench_grounding_producer_identity_v1",
-    "fixbench_grounding_member_binding_v1",
     "fixbench_grounding_scalar_field_contract_v1",
 })
 

@@ -182,3 +182,28 @@ def test_missing_h1_one_unevaluated_url_keeps_whole_repair_could_not_verify():
     assert result["state"] == "COULD_NOT_VERIFY"
     assert result["reason"] == "canonical_comparator_could_not_verify"
     assert result["blocked_evidence_key"] == keys[1]
+
+
+def test_old_missing_h1_rule_version_is_not_a_supported_targeted_verification_capability():
+    criteria = build_verification_criteria(
+        repair(rule_definition_version="missing_h1_v3"),
+        source_scan_id="scan-old",
+        source_scan_origin=ORIGIN,
+    )
+    assert criteria["state"] == "could_not_verify"
+    assert "unsupported_targeted_verification_capability" in criteria["blockers"]
+
+
+def test_other_stable_repair_family_is_not_a_supported_targeted_verification_capability():
+    criteria = build_verification_criteria(
+        {
+            **repair(),
+            "rule": "missing_meta_description",
+            "repair_surface": "cms_meta_description_field",
+            "remediation_family": "write_meta_description",
+        },
+        source_scan_id="scan-old",
+        source_scan_origin=ORIGIN,
+    )
+    assert criteria["state"] == "could_not_verify"
+    assert "unsupported_targeted_verification_capability" in criteria["blockers"]

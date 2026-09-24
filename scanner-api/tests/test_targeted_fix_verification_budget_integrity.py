@@ -3,6 +3,13 @@ import copy
 import pytest
 
 from app.coverage_probes import COVERAGE_PROBE_SCHEDULER_VERSION
+from app.missing_h1_comparison_contract import (
+    MISSING_H1_COMPARISON_PROFILE_VERSION,
+    MISSING_H1_REMEDIATION_FAMILY,
+    MISSING_H1_REPAIR_SURFACE,
+    MISSING_H1_RULE,
+    MISSING_H1_RULE_DEFINITION_VERSION,
+)
 from app.repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
 from app.targeted_fix_verification import (
     TARGETED_FIX_VERIFICATION_PURPOSE,
@@ -17,16 +24,16 @@ from app.targeted_fix_verification_budget_integrity import (
 )
 
 ORIGIN = "https://example.com"
-RULE_VERSION = "missing_h1_v3"
-PROFILE_VERSION = "standard150_review_v8"
+RULE_VERSION = MISSING_H1_RULE_DEFINITION_VERSION
+PROFILE_VERSION = MISSING_H1_COMPARISON_PROFILE_VERSION
 
 
 def repair(urls=None, **overrides):
     value = {
-        "rule": "missing_h1",
+        "rule": MISSING_H1_RULE,
         "category": "thin_content",
-        "repair_surface": "product_template",
-        "remediation_family": "add_single_h1",
+        "repair_surface": MISSING_H1_REPAIR_SURFACE,
+        "remediation_family": MISSING_H1_REMEDIATION_FAMILY,
         "affected_pages": urls or ["/a", "/b"],
         "rule_definition_version": RULE_VERSION,
         "comparison_profile_version": PROFILE_VERSION,

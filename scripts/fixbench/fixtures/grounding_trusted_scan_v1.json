@@ -1,0 +1,113 @@
+{
+  "fixture_version": "fixbench_grounding_trusted_scan_v1",
+  "sealed_l2": {
+    "authority_seal_version": "authority_v8",
+    "authority_sealed_at": "2026-09-23T07:00:00Z",
+    "authority_proof": "trusted-scan-fixbench",
+    "website_url": "https://example.com",
+    "pages": [{"url": "https://example.com/real", "status_code": 200}],
+    "stage3_handoff_v2_source": {
+      "handoff_version": "fixlist_handoff_v2",
+      "scan": {"scan_id": "scan-trusted", "scan_run_id": "scan-trusted"}
+    },
+    "fixes": [
+      {"fix_id": "fix-1", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}},
+      {"fix_id": "fix-2", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}}
+    ]
+  },
+  "cases": [
+    {
+      "name": "exact sealed producer identity groups shared root",
+      "payload": {"schema_version": "ai_annotation_v1", "annotation_id": "trusted-clean", "text": "Grounded evidence is available for this annotation.", "evidence": [{"url": "https://example.com/real", "require_live": true}], "numeric_claims": [], "fix_refs": [], "root_cause_refs": ["root-shared"], "state_claims": []},
+      "expected_status": "verified",
+      "expect_preserved": {"root_cause_refs": ["root-shared"]}
+    },
+    {
+      "name": "foreign repair member cannot poison trusted good member",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8", "authority_sealed_at": "2026-09-23T07:00:00Z", "authority_proof": "trusted-scan-fixbench", "website_url": "https://example.com",
+        "pages": [{"url": "https://example.com/real", "status_code": 200}],
+        "stage3_handoff_v2_source": {"handoff_version": "fixlist_handoff_v2", "scan": {"scan_id": "scan-trusted", "scan_run_id": "scan-trusted"}},
+        "fixes": [
+          {"fix_id": "fix-1", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}},
+          {"fix_id": "fix-2", "scan_id": "foreign-scan", "scan_run_id": "foreign-scan", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/foreign-root-evidence"]}}
+        ]
+      },
+      "payload": {"schema_version": "ai_annotation_v1", "annotation_id": "trusted-one-good", "text": "Grounded evidence is available for this annotation.", "evidence": [{"url": "https://example.com/real", "require_live": true}], "numeric_claims": [], "fix_refs": [], "root_cause_refs": ["root-shared"], "state_claims": []},
+      "expected_status": "verified"
+    },
+    {
+      "name": "foreign repair evidence url is not citation authority",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8", "authority_sealed_at": "2026-09-23T07:00:00Z", "authority_proof": "trusted-scan-fixbench", "website_url": "https://example.com",
+        "pages": [{"url": "https://example.com/real", "status_code": 200}],
+        "stage3_handoff_v2_source": {"handoff_version": "fixlist_handoff_v2", "scan": {"scan_id": "scan-trusted", "scan_run_id": "scan-trusted"}},
+        "fixes": [
+          {"fix_id": "fix-1", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}},
+          {"fix_id": "fix-2", "scan_id": "foreign-scan", "scan_run_id": "foreign-scan", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/foreign-root-evidence"]}}
+        ]
+      },
+      "payload": {"schema_version": "ai_annotation_v1", "annotation_id": "trusted-foreign-url", "text": "Grounded evidence is available for this annotation.", "evidence": [{"url": "https://example.com/foreign-root-evidence", "require_live": false}], "numeric_claims": [], "fix_refs": [], "root_cause_refs": ["root-shared"], "state_claims": []},
+      "expected_status": "rejected",
+      "expected_reasons": ["url_not_in_evidence"]
+    },
+    {
+      "name": "all foreign members cannot manufacture root authority",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8", "authority_sealed_at": "2026-09-23T07:00:00Z", "authority_proof": "trusted-scan-fixbench", "website_url": "https://example.com",
+        "pages": [{"url": "https://example.com/real", "status_code": 200}],
+        "stage3_handoff_v2_source": {"handoff_version": "fixlist_handoff_v2", "scan": {"scan_id": "scan-trusted", "scan_run_id": "scan-trusted"}},
+        "fixes": [
+          {"fix_id": "fix-1", "scan_id": "foreign-scan", "scan_run_id": "foreign-scan", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}},
+          {"fix_id": "fix-2", "scan_id": "foreign-scan", "scan_run_id": "foreign-scan", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}}
+        ]
+      },
+      "payload": {"schema_version": "ai_annotation_v1", "annotation_id": "trusted-all-foreign", "text": "Grounded evidence is available for this annotation.", "evidence": [{"url": "https://example.com/real", "require_live": true}], "numeric_claims": [], "fix_refs": [], "root_cause_refs": ["root-shared"], "state_claims": []},
+      "expected_status": "rejected",
+      "expected_reasons": ["root_cause_ref_missing"]
+    },
+    {
+      "name": "mismatched sealed producer scan identity fails closed",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8", "authority_sealed_at": "2026-09-23T07:00:00Z", "authority_proof": "trusted-scan-fixbench", "website_url": "https://example.com",
+        "pages": [{"url": "https://example.com/real", "status_code": 200}],
+        "stage3_handoff_v2_source": {"handoff_version": "fixlist_handoff_v2", "scan": {"scan_id": "scan-trusted", "scan_run_id": "different-run"}},
+        "fixes": [
+          {"fix_id": "fix-1", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}},
+          {"fix_id": "fix-2", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}}
+        ]
+      },
+      "payload": {"schema_version": "ai_annotation_v1", "annotation_id": "trusted-bad-producer", "text": "Grounded evidence is available for this annotation.", "evidence": [{"url": "https://example.com/real", "require_live": true}], "numeric_claims": [], "fix_refs": [], "root_cause_refs": ["root-shared"], "state_claims": []},
+      "expected_status": "rejected",
+      "expected_reasons": ["root_cause_ref_missing"]
+    },
+    {
+      "name": "repeated root without producer identity is ambiguous",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8", "authority_sealed_at": "2026-09-23T07:00:00Z", "authority_proof": "trusted-scan-fixbench", "website_url": "https://example.com",
+        "pages": [{"url": "https://example.com/real", "status_code": 200}],
+        "fixes": [
+          {"fix_id": "fix-1", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}},
+          {"fix_id": "fix-2", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}}
+        ]
+      },
+      "payload": {"schema_version": "ai_annotation_v1", "annotation_id": "trusted-absent-producer", "text": "Grounded evidence is available for this annotation.", "evidence": [{"url": "https://example.com/real", "require_live": true}], "numeric_claims": [], "fix_refs": [], "root_cause_refs": ["root-shared"], "state_claims": []},
+      "expected_status": "rejected",
+      "expected_reasons": ["root_cause_ref_ambiguous"]
+    },
+    {
+      "name": "nested V8 handoff source provides trusted producer identity",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8", "authority_sealed_at": "2026-09-23T07:00:00Z", "authority_proof": "trusted-scan-fixbench", "website_url": "https://example.com",
+        "pages": [{"url": "https://example.com/real", "status_code": 200}],
+        "health_score_explanation": {"stage3_delivery": {"handoff_v2_source": {"handoff_version": "fixlist_handoff_v2", "scan": {"scan_id": "scan-trusted", "scan_run_id": "scan-trusted"}}}},
+        "fixes": [
+          {"fix_id": "fix-1", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}},
+          {"fix_id": "fix-2", "root_cause_evidence": {"version": "root_cause_evidence_v1_verified", "state": "verified", "root_cause_id": "root-shared", "repair_surface_id": "surface:template", "evidence_refs": ["https://example.com/real"]}}
+        ]
+      },
+      "payload": {"schema_version": "ai_annotation_v1", "annotation_id": "trusted-nested-v8", "text": "Grounded evidence is available for this annotation.", "evidence": [{"url": "https://example.com/real", "require_live": true}], "numeric_claims": [], "fix_refs": [], "root_cause_refs": ["root-shared"], "state_claims": []},
+      "expected_status": "verified"
+    }
+  ]
+}

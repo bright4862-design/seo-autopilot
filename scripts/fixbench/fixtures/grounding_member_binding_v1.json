@@ -1,0 +1,227 @@
+{
+  "fixture_version": "fixbench_grounding_member_binding_v1",
+  "sealed_l2": {
+    "authority_seal_version": "authority_v8",
+    "authority_sealed_at": "2026-09-23T09:45:00Z",
+    "authority_proof": "fixbench-member-binding-proof",
+    "website_url": "https://example.com",
+    "pages": [
+      {"url": "https://example.com/observed", "status_code": 200}
+    ],
+    "stage3_handoff_v2_source": {
+      "handoff_version": "fixlist_handoff_v2",
+      "scan": {"scan_id": "scan-trusted", "scan_run_id": "scan-trusted"},
+      "fixes": [
+        {
+          "fix_id": "fix-member",
+          "root_cause_evidence": {
+            "version": "root_cause_evidence_v1_verified",
+            "state": "verified",
+            "root_cause_id": "root-member",
+            "repair_surface_id": "surface:member",
+            "evidence_refs": ["https://example.com/member-proof"]
+          }
+        }
+      ]
+    },
+    "fixes": [
+      {
+        "fix_id": "fix-borrowed",
+        "root_cause_evidence": {
+          "version": "root_cause_evidence_v1_verified",
+          "state": "verified",
+          "root_cause_id": "root-borrowed",
+          "repair_surface_id": "surface:borrowed",
+          "evidence_refs": ["https://example.com/borrowed-proof"]
+        }
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "trusted_handoff_member_verifies",
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "member-control",
+        "text": "Grounded evidence is available for this annotation.",
+        "evidence": [{"url": "https://example.com/observed", "require_live": true}],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": ["root-member"],
+        "state_claims": []
+      },
+      "expected_status": "verified"
+    },
+    {
+      "name": "top_level_sibling_cannot_borrow_root_authority",
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "borrowed-root",
+        "text": "Grounded evidence is available for this annotation.",
+        "evidence": [{"url": "https://example.com/observed", "require_live": true}],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": ["root-borrowed"],
+        "state_claims": []
+      },
+      "expected_status": "rejected",
+      "expected_reasons": ["root_cause_ref_missing"]
+    },
+    {
+      "name": "top_level_sibling_cannot_borrow_nested_url_authority",
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "borrowed-url",
+        "text": "Grounded evidence is available for this annotation.",
+        "evidence": [{"url": "https://example.com/borrowed-proof", "require_live": false}],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": ["root-member"],
+        "state_claims": []
+      },
+      "expected_status": "rejected",
+      "expected_reasons": ["url_not_in_evidence"]
+    },
+    {
+      "name": "matching_local_scan_pair_does_not_override_containment",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8",
+        "authority_sealed_at": "2026-09-23T09:45:00Z",
+        "authority_proof": "fixbench-member-binding-local-proof",
+        "website_url": "https://example.com",
+        "pages": [{"url": "https://example.com/observed", "status_code": 200}],
+        "stage3_handoff_v2_source": {
+          "handoff_version": "fixlist_handoff_v2",
+          "scan": {"scan_id": "scan-trusted", "scan_run_id": "scan-trusted"},
+          "fixes": [
+            {
+              "fix_id": "fix-member",
+              "root_cause_evidence": {
+                "version": "root_cause_evidence_v1_verified",
+                "state": "verified",
+                "root_cause_id": "root-member",
+                "repair_surface_id": "surface:member",
+                "evidence_refs": ["https://example.com/member-proof"]
+              }
+            }
+          ]
+        },
+        "fixes": [
+          {
+            "fix_id": "fix-borrowed",
+            "scan_id": "scan-trusted",
+            "scan_run_id": "scan-trusted",
+            "root_cause_evidence": {
+              "version": "root_cause_evidence_v1_verified",
+              "state": "verified",
+              "root_cause_id": "root-borrowed",
+              "repair_surface_id": "surface:borrowed",
+              "evidence_refs": ["https://example.com/borrowed-proof"]
+            }
+          }
+        ]
+      },
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "borrowed-local-pair",
+        "text": "Grounded evidence is available for this annotation.",
+        "evidence": [{"url": "https://example.com/observed", "require_live": true}],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": ["root-borrowed"],
+        "state_claims": []
+      },
+      "expected_status": "rejected",
+      "expected_reasons": ["root_cause_ref_missing"]
+    },
+    {
+      "name": "nested_diagnostics_fix_collection_cannot_borrow",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8",
+        "authority_sealed_at": "2026-09-23T09:45:00Z",
+        "authority_proof": "fixbench-member-binding-diagnostics-proof",
+        "website_url": "https://example.com",
+        "pages": [{"url": "https://example.com/observed", "status_code": 200}],
+        "stage3_handoff_v2_source": {
+          "handoff_version": "fixlist_handoff_v2",
+          "scan": {"scan_id": "scan-trusted", "scan_run_id": "scan-trusted"},
+          "fixes": [
+            {
+              "fix_id": "fix-member",
+              "root_cause_evidence": {
+                "version": "root_cause_evidence_v1_verified",
+                "state": "verified",
+                "root_cause_id": "root-member",
+                "repair_surface_id": "surface:member",
+                "evidence_refs": ["https://example.com/member-proof"]
+              }
+            }
+          ]
+        },
+        "diagnostics": {
+          "fixes": [
+            {
+              "fix_id": "fix-borrowed",
+              "root_cause_evidence": {
+                "version": "root_cause_evidence_v1_verified",
+                "state": "verified",
+                "root_cause_id": "root-borrowed",
+                "repair_surface_id": "surface:borrowed",
+                "evidence_refs": ["https://example.com/borrowed-proof"]
+              }
+            }
+          ]
+        }
+      },
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "nested-borrow",
+        "text": "Grounded evidence is available for this annotation.",
+        "evidence": [{"url": "https://example.com/observed", "require_live": true}],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": ["root-borrowed"],
+        "state_claims": []
+      },
+      "expected_status": "rejected",
+      "expected_reasons": ["root_cause_ref_missing"]
+    },
+    {
+      "name": "legacy_identity_only_fixture_keeps_single_root_behavior",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8",
+        "authority_sealed_at": "2026-09-23T09:45:00Z",
+        "authority_proof": "fixbench-member-binding-legacy-proof",
+        "website_url": "https://example.com",
+        "pages": [{"url": "https://example.com/observed", "status_code": 200}],
+        "stage3_handoff_v2_source": {
+          "handoff_version": "fixlist_handoff_v2",
+          "scan": {"scan_id": "scan-trusted", "scan_run_id": "scan-trusted"}
+        },
+        "fixes": [
+          {
+            "fix_id": "fix-borrowed",
+            "root_cause_evidence": {
+              "version": "root_cause_evidence_v1_verified",
+              "state": "verified",
+              "root_cause_id": "root-borrowed",
+              "repair_surface_id": "surface:borrowed",
+              "evidence_refs": ["https://example.com/borrowed-proof"]
+            }
+          }
+        ]
+      },
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "legacy-control",
+        "text": "Grounded evidence is available for this annotation.",
+        "evidence": [{"url": "https://example.com/observed", "require_live": true}],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": ["root-borrowed"],
+        "state_claims": []
+      },
+      "expected_status": "verified"
+    }
+  ]
+}

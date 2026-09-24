@@ -185,6 +185,10 @@
           "combined_rules": [],
           "grouping_explanation": "These 38 URLs use the product page pattern. One shared template correction may resolve the issue across the group.",
           "grouped_recommendation_evidence_version": "grouped_recommendation_evidence_v1_metadata_states",
+          "repair_surface": "document_primary_heading",
+          "remediation_family": "add_semantic_h1",
+          "rule_definition_version": "missing_h1_rule_v1_usable_html_h1_count_zero",
+          "comparison_profile_version": "missing_h1_comparison_v1_exact_affected_pages",
           "repair_observation_count": 38,
           "repair_observation_samples": [
             {

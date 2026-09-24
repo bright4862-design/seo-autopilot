@@ -6,6 +6,13 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .coverage_probes import COVERAGE_PROBE_SCHEDULER_VERSION, coverage_probe_request_limit
+from .missing_h1_comparison_contract import (
+    MISSING_H1_COMPARISON_PROFILE_VERSION,
+    MISSING_H1_REMEDIATION_FAMILY,
+    MISSING_H1_REPAIR_SURFACE,
+    MISSING_H1_RULE,
+    MISSING_H1_RULE_DEFINITION_VERSION,
+)
 from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION, published_evidence_url_key
 from .repair_identity import (
     REPAIR_IDENTITY_VERSION,
@@ -14,7 +21,7 @@ from .repair_identity import (
     compare_repair_runs,
 )
 
-TARGETED_FIX_VERIFICATION_CRITERIA_VERSION = "targeted_fix_verification_criteria_v1_compare_repair_runs"
+TARGETED_FIX_VERIFICATION_CRITERIA_VERSION = "targeted_fix_verification_criteria_v2_missing_h1_capability"
 TARGETED_FIX_VERIFICATION_PLAN_VERSION = "targeted_fix_verification_plan_v1_sealed_repair_scope"
 TARGETED_FIX_VERIFICATION_OBSERVATION_VERSION = "targeted_fix_verification_observation_v1_plan_bound"
 TARGETED_FIX_VERIFICATION_RULE_RECEIPT_VERSION = "targeted_fix_verification_rule_receipt_v1_complete_population"
@@ -160,6 +167,17 @@ def build_verification_criteria(
         blockers.append("comparison_profile_version_required")
     if evidence_version != PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION:
         blockers.append("published_evidence_url_identity_required")
+
+    capability_matches = (
+        identity.get("rule") == MISSING_H1_RULE
+        and identity.get("repair_surface") == MISSING_H1_REPAIR_SURFACE
+        and identity.get("remediation_family") == MISSING_H1_REMEDIATION_FAMILY
+        and rule_version == MISSING_H1_RULE_DEFINITION_VERSION
+        and comparison_version == MISSING_H1_COMPARISON_PROFILE_VERSION
+        and evidence_version == PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
+    )
+    if not capability_matches:
+        blockers.append("unsupported_targeted_verification_capability")
 
     origin = _origin_root(source_scan_origin)
     if not origin:

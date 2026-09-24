@@ -3,6 +3,13 @@ import copy
 import pytest
 
 from app.coverage_probes import COVERAGE_PROBE_SCHEDULER_VERSION
+from app.missing_h1_comparison_contract import (
+    MISSING_H1_COMPARISON_PROFILE_VERSION,
+    MISSING_H1_REMEDIATION_FAMILY,
+    MISSING_H1_REPAIR_SURFACE,
+    MISSING_H1_RULE,
+    MISSING_H1_RULE_DEFINITION_VERSION,
+)
 from app.repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
 from app.repair_identity import REPAIR_VERIFICATION_VERSION, build_repair_identity
 from app.targeted_fix_verification import (
@@ -18,16 +25,16 @@ from app.targeted_fix_verification import (
 )
 
 ORIGIN = "https://example.com"
-RULE_VERSION = "missing_h1_v3"
-PROFILE_VERSION = "standard150_review_v8"
+RULE_VERSION = MISSING_H1_RULE_DEFINITION_VERSION
+PROFILE_VERSION = MISSING_H1_COMPARISON_PROFILE_VERSION
 
 
 def repair(urls=None, **overrides):
     value = {
-        "rule": "missing_h1",
+        "rule": MISSING_H1_RULE,
         "category": "thin_content",
-        "repair_surface": "product_template",
-        "remediation_family": "add_single_h1",
+        "repair_surface": MISSING_H1_REPAIR_SURFACE,
+        "remediation_family": MISSING_H1_REMEDIATION_FAMILY,
         "affected_pages": urls or ["/a", "/b"],
         "rule_definition_version": RULE_VERSION,
         "comparison_profile_version": PROFILE_VERSION,
@@ -57,7 +64,21 @@ def ready_plan(sealed=None, **kwargs):
 
 
 def observed(plan, key, **page_overrides):
-    page = {"url": key, "status_code": 200, "content_type": "text/html", "page_evidence_class": "usable_html"}
+    page = {
+        "url": key,
+        "status_code": 200,
+        "content_type": "text/html",
+        "page_evidence_class": "usable_html",
+        "indexable": True,
+        "comparison_rule_evaluation": {
+            "rule": MISSING_H1_RULE,
+            "rule_definition_version": MISSING_H1_RULE_DEFINITION_VERSION,
+            "comparison_profile_version": MISSING_H1_COMPARISON_PROFILE_VERSION,
+            "evaluated": True,
+            "applicable": True,
+            "finding_present": False,
+        },
+    }
     page.update(page_overrides)
     return {
         "version": TARGETED_FIX_VERIFICATION_OBSERVATION_VERSION,

@@ -20,7 +20,7 @@ test("worker Cloud Build remains structurally singular after egress-mode extensi
 test("static egress canary is one dedicated network, /24 subnet, and one manual NAT IP", () => {
   assert.match(provision, /fixlist-scanner-egress/);
   assert.match(provision, /fixlist-scanner-egress-euw1/);
-  assert.match(provision, /10\.210\.0\.0\/26/);
+  assert.match(provision, /10\.210\.0\.0\/24/);
   assert.match(provision, /fixlist-scanner-egress-ip-a/);
   assert.match(provision, /--nat-custom-subnet-ip-ranges="\$SUBNET:ALL"/);
   assert.match(provision, /--nat-external-ip-pool="\$ADDRESS"/);
@@ -32,7 +32,7 @@ test("static egress canary is one dedicated network, /24 subnet, and one manual 
 
 test("normal worker builds explicitly clear Direct VPC while canary builds route all traffic through exact network", () => {
   assert.match(cloudbuild, /_EGRESS_MODE: "none"/);
-  assert.match(cloudbuild, /none\)[\s\S]*args\+\=\(--clear-network\)/);
+  assert.match(cloudbuild, /none\)[\s\S]*deploy_args\+\=\(--clear-network\)/);
   assert.match(
     cloudbuild,
     /static-canary\)[\s\S]*--network=\$\{_EGRESS_NETWORK\}[\s\S]*--subnet=\$\{_EGRESS_SUBNET\}[\s\S]*--vpc-egress=all-traffic/,

@@ -13,9 +13,6 @@ substitutions:
   _BASE44_API_URL: ""
   _SIGNING_KEY_SECRET: ""
   _SIGNING_KEY_VERSION: ""
-  _EGRESS_MODE: "none"
-  _EGRESS_NETWORK: ""
-  _EGRESS_SUBNET: ""
 
 steps:
   - id: require-substitutions
@@ -52,25 +49,6 @@ steps:
           echo "Invalid _SIGNING_KEY_VERSION: expected a numeric pinned version."
           exit 1
         fi
-        case "${_EGRESS_MODE}" in
-          none)
-            if [ -n "${_EGRESS_NETWORK}" ] || [ -n "${_EGRESS_SUBNET}" ]; then
-              echo "Refusing: egress network/subnet supplied while _EGRESS_MODE=none."
-              exit 1
-            fi
-            ;;
-          static-canary)
-            if ! printf '%s' "${_EGRESS_NETWORK}" | grep -Eq '^[a-z][a-z0-9-]{0,62}$' \
-              || ! printf '%s' "${_EGRESS_SUBNET}" | grep -Eq '^[a-z][a-z0-9-]{0,62}$'; then
-              echo "Refusing: static-canary requires exact safe network and subnet names."
-              exit 1
-            fi
-            ;;
-          *)
-            echo "Refusing unsupported _EGRESS_MODE=${_EGRESS_MODE}."
-            exit 1
-            ;;
-        esac
         echo "All required substitutions supplied."
         echo "Release identity pinned to ${_RELEASE_SHA}."
 
@@ -124,43 +102,24 @@ steps:
 
   - id: deploy-private-worker
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: bash
+    entrypoint: gcloud
     args:
-      - -c
-      - |
-        set -euo pipefail
-        deploy_args=(
-          run deploy "${_WORKER_SERVICE}"
-          "--image=${_IMAGE}:${_RELEASE_SHA}"
-          "--region=${_REGION}"
-          --no-allow-unauthenticated
-          "--service-account=${_RUNTIME_SA}"
-          --memory=1Gi
-          --timeout=480
-          --concurrency=1
-          --min-instances=0
-          --max-instances=40
-          --no-traffic
-          "--set-env-vars=TASKS_INVOKER_SERVICE_ACCOUNT=${_INVOKER_SA},BASE44_APP_ID=${_BASE44_APP_ID},BASE44_API_URL=${_BASE44_API_URL},GROK_PROXY_ENABLED=false,FIXLIST_WORKER_SOURCE_SHA=${_RELEASE_SHA},FIXLIST_EGRESS_MODE=${_EGRESS_MODE}"
-          "--set-secrets=SCAN_EVIDENCE_SIGNING_KEY=${_SIGNING_KEY_SECRET}:${_SIGNING_KEY_VERSION}"
-        )
-        case "${_EGRESS_MODE}" in
-          none)
-            deploy_args+=(--clear-network)
-            ;;
-          static-canary)
-            deploy_args+=(
-              "--network=${_EGRESS_NETWORK}"
-              "--subnet=${_EGRESS_SUBNET}"
-              --vpc-egress=all-traffic
-            )
-            ;;
-          *)
-            echo "Refusing unsupported egress mode at deploy." >&2
-            exit 1
-            ;;
-        esac
-        gcloud "${deploy_args[@]}"
+      - run
+      - deploy
+      - ${_WORKER_SERVICE}
+      - --image=${_IMAGE}:${_RELEASE_SHA}
+      - --region=${_REGION}
+      - --no-allow-unauthenticated
+      - --service-account=${_RUNTIME_SA}
+      - --memory=1Gi
+      - --timeout=480
+      - --concurrency=1
+      - --min-instances=0
+      - --max-instances=40
+      - --no-traffic
+      - --clear-network
+      - --set-env-vars=TASKS_INVOKER_SERVICE_ACCOUNT=${_INVOKER_SA},BASE44_APP_ID=${_BASE44_APP_ID},BASE44_API_URL=${_BASE44_API_URL},GROK_PROXY_ENABLED=false,FIXLIST_WORKER_SOURCE_SHA=${_RELEASE_SHA}
+      - --set-secrets=SCAN_EVIDENCE_SIGNING_KEY=${_SIGNING_KEY_SECRET}:${_SIGNING_KEY_VERSION}
 
 images:
   - ${_IMAGE}:${_RELEASE_SHA}

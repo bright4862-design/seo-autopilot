@@ -14,6 +14,7 @@ const exactKeys = (value, keys) => {
 const nonNegativeInt = (value, maximum = Number.MAX_SAFE_INTEGER) => (
   Number.isInteger(value) && value >= 0 && value <= maximum ? value : null
 );
+const compareCodeUnits = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
 
 export function sanitizeComparisonEvidence(value, { scanOrigin = "", identityVersion = "" } = {}) {
   const source = object(value);
@@ -100,7 +101,7 @@ export function sanitizeComparisonEvidence(value, { scanOrigin = "", identityVer
       finding_present: findingPresent,
     });
   }
-  observations.sort((left, right) => left.page_url.localeCompare(right.page_url));
+  observations.sort((left, right) => compareCodeUnits(left.page_url, right.page_url));
 
   if (nonNegativeInt(source.evaluated_page_count, 150) !== evaluatedCount
       || nonNegativeInt(source.finding_present_count, 150) !== presentCount

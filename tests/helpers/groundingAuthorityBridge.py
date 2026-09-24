@@ -30,6 +30,9 @@ def main() -> None:
             snapshot,
             proof=proof,
             signing_key=signing_key,
+            expected_owner_user_id=request.get("expected_owner_user_id"),
+            expected_project_id=request.get("expected_project_id"),
+            expected_scan_id=request.get("expected_scan_id"),
         )
         authority_sha256 = hashlib.sha256(
             stable_serialize(snapshot).encode("utf-8")

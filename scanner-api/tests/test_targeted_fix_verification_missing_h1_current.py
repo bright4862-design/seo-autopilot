@@ -207,3 +207,17 @@ def test_other_stable_repair_family_is_not_a_supported_targeted_verification_cap
     )
     assert criteria["state"] == "could_not_verify"
     assert "unsupported_targeted_verification_capability" in criteria["blockers"]
+
+
+def test_conflicting_rule_alias_cannot_enter_missing_h1_targeted_capability():
+    criteria = build_verification_criteria(
+        {
+            **repair(),
+            "rule": MISSING_H1_RULE,
+            "rule_id": "missing_meta_description",
+        },
+        source_scan_id="scan-old",
+        source_scan_origin=ORIGIN,
+    )
+    assert criteria["state"] == "could_not_verify"
+    assert "unsupported_targeted_verification_capability" in criteria["blockers"]

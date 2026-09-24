@@ -10,6 +10,7 @@ import { REPAIR_SUGGESTION_FALLBACK } from "./repairSuggestions.js";
  */
 export const REPAIR_ROLE_EXPLANATION_VERSION = "repair_role_explanation_v1";
 export const REPAIR_ROLE_EXPLANATION_LIBRARY_VERSION = "role_explanation_copy_v3_20260923_top11";
+export const MISSING_H1_ROLE_COPY_VERSION = "missing_h1_role_copy_v2_20260924_actionable";
 
 export const REPAIR_EXPLANATION_ROLES = Object.freeze(["owner", "marketing", "seo", "developer"]);
 export const REPAIR_EXPLANATION_FALLBACK = REPAIR_SUGGESTION_FALLBACK;
@@ -53,10 +54,10 @@ const ROLE_EXPLANATIONS = Object.freeze({
     developer: "Inspect the flagged image and its alt attribute. For an informative image, supply a meaningful value from the content source; preserve intentionally empty alt attributes for decorative images.",
   }),
   missing_h1: Object.freeze({
-    owner: "The scan did not find an H1, the code label for a main heading. A headline may already be visible; ask your website editor to check how it is marked up.",
-    marketing: "The scan did not find an H1. Check the existing headline before writing a new one: it should express the page’s purpose and be marked up as its main heading.",
-    seo: "No H1 was found in the collected page evidence. Check the page before adding one, then use a descriptive main heading that matches its topic.",
-    developer: "No H1 was found in the collected page evidence. Check the HTML and rendered page; if a main headline already exists, use the appropriate heading markup rather than adding a duplicate.",
+    owner: "FixList did not find an H1. Ask the page owner to confirm whether the visible headline is already the main heading; do not add a second headline until they check.",
+    marketing: "FixList did not find an H1. Confirm that the visible headline clearly states the page’s purpose. If the wording is right, keep it and ask for H1 markup; otherwise write one clear main headline.",
+    seo: "No H1 was found in the collected evidence. Check the rendered page for a descriptive main heading that matches its topic, then confirm it is marked as an H1 before recommending new copy.",
+    developer: "No H1 was found in the collected evidence. Inspect the rendered DOM and the page or template source. If the approved headline already exists, mark it up as an H1; otherwise add it once and verify the final HTML.",
   }),
   canonical_missing: Object.freeze({
     owner: "The scan did not find a canonical signal, which tells search engines your preferred page address. Ask your website maintainer whether one is needed and which address it should name.",
@@ -122,6 +123,7 @@ export function repairRoleExplanation(item = {}, role = "") {
   return Object.freeze({
     version: REPAIR_ROLE_EXPLANATION_VERSION,
     libraryVersion: REPAIR_ROLE_EXPLANATION_LIBRARY_VERSION,
+    ...(rule === "missing_h1" ? { ruleCopyVersion: MISSING_H1_ROLE_COPY_VERSION } : {}),
     rule,
     role: roleSupported ? normalizedRole : "",
     explanationAvailable,

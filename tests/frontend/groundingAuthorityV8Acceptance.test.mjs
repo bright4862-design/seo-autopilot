@@ -33,6 +33,18 @@ function groundingBridge(input) {
   return JSON.parse(result.stdout);
 }
 
+function groundingRequest(authority, overrides = {}) {
+  return {
+    snapshot: authority.snapshot,
+    proof: authority.proof,
+    signing_key: authority.secret,
+    expected_owner_user_id: OWNER,
+    expected_project_id: PROJECT,
+    expected_scan_id: "grounding-v8-authority",
+    ...overrides,
+  };
+}
+
 async function persistedV8Authority() {
   const emitted = producerBridge({
     action: "emit",
@@ -95,11 +107,7 @@ async function persistedV8Authority() {
 test("real persisted V8 authority bytes produce one authenticated Grounding EvidenceSet", async () => {
   const authority = await persistedV8Authority();
   const before = structuredClone(authority.snapshot);
-  const result = groundingBridge({
-    snapshot: authority.snapshot,
-    proof: authority.proof,
-    signing_key: authority.secret,
-  });
+  const result = groundingBridge(groundingRequest(authority));
 
   assert.equal(result.ok, true, result.error);
   assert.equal(result.adapter_version, "grounding_v8_authority_adapter_v1");
@@ -126,11 +134,7 @@ test("tampering after V8 sealing cannot enter Grounding", async () => {
   const tampered = structuredClone(authority.snapshot);
   tampered.scan.health_score = Number(tampered.scan.health_score) + 1;
 
-  const result = groundingBridge({
-    snapshot: tampered,
-    proof: authority.proof,
-    signing_key: authority.secret,
-  });
+  const result = groundingBridge(groundingRequest(authority, { snapshot: tampered }));
   assert.equal(result.ok, false);
   assert.equal(result.error, "sealed_l2_authentication_failed");
 });
@@ -141,11 +145,7 @@ test("a freshly signed unknown authority version is still rejected", async () =>
   unknown.version = "standard_review_snapshot_hmac_future_v1";
   const proof = await createAuthoritySeal(unknown, authority.secret, webcrypto);
 
-  const result = groundingBridge({
-    snapshot: unknown,
-    proof,
-    signing_key: authority.secret,
-  });
+  const result = groundingBridge(groundingRequest(authority, { snapshot: unknown, proof }));
   assert.equal(result.ok, false);
   assert.equal(result.error, "sealed_l2_authentication_failed");
 });
@@ -156,11 +156,17 @@ test("a signed non-authoritative V8 state cannot be projected into Grounding", a
   nonAuthoritative.scan.release_gate_eligible = false;
   const proof = await createAuthoritySeal(nonAuthoritative, authority.secret, webcrypto);
 
-  const result = groundingBridge({
-    snapshot: nonAuthoritative,
-    proof,
-    signing_key: authority.secret,
-  });
+  const result = groundingBridge(groundingRequest(authority, { snapshot: nonAuthoritative, proof }));
   assert.equal(result.ok, false);
   assert.equal(result.error, "v8_grounding_projection_unavailable");
+});
+
+
+test("a valid signed snapshot for another owner cannot cross the Grounding boundary", async () => {
+  const authority = await persistedV8Authority();
+  const result = groundingBridge(groundingRequest(authority, {
+    expected_owner_user_id: "another-owner",
+  }));
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "sealed_l2_authentication_failed");
 });

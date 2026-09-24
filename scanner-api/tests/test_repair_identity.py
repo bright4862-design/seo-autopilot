@@ -270,7 +270,7 @@ def test_comparison_profile_change_cannot_be_reported_as_verified_fixed():
     assert "comparison profile changed" in result["reason"].lower()
 
 
-def test_matching_rule_and_profile_versions_allow_eligible_verification():
+def test_matching_rule_and_profile_versions_are_not_sufficient_without_rule_evidence():
     previous = search_fix(
         rule_definition_version="missing_meta_description_v3",
         comparison_profile_version="standard150_review_v2",
@@ -287,5 +287,6 @@ def test_matching_rule_and_profile_versions_allow_eligible_verification():
         [page("/products/a", indexable=True)],
         current_contract=contract,
     )
-    assert result["state"] == "verified_fixed"
+    assert result["state"] == "could_not_verify"
     assert result["comparison_contract_state"] == "compatible"
+    assert result["rule_evidence_gaps"]

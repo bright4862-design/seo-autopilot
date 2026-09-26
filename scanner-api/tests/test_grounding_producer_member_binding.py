@@ -68,6 +68,25 @@ def annotation(root_id: str, *, evidence_url: str = PAGE_URL) -> dict:
     }
 
 
+def count_annotation(source_ref: str, value: int) -> dict:
+    return {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "member-binding-count",
+        "text": "Grounded evidence is available for this annotation.",
+        "evidence": [{"url": PAGE_URL, "require_live": True}],
+        "numeric_claims": [
+            {
+                "name": "unique_affected_pages",
+                "value": value,
+                "source_ref": source_ref,
+            }
+        ],
+        "fix_refs": [],
+        "root_cause_refs": [],
+        "state_claims": [],
+    }
+
+
 def member_fix() -> dict:
     return fix("fix-member", "root-member", MEMBER_URL, surface="surface:member")
 
@@ -134,6 +153,38 @@ def test_deepcopied_handoff_member_outside_source_does_not_gain_membership_by_va
     assert "root-member" in evidence.root_cause_refs
     assert "root-copied" not in evidence.root_cause_refs
     assert BORROWED_URL not in evidence.url_members
+
+
+def test_recognized_handoff_member_can_ground_allowlisted_fix_count():
+    trusted = member_fix()
+    trusted["counts"] = {"unique_affected_pages": 1}
+    source = sealed_l2(source=handoff(fixes=[trusted]))
+
+    result = verify_grounded_payload(
+        count_annotation(
+            "$.stage3_handoff_v2_source.fixes[0].counts.unique_affected_pages",
+            1,
+        ),
+        sealed_l2=source,
+    )
+
+    assert result.status == "verified"
+
+
+def test_top_level_nonmember_fix_cannot_ground_allowlisted_count():
+    trusted = member_fix()
+    trusted["counts"] = {"unique_affected_pages": 1}
+    sibling = borrowed_fix()
+    sibling["counts"] = {"unique_affected_pages": 999}
+    source = sealed_l2(source=handoff(fixes=[trusted]), sibling_fixes=[sibling])
+
+    result = verify_grounded_payload(
+        count_annotation("$.fixes[0].counts.unique_affected_pages", 999),
+        sealed_l2=source,
+    )
+
+    assert result.status == "rejected"
+    assert result.reasons == ["numeric_source_missing"]
 
 
 def test_legacy_snapshot_without_handoff_fixes_keeps_existing_single_root_behavior():

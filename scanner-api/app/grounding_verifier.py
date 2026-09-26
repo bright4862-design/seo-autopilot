@@ -182,7 +182,14 @@ def _json_path(parts: tuple[str | int, ...]) -> str:
     return path
 
 
-def _typed_scalar_values(source: dict[str, Any]):
+def _typed_scalar_values(
+    source: dict[str, Any],
+    *,
+    trusted_scan_id: str = "",
+    trusted_scan_state: str = "absent",
+    trusted_member_ids: frozenset[int] = frozenset(),
+    trusted_membership_state: str = "inactive",
+):
     """Yield only exact-path, exact-field, exact-type scalar evidence."""
     for field, expected in _ROOT_SCALAR_FIELD_TYPES.items():
         value = source.get(field)
@@ -220,7 +227,14 @@ def _typed_scalar_values(source: dict[str, Any]):
                 value = record.get(field)
                 if _scalar_matches_type(value, expected):
                     yield _json_path((*record_parts, field)), value
-            if child_field_types:
+            if child_field_types and _authorized_fix_record(
+                record,
+                schema_path=collection_parts,
+                trusted_scan_id=trusted_scan_id,
+                trusted_scan_state=trusted_scan_state,
+                trusted_member_ids=trusted_member_ids,
+                trusted_membership_state=trusted_membership_state,
+            ):
                 counts = record.get("counts")
                 if isinstance(counts, dict):
                     for field, expected in child_field_types.items():
@@ -770,7 +784,13 @@ def build_evidence_set(sealed_l2: dict[str, Any], *, scan_origin: str = "") -> E
 
     state_values: dict[str, Scalar] = {}
     numeric_values: dict[str, int | float] = {}
-    for path, value in _typed_scalar_values(sealed_l2):
+    for path, value in _typed_scalar_values(
+        sealed_l2,
+        trusted_scan_id=trusted_scan_id,
+        trusted_scan_state=trusted_scan_state,
+        trusted_member_ids=trusted_member_ids,
+        trusted_membership_state=trusted_membership_state,
+    ):
         state_values[path] = value
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             numeric_values[path] = value

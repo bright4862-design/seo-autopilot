@@ -14,6 +14,7 @@
       "fixes": [
         {
           "fix_id": "fix-member",
+          "counts": {"unique_affected_pages": 1},
           "root_cause_evidence": {
             "version": "root_cause_evidence_v1_verified",
             "state": "verified",
@@ -27,6 +28,7 @@
     "fixes": [
       {
         "fix_id": "fix-borrowed",
+        "counts": {"unique_affected_pages": 999},
         "root_cause_evidence": {
           "version": "root_cause_evidence_v1_verified",
           "state": "verified",
@@ -81,6 +83,43 @@
       },
       "expected_status": "rejected",
       "expected_reasons": ["url_not_in_evidence"]
+    },
+    {
+      "name": "trusted_handoff_member_can_ground_allowlisted_count",
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "member-count-control",
+        "text": "Grounded evidence is available for this annotation.",
+        "evidence": [{"url": "https://example.com/observed", "require_live": true}],
+        "numeric_claims": [{
+          "name": "unique_affected_pages",
+          "value": 1,
+          "source_ref": "$.stage3_handoff_v2_source.fixes[0].counts.unique_affected_pages"
+        }],
+        "fix_refs": [],
+        "root_cause_refs": [],
+        "state_claims": []
+      },
+      "expected_status": "verified"
+    },
+    {
+      "name": "top_level_sibling_cannot_borrow_allowlisted_count",
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "borrowed-count",
+        "text": "Grounded evidence is available for this annotation.",
+        "evidence": [{"url": "https://example.com/observed", "require_live": true}],
+        "numeric_claims": [{
+          "name": "unique_affected_pages",
+          "value": 999,
+          "source_ref": "$.fixes[0].counts.unique_affected_pages"
+        }],
+        "fix_refs": [],
+        "root_cause_refs": [],
+        "state_claims": []
+      },
+      "expected_status": "rejected",
+      "expected_reasons": ["numeric_source_missing"]
     },
     {
       "name": "matching_local_scan_pair_does_not_override_containment",

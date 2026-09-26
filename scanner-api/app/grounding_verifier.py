@@ -861,7 +861,17 @@ def build_evidence_set_from_authenticated_snapshot(
         raise EvidenceUnavailable("sealed_l2_authentication_failed") from None
     if authenticated is not True or before_authentication != after_authentication:
         raise EvidenceUnavailable("sealed_l2_authentication_failed")
-    return build_evidence_set(deepcopy(candidate), scan_origin=scan_origin)
+
+    authenticated_origin = scan_evidence_origin(candidate)
+    if not authenticated_origin:
+        raise EvidenceUnavailable("sealed_l2_authentication_failed")
+    if scan_origin:
+        supplied_root = published_evidence_url_key("/", scan_origin=scan_origin)
+        supplied_origin = supplied_root[:-1] if supplied_root else ""
+        if supplied_origin != authenticated_origin:
+            raise EvidenceUnavailable("sealed_l2_authentication_failed")
+
+    return build_evidence_set(deepcopy(candidate), scan_origin=authenticated_origin)
 
 
 def _annotations(model: AIAnnotationV1 | ChatAnswerV1) -> list[AIAnnotationV1]:

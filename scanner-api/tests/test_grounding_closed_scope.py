@@ -126,6 +126,34 @@ def test_authenticated_adapter_rejects_snapshot_mutation_during_authentication()
     assert source["health_score"] == 88
 
 
+def test_authenticated_adapter_rejects_external_scan_origin_substitution():
+    source = snapshot()
+    source["pages"][0]["url"] = "/real"
+    source["fixes"][0]["affected_urls"] = ["/real"]
+
+    with pytest.raises(EvidenceUnavailable, match="sealed_l2_authentication_failed"):
+        build_evidence_set_from_authenticated_snapshot(
+            source,
+            authenticate_snapshot=lambda _source: True,
+            scan_origin="https://attacker.example",
+        )
+
+
+def test_authenticated_adapter_accepts_equivalent_normalized_snapshot_origin():
+    source = snapshot()
+    source["pages"][0]["url"] = "/real"
+    source["fixes"][0]["affected_urls"] = ["/real"]
+
+    evidence = build_evidence_set_from_authenticated_snapshot(
+        source,
+        authenticate_snapshot=lambda _source: True,
+        scan_origin="https://EXAMPLE.com:443/ignored-path",
+    )
+
+    assert evidence.scan_origin == "https://example.com"
+    assert "https://example.com/real" in evidence.url_members
+
+
 @pytest.mark.parametrize("outcome", [1, "true", None])
 def test_authenticated_adapter_rejects_truthy_non_boolean_results(outcome):
     with pytest.raises(EvidenceUnavailable, match="sealed_l2_authentication_failed"):

@@ -1,7 +1,7 @@
 # GEO v2 authenticated persistence/reload acceptance path
 
-Date: 2026-09-23  
-Lane: `agent/ai-geo-readiness-20260923`  
+Date: 2026-09-26
+Lane: `agent/ai-geo-readiness-20260923`
 Status: held candidate; no runtime activation
 
 This is the one supported Lane-C handoff path for a future serialized
@@ -72,8 +72,19 @@ Using only that authenticated source population:
 3. Call `build_geo_v8_transport_observation_binding(...)` with the exact typed
    observation population.
 4. Call `serialize_geo_v8_transport_observation_binding(...)` and retain those
-   exact canonical bytes. The binding and nested candidate must still say
-   `seal_state=unsealed_candidate` and `authority_verified=false`.
+   exact `geo_v8_canonical_json_v1` bytes. The binding and nested candidate must
+   still say `seal_state=unsealed_candidate` and `authority_verified=false`.
+
+The canonicalization contract is intentionally bounded. It uses ASCII object
+keys, preserves Unicode string values, normalizes integral floats and negative
+zero to JSON integers, and accepts only finite safe integers or finite decimals
+whose absolute value is zero or within `1e-6 <= abs(value) < 1e21`, with no
+more than six decimal places. A writer or reader that encounters an unsafe
+integer, non-finite number, out-of-range or over-precision decimal, non-ASCII
+key, unknown value type, or unknown canonicalization version must stop before
+HMAC or persistence. Python/Node acceptance covers integral and fractional
+measurements, `null`, Unicode values, key ordering, and the full 139-page /
+1,668-observation insufficient-evidence fixture.
 
 The production-shaped acceptance test now runs this complete path for 139 pages
 and 1,668 observations: 762 verified cells, 906 unknown cells, 45.6835% overall
@@ -96,7 +107,7 @@ Persist atomically:
 - the complete bounded retained source package described above, including
   explicit absence markers; and
 - the exact source scan identity and contract versions needed for historical
-  verification.
+  verification, including `geo_v8_canonical_json_v1`.
 
 Do not recompute historical GEO results during reads. Historical snapshots that
 do not contain this authenticated GEO block remain readable with GEO authority
@@ -114,15 +125,21 @@ For the exact saved scan, the authenticated reader must:
 4. reconstruct the typed observation and optional source-normalizer inputs only
    from that strict persisted package, then re-run source, scope, semantic and
    observation binding validation;
-5. call
+5. reproduce the exact canonical bytes under the persisted, accepted
+   canonicalization version in both Python and V8; never infer a version from
+   number shape or a digest;
+6. call
    `validate_geo_v8_transport_observation_binding_reload_identity(...)` with
    the original canonical pre-seal bytes;
-6. reject missing, substituted, reordered-with-changed-content, extra or
+7. reject missing, substituted, reordered-with-changed-content, extra or
    aggregate-equivalent-but-page-different observations;
-7. prove the same result through immediate result, reload and history readers.
+8. prove the same result through immediate result, reload and history readers.
 
 Ordering alone is non-authoritative and canonicalizes identically. Any changed
 page/check state, evidence reference or reason changes the bound bytes.
+Historical snapshots without an explicit accepted canonicalization version
+remain readable but GEO-unavailable; they must not be silently rewritten or
+authenticated under v1.
 
 ## Customer and claim gates
 

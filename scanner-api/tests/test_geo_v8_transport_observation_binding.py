@@ -62,7 +62,8 @@ def test_observation_binding_version_and_exact_population_are_explicit():
     rows = observations()
     binding = build_binding(rows)
 
-    assert VERSION == "geo_v8_transport_observation_binding_v1"
+    assert VERSION == "geo_v8_transport_observation_binding_v2"
+    assert binding["canonicalization_version"] == "geo_v8_canonical_json_v1"
     assert binding["observation_count"] == len(PAGE_IDS) * len(CHECKS)
     assert len(binding["observation_population_fingerprint"]) == 64
     assert binding["candidate"]["authority_verified"] is False
@@ -144,6 +145,22 @@ def test_binding_rejects_population_fingerprint_tampering():
     binding["observation_population_fingerprint"] = "f" * 64
 
     with pytest.raises(ValueError, match="observation binding"):
+        validate_geo_v8_transport_observation_binding(
+            binding,
+            PAGE_IDS,
+            rows,
+            parent_authoritative=True,
+            entry_verified=True,
+            access_limited=False,
+        )
+
+
+def test_binding_rejects_canonicalization_version_substitution():
+    rows = observations()
+    binding = build_binding(rows)
+    binding["canonicalization_version"] = "geo_v8_canonical_json_v999"
+
+    with pytest.raises(ValueError, match="canonicalization version"):
         validate_geo_v8_transport_observation_binding(
             binding,
             PAGE_IDS,

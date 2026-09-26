@@ -16,20 +16,24 @@ from __future__ import annotations
 from copy import deepcopy
 from hashlib import sha256
 from hmac import compare_digest
-import json
 
 from .geo_readiness import Observation
 from .geo_readiness_v2 import _scope_digest
+from .geo_v8_canonical_json import (
+    VERSION as CANONICALIZATION_VERSION,
+    canonical_json_bytes,
+)
 from .geo_v8_transport_candidate import (
     SEAL_STATE,
     build_geo_v8_transport_candidate,
 )
 
-VERSION = "geo_v8_transport_observation_binding_v1"
+VERSION = "geo_v8_transport_observation_binding_v2"
 CLAIM_BOUNDARY = "exact_retained_structural_observations_not_ai_provider_outcomes"
 
 _TOP_KEYS = frozenset({
     "version",
+    "canonicalization_version",
     "candidate",
     "page_set_digest",
     "observation_count",
@@ -43,13 +47,7 @@ _TOP_KEYS = frozenset({
 
 
 def _canonical_bytes(value) -> bytes:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")
+    return canonical_json_bytes(value)
 
 
 def _digest(value) -> str:
@@ -132,6 +130,7 @@ def _build_exact_binding(
     }
     binding = {
         "version": VERSION,
+        "canonicalization_version": CANONICALIZATION_VERSION,
         "candidate": deepcopy(candidate),
         "page_set_digest": _scope_digest(page_ids),
         "observation_count": len(ordered_observations),
@@ -185,6 +184,8 @@ def validate_geo_v8_transport_observation_binding(
         raise ValueError("Malformed GEO V8 observation binding")
     if binding.get("version") != VERSION:
         raise ValueError("Unexpected GEO V8 observation binding version")
+    if binding.get("canonicalization_version") != CANONICALIZATION_VERSION:
+        raise ValueError("Unexpected GEO V8 canonicalization version")
     if binding.get("seal_state") != SEAL_STATE or binding.get("authority_verified") is not False:
         raise ValueError("GEO V8 observation binding must remain unsealed and non-authoritative")
     if binding.get("claim_boundary") != CLAIM_BOUNDARY:

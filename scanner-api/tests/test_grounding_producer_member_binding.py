@@ -103,6 +103,37 @@ def test_recognized_handoff_member_can_ground_nested_root_and_evidence_url():
     assert verify_grounded_payload(annotation("root-member"), evidence_set=evidence).status == "verified"
 
 
+def test_identical_recognized_handoff_member_populations_remain_authorized():
+    trusted = member_fix()
+    source = sealed_l2(source=handoff(fixes=[trusted]))
+    source["review"] = {
+        "stage3_handoff_v2_source": handoff(fixes=[deepcopy(trusted)])
+    }
+
+    evidence = build_evidence_set(source)
+
+    assert "root-member" in evidence.root_cause_refs
+    assert MEMBER_URL in evidence.url_members
+    assert verify_grounded_payload(annotation("root-member"), evidence_set=evidence).status == "verified"
+
+
+def test_conflicting_recognized_handoff_member_populations_fail_closed():
+    source = sealed_l2(source=handoff(fixes=[member_fix()]))
+    source["review"] = {
+        "stage3_handoff_v2_source": handoff(fixes=[borrowed_fix()])
+    }
+
+    evidence = build_evidence_set(source)
+
+    assert "root-member" not in evidence.root_cause_refs
+    assert "root-borrowed" not in evidence.root_cause_refs
+    assert MEMBER_URL not in evidence.url_members
+    assert BORROWED_URL not in evidence.url_members
+    result = verify_grounded_payload(annotation("root-borrowed"), evidence_set=evidence)
+    assert result.status == "rejected"
+    assert result.reasons == ["root_cause_ref_missing"]
+
+
 def test_top_level_fix_collection_cannot_borrow_trusted_handoff_identity():
     evidence = build_evidence_set(
         sealed_l2(source=handoff(fixes=[member_fix()]), sibling_fixes=[borrowed_fix()])

@@ -174,6 +174,58 @@
       "expected_reasons": ["root_cause_ref_missing"]
     },
     {
+      "name": "conflicting_recognized_handoff_member_populations_fail_closed",
+      "sealed_l2_override": {
+        "authority_seal_version": "authority_v8",
+        "authority_sealed_at": "2026-09-23T09:45:00Z",
+        "authority_proof": "fixbench-conflicting-member-populations-proof",
+        "website_url": "https://example.com",
+        "pages": [{"url": "https://example.com/observed", "status_code": 200}],
+        "stage3_handoff_v2_source": {
+          "handoff_version": "fixlist_handoff_v2",
+          "scan": {"scan_id": "scan-trusted", "scan_run_id": "scan-trusted"},
+          "fixes": [{
+            "fix_id": "fix-member",
+            "root_cause_evidence": {
+              "version": "root_cause_evidence_v1_verified",
+              "state": "verified",
+              "root_cause_id": "root-member",
+              "repair_surface_id": "surface:member",
+              "evidence_refs": ["https://example.com/member-proof"]
+            }
+          }]
+        },
+        "review": {
+          "stage3_handoff_v2_source": {
+            "handoff_version": "fixlist_handoff_v2",
+            "scan": {"scan_id": "scan-trusted", "scan_run_id": "scan-trusted"},
+            "fixes": [{
+              "fix_id": "fix-borrowed",
+              "root_cause_evidence": {
+                "version": "root_cause_evidence_v1_verified",
+                "state": "verified",
+                "root_cause_id": "root-borrowed",
+                "repair_surface_id": "surface:borrowed",
+                "evidence_refs": ["https://example.com/borrowed-proof"]
+              }
+            }]
+          }
+        }
+      },
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "conflicting-member-populations",
+        "text": "Grounded evidence is available for this annotation.",
+        "evidence": [{"url": "https://example.com/borrowed-proof", "require_live": false}],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": ["root-borrowed"],
+        "state_claims": []
+      },
+      "expected_status": "rejected",
+      "expected_reasons": ["root_cause_ref_missing", "url_not_in_evidence"]
+    },
+    {
       "name": "nested_diagnostics_fix_collection_cannot_borrow",
       "sealed_l2_override": {
         "authority_seal_version": "authority_v8",

@@ -343,6 +343,7 @@ def _trusted_stage3_fix_membership(
         return frozenset(), "inactive"
 
     member_ids: set[int] = set()
+    member_population_fingerprint = ""
     declared = False
     for source in _stage3_handoff_sources(sealed_l2):
         if "fixes" not in source:
@@ -351,6 +352,16 @@ def _trusted_stage3_fix_membership(
         fixes = source.get("fixes")
         if not isinstance(fixes, list):
             return frozenset(), "invalid"
+        try:
+            population_fingerprint = _canonical_fingerprint({"fixes": fixes})
+        except (TypeError, ValueError):
+            return frozenset(), "invalid"
+        if (
+            member_population_fingerprint
+            and population_fingerprint != member_population_fingerprint
+        ):
+            return frozenset(), "invalid"
+        member_population_fingerprint = population_fingerprint
         for fix in fixes:
             if not isinstance(fix, dict):
                 return frozenset(), "invalid"

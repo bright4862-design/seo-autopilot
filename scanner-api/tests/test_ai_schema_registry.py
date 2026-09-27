@@ -64,6 +64,16 @@ def test_chat_answer_v1_rejects_extra_fields():
         })
 
 
+def test_chat_answer_v1_rejects_duplicate_annotation_ids():
+    duplicate = annotation(annotation_id="same")
+    with pytest.raises(ValidationError):
+        validate_ai_schema({
+            "schema_version": "chat_answer_v1",
+            "answer_id": "answer-1",
+            "annotations": [duplicate, annotation(annotation_id="same")],
+        })
+
+
 def test_unknown_schema_version_fails_closed():
     with pytest.raises(UnknownAISchemaVersion):
         validate_ai_schema({"schema_version": "ai_annotation_v999"})

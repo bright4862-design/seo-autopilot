@@ -9,7 +9,7 @@ from __future__ import annotations
 from math import isfinite
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class _StrictModel(BaseModel):
@@ -72,3 +72,10 @@ class ChatAnswerV1(_StrictModel):
     schema_version: Literal["chat_answer_v1"]
     answer_id: str = Field(min_length=1, max_length=160)
     annotations: list[AIAnnotationV1] = Field(min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def unique_annotation_ids(self) -> "ChatAnswerV1":
+        annotation_ids = [annotation.annotation_id for annotation in self.annotations]
+        if len(annotation_ids) != len(set(annotation_ids)):
+            raise ValueError("annotation_id values must be unique within an answer")
+        return self

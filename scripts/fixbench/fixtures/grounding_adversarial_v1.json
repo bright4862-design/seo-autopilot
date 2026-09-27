@@ -195,6 +195,27 @@
           }
         ]
       }
+    },
+    {
+      "name": "duplicate_annotation_identity_rejected",
+      "expected_status": "rejected",
+      "expected_reasons": ["schema_invalid"],
+      "payload": {
+        "schema_version": "chat_answer_v1",
+        "answer_id": "duplicate-annotation-identity",
+        "annotations": [
+          {
+            "schema_version": "ai_annotation_v1", "annotation_id": "same", "text": "Grounded evidence is available for this annotation.",
+            "evidence": [{"url": "https://example.com/a", "require_live": true}],
+            "numeric_claims": [], "fix_refs": ["fix-1"], "root_cause_refs": [], "state_claims": []
+          },
+          {
+            "schema_version": "ai_annotation_v1", "annotation_id": "same", "text": "Grounded evidence is available for this annotation.",
+            "evidence": [{"url": "https://example.com/a", "require_live": true}],
+            "numeric_claims": [], "fix_refs": ["fix-fake"], "root_cause_refs": [], "state_claims": []
+          }
+        ]
+      }
     }
   ]
 }

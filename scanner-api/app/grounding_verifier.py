@@ -904,6 +904,12 @@ def _exact_scalar_equal(left: Scalar, right: Scalar) -> bool:
     return type(left) is type(right) and left == right
 
 
+def _claim_label_matches_source(label: str, source_ref: str) -> bool:
+    """Bind a typed claim's semantic label to its allowlisted source field."""
+    _parent, separator, field = source_ref.rpartition(".")
+    return bool(separator and field.isidentifier() and label == field)
+
+
 def render_grounded_annotation_text(_annotation: AIAnnotationV1) -> str:
     """Return the only prose emitted by ``ai_annotation_v1`` today.
 
@@ -929,6 +935,8 @@ def _annotation_errors(annotation: AIAnnotationV1, evidence: EvidenceSet) -> lis
     for claim in annotation.numeric_claims:
         if claim.source_ref not in evidence.numeric_values:
             errors.add("numeric_source_missing")
+        elif not _claim_label_matches_source(claim.name, claim.source_ref):
+            errors.add("numeric_claim_name_mismatch")
         elif not _exact_scalar_equal(evidence.numeric_values[claim.source_ref], claim.value):
             errors.add("numeric_value_mismatch")
 
@@ -950,6 +958,8 @@ def _annotation_errors(annotation: AIAnnotationV1, evidence: EvidenceSet) -> lis
     for claim in annotation.state_claims:
         if claim.source_ref not in evidence.state_values:
             errors.add("state_source_missing")
+        elif not _claim_label_matches_source(claim.field, claim.source_ref):
+            errors.add("state_claim_field_mismatch")
         elif not _exact_scalar_equal(evidence.state_values[claim.source_ref], claim.value):
             errors.add("state_value_mismatch")
 

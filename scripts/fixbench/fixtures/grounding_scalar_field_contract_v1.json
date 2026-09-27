@@ -77,6 +77,36 @@
       }
     },
     {
+      "name": "mislabeled_numeric_claim_rejected",
+      "expected_status": "rejected",
+      "expected_reasons": ["numeric_claim_name_mismatch"],
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "mislabeled-number",
+        "text": "Grounded evidence is available for this annotation.",
+        "evidence": [{"url": "https://example.com/real", "require_live": true}],
+        "numeric_claims": [{"name": "repairs_completed", "value": 88, "source_ref": "$.health_score"}],
+        "fix_refs": [],
+        "root_cause_refs": [],
+        "state_claims": []
+      }
+    },
+    {
+      "name": "mislabeled_state_claim_rejected",
+      "expected_status": "rejected",
+      "expected_reasons": ["state_claim_field_mismatch"],
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "mislabeled-state",
+        "text": "Grounded evidence is available for this annotation.",
+        "evidence": [{"url": "https://example.com/real", "require_live": true}],
+        "numeric_claims": [],
+        "fix_refs": [],
+        "root_cause_refs": [],
+        "state_claims": [{"field": "repair_applied", "value": "complete", "source_ref": "$.status"}]
+      }
+    },
+    {
       "name": "unapproved_root_scalar_rejected",
       "expected_status": "rejected",
       "expected_reasons": ["numeric_source_missing"],

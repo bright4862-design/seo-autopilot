@@ -186,6 +186,7 @@
           "scan": {"scan_id": "scan-trusted", "scan_run_id": "scan-trusted"},
           "fixes": [{
             "fix_id": "fix-member",
+            "counts": {"unique_affected_pages": 1},
             "root_cause_evidence": {
               "version": "root_cause_evidence_v1_verified",
               "state": "verified",
@@ -201,6 +202,7 @@
             "scan": {"scan_id": "scan-trusted", "scan_run_id": "scan-trusted"},
             "fixes": [{
               "fix_id": "fix-borrowed",
+              "counts": {"unique_affected_pages": 999},
               "root_cause_evidence": {
                 "version": "root_cause_evidence_v1_verified",
                 "state": "verified",
@@ -217,13 +219,22 @@
         "annotation_id": "conflicting-member-populations",
         "text": "Grounded evidence is available for this annotation.",
         "evidence": [{"url": "https://example.com/borrowed-proof", "require_live": false}],
-        "numeric_claims": [],
-        "fix_refs": [],
+        "numeric_claims": [{
+          "name": "unique_affected_pages",
+          "value": 999,
+          "source_ref": "$.review.stage3_handoff_v2_source.fixes[0].counts.unique_affected_pages"
+        }],
+        "fix_refs": ["fix-borrowed"],
         "root_cause_refs": ["root-borrowed"],
         "state_claims": []
       },
       "expected_status": "rejected",
-      "expected_reasons": ["root_cause_ref_missing", "url_not_in_evidence"]
+      "expected_reasons": [
+        "fix_ref_missing",
+        "numeric_source_missing",
+        "root_cause_ref_missing",
+        "url_not_in_evidence"
+      ]
     },
     {
       "name": "nested_diagnostics_fix_collection_cannot_borrow",

@@ -118,17 +118,31 @@ def test_identical_recognized_handoff_member_populations_remain_authorized():
 
 
 def test_conflicting_recognized_handoff_member_populations_fail_closed():
-    source = sealed_l2(source=handoff(fixes=[member_fix()]))
+    trusted = member_fix()
+    trusted["counts"] = {"unique_affected_pages": 1}
+    conflicting = borrowed_fix()
+    conflicting["counts"] = {"unique_affected_pages": 999}
+    source = sealed_l2(source=handoff(fixes=[trusted]))
     source["review"] = {
-        "stage3_handoff_v2_source": handoff(fixes=[borrowed_fix()])
+        "stage3_handoff_v2_source": handoff(fixes=[conflicting])
     }
 
     evidence = build_evidence_set(source)
 
+    assert "fix-member" not in evidence.fix_refs
+    assert "fix-borrowed" not in evidence.fix_refs
     assert "root-member" not in evidence.root_cause_refs
     assert "root-borrowed" not in evidence.root_cause_refs
     assert MEMBER_URL not in evidence.url_members
     assert BORROWED_URL not in evidence.url_members
+    assert (
+        "$.stage3_handoff_v2_source.fixes[0].counts.unique_affected_pages"
+        not in evidence.numeric_values
+    )
+    assert (
+        "$.review.stage3_handoff_v2_source.fixes[0].counts.unique_affected_pages"
+        not in evidence.numeric_values
+    )
     result = verify_grounded_payload(annotation("root-borrowed"), evidence_set=evidence)
     assert result.status == "rejected"
     assert result.reasons == ["root_cause_ref_missing"]

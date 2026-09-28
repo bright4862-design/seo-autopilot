@@ -30,22 +30,43 @@ fi
 
 tmp="$(mktemp -d)"
 job="fixlist-egress-probe-${RUN_ID}-${ATTEMPT}"
+job_created=false
 cleanup() {
-  gcloud run jobs delete "$job" --project="$PROJECT" --region="$REGION" --quiet >/dev/null 2>&1 || true
+  local status=$?
+  if [[ "$job_created" == true ]]; then
+    if ! gcloud run jobs delete "$job" --project="$PROJECT" --region="$REGION" --quiet >/dev/null 2>&1; then
+      echo "Static egress probe cleanup failed; inspect job=$job." >&2
+      if [[ "$status" -eq 0 ]]; then status=2; fi
+    fi
+  fi
   rm -rf "$tmp"
+  return "$status"
 }
 trap cleanup EXIT
 
 gcloud run revisions describe "$TARGET_REVISION"   --project="$PROJECT" --region="$REGION" --format=json > "$tmp/revision.json"
 gcloud run services describe "$WORKER"   --project="$PROJECT" --region="$REGION" --format=json > "$tmp/service.json"
 
-readarray -t values < <(python3 - "$tmp/revision.json" "$tmp/service.json" "$SOURCE_SHA" "$NETWORK" "$SUBNET" <<'PY'
-import json, sys
-rev_path, service_path, source_sha, network, subnet = sys.argv[1:]
+readarray -t values < <(python3 - "$tmp/revision.json" "$tmp/service.json" "$SOURCE_SHA" "$NETWORK" "$SUBNET" "$TARGET_REVISION" "$WORKER" <<'PY'
+import json, re, sys
+rev_path, service_path, source_sha, network, subnet, expected_revision, worker = sys.argv[1:]
 rev=json.load(open(rev_path, encoding="utf-8"))
 service=json.load(open(service_path, encoding="utf-8"))
+meta=rev.get("metadata", {}) or {}
+if meta.get("name") != expected_revision or meta.get("labels", {}).get("serving.knative.dev/service") != worker:
+    raise SystemExit("candidate revision/service identity mismatch")
+if service.get("metadata", {}).get("name") != worker:
+    raise SystemExit("candidate service identity mismatch")
+if not any(c.get("type") == "Ready" and c.get("status") == "True" for c in rev.get("status", {}).get("conditions", [])):
+    raise SystemExit("candidate revision is not Ready")
 spec=rev.get("spec", {}) or {}
-container=(spec.get("containers") or [{}])[0]
+containers=spec.get("containers") or []
+if len(containers) != 1 or spec.get("volumes"):
+    raise SystemExit("candidate sidecars/volumes require separate probe assessment")
+container=containers[0]
+unsupported={"http_proxy", "https_proxy", "all_proxy", "no_proxy", "ssl_cert_file", "ssl_cert_dir"}
+if any(str(item.get("name", "")).lower() in unsupported for item in container.get("env", [])):
+    raise SystemExit("candidate proxy/custom certificate environment cannot be omitted")
 env={item.get("name"): item.get("value","") for item in container.get("env", [])}
 if env.get("FIXLIST_WORKER_SOURCE_SHA") != source_sha:
     raise SystemExit("candidate source SHA mismatch")
@@ -72,16 +93,22 @@ if percent != 0:
     raise SystemExit("candidate unexpectedly serves customer traffic")
 raw_image=str(container.get("image") or "")
 digest=str(rev.get("status",{}).get("imageDigest") or "")
-if "@sha256:" in raw_image:
-    image=raw_image
-elif digest.startswith("sha256:") and raw_image:
-    base=raw_image.split("@",1)[0]
-    last=base.rsplit("/",1)[-1]
-    if ":" in last:
-        base=base.rsplit(":",1)[0]
+# Cloud Run may return either a digest or a fully-qualified digest URI.
+# Validate the complete digest and reject contradictory spec/status identities.
+base=raw_image.split("@",1)[0]
+if ":" in base.rsplit("/",1)[-1]:
+    base=base.rsplit(":",1)[0]
+full_pattern=r"[a-z0-9./_:-]+@sha256:[0-9a-f]{64}"
+if re.fullmatch(r"sha256:[0-9a-f]{64}", digest) and base:
     image=base + "@" + digest
+elif re.fullmatch(full_pattern, digest) and digest.split("@",1)[0] == base:
+    image=digest
+elif not digest and re.fullmatch(full_pattern, raw_image):
+    image=raw_image
 else:
-    raise SystemExit("candidate immutable image digest unavailable")
+    raise SystemExit("candidate immutable image digest unavailable or inconsistent")
+if not re.fullmatch(full_pattern, image) or ("@" in raw_image and raw_image != image):
+    raise SystemExit("candidate immutable image identity mismatch")
 sa=str(spec.get("serviceAccountName") or "")
 if not sa:
     raise SystemExit("candidate runtime service account unavailable")
@@ -126,9 +153,10 @@ gcloud run jobs create "$job" \
   --project="$PROJECT" --region="$REGION" \
   --flags-file="$tmp/job-flags.json" \
   --quiet
+job_created=true
 
 execution="$(gcloud run jobs execute "$job" --project="$PROJECT" --region="$REGION" --wait --format='value(metadata.name)')"
-[[ -n "$execution" ]] || { echo "Static egress probe execution identity missing." >&2; exit 2; }
+[[ "$execution" =~ ^${job}-[a-z0-9]+$ ]] || { echo "Static egress probe execution identity mismatch." >&2; exit 2; }
 
 # Job completion can precede log ingestion. Retry only the exact-execution
 # log read, never the job or HTTP request; a permission error still stops here.
@@ -163,6 +191,16 @@ PY
 if [[ "$observed" != "$EXPECTED_IP" ]]; then
   echo "Static egress probe mismatch: observed $observed but reserved canary IP is $EXPECTED_IP." >&2
   exit 2
+fi
+
+# Complete cleanup before publishing success. The EXIT trap handles earlier
+# failures, but never deletes a job whose create operation did not succeed.
+if [[ "${job_created:-false}" == true ]]; then
+  job_created=false
+  if ! gcloud run jobs delete "$job" --project="$PROJECT" --region="$REGION" --quiet >/dev/null 2>&1; then
+    echo "Static egress probe cleanup failed; inspect job=$job." >&2
+    exit 2
+  fi
 fi
 
 echo "STATIC_EGRESS_SOURCE_IP_VERIFIED=1"

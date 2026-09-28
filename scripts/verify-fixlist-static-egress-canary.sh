@@ -19,10 +19,10 @@ gcloud compute addresses describe "$ADDRESS" --project="$PROJECT" --region="$REG
 gcloud compute routers describe "$ROUTER" --project="$PROJECT" --region="$REGION" --format=json > "$tmp/router.json"
 gcloud compute routers nats describe "$NAT" --router="$ROUTER" --project="$PROJECT" --region="$REGION" --format=json > "$tmp/nat.json"
 
-python3 - "$tmp" "$NETWORK" "$SUBNET" "$SUBNET_CIDR" "$REGION" "$ADDRESS" <<'PY'
+python3 - "$tmp" "$NETWORK" "$SUBNET" "$SUBNET_CIDR" "$REGION" "$ADDRESS" "$PROJECT" <<'PY'
 import json, pathlib, sys
 root = pathlib.Path(sys.argv[1])
-network, subnet, cidr, region, address_name = sys.argv[2:]
+network, subnet, cidr, region, address_name, project = sys.argv[2:]
 
 def load(name):
     return json.loads((root / name).read_text())
@@ -45,9 +45,14 @@ if not str(router.get("network") or "").endswith("/networks/" + network):
     raise SystemExit("static egress router network mismatch")
 if nat.get("natIpAllocateOption") != "MANUAL_ONLY":
     raise SystemExit("static egress NAT is not manual-IP mode")
-nat_ips = [str(x) for x in nat.get("natIps") or []]
-if not any(x.endswith("/addresses/" + address_name) for x in nat_ips):
-    raise SystemExit("static egress NAT does not use the reserved canary IP")
+# A membership check permits additional source addresses. Compare the complete
+# resource identity and the complete pool, not just an address-name suffix.
+expected_address = (f"https://www.googleapis.com/compute/v1/projects/{project}"
+                    f"/regions/{region}/addresses/{address_name}")
+if addr.get("selfLink") != expected_address or nat.get("natIps") != [expected_address]:
+    raise SystemExit("static egress NAT must use exactly the reserved canary IP")
+if nat.get("drainNatIps", []) != [] or nat.get("rules", []) != []:
+    raise SystemExit("static egress NAT must not have draining IPs or source-IP rules")
 if nat.get("sourceSubnetworkIpRangesToNat") != "LIST_OF_SUBNETWORKS":
     raise SystemExit("static egress NAT is not subnet-scoped")
 if nat.get("enableDynamicPortAllocation") is True:

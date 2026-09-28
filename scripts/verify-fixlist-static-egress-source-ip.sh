@@ -130,7 +130,17 @@ gcloud run jobs create "$job" \
 execution="$(gcloud run jobs execute "$job" --project="$PROJECT" --region="$REGION" --wait --format='value(metadata.name)')"
 [[ -n "$execution" ]] || { echo "Static egress probe execution identity missing." >&2; exit 2; }
 
-gcloud logging read   "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"$job\" AND labels.\"run.googleapis.com/execution_name\"=\"$execution\""   --project="$PROJECT" --limit=50 --order=asc --format='value(textPayload)' > "$tmp/logs.txt"
+# Job completion can precede log ingestion. Retry only the exact-execution
+# log read, never the job or HTTP request; a permission error still stops here.
+log_filter="resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"$job\" AND labels.\"run.googleapis.com/execution_name\"=\"$execution\""
+for ((log_attempt = 1; log_attempt <= 12; log_attempt++)); do
+  gcloud logging read "$log_filter" \
+    --project="$PROJECT" --limit=50 --order=asc --format='value(textPayload)' > "$tmp/logs.txt"
+  if grep -q '^FIXLIST_STATIC_EGRESS_PROBE=' "$tmp/logs.txt"; then
+    break
+  fi
+  if ((log_attempt < 12)); then sleep 10; fi
+done
 
 observed="$(python3 - "$tmp/logs.txt" <<'PY'
 import json, sys

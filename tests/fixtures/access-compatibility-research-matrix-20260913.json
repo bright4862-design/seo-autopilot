@@ -1,0 +1,193 @@
+{
+  "version": "access_compatibility_research_matrix_v1",
+  "observed_on": "2026-09-13",
+  "purpose": "Research-only matrix. Real-site rows must not claim a transport, WAF, user-agent, TLS, IP-reputation, rate-limit, or robots root cause until the isolated first-hop observer supplies normalized evidence.",
+  "real_sites": [
+    {
+      "site": "ironwoodcrecapital.com",
+      "role": "primary_blocked_case",
+      "public_retrieval": "ordinary_public_retrieval_succeeds",
+      "robots_context": "not_yet_measured_for_exact_fixlist_identity",
+      "bot_waf_context": "provider_unproven",
+      "historical_fixlist_state": "failed_or_limited_without_persisted_first_hop_diagnostics",
+      "observer_status": "pending",
+      "root_cause_confidence": "unproven",
+      "normalized_inputs": null,
+      "expected_policy": null
+    },
+    {
+      "site": "rbiprivatelending.com",
+      "role": "same_environment_identity_difference_control",
+      "public_retrieval": "ordinary_public_retrieval_available",
+      "robots_context": "historically_not_a_blanket_robots_denial_but_exact_observer_revalidation_required",
+      "bot_waf_context": "historical_same_environment_requests_differed_by_request_identity_but_root_cause_remains_unproven",
+      "historical_fixlist_state": "zero_page_failure_without_persisted_first_hop_diagnostics",
+      "observer_status": "pending",
+      "root_cause_confidence": "unproven",
+      "normalized_inputs": null,
+      "expected_policy": null
+    },
+    {
+      "site": "klook.com",
+      "role": "robots_vs_transport_control",
+      "public_retrieval": "ordinary_public_retrieval_available",
+      "robots_context": "generic_user_agent_has_selected_path_disallows_not_blanket_root_denial",
+      "bot_waf_context": "exact_fixlist_transport_unmeasured",
+      "historical_fixlist_state": "access_limited_or_challenged",
+      "observer_status": "pending",
+      "root_cause_confidence": "unproven",
+      "normalized_inputs": null,
+      "expected_policy": null
+    },
+    {
+      "site": "feverup.com",
+      "role": "crawler_identity_policy_control",
+      "public_retrieval": "ordinary_public_retrieval_available",
+      "robots_context": "generic_rules_plus_multiple_named_bot_denials",
+      "bot_waf_context": "exact_fixlist_transport_unmeasured",
+      "historical_fixlist_state": "access_limited_or_challenged",
+      "observer_status": "pending",
+      "root_cause_confidence": "unproven",
+      "normalized_inputs": null,
+      "expected_policy": null
+    },
+    {
+      "site": "ratp.fr",
+      "role": "bot_management_control",
+      "public_retrieval": "ordinary_public_retrieval_available",
+      "robots_context": "not_yet_measured_for_exact_fixlist_identity",
+      "bot_waf_context": "site_documentation_mentions_cf_bm_human_vs_robot_cookie",
+      "historical_fixlist_state": "access_limited_or_incomplete",
+      "observer_status": "pending",
+      "root_cause_confidence": "unproven",
+      "normalized_inputs": null,
+      "expected_policy": null
+    },
+    {
+      "site": "viator.com",
+      "role": "historical_access_limited_control",
+      "public_retrieval": "ordinary_public_retrieval_available",
+      "robots_context": "not_revalidated_in_this_matrix_revision",
+      "bot_waf_context": "exact_fixlist_transport_unmeasured",
+      "historical_fixlist_state": "access_limited_or_challenged",
+      "observer_status": "pending",
+      "root_cause_confidence": "unproven",
+      "normalized_inputs": null,
+      "expected_policy": null
+    },
+    {
+      "site": "winamax.fr",
+      "role": "historical_access_limited_control",
+      "public_retrieval": "not_revalidated_in_this_matrix_revision",
+      "robots_context": "not_revalidated_in_this_matrix_revision",
+      "bot_waf_context": "exact_fixlist_transport_unmeasured",
+      "historical_fixlist_state": "access_limited_or_challenged",
+      "observer_status": "pending",
+      "root_cause_confidence": "unproven",
+      "normalized_inputs": null,
+      "expected_policy": null
+    },
+    {
+      "site": "funbooker.com",
+      "role": "known_standard150_success_control",
+      "public_retrieval": "ordinary_public_retrieval_available",
+      "robots_context": "production_scan_policy_is_separate_from_this_observer_matrix",
+      "bot_waf_context": "no_current_block_in_known_acceptance_run",
+      "historical_fixlist_state": "standard150_success",
+      "observer_status": "pending",
+      "root_cause_confidence": "not_applicable_control",
+      "normalized_inputs": null,
+      "expected_policy": null
+    }
+  ],
+  "synthetic_policy_cases": [
+    {
+      "name": "robots_denied_even_if_http_would_be_403",
+      "normalized_inputs": {
+        "robots_allowed": false,
+        "http_status": 403,
+        "owner_managed": true
+      },
+      "expected_policy": {
+        "failure_kind": "robots_restricted",
+        "identity_sensitivity": "unproven",
+        "owner_action": "none",
+        "access_strategy": "diagnostic_only"
+      }
+    },
+    {
+      "name": "http_denied_without_identity_comparison",
+      "normalized_inputs": {
+        "robots_allowed": true,
+        "http_status": 403,
+        "owner_managed": true
+      },
+      "expected_policy": {
+        "failure_kind": "http_access_denied",
+        "identity_sensitivity": "unproven",
+        "owner_action": "manual_review",
+        "access_strategy": "diagnostic_only"
+      }
+    },
+    {
+      "name": "identity_sensitive_only_after_controlled_comparison",
+      "normalized_inputs": {
+        "robots_allowed": true,
+        "http_status": 403,
+        "owner_managed": true,
+        "identity_comparison_result": "fixlist_denied_control_allowed"
+      },
+      "expected_policy": {
+        "failure_kind": "http_access_denied",
+        "identity_sensitivity": "proven",
+        "owner_action": "manual_review",
+        "access_strategy": "diagnostic_only"
+      }
+    },
+    {
+      "name": "rate_limit_is_not_http_access_denial",
+      "normalized_inputs": {
+        "robots_allowed": true,
+        "http_status": 429,
+        "owner_managed": true
+      },
+      "expected_policy": {
+        "failure_kind": "rate_limited",
+        "identity_sensitivity": "unproven",
+        "owner_action": "manual_review",
+        "access_strategy": "diagnostic_only"
+      }
+    },
+    {
+      "name": "tls_transport_failure_stays_separate",
+      "normalized_inputs": {
+        "robots_allowed": true,
+        "http_status": null,
+        "owner_managed": true,
+        "transport_error_class": "tls_handshake_failed",
+        "failure_stage": "tls_handshake"
+      },
+      "expected_policy": {
+        "failure_kind": "transport_blocked",
+        "identity_sensitivity": "unproven",
+        "owner_action": "manual_review",
+        "access_strategy": "diagnostic_only"
+      }
+    },
+    {
+      "name": "owner_allowlist_requires_explicit_capability",
+      "normalized_inputs": {
+        "robots_allowed": true,
+        "http_status": 403,
+        "owner_managed": true,
+        "owner_exception_capability": "supported"
+      },
+      "expected_policy": {
+        "failure_kind": "http_access_denied",
+        "identity_sensitivity": "unproven",
+        "owner_action": "owner_exception_possible",
+        "access_strategy": "owner_allowlist_candidate"
+      }
+    }
+  ]
+}

@@ -13,8 +13,8 @@
     "test:frontend": "node --test tests/frontend/*.test.mjs"
   },
   "dependencies": {
-    "@base44/sdk": "^0.8.51",
-    "@base44/vite-plugin": "^1.0.42",
+    "@base44/sdk": "^0.8.52",
+    "@base44/vite-plugin": "^1.0.44",
     "@hello-pangea/dnd": "^17.0.0",
     "@hookform/resolvers": "^4.1.2",
     "@radix-ui/react-accordion": "^1.2.3",

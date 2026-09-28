@@ -7,10 +7,37 @@ WORKER="${CLOUD_RUN_SERVICE:-fixlist-standard150-worker}"
 SOURCE_SHA="${SOURCE_SHA:-}"
 CONFIRM="${CONFIRM:-}"
 BUILD_SA_INPUT="${CLOUD_BUILD_SERVICE_ACCOUNT:-}"
+EGRESS_MODE="${FIXLIST_EGRESS_MODE:-none}"
+EGRESS_NETWORK="${FIXLIST_EGRESS_NETWORK:-}"
+EGRESS_SUBNET="${FIXLIST_EGRESS_SUBNET:-}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$REPO_ROOT/scripts/lib/release-source-guard.sh"
 fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$CONFIRM"
 SOURCE_SHA="$FIXLIST_EXACT_SOURCE_SHA"
+
+case "$EGRESS_MODE" in
+  none)
+    [[ -z "$EGRESS_NETWORK" && -z "$EGRESS_SUBNET" ]] || {
+      echo "Refusing: network/subnet supplied while FIXLIST_EGRESS_MODE=none." >&2
+      exit 2
+    }
+    ;;
+  static-canary)
+    [[ "$EGRESS_NETWORK" == "fixlist-scanner-egress" ]] || {
+      echo "Refusing: unexpected static-egress canary network." >&2
+      exit 2
+    }
+    [[ "$EGRESS_SUBNET" == "fixlist-scanner-egress-euw1" ]] || {
+      echo "Refusing: unexpected static-egress canary subnet." >&2
+      exit 2
+    }
+    "$REPO_ROOT/scripts/verify-fixlist-static-egress-canary.sh" >/dev/null
+    ;;
+  *)
+    echo "Refusing unsupported FIXLIST_EGRESS_MODE=$EGRESS_MODE." >&2
+    exit 2
+    ;;
+esac
 
 gcloud config set project "$PROJECT" >/dev/null
 
@@ -53,42 +80,95 @@ normalize_build_sa() {
 if [[ -n "$BUILD_SA_INPUT" ]]; then normalize_build_sa "$BUILD_SA_INPUT"; else normalize_build_sa "$(gcloud builds get-default-service-account --project="$PROJECT" --format='value(serviceAccountEmail)')"; fi
 gcloud iam service-accounts describe "$BUILD_SA_EMAIL" --project="$PROJECT" >/dev/null
 
-printf 'worker=%s\nimage=%s\nruntime_sa=%s\ninvoker_sa=%s\nbuild_sa=%s\nsource_sha=%s\n' \
-  "$WORKER" "$IMAGE" "$RUNTIME_SA" "$INVOKER_SA" "$BUILD_SA_EMAIL" "$SOURCE_SHA"
+printf 'worker=%s\nimage=%s\nruntime_sa=%s\ninvoker_sa=%s\nbuild_sa=%s\nsource_sha=%s\negress_mode=%s\n' \
+  "$WORKER" "$IMAGE" "$RUNTIME_SA" "$INVOKER_SA" "$BUILD_SA_EMAIL" "$SOURCE_SHA" "$EGRESS_MODE"
 
 # Submit only a clean archive of the exact verified commit. The generated stamp
-# is provenance metadata consumed by cloudbuild.durable-worker.yaml and is not
-# copied into the worker image.
+# is provenance metadata consumed by the selected immutable worker build config
+# and is not copied into the worker image.
 git -C "$REPO_ROOT" archive --format=tar "$SOURCE_SHA" | tar -xf - -C "$BUILD_CONTEXT"
 printf '%s\n' "$SOURCE_SHA" > "$BUILD_CONTEXT/.fixlist-source-sha"
+
+common_substitutions="_RELEASE_SHA=$SOURCE_SHA,_WORKER_SERVICE=$WORKER,_REGION=$REGION,_IMAGE=$IMAGE,_RUNTIME_SA=$RUNTIME_SA,_INVOKER_SA=$INVOKER_SA,_BASE44_APP_ID=$BASE44_APP,_BASE44_API_URL=$BASE44_API,_SIGNING_KEY_SECRET=$SIGNING_SECRET,_SIGNING_KEY_VERSION=$SIGNING_VERSION"
+case "$EGRESS_MODE" in
+  none)
+    BUILD_CONFIG="$BUILD_CONTEXT/cloudbuild.durable-worker.yaml"
+    BUILD_SUBSTITUTIONS="$common_substitutions"
+    ;;
+  static-canary)
+    BUILD_CONFIG="$BUILD_CONTEXT/cloudbuild.durable-worker-static-egress-canary.yaml"
+    BUILD_SUBSTITUTIONS="$common_substitutions,_EGRESS_NETWORK=$EGRESS_NETWORK,_EGRESS_SUBNET=$EGRESS_SUBNET"
+    ;;
+  *)
+    echo "Refusing unsupported worker build egress mode." >&2
+    exit 2
+    ;;
+esac
+test -f "$BUILD_CONFIG" || { echo "Worker build config missing: $BUILD_CONFIG" >&2; exit 2; }
 
 gcloud builds submit "$BUILD_CONTEXT" \
   --project="$PROJECT" \
   --region="$REGION" \
-  --config="$BUILD_CONTEXT/cloudbuild.durable-worker.yaml" \
+  --config="$BUILD_CONFIG" \
   --service-account="$BUILD_SA_RESOURCE" \
-  --substitutions="_RELEASE_SHA=$SOURCE_SHA,_WORKER_SERVICE=$WORKER,_REGION=$REGION,_IMAGE=$IMAGE,_RUNTIME_SA=$RUNTIME_SA,_INVOKER_SA=$INVOKER_SA,_BASE44_APP_ID=$BASE44_APP,_BASE44_API_URL=$BASE44_API,_SIGNING_KEY_SECRET=$SIGNING_SECRET,_SIGNING_KEY_VERSION=$SIGNING_VERSION"
+  --substitutions="$BUILD_SUBSTITUTIONS"
 
 gcloud run revisions list --service="$WORKER" --project="$PROJECT" --region="$REGION" --format=json > "$REVISIONS_JSON"
-CANDIDATE="$(python3 - "$REVISIONS_JSON" "$SOURCE_SHA" <<'PY'
-import json,sys
-rows=json.load(open(sys.argv[1])); sha=sys.argv[2]
+CANDIDATE="$(python3 - "$REVISIONS_JSON" "$SOURCE_SHA" "$EGRESS_MODE" "$EGRESS_NETWORK" "$EGRESS_SUBNET" <<'PY'
+import json, sys
+rows=json.load(open(sys.argv[1])); sha, mode, network, subnet = sys.argv[2:]
+matches=[]
 for r in rows:
-  spec=r.get('spec',{}); c=(spec.get('containers') or [{}])[0]; env={i.get('name'):i.get('value','') for i in c.get('env',[])}
-  if env.get('FIXLIST_WORKER_SOURCE_SHA')==sha:
-    print(r.get('metadata',{}).get('name','')); break
+  spec=r.get('spec',{}); c=(spec.get('containers') or [{}])[0]
+  env={i.get('name'):i.get('value','') for i in c.get('env',[])}
+  if env.get('FIXLIST_WORKER_SOURCE_SHA') != sha or env.get('FIXLIST_EGRESS_MODE','none') != mode:
+    continue
+  annotations=r.get('metadata',{}).get('annotations',{}) or {}
+  raw=annotations.get('run.googleapis.com/network-interfaces','')
+  if mode == 'static-canary':
+    try:
+      interfaces=json.loads(raw)
+    except Exception:
+      continue
+    if len(interfaces)!=1:
+      continue
+    item=interfaces[0]
+    if str(item.get('network','')).split('/')[-1] != network or str(item.get('subnetwork','')).split('/')[-1] != subnet:
+      continue
+    if annotations.get('run.googleapis.com/vpc-access-egress') != 'all-traffic':
+      continue
+  else:
+    if raw:
+      continue
+  matches.append((r.get('metadata',{}).get('creationTimestamp',''), r.get('metadata',{}).get('name','')))
+matches.sort()
+print(matches[-1][1] if matches else '')
 PY
 )"
 [[ -n "$CANDIDATE" ]] || { echo "No worker revision carries FIXLIST_WORKER_SOURCE_SHA=$SOURCE_SHA" >&2; exit 2; }
 
 gcloud run revisions describe "$CANDIDATE" --project="$PROJECT" --region="$REGION" --format=json > "$REVISIONS_JSON"
-python3 - "$REVISIONS_JSON" "$SOURCE_SHA" <<'PY'
-import json,sys
-v=json.load(open(sys.argv[1])); sha=sys.argv[2]; spec=v.get('spec',{}); c=(spec.get('containers') or [{}])[0]
+python3 - "$REVISIONS_JSON" "$SOURCE_SHA" "$EGRESS_MODE" "$EGRESS_NETWORK" "$EGRESS_SUBNET" <<'PY'
+import json, sys
+v=json.load(open(sys.argv[1])); sha, mode, network, subnet = sys.argv[2:]
+spec=v.get('spec',{}); c=(spec.get('containers') or [{}])[0]
 env={i.get('name'):i.get('value','') for i in c.get('env',[])}
 if env.get('FIXLIST_WORKER_SOURCE_SHA')!=sha: raise SystemExit('candidate source SHA mismatch')
+if env.get('FIXLIST_EGRESS_MODE','none')!=mode: raise SystemExit('candidate egress mode mismatch')
 if int(spec.get('containerConcurrency') or 0)!=1: raise SystemExit('candidate concurrency is not 1')
 if int(spec.get('timeoutSeconds') or 0)!=480: raise SystemExit('candidate timeout is not 480')
+annotations=v.get('metadata',{}).get('annotations',{}) or {}
+raw=annotations.get('run.googleapis.com/network-interfaces','')
+if mode == 'static-canary':
+    try: interfaces=json.loads(raw)
+    except Exception: raise SystemExit('candidate direct-VPC annotation is invalid')
+    if len(interfaces)!=1: raise SystemExit('candidate must have exactly one direct-VPC interface')
+    item=interfaces[0]
+    if str(item.get('network','')).split('/')[-1] != network: raise SystemExit('candidate network mismatch')
+    if str(item.get('subnetwork','')).split('/')[-1] != subnet: raise SystemExit('candidate subnet mismatch')
+    if annotations.get('run.googleapis.com/vpc-access-egress') != 'all-traffic': raise SystemExit('candidate VPC egress is not all-traffic')
+elif raw:
+    raise SystemExit('normal candidate unexpectedly uses Direct VPC')
 conds=v.get('status',{}).get('conditions',[])
 ready=next((x for x in conds if x.get('type')=='Ready'),{})
 if str(ready.get('status') or '').lower()!='true': raise SystemExit('candidate revision is not Ready')
@@ -103,4 +183,4 @@ for item in v.get('status',{}).get('traffic',[]) or []:
     raise SystemExit('candidate unexpectedly receives traffic')
 print('Candidate traffic verified at 0%.')
 PY
-printf 'WORKER_CANDIDATE_READY=%s\nWORKER_CANDIDATE_SOURCE_SHA=%s\n' "$CANDIDATE" "$SOURCE_SHA"
+printf 'WORKER_CANDIDATE_READY=%s\nWORKER_CANDIDATE_SOURCE_SHA=%s\nWORKER_CANDIDATE_EGRESS_MODE=%s\n' "$CANDIDATE" "$SOURCE_SHA" "$EGRESS_MODE"

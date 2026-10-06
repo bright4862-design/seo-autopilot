@@ -32,13 +32,15 @@ the first visible error was the create. Nothing was created.
 
 ## Minimum permissions, per command actually executed
 
-API methods were read from the installed gcloud SDK. Compute writes wait with
-`{global,region}Operations.wait` and then GET the resource.
+Compute writes wait with `{global,region}Operations.wait` and then GET the
+resource. The subnet's network reference also requires
+[`compute.networks.updatePolicy`](https://docs.cloud.google.com/compute/docs/reference/rest/v1/subnetworks/insert).
+These admin permissions are never added to the verifier role.
 
 | Step | Command (script) | Principal | Permissions |
 |---|---|---|---|
 | Provision | `networks describe/create` | admin | `compute.networks.get`, `compute.networks.create`, `compute.globalOperations.get` |
-| | `networks subnets describe/create` | admin | `compute.subnetworks.get`, `compute.subnetworks.create`, `compute.regionOperations.get` |
+| | `networks subnets describe/create` | admin | `compute.subnetworks.get`, `compute.subnetworks.create`, `compute.networks.updatePolicy`, `compute.regionOperations.get` |
 | | `addresses describe/create` (external, Premium) | admin | `compute.addresses.get`, `compute.addresses.create`, `compute.regionOperations.get` |
 | | `routers describe/create` | admin | `compute.routers.get`, `compute.routers.create`, `compute.regionOperations.get` |
 | | `routers nats describe/create` (`routers.get` then `routers.patch`) | admin | `compute.routers.get`, `compute.routers.update`, `compute.regionOperations.get` |
@@ -48,6 +50,14 @@ API methods were read from the installed gcloud SDK. Compute writes wait with
 | | Direct VPC attachment | Cloud Run service agent | same-project subnet use, from its default `roles/run.serviceAgent` |
 | Verify outbound IP | `verify-fixlist-static-egress-source-ip.sh` | operator | the four reads; `run.revisions.list/get`, `run.services.get`, `run.jobs.create`, `iam.serviceAccounts.actAs` on the worker runtime SA, `run.jobs.get`, `run.jobs.run`, `run.executions.get`, `logging.logEntries.list` |
 | Delete probe job | `run jobs delete` | operator | `run.jobs.delete` |
+
+The human bootstrap additionally needs `serviceusage.services.enable`,
+`iam.roles.get/create/update`, `resourcemanager.projects.getIamPolicy/setIamPolicy`,
+and permission to read project ancestry. For projects under folders or an
+organization, it must read every parent's policy with
+`resourcemanager.folders.getIamPolicy` / `resourcemanager.organizations.getIamPolicy`.
+An unreadable policy stops the bootstrap before any cloud write; do not broaden
+the WIF operator to satisfy this administrator-only preflight.
 
 Already proven for `fixlist-github-operator` in production:
 
@@ -73,16 +83,25 @@ staging, where a failure leaves no customer impact.
 Either path needs a human admin once, so giving the CI identity permanent
 network-mutation rights for a one-time action adds risk and saves nothing. The
 operator does not receive Owner, Editor, Compute Admin or Network Admin, and
-the bootstrap refuses to run if it already holds one of them.
+the bootstrap refuses direct grants of those roles on the project, any parent
+folder, or its organization, including conditional grants and grants to public
+principals. It reads complete policies rather than relying on filtered output.
+Group membership and permissions in other pre-existing custom roles require
+the administrator's effective-access audit; this preflight does not claim to
+resolve group membership or certify every existing grant.
 
-Once the resources exist, the provisioner's guarded creates are skipped. The
-owner `/provision-static-egress-canary <sha>` command then performs only
-describes and verification, so it becomes a WIF re-verification.
+The owner `/provision-static-egress-canary <sha>` command retains its spelling
+but invokes only the read-only verifier. Missing resources or denied reads stop
+it immediately; it has no create fallback. Only the human bootstrap invokes the
+provisioner, whose project, region, resource names and CIDR are fixed.
 
 ## Runbook
 
 1. Merge the bootstrap change. In an authorized Cloud Shell, as the existing
-   project owner, on a clean checkout of the new `main`:
+   project owner, on a clean checkout of the new `main`. Review the operator's
+   effective access, including group membership and existing custom roles,
+   first. Use the normal human shell: `GITHUB_ACTIONS=true` is refused so local
+   environment variables cannot select the CI source-guard shortcut.
 
    ```bash
    git checkout main && git pull --ff-only
@@ -94,11 +113,10 @@ describes and verification, so it becomes a WIF re-verification.
    Expect `STATIC_EGRESS_CANARY_READY=1`, `STATIC_EGRESS_IP=<reserved IPv4>` and
    `STATIC_EGRESS_BOOTSTRAP_COMPLETE`.
 2. Re-verify the infrastructure under WIF with an owner comment on a PR:
-   `/provision-static-egress-canary <current-main-sha>`. If this again reports
-   `compute.networks.create`, the operator's read grant is missing or has not
-   propagated yet. The describe failed with 403 and the provisioner fell through
-   to create. Check the `fixlistStaticEgressVerifier` binding. Do not grant
-   create rights.
+   `/provision-static-egress-canary <current-main-sha>`. A failed describe stops
+   verification. Check that the canary exists and the `fixlistStaticEgressVerifier`
+   binding has propagated. Do not grant create rights or retry provisioning
+   through CI.
 3. `/stage-static-egress-worker <current-main-sha>`. This passes when the status
    `fixlist/static-egress-candidate-stage` is `success`, the revision has 0% traffic,
    and the network, subnet and `all-traffic` annotations are present.
@@ -110,3 +128,13 @@ describes and verification, so it becomes a WIF re-verification.
    candidates, and no such path exists yet.
 
 Every command binds to the current `main` SHA. If `main` moves, use the new SHA.
+
+## Failure and rollback boundary
+
+A failed admin bootstrap can leave the read-only binding or some isolated
+canary resources in place. It does not automatically delete resources or undo
+IAM. Inspect partial state and rerun the exact-main bootstrap after resolving
+the failure, or have the authorized administrator remove only the canary
+resources and verifier binding after checking for attached workloads. Keep the
+candidate at 0%; ordinary promotion refuses static-egress/Direct-VPC revisions.
+No production worker, queue or admission rollback is needed for this bootstrap.

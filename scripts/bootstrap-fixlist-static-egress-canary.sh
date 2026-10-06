@@ -32,8 +32,18 @@ if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
   exit 2
 fi
 
+# This is a human bootstrap. Never accept the CI-only exact-source shortcut
+# from environment variables supplied by a local caller.
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  echo "Refusing: run the human bootstrap outside GitHub Actions." >&2
+  exit 2
+fi
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$REPO_ROOT/scripts/lib/release-source-guard.sh"
+# Refresh this exact tracking ref even in a single-branch or custom-refspec
+# checkout; fetching only FETCH_HEAD must not leave a stale origin/main guard.
+git -C "$REPO_ROOT" fetch origin refs/heads/main:refs/remotes/origin/main --quiet
 fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$SOURCE_SHA"
 
 if [[ "$CONFIRM" != "BOOTSTRAP-STATIC-EGRESS-CANARY:$SOURCE_SHA" ]]; then
@@ -45,17 +55,39 @@ say() { printf '\n==> %s\n' "$*"; }
 
 gcloud config set project "$PROJECT" >/dev/null
 
-say "Refuse if the operator already holds a broad role"
-for ROLE in roles/owner roles/editor roles/compute.admin roles/compute.networkAdmin; do
-  FOUND="$(gcloud projects get-iam-policy "$PROJECT" \
-    --flatten='bindings[].members' \
-    --filter="bindings.role=${ROLE} AND bindings.members=serviceAccount:${OPERATOR_SA}" \
-    --format='value(bindings.role)' | head -n 1)"
-  if [[ -n "$FOUND" ]]; then
-    echo "Refusing: operator holds prohibited broad role $ROLE; remove it before this bootstrap." >&2
-    exit 4
-  fi
-done
+say "Refuse broad operator grants on the project and its ancestors"
+python3 - "$PROJECT" "$OPERATOR_SA" <<'PY'
+import json, subprocess, sys
+project, operator = sys.argv[1:]
+prohibited = {"roles/owner", "roles/editor", "roles/compute.admin", "roles/compute.networkAdmin"}
+members = {"serviceAccount:" + operator, "allUsers", "allAuthenticatedUsers"}
+
+def read(*args):
+    try:
+        return json.loads(subprocess.check_output(["gcloud", *args, "--format=json"], text=True))
+    except (subprocess.CalledProcessError, ValueError) as error:
+        raise SystemExit("Refusing: cannot inspect IAM preflight: " + str(error))
+
+ancestors = read("projects", "get-ancestors", project)
+if not isinstance(ancestors, list) or sum(a.get("type") == "project" for a in ancestors) != 1:
+    raise SystemExit("Refusing: incomplete project ancestry")
+for ancestor in ancestors:
+    kind, identity = ancestor.get("type"), str(ancestor.get("id") or "")
+    if kind == "project" and identity in {project, "919035207432"}:
+        policy = read("projects", "get-iam-policy", project)
+    elif kind == "folder" and identity.isdigit():
+        policy = read("resource-manager", "folders", "get-iam-policy", identity)
+    elif kind == "organization" and identity.isdigit():
+        policy = read("organizations", "get-iam-policy", identity)
+    else:
+        raise SystemExit("Refusing: unexpected project ancestor")
+    if not isinstance(policy, dict) or not isinstance(policy.get("bindings", []), list):
+        raise SystemExit("Refusing: malformed IAM policy")
+    for binding in policy.get("bindings", []):
+        if binding.get("role") in prohibited and members.intersection(binding.get("members", [])):
+            print(f"Refusing: operator holds prohibited broad role {binding['role']} on {kind}/{identity}", file=sys.stderr)
+            raise SystemExit(4)
+PY
 
 say "Enable the Compute Engine API used by the canary network"
 gcloud services enable compute.googleapis.com --project="$PROJECT" --quiet
@@ -80,7 +112,8 @@ python3 - "$ROLE_JSON" "$VERIFIER_PERMISSIONS" <<'PY'
 import json, sys
 role = json.load(open(sys.argv[1], encoding="utf-8"))
 expected = sorted(sys.argv[2].split(","))
-if sorted(role.get("includedPermissions") or []) != expected or role.get("deleted"):
+if (sorted(role.get("includedPermissions") or []) != expected or role.get("deleted")
+        or role.get("stage") != "GA"):
     raise SystemExit("Refusing: static-egress verifier role is not exactly the read-only contract")
 PY
 

@@ -408,7 +408,7 @@ jobs:
       && github.event.issue.pull_request
       && github.event.comment.user.login == 'bright4862-design'
       && startsWith(github.event.comment.body, '/provision-static-egress-canary ')
-    name: Provision one-IP static egress canary
+    name: Re-verify one-IP static egress canary
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -455,12 +455,12 @@ jobs:
           bash -n scripts/verify-fixlist-static-egress-canary.sh
           bash -n scripts/verify-fixlist-static-egress-source-ip.sh
 
-      - name: Provision exact one-IP egress canary
-        env:
-          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
-          CONFIRM: STATIC-EGRESS-CANARY:${{ steps.command.outputs.source_sha }}
+      # The owner command is retained for compatibility. WIF only verifies
+      # infrastructure already provisioned by the authorized human bootstrap.
+      # Missing resources or failed reads must never enter a create path.
+      - name: Read-only verification of exact one-IP egress canary
         shell: bash
-        run: bash scripts/provision-fixlist-static-egress-canary.sh
+        run: bash scripts/verify-fixlist-static-egress-canary.sh
 
   stage-static-egress-worker-on-owner-comment:
     if: >-

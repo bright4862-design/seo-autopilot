@@ -12,8 +12,24 @@ ROUTER="${FIXLIST_EGRESS_ROUTER:-fixlist-scanner-egress-router}"
 NAT="${FIXLIST_EGRESS_NAT:-fixlist-scanner-egress-nat-a}"
 ADDRESS="${FIXLIST_EGRESS_ADDRESS:-fixlist-scanner-egress-ip-a}"
 
+if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "Refusing: SOURCE_SHA must be the exact 40-character current main SHA." >&2
+  exit 2
+fi
+
+if [[ "$PROJECT" != "seo-autopilot-501517" || "$REGION" != "europe-west1" \
+  || "$NETWORK" != "fixlist-scanner-egress" || "$SUBNET" != "fixlist-scanner-egress-euw1" \
+  || "$SUBNET_CIDR" != "10.210.0.0/24" || "$ROUTER" != "fixlist-scanner-egress-router" \
+  || "$NAT" != "fixlist-scanner-egress-nat-a" || "$ADDRESS" != "fixlist-scanner-egress-ip-a" ]]; then
+  echo "Refusing: provisioning is restricted to the fixed Standard 150 static-egress canary." >&2
+  exit 2
+fi
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$REPO_ROOT/scripts/lib/release-source-guard.sh"
+if [[ "${GITHUB_ACTIONS:-}" != "true" ]]; then
+  git -C "$REPO_ROOT" fetch origin refs/heads/main:refs/remotes/origin/main --quiet
+fi
 fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$SOURCE_SHA"
 
 if [[ "$CONFIRM" != "STATIC-EGRESS-CANARY:$SOURCE_SHA" ]]; then

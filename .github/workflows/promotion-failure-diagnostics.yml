@@ -1,0 +1,89 @@
+name: Promotion Failure Diagnostics
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  actions: read
+  statuses: write
+
+jobs:
+  diagnose:
+    if: >-
+      github.event.issue.pull_request
+      && github.event.comment.user.login == 'bright4862-design'
+      && startsWith(github.event.comment.body, '/diagnose-promotion ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Resolve exact target SHA
+        id: target
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          target_sha="${COMMENT_BODY#/diagnose-promotion }"
+          if ! printf '%s' "$target_sha" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo 'Expected /diagnose-promotion followed by one exact 40-character SHA.' >&2
+            exit 2
+          fi
+          echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Find failed promotion gate
+        id: diagnose
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=''
+          run_ids="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/workflows/fixlist-cloud-operator.yml/runs?event=issue_comment&per_page=100" --jq ".workflow_runs[] | select(.head_sha == \"$TARGET_SHA\") | .id")"
+          for run_id in $run_ids; do
+            job_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100")"
+            job_id="$(jq -r '.jobs[] | select(.name == "Verify and promote exact staged worker" and .conclusion == "failure") | .id' <<<"$job_json" | head -1)"
+            [ -n "$job_id" ] || continue
+            failed_step="$(jq -r --argjson job "$job_id" '.jobs[] | select(.id == $job) | .steps[] | select(.conclusion == "failure") | .name' <<<"$job_json" | head -1)"
+            [ -n "$failed_step" ] || failed_step='unknown'
+            case "$failed_step" in
+              'Checkout exact default-branch SHA bound to the comment event') gate='checkout' ;;
+              'Validate exact owner command and resolve product SHA') gate='command' ;;
+              'Authenticate to Google Cloud') gate='auth' ;;
+              'Set up gcloud') gate='gcloud' ;;
+              'Discover exact zero-traffic candidate and rollback revision') gate='candidate' ;;
+              'Verify candidate build provenance and durable worker routes') gate='routes' ;;
+              'Verify matching Base44 product release is public') gate='base44' ;;
+              'Promote exact candidate with automatic rollback on failed post-check') gate='promote' ;;
+              *) gate='unknown' ;;
+            esac
+            echo "gate=$gate" >> "$GITHUB_OUTPUT"
+            echo "step=$failed_step" >> "$GITHUB_OUTPUT"
+            echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+            found=1
+            break
+          done
+          if [ -z "$found" ]; then
+            echo "No failed promotion job found for $TARGET_SHA." >&2
+            exit 1
+          fi
+
+      - name: Publish diagnostic status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+          GATE: ${{ steps.diagnose.outputs.gate }}
+          STEP: ${{ steps.diagnose.outputs.step }}
+          RUN_ID: ${{ steps.diagnose.outputs.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          description="Promotion failed at ${GATE}: ${STEP}"
+          description="${description:0:140}"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${TARGET_SHA}" \
+            -f state=failure \
+            -f context="fixlist/worker-promotion-failed/${GATE}" \
+            -f description="$description" \
+            -f target_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}"

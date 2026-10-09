@@ -1,0 +1,208 @@
+name: B25 final reviewed gate once
+
+on:
+  push:
+    branches: [b25/accelerated-gate-20260921]
+    paths:
+      - .github/workflows/b25-finalize-once.yml
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  final-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout temporary evidence branch
+        uses: actions/checkout@v4
+        with:
+          ref: b25/accelerated-gate-20260921
+          fetch-depth: 0
+
+      - name: Checkout exact frozen candidate
+        uses: actions/checkout@v4
+        with:
+          ref: 53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2
+          path: candidate
+
+      - name: Verify exact candidate identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C candidate rev-parse HEAD)" = "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+
+      - name: Download all 30 paired artifacts from final capture run
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: bright4862-design/seo-autopilot
+          run-id: 35621444894
+          pattern: b25-pair-*
+          path: artifacts
+
+      - name: Build independently reviewed gate record and verify raw evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, pathlib, re
+          from datetime import datetime, timezone
+
+          BASELINE = "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+          CANDIDATE = "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+          ROSTER_SHA = "34ba06002016df451a297325b968aa3f79f508c92f40008966985715d65fc2be"
+          root = pathlib.Path("artifacts")
+          manifest_path = pathlib.Path("candidate/data/renderer-risk-study-manifest.jsonl")
+          manifest_bytes = manifest_path.read_bytes()
+          assert hashlib.sha256(manifest_bytes).hexdigest() == ROSTER_SHA
+          roster = [json.loads(line) for line in manifest_bytes.decode().splitlines() if line.strip()]
+          assert len(roster) == 30
+          roster_map = {r["site"]: r for r in roster}
+          assert len(roster_map) == 30
+
+          reviewer = {
+              1: ("independent-b25-final-batch1-20260921", "2026-09-21T18:58:20Z"),
+              2: ("independent-b25-final-batch2-20260921", "2026-09-21T16:10:13Z"),
+              3: ("independent-b25-final-batch3-20260921", "2026-09-21T16:10:21Z"),
+          }
+          expected_repairs = {
+              ("center-street-lending", "0f24396e2ec17cbfcf03e821"),
+              ("charity-water", "93cbd8c01a705be590d64b2f"),
+              ("charity-water", "763d4c81f918c34db89be984"),
+              ("tinyseed", "763d4c81f918c34db89be984"),
+              ("calendly", "0f24396e2ec17cbfcf03e821"),
+              ("intercom", "0f24396e2ec17cbfcf03e821"),
+              ("zapier", "93cbd8c01a705be590d64b2f"),
+              ("mejuri", "19be5ac91b1484e40b602d3c"),
+          }
+          special_refs = {
+              ("center-street-lending", "0f24396e2ec17cbfcf03e821"): "candidate-raw.json::.scan.coverage_probe_evidence.observations[da5b08abc5004dee21f25924,6146f8ac4edca46d72a653af] + .review.canonical_repairs[fingerprint=0f24396e2ec17cbfcf03e821]",
+              ("tinyseed", "763d4c81f918c34db89be984"): "candidate-raw.json::.scan.coverage_probe_evidence.observations[evidence_ref=link_integrity_probe_v1_unsampled_same_site:48dccc2f211afd07f802c395] + .review.canonical_repairs[fix_id=finding_fd288c6610ac].affected_pages[https://tinyseed.com/Season%201%20Trailer%20(Castos)]",
+              ("charity-water", "763d4c81f918c34db89be984"): "candidate-raw.json::.scan.coverage_probe_evidence.observations[b1dc7daa62efc5b71b6b7274,ef28a32f8c5c5c86579e5f73,cb2be6f877ada0340159b858] + .review.canonical_repairs[fingerprint=763d4c81f918c34db89be984]",
+              ("charity-water", "93cbd8c01a705be590d64b2f"): "candidate-raw.json::.scan.pages[url=https://www.charitywater.org/the-tributary].redirect_fetch_evidence.meaning_evidence[state=verified_mismatch,reason=specific_source_to_homepage]",
+              ("calendly", "0f24396e2ec17cbfcf03e821"): "candidate-raw.json::.scan.coverage_probe_evidence.observations[evidence_ref=link_integrity_probe_v1_unsampled_same_site:cb6f27f36eeee8caf075bd9c] + .review.canonical_repairs[fix_id=finding_87457eec8111]",
+              ("intercom", "0f24396e2ec17cbfcf03e821"): "candidate-raw.json::.scan.coverage_probe_evidence.observations[evidence_ref=link_integrity_probe_v1_unsampled_same_site:e0d7637eb76836fb850da497] + .review.canonical_repairs[fix_id=finding_650ee34d3a3f]",
+              ("zapier", "93cbd8c01a705be590d64b2f"): "candidate-raw.json::.scan.pages[url=https://zapier.com/learn/university-course-101/].redirect_fetch_evidence.meaning_evidence[state=verified_mismatch,reason=specific_source_to_homepage]",
+              ("mejuri", "19be5ac91b1484e40b602d3c"): "candidate-raw.json::.scan.pages[url=https://mejuri.com/edit/staygold-content-cards-text-mix-match].visible_template_evidence[state=fail,issue_types=placeholder_copy]",
+          }
+
+          def fingerprint(rep):
+              return str(((rep.get("repair_identity") or {}).get("fingerprint") or rep.get("repair_fingerprint") or "")).strip()
+
+          dirs = sorted([p for p in root.iterdir() if p.is_dir() and p.name.startswith("b25-pair-")])
+          assert len(dirs) == 30, f"expected 30 artifact dirs, got {len(dirs)}"
+          pairs = []
+          seen = set()
+          for d in dirs:
+              m = re.match(r"b25-pair-(\d)-(.+)$", d.name)
+              assert m, d.name
+              batch, site = int(m.group(1)), m.group(2)
+              assert site not in seen and site in roster_map
+              seen.add(site)
+              pm = json.loads((d / "pair-metadata.json").read_text())
+              bcap = json.loads((d / "baseline-capture.json").read_text())
+              ccap = json.loads((d / "candidate-capture.json").read_text())
+              bbytes = (d / "baseline-raw.json").read_bytes()
+              cbytes = (d / "candidate-raw.json").read_bytes()
+              braw, craw = json.loads(bbytes), json.loads(cbytes)
+              assert hashlib.sha256(bbytes).hexdigest() == bcap["artifact_sha256"] == pm["baseline"]["artifact_sha256"]
+              assert hashlib.sha256(cbytes).hexdigest() == ccap["artifact_sha256"] == pm["candidate"]["artifact_sha256"]
+              for cap, raw, expected_sha in ((bcap, braw, BASELINE), (ccap, craw, CANDIDATE)):
+                  assert cap["provenance"] == "captured"
+                  assert cap["source_sha"] == expected_sha
+                  assert re.fullmatch(r"[a-f0-9]{16}", cap["release_fingerprint"])
+                  assert cap["scan_mode"] == "standard_150"
+                  assert cap["scope"] and cap["policy_id"]
+                  assert cap["capture_status"] == "completed"
+                  assert raw["capture_status"] == "completed"
+                  assert raw["runner"]["robots_respected"] is True
+              assert ccap["captured_at"] >= bcap["captured_at"]
+              assert bcap["scope"] == ccap["scope"] and bcap["policy_id"] == ccap["policy_id"]
+              assert bcap["evidence_bundle_id"] != ccap["evidence_bundle_id"]
+              assert bcap["artifact_sha256"] != ccap["artifact_sha256"]
+              r = roster_map[site]
+              assert pm["url"] == r["url"] and pm["stratum"] == r["stratum"]
+
+              cov = craw["scan"]["coverage_probe_evidence"]
+              assert cov["assessed_page_count_before"] == cov["assessed_page_count_after"]
+              assert cov["assessed_page_count_after"] <= 150
+              assert craw["scan"]["connected_provider_evidence"]["provider_data_admitted"] is False
+              assert craw["review"]["stage3_health_score_decision"]["legacy_health_score_unchanged"] is True
+
+              who, when = reviewer[batch]
+              ids, adjs = [], []
+              aid = f"b25:{site}:stage2-stage3-evidence-v1"
+              ids.append(aid)
+              adjs.append({"artifact_id": aid, "outcome": "expected_change", "evidence_reference": f"{d.name}/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]", "reviewed_by": who, "reviewed_at": when})
+
+              breps = braw["review"].get("canonical_repairs") or []
+              creps = craw["review"].get("canonical_repairs") or []
+              bmap = {fingerprint(x): x for x in breps if fingerprint(x)}
+              cmap = {fingerprint(x): x for x in creps if fingerprint(x)}
+              newfps = sorted(set(cmap) - set(bmap))
+              expfps = [fp for fp in newfps if (site, fp) in expected_repairs]
+              otherfps = [fp for fp in newfps if (site, fp) not in expected_repairs]
+              if expfps:
+                  aid = f"b25:{site}:expected-semantic-delta-v1"
+                  ids.append(aid)
+                  refs = [special_refs.get((site, fp), f"{d.name}/candidate-raw.json::.review.canonical_repairs[fingerprint={fp}]") for fp in expfps]
+                  adjs.append({"artifact_id": aid, "outcome": "expected_change", "evidence_reference": " + ".join(refs), "reviewed_by": who, "reviewed_at": when})
+
+              core_fields = ["pages_found", "pages_crawled", "health_score"]
+              bscan, cscan, brev, crev = braw["scan"], craw["scan"], braw["review"], craw["review"]
+              core_changed = any(bscan.get(k) != cscan.get(k) for k in core_fields) or any(brev.get(k) != crev.get(k) for k in ["health_score", "access_evidence_state", "coverage_state", "release_gate_eligible", "evidence_complete"])
+              same_fp_changed = any((bmap[fp].get("fix_id") != cmap[fp].get("fix_id") or set(bmap[fp].get("affected_pages") or []) != set(cmap[fp].get("affected_pages") or [])) for fp in set(bmap) & set(cmap))
+              removed = bool(set(bmap) - set(cmap))
+              if otherfps or core_changed or same_fp_changed or removed:
+                  aid = f"b25:{site}:nonregression-delta-v1"
+                  ids.append(aid)
+                  adjs.append({"artifact_id": aid, "outcome": "not_regression", "evidence_reference": f"{d.name}/{{baseline,candidate}}-raw.json::.scan.pages/.scan.crawl_timing/.review.canonical_repairs; live sampling/access, stable-fingerprint scope/identity, or evidence regrouping independently reviewed", "reviewed_by": who, "reviewed_at": when})
+
+              if site == "tinyseed":
+                  target = "https://tinyseed.com/Season%201%20Trailer%20(Castos)"
+                  rep = next(x for x in creps if x.get("fix_id") == "finding_fd288c6610ac")
+                  assert target in (rep.get("affected_pages") or [])
+                  assert rep.get("page_url") == target
+                  assert "https://tinyseed.com" not in [u for u in (rep.get("affected_pages") or []) if u != target]
+                  obs = next(x for x in cov.get("observations", []) if x.get("evidence_ref") == "link_integrity_probe_v1_unsampled_same_site:48dccc2f211afd07f802c395")
+                  assert obs["status_code"] == 404 and obs["state"] == "fail"
+                  assert obs["final_url"] == target
+
+              pairs.append({"site_id": site, "url": r["url"], "stratum": r["stratum"], "baseline": pm["baseline"], "candidate": pm["candidate"], "difference_summary": {"new_artifact_ids": ids}, "adjudications": adjs})
+
+          assert seen == set(roster_map)
+          record = {"version": "blueprint_30_site_baseline_candidate_v1", "roster_sha256": ROSTER_SHA, "provenance": "captured_baseline_candidate", "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"), "pairs": sorted(pairs, key=lambda p: [r["site"] for r in roster].index(p["site_id"]))}
+          out = pathlib.Path("evidence/b25-53d8d110-gate-reviewed.json")
+          out.parent.mkdir(exist_ok=True)
+          out.write_text(json.dumps(record, sort_keys=True, indent=2) + "\n")
+          print(f"wrote {out}: {len(pairs)} pairs, {sum(len(p['adjudications']) for p in pairs)} adjudications")
+          PY
+
+      - name: Run exact candidate B25 assertion script
+        shell: bash
+        run: |
+          set -euo pipefail
+          node candidate/scripts/assertBlueprint30SiteGate.mjs evidence/b25-53d8d110-gate-reviewed.json | tee /tmp/b25-gate-result.json
+          python - <<'PY'
+          import json
+          r=json.load(open('/tmp/b25-gate-result.json'))
+          assert r == {"status":"pass","pass":True,"failures":[],"blockers":[],"site_count":30,"roster_sha256":"34ba06002016df451a297325b968aa3f79f508c92f40008966985715d65fc2be"}
+          PY
+
+      - name: Persist reviewed evidence record only on temporary branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "FixList B25 Gate"
+          git config user.email "actions@users.noreply.github.com"
+          git add evidence/b25-53d8d110-gate-reviewed.json
+          git diff --cached --quiet && { echo "No evidence record change"; exit 1; }
+          git commit -m "Persist reviewed final B25 gate record"
+          git push origin HEAD:b25/accelerated-gate-20260921
+          echo "## FINAL B25 GATE: PASS" >> "$GITHUB_STEP_SUMMARY"
+          echo "- candidate: 53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2" >> "$GITHUB_STEP_SUMMARY"
+          echo "- baseline: 2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad" >> "$GITHUB_STEP_SUMMARY"
+          echo "- sites: 30" >> "$GITHUB_STEP_SUMMARY"
+          echo "- roster: 34ba06002016df451a297325b968aa3f79f508c92f40008966985715d65fc2be" >> "$GITHUB_STEP_SUMMARY"

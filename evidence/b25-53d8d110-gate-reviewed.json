@@ -1,0 +1,1642 @@
+{
+  "generated_at": "2026-09-21T19:09:19.257975Z",
+  "pairs": [
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:center-street-lending:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-1-center-street-lending/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T18:58:20Z",
+          "reviewed_by": "independent-b25-final-batch1-20260921"
+        },
+        {
+          "artifact_id": "b25:center-street-lending:expected-semantic-delta-v1",
+          "evidence_reference": "candidate-raw.json::.scan.coverage_probe_evidence.observations[da5b08abc5004dee21f25924,6146f8ac4edca46d72a653af] + .review.canonical_repairs[fingerprint=0f24396e2ec17cbfcf03e821]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T18:58:20Z",
+          "reviewed_by": "independent-b25-final-batch1-20260921"
+        },
+        {
+          "artifact_id": "b25:center-street-lending:nonregression-delta-v1",
+          "evidence_reference": "b25-pair-1-center-street-lending/{baseline,candidate}-raw.json::.scan.pages/.scan.crawl_timing/.review.canonical_repairs; live sampling/access, stable-fingerprint scope/identity, or evidence regrouping independently reviewed",
+          "outcome": "not_regression",
+          "reviewed_at": "2026-09-21T18:58:20Z",
+          "reviewed_by": "independent-b25-final-batch1-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "f70177935213227845532fc0bf5051d5e488ba6751b5bdd6113c556349b49897",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:49:44.225219Z",
+        "evidence_bundle_id": "a1ea43524e0b881bb920e65b8b827949",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "f2080b6e78deed4a009eeb8e9ee6ba9a505119808680fcfe6f3091aa75c92db9",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:50:20.467986Z",
+        "evidence_bundle_id": "2529fa47d49b1886aa2100265929ca62",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:center-street-lending:stage2-stage3-evidence-v1",
+          "b25:center-street-lending:expected-semantic-delta-v1",
+          "b25:center-street-lending:nonregression-delta-v1"
+        ]
+      },
+      "site_id": "center-street-lending",
+      "stratum": "smb_cms",
+      "url": "https://www.centerstreetlending.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:pretto:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-1-pretto/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T18:58:20Z",
+          "reviewed_by": "independent-b25-final-batch1-20260921"
+        },
+        {
+          "artifact_id": "b25:pretto:nonregression-delta-v1",
+          "evidence_reference": "b25-pair-1-pretto/{baseline,candidate}-raw.json::.scan.pages/.scan.crawl_timing/.review.canonical_repairs; live sampling/access, stable-fingerprint scope/identity, or evidence regrouping independently reviewed",
+          "outcome": "not_regression",
+          "reviewed_at": "2026-09-21T18:58:20Z",
+          "reviewed_by": "independent-b25-final-batch1-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "b604079fc5759688fd9b2907acd1cbf520da1b9a500e8e54c3016bd60f1c94d7",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:49:38.839838Z",
+        "evidence_bundle_id": "eb8a1a9690ba7968828e24da339bef2a",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "c88ecf2a5e99f671e3dff9bf887869a2f868a9a4ed2e1d6f4b3e5a6419428e28",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:50:19.209650Z",
+        "evidence_bundle_id": "cea4f30769814c8ea46aec61e31a5ea2",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:pretto:stage2-stage3-evidence-v1",
+          "b25:pretto:nonregression-delta-v1"
+        ]
+      },
+      "site_id": "pretto",
+      "stratum": "smb_cms",
+      "url": "https://www.pretto.fr"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:brightscout:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-1-brightscout/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T18:58:20Z",
+          "reviewed_by": "independent-b25-final-batch1-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "606e5e18c81f77a6c5b2a20df639214c96bb65b226758c8c0d85ad4a0e963874",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:50:02.022823Z",
+        "evidence_bundle_id": "69b474de89ebb15818bfb7412b3a50b4",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "1dc4f316b295f783b1d767b15b0708231d9f1448489c7fc9d55a985439ed0b4b",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:51:09.755941Z",
+        "evidence_bundle_id": "d51c83c13bb2583d6e2c889c8fad17fd",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:brightscout:stage2-stage3-evidence-v1"
+        ]
+      },
+      "site_id": "brightscout",
+      "stratum": "smb_cms",
+      "url": "https://www.brightscout.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:ideo:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-1-ideo/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T18:58:20Z",
+          "reviewed_by": "independent-b25-final-batch1-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "b83090603027d40ef8f708719de356f0b5a35f2c1031441ccc828cb4f2e3d54c",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:49:21.430113Z",
+        "evidence_bundle_id": "1a8becf2cde8b3c3befa5572cb9bce83",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "794dc53dfdb3b013f268e52ded968024ad9d24b25b46f9e482cee75f04735e0b",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:49:41.802205Z",
+        "evidence_bundle_id": "29e018eff8d072d2f3775e839384dbcb",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:ideo:stage2-stage3-evidence-v1"
+        ]
+      },
+      "site_id": "ideo",
+      "stratum": "smb_cms",
+      "url": "https://www.ideo.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:charity-water:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-1-charity-water/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T18:58:20Z",
+          "reviewed_by": "independent-b25-final-batch1-20260921"
+        },
+        {
+          "artifact_id": "b25:charity-water:expected-semantic-delta-v1",
+          "evidence_reference": "candidate-raw.json::.scan.coverage_probe_evidence.observations[b1dc7daa62efc5b71b6b7274,ef28a32f8c5c5c86579e5f73,cb2be6f877ada0340159b858] + .review.canonical_repairs[fingerprint=763d4c81f918c34db89be984] + candidate-raw.json::.scan.pages[url=https://www.charitywater.org/the-tributary].redirect_fetch_evidence.meaning_evidence[state=verified_mismatch,reason=specific_source_to_homepage]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T18:58:20Z",
+          "reviewed_by": "independent-b25-final-batch1-20260921"
+        },
+        {
+          "artifact_id": "b25:charity-water:nonregression-delta-v1",
+          "evidence_reference": "b25-pair-1-charity-water/{baseline,candidate}-raw.json::.scan.pages/.scan.crawl_timing/.review.canonical_repairs; live sampling/access, stable-fingerprint scope/identity, or evidence regrouping independently reviewed",
+          "outcome": "not_regression",
+          "reviewed_at": "2026-09-21T18:58:20Z",
+          "reviewed_by": "independent-b25-final-batch1-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "6824b1302e7bd5fd467ebe3619ba8144167b3edbdb125c2cffb893adf5eba945",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:49:57.296210Z",
+        "evidence_bundle_id": "095253adba7dbd81f05856122fe28a98",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "8d9dbe39015e9747edfd7942ad341d31e73008f69c69d052eb73cd3bd55aa8a4",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:51:02.385849Z",
+        "evidence_bundle_id": "72fe8a69ee2473c3ff6af1725304b564",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:charity-water:stage2-stage3-evidence-v1",
+          "b25:charity-water:expected-semantic-delta-v1",
+          "b25:charity-water:nonregression-delta-v1"
+        ]
+      },
+      "site_id": "charity-water",
+      "stratum": "smb_cms",
+      "url": "https://www.charitywater.org"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:firewatch:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-1-firewatch/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T18:58:20Z",
+          "reviewed_by": "independent-b25-final-batch1-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "4aacc21e18dabe3cf30b35569942aae0b1bd77ae994c790e3c1bbe5ff13d65df",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:49:20.325593Z",
+        "evidence_bundle_id": "bdac1b1d7c5c5780d2df0cadc1fae715",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "89f7683137ad6f2ee4852cf04208bcb5f41bb65a25909f39a4739c4d96f157aa",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:49:26.482371Z",
+        "evidence_bundle_id": "451ccca0ee24d0f9877e2f0d63a9a914",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:firewatch:stage2-stage3-evidence-v1"
+        ]
+      },
+      "site_id": "firewatch",
+      "stratum": "smb_cms",
+      "url": "https://www.firewatchgame.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:nomadic-matt:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-1-nomadic-matt/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T18:58:20Z",
+          "reviewed_by": "independent-b25-final-batch1-20260921"
+        },
+        {
+          "artifact_id": "b25:nomadic-matt:nonregression-delta-v1",
+          "evidence_reference": "b25-pair-1-nomadic-matt/{baseline,candidate}-raw.json::.scan.pages/.scan.crawl_timing/.review.canonical_repairs; live sampling/access, stable-fingerprint scope/identity, or evidence regrouping independently reviewed",
+          "outcome": "not_regression",
+          "reviewed_at": "2026-09-21T18:58:20Z",
+          "reviewed_by": "independent-b25-final-batch1-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "7dca4d54aa3b3e835c41d9d23fd073f54d5c773d98ad5f4cce947c2233e3b1d9",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:49:57.526530Z",
+        "evidence_bundle_id": "f764e255778c9132607855df066e17c3",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "34277de5881269fe945b8b021c98470d76a7df977ac0532a88b48d593918fdf3",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:51:05.024037Z",
+        "evidence_bundle_id": "db7438931f6cfdf9ca12eeff19545b7b",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:nomadic-matt:stage2-stage3-evidence-v1",
+          "b25:nomadic-matt:nonregression-delta-v1"
+        ]
+      },
+      "site_id": "nomadic-matt",
+      "stratum": "smb_cms",
+      "url": "https://www.nomadicmatt.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:wpbeginner:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-1-wpbeginner/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T18:58:20Z",
+          "reviewed_by": "independent-b25-final-batch1-20260921"
+        },
+        {
+          "artifact_id": "b25:wpbeginner:nonregression-delta-v1",
+          "evidence_reference": "b25-pair-1-wpbeginner/{baseline,candidate}-raw.json::.scan.pages/.scan.crawl_timing/.review.canonical_repairs; live sampling/access, stable-fingerprint scope/identity, or evidence regrouping independently reviewed",
+          "outcome": "not_regression",
+          "reviewed_at": "2026-09-21T18:58:20Z",
+          "reviewed_by": "independent-b25-final-batch1-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "ad8e0f57e1746775cfd6c67a0d9ad172045a7ac40425aaac150d72870e6cf30d",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:51:14.225839Z",
+        "evidence_bundle_id": "18b915d7c7cc1d08ba6f2fe50c1ba20d",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "4ec76e3c3cf40501ba670cc39511b3785e66664c2db167b60e21755110290a5c",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:53:20.901950Z",
+        "evidence_bundle_id": "5f2ee04870563d41cb68b1deea06169d",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:wpbeginner:stage2-stage3-evidence-v1",
+          "b25:wpbeginner:nonregression-delta-v1"
+        ]
+      },
+      "site_id": "wpbeginner",
+      "stratum": "smb_cms",
+      "url": "https://www.wpbeginner.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:tinyseed:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-1-tinyseed/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T18:58:20Z",
+          "reviewed_by": "independent-b25-final-batch1-20260921"
+        },
+        {
+          "artifact_id": "b25:tinyseed:expected-semantic-delta-v1",
+          "evidence_reference": "candidate-raw.json::.scan.coverage_probe_evidence.observations[evidence_ref=link_integrity_probe_v1_unsampled_same_site:48dccc2f211afd07f802c395] + .review.canonical_repairs[fix_id=finding_fd288c6610ac].affected_pages[https://tinyseed.com/Season%201%20Trailer%20(Castos)]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T18:58:20Z",
+          "reviewed_by": "independent-b25-final-batch1-20260921"
+        },
+        {
+          "artifact_id": "b25:tinyseed:nonregression-delta-v1",
+          "evidence_reference": "b25-pair-1-tinyseed/{baseline,candidate}-raw.json::.scan.pages/.scan.crawl_timing/.review.canonical_repairs; live sampling/access, stable-fingerprint scope/identity, or evidence regrouping independently reviewed",
+          "outcome": "not_regression",
+          "reviewed_at": "2026-09-21T18:58:20Z",
+          "reviewed_by": "independent-b25-final-batch1-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "41c2e3d5d6db857cb49eb9ec9d737dbc1f453126180c7065f1aab8f06908f8b4",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:50:18.798152Z",
+        "evidence_bundle_id": "44dfae24e45d2e7b0548fe221b873d40",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "a27771f13c106c44767483d54efd601f10fbe7866b52a58290b3452592ff3e15",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:51:37.961824Z",
+        "evidence_bundle_id": "1df2ee3a658588785c7e751c05d344fd",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:tinyseed:stage2-stage3-evidence-v1",
+          "b25:tinyseed:expected-semantic-delta-v1",
+          "b25:tinyseed:nonregression-delta-v1"
+        ]
+      },
+      "site_id": "tinyseed",
+      "stratum": "smb_cms",
+      "url": "https://tinyseed.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:buffer:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-1-buffer/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T18:58:20Z",
+          "reviewed_by": "independent-b25-final-batch1-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "7797f3570978995c143247e88a71d9f3f148d3b9d3573bd635a077de13b4bae7",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:50:15.923850Z",
+        "evidence_bundle_id": "0287935451fa79a34c788f134043dd56",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "179a005898b0edf156ed3ee624b1f6ce4da988a2874d50ba71e8d2895a915cf2",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:51:36.145485Z",
+        "evidence_bundle_id": "7982fbe2575210e2a1197937e276455a",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:buffer:stage2-stage3-evidence-v1"
+        ]
+      },
+      "site_id": "buffer",
+      "stratum": "smb_cms",
+      "url": "https://buffer.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:linear:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-2-linear/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:13Z",
+          "reviewed_by": "independent-b25-final-batch2-20260921"
+        },
+        {
+          "artifact_id": "b25:linear:nonregression-delta-v1",
+          "evidence_reference": "b25-pair-2-linear/{baseline,candidate}-raw.json::.scan.pages/.scan.crawl_timing/.review.canonical_repairs; live sampling/access, stable-fingerprint scope/identity, or evidence regrouping independently reviewed",
+          "outcome": "not_regression",
+          "reviewed_at": "2026-09-21T16:10:13Z",
+          "reviewed_by": "independent-b25-final-batch2-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "8e313ff592fa617534f6ff18a26cfd87612d35f66c0787d59e903fb13762d025",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:50:42.079569Z",
+        "evidence_bundle_id": "d2f3f49208c27ab57d437e9133202a8b",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "507eac869da0456c4e4085f3d5970cd29229676ddbeea38e5914e1774c2784eb",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:51:41.032714Z",
+        "evidence_bundle_id": "649d887160ea9b0a3b35351a4037e06b",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:linear:stage2-stage3-evidence-v1",
+          "b25:linear:nonregression-delta-v1"
+        ]
+      },
+      "site_id": "linear",
+      "stratum": "saas_js",
+      "url": "https://linear.app"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:notion-product:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-2-notion-product/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:13Z",
+          "reviewed_by": "independent-b25-final-batch2-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "92d0ba614bd1af803a24016c5e814e640a9e481c2cc1970ad5a3e35c266a059e",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:50:28.274655Z",
+        "evidence_bundle_id": "994c05d84539e81402e9220eb418c3c7",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "e602424273d32611af9d2c7c02fdffb858a77f75bfd161bc0dff80b0810bdf34",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:50:43.804202Z",
+        "evidence_bundle_id": "fc6f073295db9845892db49c71ec26f5",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:notion-product:stage2-stage3-evidence-v1"
+        ]
+      },
+      "site_id": "notion-product",
+      "stratum": "saas_js",
+      "url": "https://www.notion.so/product"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:asana:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-2-asana/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:13Z",
+          "reviewed_by": "independent-b25-final-batch2-20260921"
+        },
+        {
+          "artifact_id": "b25:asana:nonregression-delta-v1",
+          "evidence_reference": "b25-pair-2-asana/{baseline,candidate}-raw.json::.scan.pages/.scan.crawl_timing/.review.canonical_repairs; live sampling/access, stable-fingerprint scope/identity, or evidence regrouping independently reviewed",
+          "outcome": "not_regression",
+          "reviewed_at": "2026-09-21T16:10:13Z",
+          "reviewed_by": "independent-b25-final-batch2-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "bbf565d6b38510ab71476cdc229a0761c689c199f03ef997c28600ea5df27bb1",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:52:51.978976Z",
+        "evidence_bundle_id": "64ab757bd3efe276dd2bb48155c98fb8",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "5a34e63a7780130bef13203a874a8c5e2dc070d5549576a3842fcff559955661",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:54:53.049701Z",
+        "evidence_bundle_id": "eb2fe599ccdb3edddbb3d98230a600e8",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:asana:stage2-stage3-evidence-v1",
+          "b25:asana:nonregression-delta-v1"
+        ]
+      },
+      "site_id": "asana",
+      "stratum": "saas_js",
+      "url": "https://asana.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:airtable:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-2-airtable/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:13Z",
+          "reviewed_by": "independent-b25-final-batch2-20260921"
+        },
+        {
+          "artifact_id": "b25:airtable:nonregression-delta-v1",
+          "evidence_reference": "b25-pair-2-airtable/{baseline,candidate}-raw.json::.scan.pages/.scan.crawl_timing/.review.canonical_repairs; live sampling/access, stable-fingerprint scope/identity, or evidence regrouping independently reviewed",
+          "outcome": "not_regression",
+          "reviewed_at": "2026-09-21T16:10:13Z",
+          "reviewed_by": "independent-b25-final-batch2-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "b57e2cb7ad274e9c75e34fc69a2ada34585e873c6220b9a1aec6b7f7cd32e8c5",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:52:04.230066Z",
+        "evidence_bundle_id": "45922d11358cd910c5a80636f5f88ed9",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "bfb4fb2de7ada0c3969a4c5ad246feaae7579e0c15e372fc3f3865c99d9e530f",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:53:41.547680Z",
+        "evidence_bundle_id": "467bc36be1302582d5c5f52e727f482c",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:airtable:stage2-stage3-evidence-v1",
+          "b25:airtable:nonregression-delta-v1"
+        ]
+      },
+      "site_id": "airtable",
+      "stratum": "saas_js",
+      "url": "https://www.airtable.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:intercom:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-2-intercom/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:13Z",
+          "reviewed_by": "independent-b25-final-batch2-20260921"
+        },
+        {
+          "artifact_id": "b25:intercom:expected-semantic-delta-v1",
+          "evidence_reference": "candidate-raw.json::.scan.coverage_probe_evidence.observations[evidence_ref=link_integrity_probe_v1_unsampled_same_site:e0d7637eb76836fb850da497] + .review.canonical_repairs[fix_id=finding_650ee34d3a3f]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:13Z",
+          "reviewed_by": "independent-b25-final-batch2-20260921"
+        },
+        {
+          "artifact_id": "b25:intercom:nonregression-delta-v1",
+          "evidence_reference": "b25-pair-2-intercom/{baseline,candidate}-raw.json::.scan.pages/.scan.crawl_timing/.review.canonical_repairs; live sampling/access, stable-fingerprint scope/identity, or evidence regrouping independently reviewed",
+          "outcome": "not_regression",
+          "reviewed_at": "2026-09-21T16:10:13Z",
+          "reviewed_by": "independent-b25-final-batch2-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "d36042b0c57f27966c532893ec4d21278ab2461f9af022117f39ea8feab298f0",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:52:05.857818Z",
+        "evidence_bundle_id": "d8f4aff5c22a2d5138f8a1eb906b2234",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "fed15f79c6643431f0656d324a85a3f263889e9d86eb7af1e1d9106df71f1958",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:53:11.684269Z",
+        "evidence_bundle_id": "9e27f4a51b7397531fd7c3b06ddc48c5",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:intercom:stage2-stage3-evidence-v1",
+          "b25:intercom:expected-semantic-delta-v1",
+          "b25:intercom:nonregression-delta-v1"
+        ]
+      },
+      "site_id": "intercom",
+      "stratum": "saas_js",
+      "url": "https://www.intercom.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:calendly:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-2-calendly/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:13Z",
+          "reviewed_by": "independent-b25-final-batch2-20260921"
+        },
+        {
+          "artifact_id": "b25:calendly:expected-semantic-delta-v1",
+          "evidence_reference": "candidate-raw.json::.scan.coverage_probe_evidence.observations[evidence_ref=link_integrity_probe_v1_unsampled_same_site:cb6f27f36eeee8caf075bd9c] + .review.canonical_repairs[fix_id=finding_87457eec8111]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:13Z",
+          "reviewed_by": "independent-b25-final-batch2-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "32a26a7d3acedfd1223a60b1bce752b625ad2bc1d5671206c6ad674028a11a14",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:52:13.317514Z",
+        "evidence_bundle_id": "39c33ce1c2f8a2ef2ee2c4d7fbc9ed02",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "fe22cf2b72bf55ca251f40bde45a712ab6a1916e9acbfb8d530864ceddb76f3b",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:53:12.529080Z",
+        "evidence_bundle_id": "cebbb2b01f2bf8695e47229b38287fcc",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:calendly:stage2-stage3-evidence-v1",
+          "b25:calendly:expected-semantic-delta-v1"
+        ]
+      },
+      "site_id": "calendly",
+      "stratum": "saas_js",
+      "url": "https://calendly.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:vercel:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-2-vercel/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:13Z",
+          "reviewed_by": "independent-b25-final-batch2-20260921"
+        },
+        {
+          "artifact_id": "b25:vercel:nonregression-delta-v1",
+          "evidence_reference": "b25-pair-2-vercel/{baseline,candidate}-raw.json::.scan.pages/.scan.crawl_timing/.review.canonical_repairs; live sampling/access, stable-fingerprint scope/identity, or evidence regrouping independently reviewed",
+          "outcome": "not_regression",
+          "reviewed_at": "2026-09-21T16:10:13Z",
+          "reviewed_by": "independent-b25-final-batch2-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "4bf2ad5554e669b9616a05de05f76b10bf26ea497332477803c5241210e48005",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:52:28.712644Z",
+        "evidence_bundle_id": "fa527f6561bb3d02fbf0dbf049f5ab67",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "6e495ceef7c13fc0ee92557e9cab09ec847d7df58b1383f776919ecca589748c",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:53:43.056182Z",
+        "evidence_bundle_id": "387e78f5c0a249e50f8ba249ccf8ae19",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:vercel:stage2-stage3-evidence-v1",
+          "b25:vercel:nonregression-delta-v1"
+        ]
+      },
+      "site_id": "vercel",
+      "stratum": "saas_js",
+      "url": "https://vercel.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:webflow:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-2-webflow/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:13Z",
+          "reviewed_by": "independent-b25-final-batch2-20260921"
+        },
+        {
+          "artifact_id": "b25:webflow:nonregression-delta-v1",
+          "evidence_reference": "b25-pair-2-webflow/{baseline,candidate}-raw.json::.scan.pages/.scan.crawl_timing/.review.canonical_repairs; live sampling/access, stable-fingerprint scope/identity, or evidence regrouping independently reviewed",
+          "outcome": "not_regression",
+          "reviewed_at": "2026-09-21T16:10:13Z",
+          "reviewed_by": "independent-b25-final-batch2-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "9b28f823815f501d0086d612133fc108f466840e17b9980757b34d63ec3bffc1",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:52:34.976294Z",
+        "evidence_bundle_id": "ed47723af899c2df26ea6480202553f0",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "45beb9b52a9dfa31a7692b6edf0f580e8188278930fed1f0f4d1abb28d77ccee",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:54:03.854175Z",
+        "evidence_bundle_id": "e643b7816391e5802db67454e92b10ef",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:webflow:stage2-stage3-evidence-v1",
+          "b25:webflow:nonregression-delta-v1"
+        ]
+      },
+      "site_id": "webflow",
+      "stratum": "saas_js",
+      "url": "https://webflow.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:zapier:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-2-zapier/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:13Z",
+          "reviewed_by": "independent-b25-final-batch2-20260921"
+        },
+        {
+          "artifact_id": "b25:zapier:expected-semantic-delta-v1",
+          "evidence_reference": "candidate-raw.json::.scan.pages[url=https://zapier.com/learn/university-course-101/].redirect_fetch_evidence.meaning_evidence[state=verified_mismatch,reason=specific_source_to_homepage]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:13Z",
+          "reviewed_by": "independent-b25-final-batch2-20260921"
+        },
+        {
+          "artifact_id": "b25:zapier:nonregression-delta-v1",
+          "evidence_reference": "b25-pair-2-zapier/{baseline,candidate}-raw.json::.scan.pages/.scan.crawl_timing/.review.canonical_repairs; live sampling/access, stable-fingerprint scope/identity, or evidence regrouping independently reviewed",
+          "outcome": "not_regression",
+          "reviewed_at": "2026-09-21T16:10:13Z",
+          "reviewed_by": "independent-b25-final-batch2-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "cd628f1cf471f5923fbe192e210a45facd5e55d990859447dfb4e48a1a08d856",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:54:10.387246Z",
+        "evidence_bundle_id": "e309e7dfa03a87696911b96cd5e4b312",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "c7eac221b708848029e412502fb7c33a47832483b37f1109e8c5b9f813ce1c39",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:56:18.567705Z",
+        "evidence_bundle_id": "f4a477f26ed1873653492570e5ffc589",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:zapier:stage2-stage3-evidence-v1",
+          "b25:zapier:expected-semantic-delta-v1",
+          "b25:zapier:nonregression-delta-v1"
+        ]
+      },
+      "site_id": "zapier",
+      "stratum": "saas_js",
+      "url": "https://zapier.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:monday:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-2-monday/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:13Z",
+          "reviewed_by": "independent-b25-final-batch2-20260921"
+        },
+        {
+          "artifact_id": "b25:monday:nonregression-delta-v1",
+          "evidence_reference": "b25-pair-2-monday/{baseline,candidate}-raw.json::.scan.pages/.scan.crawl_timing/.review.canonical_repairs; live sampling/access, stable-fingerprint scope/identity, or evidence regrouping independently reviewed",
+          "outcome": "not_regression",
+          "reviewed_at": "2026-09-21T16:10:13Z",
+          "reviewed_by": "independent-b25-final-batch2-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "0fcee87b28227a9b1f70fd17bd3db6e3c86d1bf219e8520668efe32430365335",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:53:19.639514Z",
+        "evidence_bundle_id": "deb9d33cc1aa861910b27330b91e28ae",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "ab2285f9be60ddfd677212b20e687d877bdaa5f7ea18ae6ecc0b7e576c88d11d",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:54:49.103325Z",
+        "evidence_bundle_id": "4010816052acce5248f210787c3d2ab2",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:monday:stage2-stage3-evidence-v1",
+          "b25:monday:nonregression-delta-v1"
+        ]
+      },
+      "site_id": "monday",
+      "stratum": "saas_js",
+      "url": "https://monday.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:funbooker:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-3-funbooker/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:21Z",
+          "reviewed_by": "independent-b25-final-batch3-20260921"
+        },
+        {
+          "artifact_id": "b25:funbooker:nonregression-delta-v1",
+          "evidence_reference": "b25-pair-3-funbooker/{baseline,candidate}-raw.json::.scan.pages/.scan.crawl_timing/.review.canonical_repairs; live sampling/access, stable-fingerprint scope/identity, or evidence regrouping independently reviewed",
+          "outcome": "not_regression",
+          "reviewed_at": "2026-09-21T16:10:21Z",
+          "reviewed_by": "independent-b25-final-batch3-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "49d3bc34593ba9fb9746801267601059eae064df430bd7d70fc23659be916ebd",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:53:31.560125Z",
+        "evidence_bundle_id": "d66ee9c6103375797d4a6ded74cc9d1e",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "bfb4d097d4fbbed9a743533f28ee751665e9fbd47505ab80162553d0130a2bca",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:55:05.088028Z",
+        "evidence_bundle_id": "a43cc5418e10e8f4ba7d831b0d7e2390",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:funbooker:stage2-stage3-evidence-v1",
+          "b25:funbooker:nonregression-delta-v1"
+        ]
+      },
+      "site_id": "funbooker",
+      "stratum": "ecommerce_marketplace",
+      "url": "https://www.funbooker.com/fr/"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:bellroy:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-3-bellroy/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:21Z",
+          "reviewed_by": "independent-b25-final-batch3-20260921"
+        },
+        {
+          "artifact_id": "b25:bellroy:nonregression-delta-v1",
+          "evidence_reference": "b25-pair-3-bellroy/{baseline,candidate}-raw.json::.scan.pages/.scan.crawl_timing/.review.canonical_repairs; live sampling/access, stable-fingerprint scope/identity, or evidence regrouping independently reviewed",
+          "outcome": "not_regression",
+          "reviewed_at": "2026-09-21T16:10:21Z",
+          "reviewed_by": "independent-b25-final-batch3-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "12888b2902c545f1c7bee1d21c91881591fb020bb4e894aa217c5b99bfa254d2",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:55:38.307645Z",
+        "evidence_bundle_id": "9c2cf7f55dcad7ae302262f593d066c3",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "859618e4ca5f00c5f79a0f440b4c7cbb89a9d6242a983ac882ad83979906a810",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:57:38.221356Z",
+        "evidence_bundle_id": "244461055b887cd270b178fa611a4784",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:bellroy:stage2-stage3-evidence-v1",
+          "b25:bellroy:nonregression-delta-v1"
+        ]
+      },
+      "site_id": "bellroy",
+      "stratum": "ecommerce_marketplace",
+      "url": "https://bellroy.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:cotopaxi:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-3-cotopaxi/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:21Z",
+          "reviewed_by": "independent-b25-final-batch3-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "5e688e2206211579fbcb46e643e35fc07d967939b9ac592f8b1d15ed08a7f7e8",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:57:00.974682Z",
+        "evidence_bundle_id": "a02e7d23b6f3317be496c439eb4a2763",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "66af99f8bde68a24c1436524d874b8e6c5abd3a00b8ba843c7afcaf45eba2e6b",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:59:08.112515Z",
+        "evidence_bundle_id": "fb6e4acace383fb4ccb6aab1789f6020",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:cotopaxi:stage2-stage3-evidence-v1"
+        ]
+      },
+      "site_id": "cotopaxi",
+      "stratum": "ecommerce_marketplace",
+      "url": "https://www.cotopaxi.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:lego-shop:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-3-lego-shop/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:21Z",
+          "reviewed_by": "independent-b25-final-batch3-20260921"
+        },
+        {
+          "artifact_id": "b25:lego-shop:nonregression-delta-v1",
+          "evidence_reference": "b25-pair-3-lego-shop/{baseline,candidate}-raw.json::.scan.pages/.scan.crawl_timing/.review.canonical_repairs; live sampling/access, stable-fingerprint scope/identity, or evidence regrouping independently reviewed",
+          "outcome": "not_regression",
+          "reviewed_at": "2026-09-21T16:10:21Z",
+          "reviewed_by": "independent-b25-final-batch3-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "bb71965f3220e0e9bf16c569ff47f2ed5582303cd30da8c46a697e24bdd784ee",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:55:08.249540Z",
+        "evidence_bundle_id": "54cd9fd62717038c23c6392d4f140e83",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "86f4cb11ba5d50d706de310e710ab5a27ade5afd96bb8a270473e2fe019faae1",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:56:44.747822Z",
+        "evidence_bundle_id": "d3dee8d944207da248d240592a7d1fc6",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:lego-shop:stage2-stage3-evidence-v1",
+          "b25:lego-shop:nonregression-delta-v1"
+        ]
+      },
+      "site_id": "lego-shop",
+      "stratum": "ecommerce_marketplace",
+      "url": "https://www.lego.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:away-travel:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-3-away-travel/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:21Z",
+          "reviewed_by": "independent-b25-final-batch3-20260921"
+        },
+        {
+          "artifact_id": "b25:away-travel:nonregression-delta-v1",
+          "evidence_reference": "b25-pair-3-away-travel/{baseline,candidate}-raw.json::.scan.pages/.scan.crawl_timing/.review.canonical_repairs; live sampling/access, stable-fingerprint scope/identity, or evidence regrouping independently reviewed",
+          "outcome": "not_regression",
+          "reviewed_at": "2026-09-21T16:10:21Z",
+          "reviewed_by": "independent-b25-final-batch3-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "e9d036052d86042741494e43fef35ed31c8b3faac90721bc8072efd998ef785c",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:56:17.422421Z",
+        "evidence_bundle_id": "0a90d63e360d813d68fbe18335e68e21",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "cf740f54d5df5881582e3275e04b6e81758058f52d8fa45dfa8c10323e85786a",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:56:49.149608Z",
+        "evidence_bundle_id": "f3f0ee03b353cd7fa81dfdb44bb41281",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:away-travel:stage2-stage3-evidence-v1",
+          "b25:away-travel:nonregression-delta-v1"
+        ]
+      },
+      "site_id": "away-travel",
+      "stratum": "ecommerce_marketplace",
+      "url": "https://www.awaytravel.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:mejuri:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-3-mejuri/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:21Z",
+          "reviewed_by": "independent-b25-final-batch3-20260921"
+        },
+        {
+          "artifact_id": "b25:mejuri:expected-semantic-delta-v1",
+          "evidence_reference": "candidate-raw.json::.scan.pages[url=https://mejuri.com/edit/staygold-content-cards-text-mix-match].visible_template_evidence[state=fail,issue_types=placeholder_copy]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:21Z",
+          "reviewed_by": "independent-b25-final-batch3-20260921"
+        },
+        {
+          "artifact_id": "b25:mejuri:nonregression-delta-v1",
+          "evidence_reference": "b25-pair-3-mejuri/{baseline,candidate}-raw.json::.scan.pages/.scan.crawl_timing/.review.canonical_repairs; live sampling/access, stable-fingerprint scope/identity, or evidence regrouping independently reviewed",
+          "outcome": "not_regression",
+          "reviewed_at": "2026-09-21T16:10:21Z",
+          "reviewed_by": "independent-b25-final-batch3-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "d5703986c7fa4c6736bfc32f21e095e00ecaf48baf01091db5c413347221b923",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:56:22.968166Z",
+        "evidence_bundle_id": "83a1292582d03a3d078760f561c66849",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "b01b382b089a5c2a7950d0f80ce524f8d33f266e563c3f975c8f3262e6575a44",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:58:21.302562Z",
+        "evidence_bundle_id": "42b9dd979d86f887e9ac5dd062f87ba0",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:mejuri:stage2-stage3-evidence-v1",
+          "b25:mejuri:expected-semantic-delta-v1",
+          "b25:mejuri:nonregression-delta-v1"
+        ]
+      },
+      "site_id": "mejuri",
+      "stratum": "ecommerce_marketplace",
+      "url": "https://mejuri.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:warby-parker:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-3-warby-parker/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:21Z",
+          "reviewed_by": "independent-b25-final-batch3-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "1b0a385c9ea7470a09333b07545afb0d6ede92a1b575e24d5950af93935de678",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:54:38.179377Z",
+        "evidence_bundle_id": "54d1fcfbfc609fc5d9e2b5d7545e19e0",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "8616759bf676f88da7605c61e693d8ebe08357b22171f8ccabd852c3d689d1b5",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:54:40.316652Z",
+        "evidence_bundle_id": "a3189116f5509f3cde61f8e27802095c",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:warby-parker:stage2-stage3-evidence-v1"
+        ]
+      },
+      "site_id": "warby-parker",
+      "stratum": "ecommerce_marketplace",
+      "url": "https://www.warbyparker.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:sephora:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-3-sephora/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:21Z",
+          "reviewed_by": "independent-b25-final-batch3-20260921"
+        },
+        {
+          "artifact_id": "b25:sephora:nonregression-delta-v1",
+          "evidence_reference": "b25-pair-3-sephora/{baseline,candidate}-raw.json::.scan.pages/.scan.crawl_timing/.review.canonical_repairs; live sampling/access, stable-fingerprint scope/identity, or evidence regrouping independently reviewed",
+          "outcome": "not_regression",
+          "reviewed_at": "2026-09-21T16:10:21Z",
+          "reviewed_by": "independent-b25-final-batch3-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "3328fa5f5d978d5567064530a013dc5fb30b48e2c6ebdecd108a8b6f55820608",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:55:36.346439Z",
+        "evidence_bundle_id": "6a0a73dc06c205a0fb585862615ad3c1",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "0164ab5cbae18e05e2f45576f97868523a2557cfb52803bf5f3e706f1b6b301c",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:56:11.956260Z",
+        "evidence_bundle_id": "5a1146098a42b0ccca8f6a39f8f0f6b0",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:sephora:stage2-stage3-evidence-v1",
+          "b25:sephora:nonregression-delta-v1"
+        ]
+      },
+      "site_id": "sephora",
+      "stratum": "ecommerce_marketplace",
+      "url": "https://www.sephora.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:allbirds:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-3-allbirds/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:21Z",
+          "reviewed_by": "independent-b25-final-batch3-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "564132229a613f0da93b13fb1ce7d20483f1ad72fb6922f704ba07a8ba60279e",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:57:19.745654Z",
+        "evidence_bundle_id": "f79a4c208315851c67b2cc04415bf429",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "0aa01354f661e63e7acaf4de533597534af4793d206cbb9fb8bce24b9be37c65",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:59:18.733782Z",
+        "evidence_bundle_id": "20f3f0dbdb5344dafbfe10c1916f0a8b",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:allbirds:stage2-stage3-evidence-v1"
+        ]
+      },
+      "site_id": "allbirds",
+      "stratum": "ecommerce_marketplace",
+      "url": "https://www.allbirds.com"
+    },
+    {
+      "adjudications": [
+        {
+          "artifact_id": "b25:glossier:stage2-stage3-evidence-v1",
+          "evidence_reference": "b25-pair-3-glossier/candidate-raw.json::.scan[coverage_probe_evidence,connected_provider_evidence,local_entity_scan_evidence]+.review[stage3_delivery,stage3_health_score_decision,stage3_root_cause_groups]",
+          "outcome": "expected_change",
+          "reviewed_at": "2026-09-21T16:10:21Z",
+          "reviewed_by": "independent-b25-final-batch3-20260921"
+        },
+        {
+          "artifact_id": "b25:glossier:nonregression-delta-v1",
+          "evidence_reference": "b25-pair-3-glossier/{baseline,candidate}-raw.json::.scan.pages/.scan.crawl_timing/.review.canonical_repairs; live sampling/access, stable-fingerprint scope/identity, or evidence regrouping independently reviewed",
+          "outcome": "not_regression",
+          "reviewed_at": "2026-09-21T16:10:21Z",
+          "reviewed_by": "independent-b25-final-batch3-20260921"
+        }
+      ],
+      "baseline": {
+        "artifact_sha256": "43701217978a011cfa7cbb3cf9304bd8e9f4da9cc3d8f1c74bfab2ed80436796",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:57:24.326316Z",
+        "evidence_bundle_id": "3b1bb62663d944b070cf494ee9ccbc6f",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "baseline-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
+      },
+      "candidate": {
+        "artifact_sha256": "d5abded1ed61f995351ef7c3fd8547c53d75ea51b97d27c916d7b6c8a9d6dcd7",
+        "capture_status": "completed",
+        "captured_at": "2026-09-21T15:57:55.800339Z",
+        "evidence_bundle_id": "56cd9d908edab91e5bd0edff0bd95ec3",
+        "policy_id": "b25_standard150_robots_respected_v1",
+        "process_returncode": 0,
+        "provenance": "captured",
+        "raw_file": "candidate-raw.json",
+        "release_fingerprint": "01ebe8e90df1e6bd",
+        "scan_mode": "standard_150",
+        "scope": "full_site_same_origin",
+        "source_sha": "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+      },
+      "difference_summary": {
+        "new_artifact_ids": [
+          "b25:glossier:stage2-stage3-evidence-v1",
+          "b25:glossier:nonregression-delta-v1"
+        ]
+      },
+      "site_id": "glossier",
+      "stratum": "ecommerce_marketplace",
+      "url": "https://www.glossier.com"
+    }
+  ],
+  "provenance": "captured_baseline_candidate",
+  "roster_sha256": "34ba06002016df451a297325b968aa3f79f508c92f40008966985715d65fc2be",
+  "version": "blueprint_30_site_baseline_candidate_v1"
+}

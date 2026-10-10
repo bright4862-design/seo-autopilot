@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "queue_policy": "Highest severity unblocked item first; do not duplicate active work.",
+  "items": [
+    {
+      "id": "release-pr191-integrity",
+      "title": "Clear PR #191 release-integrity blockers",
+      "priority": "P0",
+      "status": "in_progress",
+      "owner_role": "lead",
+      "requires_owner_approval": false,
+      "completion": [
+        "All still-valid release-integrity findings are fixed with smallest safe changes.",
+        "Focused regressions pass.",
+        "Full local release gate matrix passes.",
+        "Published exact head is verified.",
+        "CI and independent review are clean."
+      ]
+    },
+    {
+      "id": "production-acceptance-standard150",
+      "title": "Run same-SHA Standard 150 production acceptance",
+      "priority": "P0",
+      "status": "blocked",
+      "blocked_by": ["release-pr191-integrity"],
+      "owner_role": "qa",
+      "requires_owner_approval": true,
+      "completion": [
+        "Approved release identity is deployed.",
+        "Acceptance matrix passes on fresh sites and critical state transitions.",
+        "Rollback evidence is recorded."
+      ]
+    },
+    {
+      "id": "post-release-sentinel",
+      "title": "Monitor post-release reliability and customer trust signals",
+      "priority": "P1",
+      "status": "blocked",
+      "blocked_by": ["production-acceptance-standard150"],
+      "owner_role": "product_sentinel",
+      "requires_owner_approval": false,
+      "completion": [
+        "Production health remains within accepted thresholds.",
+        "No new P0/P1 regressions are observed.",
+        "Material findings are converted to reproducible work items."
+      ]
+    }
+  ]
+}

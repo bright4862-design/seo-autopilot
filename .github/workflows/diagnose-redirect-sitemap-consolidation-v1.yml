@@ -1,0 +1,65 @@
+name: Diagnose redirect sitemap consolidation v1
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  diagnose:
+    if: github.head_ref == 'feature/redirect-sitemap-consolidation-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/redirect-sitemap-consolidation-v1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        run: pip install -r scanner-api/requirements.txt
+
+      - name: Extract and apply candidate in workspace
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          workflow = Path('.github/workflows/apply-redirect-sitemap-consolidation-v1.yml').read_text(encoding='utf-8')
+          start_marker = "          python - <<'PY'\n"
+          end_marker = "          PY\n\n      - name: Run focused consolidation and revision tests"
+          script = workflow.split(start_marker, 1)[1].split(end_marker, 1)[0]
+          normalized = '\n'.join(line[10:] if line.startswith('          ') else line for line in script.splitlines()) + '\n'
+          Path('/tmp/apply_candidate.py').write_text(normalized, encoding='utf-8')
+          PY
+          python /tmp/apply_candidate.py
+
+      - name: Run tests and post bounded diagnostics
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set +e
+          cd scanner-api
+          pytest -q \
+            tests/test_redirect_sitemap_consolidation.py \
+            tests/test_sitemap_indexability_conflicts.py \
+            tests/test_redirect_evidence.py \
+            tests/test_beta_revision.py > /tmp/pytest-output.txt 2>&1
+          status=$?
+          cd ..
+          {
+            echo '## Consolidation focused-test diagnostics'
+            echo
+            echo '```text'
+            tail -n 180 /tmp/pytest-output.txt
+            echo '```'
+          } > /tmp/comment.md
+          gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md
+          exit "$status"

@@ -398,6 +398,42 @@ def test_strict_aggregate_observation_accepts_bound_identity(profile):
     assert module().validate_observation(row, profile, "ironwood", REV, SHA, IMAGE, IP) == row
 
 
+OBSERVATION_NUMBER_LIMITS = {
+    "pages_crawled": 150, "usable_html_pages": 150, "access_limited_pages": 150,
+    "robots_blocked_pages": 150, "transport_failure_pages": 150, "http_403_pages": 150,
+    "http_429_pages": 150, "robots_status_code": 599, "elapsed_ms": 210000,
+    "http_hops": 200, "guard_refusals": 200,
+}
+
+
+def test_cloud_logging_integral_float_numbers_normalize_to_integer_evidence():
+    row = observation()
+    for field in OBSERVATION_NUMBER_LIMITS:
+        row[field] = float(row[field])
+    result = module().validate_observation(row, "static", "ironwood", REV, SHA, IMAGE, IP)
+    assert all(type(result[field]) is int for field in OBSERVATION_NUMBER_LIMITS)
+    assert result["pages_crawled"] == result["usable_html_pages"] == 1
+    assert result["robots_status_code"] == 200 and result["elapsed_ms"] == 1000
+    assert result["http_hops"] == 3 and result["guard_refusals"] == 0
+
+
+@pytest.mark.parametrize("field", OBSERVATION_NUMBER_LIMITS)
+@pytest.mark.parametrize("value", [1.25, float("nan"), float("inf"), -float("inf"), True, -1.0])
+def test_cloud_logging_nonintegral_nonfinite_boolean_or_negative_numbers_refuse(field, value):
+    row = observation()
+    row[field] = value
+    with pytest.raises(ValueError):
+        module().validate_observation(row, "static", "ironwood", REV, SHA, IMAGE, IP)
+
+
+@pytest.mark.parametrize("field,limit", OBSERVATION_NUMBER_LIMITS.items())
+def test_cloud_logging_integral_floats_above_field_boundaries_refuse(field, limit):
+    row = observation()
+    row[field] = float(limit + 1)
+    with pytest.raises(ValueError):
+        module().validate_observation(row, "static", "ironwood", REV, SHA, IMAGE, IP)
+
+
 @pytest.mark.parametrize("updates", [
     {"target": "winamax"}, {"profile": "default"}, {"source_sha": "b" * 40},
     {"revision": SERVING}, {"image": REPOSITORY + ":latest"}, {"expected_ip": "8.8.8.8"},

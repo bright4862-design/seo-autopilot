@@ -242,6 +242,14 @@ def validate_observation(payload, profile, target, revision, source, image, ip):
     allowed = COUNT_FIELDS | BOOL_FIELDS | STRING_FIELDS | {"robots_status_code", "elapsed_ms", "http_hops", "guard_refusals"}
     if not isinstance(payload, dict) or set(payload) != allowed:
         raise ValueError("observation_schema_mismatch")
+    # Cloud Logging jsonPayload is a protobuf Struct: whole numbers may be
+    # serialized as doubles. Normalize only integral floats, then enforce the
+    # same integer types and bounds; bool, fractional and nonfinite values fail.
+    payload = dict(payload)
+    for key in COUNT_FIELDS | {"robots_status_code", "elapsed_ms", "http_hops", "guard_refusals"}:
+        value = payload[key]
+        if type(value) is float and value.is_integer():
+            payload[key] = int(value)
     identities = {"diagnostic": "static_egress_comparison_v1", "event": "complete", "target": target,
                   "profile": profile, "source_sha": source, "revision": revision, "image": image, "expected_ip": ip,
                   "authoritative_scan": False, "worker_process": False}

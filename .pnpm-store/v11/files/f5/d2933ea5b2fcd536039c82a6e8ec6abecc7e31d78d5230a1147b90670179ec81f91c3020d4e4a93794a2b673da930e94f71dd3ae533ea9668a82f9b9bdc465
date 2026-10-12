@@ -1,0 +1,1 @@
+{"version":3,"file":"vite-plugin.d.ts","sourceRoot":"","sources":["../../src/route-request-log/vite-plugin.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,MAAM,EAAE,MAAM,MAAM,CAAC;AACnC,OAAO,EAAE,8BAA8B,EAAE,MAAM,mBAAmB,CAAC;AAEnE,KAAK,qBAAqB,GAAG,MAAM,GAAG;IAAE,KAAK,EAAE,OAAO,8BAA8B,CAAA;CAAE,CAAC;AAEvF,eAAO,MAAM,qBAAqB,QAAO,qBAGvC,CAAC"}

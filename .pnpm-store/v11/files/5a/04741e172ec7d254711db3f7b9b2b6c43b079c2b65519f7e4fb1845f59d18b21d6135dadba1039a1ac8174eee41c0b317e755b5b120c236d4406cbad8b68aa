@@ -1,0 +1,1 @@
+{"version":3,"file":"sandbox-build-error-notifier.d.ts","sourceRoot":"","sources":["../../src/injections/sandbox-build-error-notifier.ts"],"names":[],"mappings":"AAMA,KAAK,iBAAiB,GAAG;IAAE,GAAG,CAAC,EAAE,MAAM,CAAC,MAAM,EAAE,OAAO,CAAC,CAAA;CAAE,GAAG,SAAS,CAAC;AAEvE,wBAAgB,gBAAgB,CAAC,OAAO,EAAE,iBAAiB,EAAE,GAAG,GAAE,MAAe,QAuBhF"}

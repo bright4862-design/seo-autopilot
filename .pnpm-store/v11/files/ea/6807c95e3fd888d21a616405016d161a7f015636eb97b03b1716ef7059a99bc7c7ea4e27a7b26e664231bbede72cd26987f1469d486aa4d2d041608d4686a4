@@ -1,0 +1,43 @@
+{
+  "name": "@base44/vite-plugin",
+  "version": "1.0.44",
+  "description": "The Vite plugin for base44 based applications",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./dist/index.js",
+    "./bridge": "./dist/bridge.js",
+    "./compat/*": "./compat/*"
+  },
+  "files": [
+    "dist",
+    "src",
+    "compat"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "build:bridge": "tsup",
+    "validate-exports": "node scripts/validate-exports.mjs",
+    "prepublishOnly": "rm -rf ./dist && npm run build && npm run build:bridge && npm run validate-exports",
+    "dev": "node dev-server.js",
+    "test:unit": "vitest run"
+  },
+  "devDependencies": {
+    "@types/babel__generator": "^7.27.0",
+    "@types/babel__traverse": "^7.28.0",
+    "@types/node": "^24.6.2",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "jsdom": "^26.0.0",
+    "tsup": "^8.1.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.9",
+    "vitest": "^3.0.0"
+  },
+  "dependencies": {
+    "@babel/generator": "^7.28.5",
+    "@babel/parser": "^7.28.5",
+    "@babel/traverse": "^7.28.5",
+    "@babel/types": "^7.28.5"
+  }
+}

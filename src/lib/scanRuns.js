@@ -47,6 +47,8 @@ const CUSTOMER_RECOVERY_KIND_BY_CODE = Object.freeze({
   result_authority_unavailable: "unavailable",
   result_release_mismatch: "release_mismatch",
   result_authority_invalid: "authority_invalid",
+  limited_result_invalid: "authority_invalid",
+  result_preview_invalid: "authority_invalid",
   fix_list_unavailable: "authority_invalid",
   fix_list_mismatch: "authority_invalid",
   fix_items_unavailable: "authority_invalid",
@@ -579,7 +581,7 @@ export async function listScanRuns(projectId, limit = 3) {
   const scope = `history:${requestedProjectId}`;
   try {
     await currentOwner();
-    const response = await base44.functions.invoke("getCustomerScanResultV5", {
+    const response = await base44.functions.invoke("getCustomerScanResultV8", {
       action: "list",
       project_id: requestedProjectId,
       limit: Math.min(Math.max(Number(limit) || 3, 1), 3),
@@ -630,7 +632,7 @@ export async function listAccountScanRuns(limit = 20) {
   const scope = "history:account";
   try {
     await currentOwner();
-    const response = await base44.functions.invoke("getCustomerScanResultV5", {
+    const response = await base44.functions.invoke("getCustomerScanResultV8", {
       action: "list_all",
       limit: Math.min(Math.max(Number(limit) || 20, 1), 30),
     });
@@ -678,7 +680,7 @@ export async function getScanRunWithFixList(scanRunId) {
 
   try {
     await currentOwner();
-    const response = await base44.functions.invoke("getCustomerScanResultV5", {
+    const response = await base44.functions.invoke("getCustomerScanResultV8", {
       scan_id: requestedScanId,
     });
     const result = response?.data && typeof response.data === "object" ? response.data : response;
@@ -709,7 +711,7 @@ export async function getScanRunWithFixList(scanRunId) {
     const terminalPreview = access === "preview" && String(run.status || "") === "complete";
 
     // A terminal unpaid preview is already identity-bound and HMAC-verified by
-    // getCustomerScanResultV5. Its two customer-visible FixItems are
+    // getCustomerScanResultV8. Its two customer-visible FixItems are
     // deliberately sanitized and do not expose internal project/scan/fix-list
     // row ids, so applying the full-result row-identity check here rejects a
     // valid signed preview as result_authority_invalid. Keep the top-level
@@ -732,6 +734,7 @@ export async function getScanRunWithFixList(scanRunId) {
       fix_list_id: fixList?.id || result.fix_list_id || run.fix_list_id || "",
       access,
       authority_verified: authorityVerified,
+      result_integrity_verified: result.result_integrity_verified === true,
       run: { ...run, scan_id: run.id },
       fixList: fixList || null,
       fixItems: fixItems || [],

@@ -74,12 +74,18 @@ test("public blog surfaces do not advertise unreleased product modes", () => {
   }
 });
 
-test("daily publisher is idempotent, quality gated, scheduled, and scanner-isolated", () => {
+test("legacy daily publisher stays disabled with idempotency, quality gates, and scanner isolation intact", () => {
   assert.match(publisherSource, /generationKey\s*=\s*`daily:\$\{dayKey\}`/);
   assert.match(publisherSource, /wordCount\(bodyMarkdown\)\s*<\s*800/);
   assert.match(publisherSource, /status:\s*["']published["']/);
   assert.match(publisherConfig, /"cron_expression"\s*:\s*"0 12 \* \* \*"/);
-  assert.match(publisherConfig, /"is_active"\s*:\s*true/);
+  // Preserve the Sep 21 legacy-schedule disablement; a scanner release must not
+  // restart it. This source contract does not verify any replacement workflow.
+  const legacySchedule = JSON.parse(publisherConfig).automations.find(
+    (automation) => automation.name === "FixList daily blog",
+  );
+  assert.ok(legacySchedule, "the legacy daily schedule must remain identifiable");
+  assert.equal(legacySchedule.is_active, false, "the legacy daily publisher must stay disabled");
 
   assert.doesNotMatch(
     publisherSource,

@@ -663,6 +663,160 @@ jobs:
           fi
           gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${TARGET_SHA}"             -f state="$state"             -f context="fixlist/static-egress-source-ip"             -f description="$description"
 
+  compare-static-egress-access-on-owner-comment:
+    if: >-
+      github.event_name == 'issue_comment'
+      && github.event.issue.pull_request
+      && github.event.comment.user.login == 'bright4862-design'
+      && startsWith(github.event.comment.body, '/compare-static-egress-access ')
+    name: Compare one fixed site over default and static egress
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact default-branch SHA bound to the comment event
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate exact owner comparison command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_USER: ${{ github.event.comment.user.login }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$COMMENT_USER" = "bright4862-design"
+          read -r command requested_sha target extra <<< "$COMMENT_BODY"
+          test "$command" = "/compare-static-egress-access"
+          [[ "$requested_sha" =~ ^[0-9a-f]{40}$ ]]
+          case "$target" in
+            winamax|ratp|viator|klook|fever|ironwood|funbooker) ;;
+            *) echo "Refusing: unknown fixed comparison target." >&2; exit 2 ;;
+          esac
+          test -z "$extra"
+          test "$COMMENT_BODY" = "/compare-static-egress-access $requested_sha $target"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$requested_sha"
+          # Refresh the explicit ref before authentication. A queued event for
+          # superseded main must fail instead of receiving cloud credentials.
+          git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main --quiet
+          source scripts/lib/release-source-guard.sh
+          fixlist_require_exact_main "$PWD" "$requested_sha" "$requested_sha"
+          printf 'source_sha=%s\ntarget=%s\n' "$requested_sha" "$target" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate cloud operator
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Resolve Ready zero-traffic candidate from this exact main
+        id: candidate
+        env:
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run revisions list --service="$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > /tmp/comparison-revisions.json
+          gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > /tmp/comparison-service.json
+          revision="$(python3 - "$SOURCE_SHA" "$CLOUD_RUN_SERVICE" /tmp/comparison-revisions.json /tmp/comparison-service.json <<'PY'
+          import json, re, sys
+          source_sha, worker, revisions_path, service_path = sys.argv[1:]
+          rows = json.load(open(revisions_path))
+          service = json.load(open(service_path))
+          if service.get('metadata', {}).get('name') != worker:
+              raise SystemExit('Refusing: worker service identity mismatch')
+          resolved = service.get('status', {}).get('traffic', []) or []
+          desired = service.get('spec', {}).get('traffic', []) or []
+          candidates = []
+          for row in rows:
+              metadata = row.get('metadata', {}) or {}
+              name = metadata.get('name', '')
+              if not re.fullmatch(re.escape(worker) + r'-[a-z0-9-]+', name):
+                  continue
+              if metadata.get('labels', {}).get('serving.knative.dev/service') != worker:
+                  continue
+              spec = row.get('spec', {}) or {}
+              containers = spec.get('containers', []) or []
+              if len(containers) != 1:
+                  continue
+              values = {item.get('name'): item.get('value', '') for item in containers[0].get('env', [])}
+              if values.get('FIXLIST_WORKER_SOURCE_SHA') != source_sha or values.get('FIXLIST_EGRESS_MODE') != 'static-canary':
+                  continue
+              if not any(item.get('type') == 'Ready' and item.get('status') == 'True'
+                         for item in row.get('status', {}).get('conditions', [])):
+                  continue
+              if any(int(item.get('percent') or 0) > 0 and
+                     (item.get('revisionName') == name or item.get('latestRevision') is True)
+                     for item in [*resolved, *desired]):
+                  continue
+              candidates.append((metadata.get('creationTimestamp', ''), name))
+          candidates.sort()
+          if not candidates:
+              raise SystemExit('Refusing: stage a Ready 0% static candidate from this exact main first')
+          print(candidates[-1][1])
+          PY
+          )"
+          test -n "$revision"
+          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Run isolated default versus static access comparison
+        env:
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+          TARGET: ${{ steps.command.outputs.target }}
+          REVISION: ${{ steps.candidate.outputs.revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/static_egress_comparison_job.py \
+            --revision "$REVISION" --source-sha "$SOURCE_SHA" --target "$TARGET" \
+            --confirm "STATIC-EGRESS-COMPARE:$TARGET:$REVISION:$SOURCE_SHA" \
+            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --output /tmp/fixlist-static-egress-comparison.json
+
+      - name: Preserve only sanitized pair evidence when present
+        if: always() && steps.command.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-egress-comparison-${{ steps.command.outputs.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: ignore
+          path: /tmp/fixlist-static-egress-comparison.json
+
+      - name: Publish per-target pair completion status
+        if: always() && steps.command.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.command.outputs.source_sha }}
+          TARGET: ${{ steps.command.outputs.target }}
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$TARGET" in
+            winamax|ratp|viator|klook|fever|ironwood|funbooker) ;;
+            *) exit 2 ;;
+          esac
+          if [ "$JOB_STATUS" = "success" ]; then
+            state=success
+            description="Pair diagnostic complete; access improvement unassessed"
+          else
+            state=failure
+            description="Pair diagnostic or required cleanup failed"
+          fi
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${TARGET_SHA}" \
+            -f state="$state" -f context="fixlist/static-egress-comparison-$TARGET" \
+            -f description="$description"
+
   verify-admission-identity:
     if: >-
       github.event_name == 'workflow_dispatch'

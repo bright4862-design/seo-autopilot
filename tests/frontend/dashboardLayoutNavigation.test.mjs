@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -12,7 +13,7 @@ const source = readFileSync(layoutPath, "utf8");
 // Bundle the real layout. Only the auth hook is replaced; React, the router and
 // icons resolve to the same module instances this test renders with.
 const bundled = await build({
-  entryPoints: [layoutPath.pathname],
+  entryPoints: [fileURLToPath(layoutPath)],
   bundle: true,
   write: false,
   format: "esm",

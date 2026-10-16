@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -35,7 +36,7 @@ test("insufficient evidence reads as an incomplete assessment, not a failed one"
   assert.equal(result.scoreAvailable, false);
   const explanation = result.incompleteExplanation.join(" ");
   assert.match(explanation, /Missing evidence is unknown, not a failed readiness check\./);
-  assert.match(explanation, /at least 80% of checks overall/);
+  assert.match(explanation, /at least 80% evidence coverage overall/);
   assert.match(explanation, /at least 50% in every assessment area/);
   // No invented score and no promise that another scan will supply the evidence.
   assert.doesNotMatch(explanation, /\d+ out of 100|rescan|scan again|another scan|will (?:fix|resolve|improve)/i);
@@ -140,7 +141,7 @@ test("experimental and non-citation disclaimers and full-authority restrictions 
 const panelPath = new URL("../../src/components/fixlist/GeoReadinessPanel.jsx", import.meta.url);
 const srcRoot = new URL("../../src/", import.meta.url);
 const bundled = await build({
-  entryPoints: [panelPath.pathname],
+  entryPoints: [fileURLToPath(panelPath)],
   bundle: true,
   write: false,
   format: "esm",
@@ -148,7 +149,7 @@ const bundled = await build({
   plugins: [{
     name: "geo-panel-test",
     setup(builder) {
-      builder.onResolve({ filter: /^@\// }, (args) => ({ path: new URL(`${args.path.slice(2)}.js`, srcRoot).pathname }));
+      builder.onResolve({ filter: /^@\// }, (args) => ({ path: fileURLToPath(new URL(`${args.path.slice(2)}.js`, srcRoot)) }));
       builder.onResolve({ filter: /^(react|react\/jsx-runtime)$/ }, (args) => ({ path: import.meta.resolve(args.path), external: true }));
     },
   }],

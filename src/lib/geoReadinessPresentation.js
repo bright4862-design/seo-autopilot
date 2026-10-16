@@ -22,7 +22,7 @@ const lowerBound = (value) => clampBound(Math.floor(value * 10 + 1e-9) / 10);
 const upperBound = (value) => clampBound(Math.ceil(value * 10 - 1e-9) / 10);
 const INCOMPLETE_EXPLANATION = Object.freeze([
   "Missing evidence is unknown, not a failed readiness check.",
-  "A readiness score needs verified evidence for at least 80% of checks overall and at least 50% in every assessment area.",
+  "A readiness score needs at least 80% evidence coverage overall and at least 50% in every assessment area.",
 ]);
 
 function validSummary(value) {

@@ -1,7 +1,6 @@
-import React, { useState } from "react";
+import React from "react";
 import { buildImplementationPlan } from "../../lib/implementationPlan.js";
 import { repairRoleExplanation, REPAIR_EXPLANATION_ROLES, REPAIR_ROLE_VIEW_COPY } from "../../lib/repairRoleExplanations.js";
-import { RepairRoleSelector } from "./RepairRoleView.jsx";
 
 const text = (value) => typeof value === "string" ? value.trim() : "";
 const object = (value) => value && typeof value === "object" && !Array.isArray(value);
@@ -68,13 +67,12 @@ function ImplementationOrder({ items, trustedScanId }) {
  */
 export function CustomerRepairGuidanceView({
   sourceItems = [], cards = [], trustedScanId = "", sourceScanId = "", cardsScanId = "", authorityVerified = false,
-  role = "owner", onRoleChange, renderCards, renderCard,
+  role = "owner", renderCards, renderCard,
 }) {
   const list = Array.isArray(cards) ? cards : [];
   const trusted = scanBound(sourceItems, cards, trustedScanId, sourceScanId, cardsScanId, authorityVerified);
   const selectedRole = REPAIR_EXPLANATION_ROLES.includes(role) ? role : "owner";
   const roleView = REPAIR_ROLE_VIEW_COPY[selectedRole];
-  const roleCopyCount = trusted ? list.filter((card) => object(card) && repairRoleExplanation(card, selectedRole).explanationAvailable).length : 0;
   const explanationForCard = (card) => {
     const fallback = { explanation: text(card?.whyItMatters), explanationAvailable: false, explanationHeading: "Why it matters" };
     if (!trusted || !object(card)) return fallback;
@@ -91,24 +89,13 @@ export function CustomerRepairGuidanceView({
       : null;
   return (
     <>
-      {roleCopyCount > 0 && typeof onRoleChange === "function" ? (
-        <div className="mb-5">
-          <RepairRoleSelector role={selectedRole} onRoleChange={onRoleChange} />
-          {roleCopyCount < list.length ? <p className="mt-1 text-[12px] leading-relaxed text-ink-faint">Role guidance is available for {roleCopyCount} of {list.length} repairs.</p> : null}
-        </div>
-      ) : null}
       {trusted && list.length > 0 ? <ImplementationOrder items={sourceItems} trustedScanId={trustedScanId} /> : null}
       {content}
     </>
   );
 }
 
-function StatefulGuidance(props) {
-  const [role, setRole] = useState("owner");
-  return <CustomerRepairGuidanceView {...props} role={role} onRoleChange={setRole} />;
-}
-
 /** Authority is established by the owner-bound reader, never by this view. */
 export default function CustomerRepairGuidance(props) {
-  return <StatefulGuidance key={props.trustedScanId} {...props} />;
+  return <CustomerRepairGuidanceView {...props} role="owner" />;
 }

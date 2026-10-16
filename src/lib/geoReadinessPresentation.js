@@ -13,7 +13,17 @@ const REPAIR_RULES = Object.freeze({
 
 const clean = (value) => typeof value === "string" ? value.trim() : "";
 const finite = (value) => typeof value === "number" && Number.isFinite(value);
-const percent = (value) => `${Math.round(value * 100)}%`;
+// Floor, so coverage just under the 80% scoring threshold never displays as 80%.
+const percent = (value) => `${Math.floor(value * 100 + 1e-9)}%`;
+// Round bounds outward to at most one decimal: the shown range always contains
+// the computed one, and never reads like 43.589744.
+const clampBound = (value) => String(Math.min(100, Math.max(0, value)));
+const lowerBound = (value) => clampBound(Math.floor(value * 10 + 1e-9) / 10);
+const upperBound = (value) => clampBound(Math.ceil(value * 10 - 1e-9) / 10);
+const INCOMPLETE_EXPLANATION = Object.freeze([
+  "Missing evidence is unknown, not a failed readiness check.",
+  "A readiness score needs verified evidence for at least 80% of checks overall and at least 50% in every assessment area.",
+]);
 
 function validSummary(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -37,7 +47,7 @@ function statusLabel(status) {
   if (status === "not_assessed") return "Not assessed for this scan";
   if (status === "evaluation_error") return "GEO readiness unavailable";
   if (status === "access_limited") return "Could not assess because access was limited";
-  if (status === "insufficient_evidence") return "Not enough verified evidence to score";
+  if (status === "insufficient_evidence") return "GEO assessment incomplete";
   return "Experimental readiness score";
 }
 
@@ -109,6 +119,7 @@ function neutral(state, label) {
     sampleLabel: "Assessment sample unavailable",
     coverageLabel: "Evidence coverage unavailable",
     boundsLabel: "",
+    incompleteExplanation: [],
     methodologyLabel: "Experimental v1 assessment of accepted raw HTML evidence.",
     nonCitationLabel: "This readiness assessment does not measure AI citations, inclusion, visibility, or traffic.",
     completedAt: "",
@@ -136,7 +147,10 @@ export function buildGeoReadinessPresentation({
     statusLabel: statusLabel(geoReadiness.assessment_status),
     sampleLabel: `${geoReadiness.sample_pages} assessed ${geoReadiness.sample_pages === 1 ? "page" : "pages"}`,
     coverageLabel: `${percent(geoReadiness.coverage)} evidence coverage`,
-    boundsLabel: bounds ? `${bounds.lower}–${bounds.upper} possible as unresolved checks are completed` : "",
+    boundsLabel: bounds
+      ? `${lowerBound(bounds.lower)}–${upperBound(bounds.upper)} possible as unresolved checks are completed`
+      : "",
+    incompleteExplanation: geoReadiness.assessment_status === "insufficient_evidence" ? [...INCOMPLETE_EXPLANATION] : [],
     methodologyLabel: "Experimental v1 assessment of accepted raw HTML evidence.",
     nonCitationLabel: "This readiness assessment does not measure AI citations, inclusion, visibility, or traffic.",
     completedAt: Number.isNaN(date.getTime()) ? "" : date.toISOString(),

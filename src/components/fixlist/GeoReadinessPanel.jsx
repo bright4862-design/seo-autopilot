@@ -29,9 +29,15 @@ export default function GeoReadinessPanel({
           <div className="text-[30px] font-semibold leading-none tabular-nums text-ink" aria-label={presentation.scoreAvailable ? `GEO readiness score ${presentation.score}` : "GEO readiness score unavailable"}>
             {presentation.scoreAvailable ? presentation.score : "—"}
           </div>
-          <div className="mt-1 text-[11px] text-ink-faint">out of 100</div>
+          <div className="mt-1 text-[11px] text-ink-faint">{presentation.scoreAvailable ? "out of 100" : "Not scored"}</div>
         </div>
       </div>
+
+      {presentation.incompleteExplanation.length > 0 ? (
+        <div className="mt-3 space-y-1 text-[12.5px] leading-relaxed text-ink-muted">
+          {presentation.incompleteExplanation.map((line) => <p key={line}>{line}</p>)}
+        </div>
+      ) : null}
 
       <dl className="mt-4 grid grid-cols-1 gap-2 border-y border-hairline-soft py-3 text-[12.5px] sm:grid-cols-2">
         <div><dt className="inline text-ink-faint">Sample: </dt><dd className="inline font-medium text-ink-muted">{presentation.sampleLabel}</dd></div>

@@ -90,10 +90,15 @@ def test_funbooker_booking_and_collection_pages_are_sampled():
     assert counts.get("collection_page", 0) >= 3
 
 
-@pytest.mark.parametrize("spec,money", [(FUNBOOKER, "activity_detail"), (PRETTO, "loan_program")])
-def test_money_family_keeps_dominant_share(spec, money):
-    _, selected, counts, _, _ = _counts(spec)
-    assert counts[money] > len(selected) * 0.5
+def test_large_activity_inventory_keeps_representatives_after_commercial_hubs():
+    _, _, counts, _, _ = _counts(FUNBOOKER)
+    assert counts["activity_detail"] >= 24
+    assert counts["collection_page"] >= 50
+
+
+def test_loan_programs_keep_dominant_share_when_no_other_hubs_exist():
+    _, selected, counts, _, _ = _counts(PRETTO)
+    assert counts["loan_program"] > len(selected) * 0.5
 
 
 @pytest.mark.parametrize("spec", [FUNBOOKER, PRETTO, CENTER_STREET])

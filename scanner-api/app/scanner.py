@@ -21,7 +21,7 @@ from .coverage_probes import (
 )
 from .redirect_validation import apply_redirect_evidence, fetch_with_redirect_evidence, summarize_redirect_evidence
 from .extract import classify_template, extract_links, extract_page
-from .market_scope import market_pair_prefix, path_within_scope
+from .market_scope import MARKET_SEGMENT_RE, market_pair_prefix, path_within_scope
 from .page_evidence_gate import (
     ACCESS_BLOCK_HEADER_ALLOWLIST,
     PAGE_EVIDENCE_GATE_VERSION,
@@ -375,6 +375,17 @@ def compute_pages_found(
 ASYNC_JOB_TIMEOUT_CEILING = 120.0
 
 
+def _selection_market_hint(path: str) -> str:
+    """An ordering hint only; request identity and crawl scope stay separate."""
+    segments = [segment for segment in str(path or "").split("/") if segment]
+    market = []
+    for segment in segments[:2]:
+        if not MARKET_SEGMENT_RE.fullmatch(segment):
+            break
+        market.append(segment.lower())
+    return "/" + "/".join(market) if market else ""
+
+
 def resolve_scan_budget(scan_mode: str, timeout_seconds: float | None = None, *, job_mode: bool = False) -> dict:
     """Return a per-request copy of the mode budget.
 
@@ -468,6 +479,7 @@ async def run_scan(
     parsed_start = urlparse(start_url)
     origin = f"{parsed_start.scheme}://{parsed_start.netloc}"
     prefix, prefix_source, requested_seed_path = resolve_crawl_scope(path_prefix, parsed_start.path)
+    primary_market_hint = _selection_market_hint(prefix)
     scope_evidence = {
         "requested_path_prefix": prefix,
         "requested_seed_path": requested_seed_path,
@@ -619,6 +631,8 @@ async def run_scan(
                     scope_evidence["effective_origin"] = origin
                     scope_evidence["origin_scope_source"] = "verified_www_alias_redirect"
                     robots_policy = await load_robots_policy(client, origin)
+                if 200 <= landing_status < 300 and same_origin(final_landing_url, origin):
+                    primary_market_hint = _selection_market_hint(urlparse(final_landing_url).path)
                 redirected_market = market_pair_prefix(final_landing_url)
                 if redirected_market:
                     prefix = redirected_market
@@ -656,6 +670,7 @@ async def run_scan(
                 client, origin, prefix, SITEMAP_DISCOVERY_LIMIT, artifacts,
                 scope_evidence=scope_evidence, deadline=timing_budget["sitemap_deadline"],
                 max_fetches=max_sitemap_fetches, diagnostics=sitemap_diagnostics,
+                primary_market_hint=primary_market_hint,
                 min_request_interval_seconds=(
                     proactive_rate_limit_interval(rate_limit_profile)
                     if rate_limit_profile
@@ -666,7 +681,10 @@ async def run_scan(
         sitemap_diagnostics["sitemap_urls_discovered"] = len(sitemap_urls)
         family_of = lambda url: classify_template(urlparse(url).path or "/")
         path_of = lambda url: urlparse(url).path or "/"
-        sampled_sitemap_urls = select_balanced_urls(sitemap_urls, family_of, path_of, max(0, max_pages - 1))
+        sampled_sitemap_urls = select_balanced_urls(
+            sitemap_urls, family_of, path_of, max(0, max_pages - 1),
+            preferred_market=primary_market_hint,
+        )
         sampling_evidence = sampling_report(sitemap_urls, sampled_sitemap_urls, family_of, path_of)
         scope_evidence["effective_path_prefix"] = prefix
         sampling_evidence["crawl_scope"] = dict(scope_evidence)

@@ -8,7 +8,7 @@ from urllib.parse import urlparse, urlunparse
 import httpx
 
 from .artifact_filter import is_artifact_url, record_artifact
-from .market_scope import market_pair_prefix, path_within_scope
+from .market_scope import MARKET_SEGMENT_RE, market_pair_prefix, path_within_scope
 from .security import ResponseBodyTooLarge, safe_get
 
 MAX_SITEMAP_FETCHES = 60
@@ -101,7 +101,13 @@ class _SitemapRequestPacer:
         return True
 
 
-async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix: str, limit: int, artifacts: list[dict], scope_evidence: dict | None = None, *, deadline: float | None = None, max_fetches: int | None = None, diagnostics: dict | None = None, min_request_interval_seconds: float = 0.0) -> list[str]:
+async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix: str, limit: int, artifacts: list[dict], scope_evidence: dict | None = None, *, deadline: float | None = None, max_fetches: int | None = None, diagnostics: dict | None = None, min_request_interval_seconds: float = 0.0, primary_market_hint: str | None = None) -> list[str]:
+    """Discover within existing bounds; a verified market hint affects order only.
+
+    Callers may supply a locale prefix such as /fr or /fr/fr from an observed
+    successful same-origin landing or an explicit market scope. No market is
+    inferred here, and the hint never changes scope or excludes other locales.
+    """
     scope_evidence = scope_evidence if scope_evidence is not None else {}
     diagnostics = diagnostics if diagnostics is not None else {}
     diagnostics.setdefault("sitemap_fetch_count", 0)
@@ -189,7 +195,7 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
     # Collect child-sitemap URLs into per-family buckets, then interleave before
     # applying the global limit. Otherwise one huge child sitemap can consume
     # every discovery slot before booking, collection, or trust families appear.
-    for child in rank_child_sitemaps(child_sitemaps, path_prefix):
+    for child in rank_child_sitemaps(child_sitemaps, path_prefix, primary_market_hint=primary_market_hint):
         if _stop_sitemap_discovery(fetched, fetch_limit, deadline, diagnostics):
             break
         failures_before = _sitemap_failure_total(diagnostics)
@@ -551,7 +557,7 @@ def comparable_host(host: str) -> str:
     return value[4:] if value.startswith("www.") else value
 
 
-def rank_child_sitemaps(children: list[str], path_prefix: str) -> list[str]:
+def rank_child_sitemaps(children: list[str], path_prefix: str, *, primary_market_hint: str | None = None) -> list[str]:
     tokens = [token for token in (path_prefix or "").lower().split("/") if token]
 
     def score(url: str) -> int:
@@ -561,7 +567,9 @@ def rank_child_sitemaps(children: list[str], path_prefix: str) -> list[str]:
             value += 40
         elif tokens and any(token in target for token in tokens):
             value += 20
-        if re.search(r"page|product|categor|service|listing|collection|loan|location|reservation|booking|checkout|cart|panier|billet|ticket|devis|quote|apply|contact|trust|legal|privacy|mentions", target):
+        hub_filename = any(token in {"city", "cities", "ville", "villes", "location", "locations", "store", "stores"}
+                           for token in _child_sitemap_structure_key(url)[2])
+        if hub_filename or re.search(r"page|product|categor|service|listing|collection|loan|location|reservation|booking|checkout|cart|panier|billet|ticket|devis|quote|apply|contact|trust|legal|privacy|mentions", target):
             value += 18
         if re.search(r"post|article|blog|guide", target):
             value += 4
@@ -570,7 +578,7 @@ def rank_child_sitemaps(children: list[str], path_prefix: str) -> list[str]:
         return value
 
     ranked = sorted(dedupe(children), key=score, reverse=True)
-    return interleave_by_family(ranked)
+    return interleave_by_family(ranked, primary_market_hint=primary_market_hint)
 
 
 def sitemap_family_key(url: str) -> str:
@@ -583,11 +591,85 @@ def sitemap_family_key(url: str) -> str:
     return re.sub(r"[-_]?\d+$", "", name) or "sitemap"
 
 
-def interleave_by_family(children: list[str]) -> list[str]:
-    """Round-robin child sitemaps so one large family cannot starve others."""
-    families: dict[str, list[str]] = {}
+def _child_sitemap_structure_key(url: str) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+    """Group locale/number siblings for ordering, never for URL accounting.
+
+    Keep every non-locale directory and filename token: listing.other is a
+    different discovery surface from listing, as cities is from activities.
+    The existing sitemap_family_key remains separate because merging locale
+    URL buckets could discard another language when the first fills its cap.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        # Leave malformed inputs to the existing bounded fetch/error path.
+        return "", (), (url,)
+    segments = [part.lower() for part in parsed.path.split("/") if part]
+    directories = segments[:-1]
+    for _ in range(2):
+        if directories and MARKET_SEGMENT_RE.fullmatch(directories[0]):
+            directories = directories[1:]
+        else:
+            break
+    name = re.sub(r"\.xml(?:\.gz)?$", "", segments[-1] if segments else "sitemap")
+    name = re.sub(r"\d+$", "", name)
+    tokens = [part for part in re.split(r"[._-]+", name) if part]
+    while len(tokens) > 1 and (tokens[-1].isdigit() or MARKET_SEGMENT_RE.fullmatch(tokens[-1])):
+        tokens.pop()
+    if len(tokens) > 1 and MARKET_SEGMENT_RE.fullmatch(tokens[0]):
+        tokens = tokens[1:]
+    return parsed.netloc.lower(), tuple(directories), tuple(tokens)
+
+
+def _primary_market_tokens(hint: str | None) -> tuple[str, ...]:
+    raw = str(hint or "").strip().lower()
+    if not raw.startswith("/"):
+        return ()
+    segments = raw.strip("/").split("/")
+    if not 1 <= len(segments) <= 2 or not all(MARKET_SEGMENT_RE.fullmatch(part) for part in segments):
+        return ()
+    return tuple(token for part in segments for token in part.split("-"))
+
+
+def _child_sitemap_market(url: str) -> tuple[str, ...]:
+    try:
+        segments = [part.lower() for part in urlparse(url).path.split("/") if part]
+    except ValueError:
+        return ()
+    market = []
+    for part in segments[:-1][:2]:
+        if not MARKET_SEGMENT_RE.fullmatch(part):
+            break
+        market.extend(part.split("-"))
+    if market:
+        return tuple(market)
+    name = re.sub(r"\.xml(?:\.gz)?$", "", segments[-1] if segments else "")
+    name = re.sub(r"\d+$", "", name)
+    tokens = [part for part in re.split(r"[._-]+", name) if part]
+    while len(tokens) > 1 and (tokens[-1].isdigit() or MARKET_SEGMENT_RE.fullmatch(tokens[-1])):
+        part = tokens.pop()
+        if not part.isdigit():
+            market.insert(0, part)
+    if not market and len(tokens) > 1 and MARKET_SEGMENT_RE.fullmatch(tokens[0]):
+        market.append(tokens[0])
+    return tuple(market)
+
+
+def interleave_by_family(children: list[str], *, primary_market_hint: str | None = None) -> list[str]:
+    """Visit distinct structures before their language/number siblings."""
+    families: dict[tuple[str, tuple[str, ...], tuple[str, ...]], list[str]] = {}
     for child in children:
-        families.setdefault(sitemap_family_key(child), []).append(child)
+        families.setdefault(_child_sitemap_structure_key(child), []).append(child)
+    preferred = _primary_market_tokens(primary_market_hint)
+    if preferred:
+        def market_match(url: str) -> int:
+            actual = _child_sitemap_market(url)
+            if len(preferred) > 1 and actual == preferred:
+                return 2
+            return int(bool(actual and actual[-1] == preferred[-1]))
+
+        for values in families.values():
+            values.sort(key=market_match, reverse=True)
     output: list[str] = []
     while any(families.values()):
         for family in list(families):

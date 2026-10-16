@@ -132,7 +132,7 @@ def test_run_scan_continues_to_page_workers_after_sitemap_budget(monkeypatch):
     async def fake_safe_get(client, url, **kwargs):
         return FakeResponse(url=url)
 
-    async def fake_load_sitemap_urls(client, origin, prefix, limit, artifacts, scope_evidence=None, *, deadline=None, max_fetches=None, diagnostics=None, min_request_interval_seconds=0.0):
+    async def fake_load_sitemap_urls(client, origin, prefix, limit, artifacts, scope_evidence=None, *, deadline=None, max_fetches=None, diagnostics=None, min_request_interval_seconds=0.0, primary_market_hint=None):
         captured["sitemap_deadline"] = deadline
         captured["sitemap_request_interval_seconds"] = min_request_interval_seconds
         diagnostics.update({

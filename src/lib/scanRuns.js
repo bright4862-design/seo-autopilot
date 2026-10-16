@@ -3,6 +3,7 @@
 // queue or asynchronous recovery; Premium remains blocked on that coordinator.
 
 import { base44 } from "@/api/base44Client";
+import { scanComparisonSupportReference } from "./scanComparisonSupport.js";
 
 export const SCAN_HISTORY_VERSION = "scan_history_v3_focused_parent_children";
 import { getActiveProject } from "@/lib/activeProject";
@@ -669,6 +670,48 @@ export async function listAccountScanRuns(limit = 20) {
     console.warn("Durable account scan history read failed.", failure.kind, failure.support_reference);
     if (failure.kind === "unauthorized") clearCustomerAuthBoundary({ status: 401 });
     return failure;
+  }
+}
+
+// Comparison is a separate read: failure must not replace a verified FixList.
+// Only the current ID crosses this boundary; the server selects the prior run.
+export async function getScanComparison(scanRunId) {
+  const scanId = typeof scanRunId === "string" ? scanRunId.trim() : "";
+  const unavailable = (reference = "") => ({
+    scan_id: scanId,
+    comparison_status: "unavailable",
+    comparison_verified: false,
+    comparison: null,
+    ...(scanComparisonSupportReference(reference) ? { support_reference: reference } : {}),
+  });
+  if (!scanId || scanId.length > 256) return unavailable();
+  try {
+    await currentOwner();
+    const response = await base44.functions.invoke("getCustomerScanResultV8", {
+      action: "compare",
+      scan_id: scanId,
+    });
+    const result = response?.data && typeof response.data === "object" ? response.data : response;
+    if (result?.success !== true || result.scan_id !== scanId) return unavailable();
+    if (result.comparison_status === "no_previous_scan" && result.comparison_verified === false) {
+      return { ...unavailable(), comparison_status: "no_previous_scan" };
+    }
+    if (result.comparison_status === "unavailable" && result.comparison_verified === false) {
+      return unavailable(result.support_reference);
+    }
+    if (result.comparison_verified !== true || result.comparison?.current_scan_id !== scanId) return unavailable();
+    return {
+      scan_id: scanId,
+      comparison_status: "ready",
+      comparison_verified: true,
+      comparison: result.comparison,
+    };
+  } catch (error) {
+    if (classifyCustomerRecoveryError(error).kind === "unauthorized") {
+      clearCustomerAuthBoundary({ status: 401 });
+      return unavailable();
+    }
+    return unavailable("CMP-REQUEST");
   }
 }
 

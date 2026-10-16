@@ -1,0 +1,1042 @@
+{
+  "name": "geo_report_evidence_with_defaults",
+  "data": {
+    "run": {
+      "geo_readiness": {
+        "geo_readiness_version": "geo_readiness_v1_experimental",
+        "assessment_status": "assessed",
+        "score": 83,
+        "coverage": 1,
+        "score_bounds": {
+          "lower": 83.333333,
+          "upper": 83.333333
+        },
+        "bounds_kind": "unknown_outcome_range_not_statistical_confidence",
+        "sample_pages": 1,
+        "dimensions": {
+          "access": {
+            "coverage": 1,
+            "checks": {
+              "search_policy": {
+                "counts": {
+                  "fail": 1,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 0
+                },
+                "applicable_or_unknown": 1
+              },
+              "indexability": {
+                "counts": {
+                  "fail": 0,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 1
+                },
+                "applicable_or_unknown": 1
+              },
+              "discovery": {
+                "counts": {
+                  "fail": 0,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 1
+                },
+                "applicable_or_unknown": 1
+              }
+            },
+            "score": 66.666667
+          },
+          "clarity": {
+            "coverage": 1,
+            "checks": {
+              "main_text": {
+                "counts": {
+                  "fail": 0,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 1
+                },
+                "applicable_or_unknown": 1
+              },
+              "page_identity": {
+                "counts": {
+                  "fail": 0,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 1
+                },
+                "applicable_or_unknown": 1
+              },
+              "template_integrity": {
+                "counts": {
+                  "fail": 1,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 0
+                },
+                "applicable_or_unknown": 1
+              }
+            },
+            "score": 66.666667
+          },
+          "entity": {
+            "coverage": 1,
+            "checks": {
+              "subject_identity": {
+                "counts": {
+                  "fail": 0,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 1
+                },
+                "applicable_or_unknown": 1
+              },
+              "entity_details": {
+                "counts": {
+                  "fail": 0,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 1
+                },
+                "applicable_or_unknown": 1
+              },
+              "schema_agreement": {
+                "counts": {
+                  "fail": 0,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 1
+                },
+                "applicable_or_unknown": 1
+              }
+            },
+            "score": 100
+          },
+          "support": {
+            "coverage": 1,
+            "checks": {
+              "accountability": {
+                "counts": {
+                  "fail": 0,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 1
+                },
+                "applicable_or_unknown": 1
+              },
+              "date_context": {
+                "counts": {
+                  "fail": 0,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 1
+                },
+                "applicable_or_unknown": 1
+              },
+              "source_attribution": {
+                "counts": {
+                  "fail": 0,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 1
+                },
+                "applicable_or_unknown": 1
+              }
+            },
+            "score": 100
+          }
+        },
+        "reasons": [],
+        "authority_verified": false,
+        "evidence_adapter_version": "geo_evidence_v1",
+        "observations": [
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "search_policy",
+            "state": "fail",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:search_policy:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Observed OAI-SearchBot directive; not proof of provider access"
+          },
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "indexability",
+            "state": "pass",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:indexability:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "No noindex observed in retained search directives; indexing not guaranteed"
+          },
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "discovery",
+            "state": "pass",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:discovery:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Observed incoming link in the sampled graph"
+          },
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "main_text",
+            "state": "pass",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:main_text:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Extractable text in a main content landmark"
+          },
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "page_identity",
+            "state": "pass",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:page_identity:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Nonempty page title and primary heading"
+          },
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "template_integrity",
+            "state": "fail",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:template_integrity:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Template token syntax in ordinary text"
+          },
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "subject_identity",
+            "state": "pass",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:subject_identity:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Explicitly labelled subject name"
+          },
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "entity_details",
+            "state": "pass",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:entity_details:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Visible semantic contact address"
+          },
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "schema_agreement",
+            "state": "pass",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:schema_agreement:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Page-linked structured name agrees with primary heading"
+          },
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "accountability",
+            "state": "pass",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:accountability:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Article contains an identified author link"
+          },
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "date_context",
+            "state": "pass",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:date_context:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Article contains a labelled machine-readable date"
+          },
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "source_attribution",
+            "state": "pass",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:source_attribution:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Article quotation links its declared source"
+          }
+        ],
+        "findings": [
+          {
+            "rule_id": "geo_search_policy",
+            "root_cause_id": "geo_search_policy",
+            "check_id": "search_policy",
+            "label": "OAI-SearchBot robots directive",
+            "affected_page_count": 1,
+            "page_ids": [
+              "p_0f115db062b7c0dd030b1687"
+            ],
+            "evidence_samples": [
+              {
+                "page_id": "p_0f115db062b7c0dd030b1687",
+                "check_id": "search_policy",
+                "state": "fail",
+                "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:search_policy:aaaaaaaaaaaaaaaaaaaaaaaa",
+                "reason": "Observed OAI-SearchBot directive; not proof of provider access",
+                "page_url": "https://example.com/"
+              }
+            ],
+            "sample_truncated": false,
+            "suggested_action": "Review whether the OAI-SearchBot restriction matches intended search access.",
+            "verification_step": "Recheck the robots directive for the affected page after any intended change."
+          },
+          {
+            "rule_id": "geo_template_integrity",
+            "root_cause_id": "geo_template_integrity",
+            "check_id": "template_integrity",
+            "label": "Template token syntax in ordinary text",
+            "affected_page_count": 1,
+            "page_ids": [
+              "p_0f115db062b7c0dd030b1687"
+            ],
+            "evidence_samples": [
+              {
+                "page_id": "p_0f115db062b7c0dd030b1687",
+                "check_id": "template_integrity",
+                "state": "fail",
+                "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:template_integrity:aaaaaaaaaaaaaaaaaaaaaaaa",
+                "reason": "Template token syntax in ordinary text",
+                "page_url": "https://example.com/"
+              }
+            ],
+            "sample_truncated": false,
+            "suggested_action": "Review the token syntax in ordinary page text and replace any unintended placeholder.",
+            "verification_step": "Confirm the published main text no longer contains the unintended token."
+          }
+        ],
+        "assessment_gates": {
+          "parent_authoritative": true,
+          "entry_verified": true,
+          "access_limited": false
+        }
+      },
+      "status": "complete",
+      "release_gate_eligible": true,
+      "score_is_provisional": false,
+      "evidence_quality_blocking": false,
+      "website_url": "https://example.com/",
+      "normalized_domain": "example.com",
+      "scope_type": "",
+      "parent_scan_id": "",
+      "requested_origin": "",
+      "requested_path_prefix": "",
+      "discovered_from": "",
+      "user_confirmed": false,
+      "scanner_version": "",
+      "scanner_build_revision": "",
+      "scanner_wrapper_version": "",
+      "advanced_scan_backend": "python_scanner_api",
+      "deno_fallback_used": false,
+      "archetype_classifier_version": "",
+      "review_version": "",
+      "review_evidence_calibration_version": "",
+      "ai_review_backend": "python_review_api",
+      "python_review_fallback_used": false,
+      "beta_revision_fingerprint": "",
+      "metadata_evidence_version": "",
+      "title_evidence_version": "",
+      "pages_found": 1,
+      "pages_crawled": 1,
+      "scan_coverage": {},
+      "scan_status": "complete",
+      "review_confidence_state": "",
+      "evidence_quality_state": "",
+      "evidence_quality_score": 0,
+      "evidence_quality_reasons": [],
+      "pages_retained": 0,
+      "usable_html_page_count": 0,
+      "representative_html_page_count": 0,
+      "default_route_page_count": 0,
+      "discovery_quality_state": "",
+      "evidence_quality_gate_version": "",
+      "crawl_timing": {},
+      "sampling_evidence": {},
+      "health_score": 93,
+      "health_grade": "",
+      "health_score_explanation": {},
+      "customer_summary": "",
+      "next_best_step": "",
+      "no_high_confidence_findings": false,
+      "completed_at": "2026-09-18T12:00:00.000Z",
+      "status_detail": "",
+      "fix_list_id": "f",
+      "authority_seal_version": "standard_review_snapshot_hmac_geo_v1",
+      "authority_sealed_at": "2026-09-18T12:00:00.000Z",
+      "authority_proof": "72c2f5ddcda93bc26992f0a0955409a9e6b9ba20400d5a767a53798f3d8470a4",
+      "id": "s",
+      "project_id": "p",
+      "updated_date": "2026-09-18T12:00:03.000Z"
+    },
+    "fixList": {
+      "scan_run_id": "s",
+      "project_id": "p",
+      "website_url": "https://example.com/",
+      "ai_review_backend": "python_review_api",
+      "python_review_fallback_used": false,
+      "is_authoritative": true,
+      "health_score": 93,
+      "health_grade": "",
+      "scan_status": "complete",
+      "score_is_provisional": false,
+      "no_high_confidence_findings": false,
+      "total_fixes": 1,
+      "critical_count": 0,
+      "high_count": 1,
+      "medium_count": 0,
+      "low_count": 0,
+      "completed_count": 0,
+      "top_action_fix_ids": [
+        "redirect-wrong-destination-1"
+      ],
+      "generated_at": "2026-09-18T12:00:00.000Z",
+      "authority_proof": "72c2f5ddcda93bc26992f0a0955409a9e6b9ba20400d5a767a53798f3d8470a4",
+      "owner_user_id": "u",
+      "id": "f",
+      "created_date": "2026-09-18T12:00:02.000Z"
+    },
+    "fixItems": [
+      {
+        "fix_list_id": "f",
+        "scan_run_id": "s",
+        "project_id": "p",
+        "fix_id": "redirect-wrong-destination-1",
+        "rule": "redirect_destination_failed",
+        "category": "indexability",
+        "customer_category": "",
+        "issue_title": "Fix a redirect that sends visitors to the wrong page",
+        "plain_english_explanation": "The requested deep URL collapses to the homepage.",
+        "why_it_matters": "The destination is usable but not a relevant replacement.",
+        "current_value": "",
+        "recommended_value": "Restore the intended page or choose a verified relevant replacement.",
+        "simple_next_step": "Review the observed destination before changing the redirect.",
+        "page_scope": "page",
+        "page_template_family": "standard",
+        "page_url": "/legacy-page",
+        "affected_pages": [
+          "/legacy-page"
+        ],
+        "source_pages": [],
+        "evidence_status": "confirmed",
+        "verification_state": "verified",
+        "confidence_score": 99,
+        "priority": "high",
+        "difficulty": "developer",
+        "who_can_do_this": "your_web_person",
+        "requires_developer": true,
+        "requires_approval": false,
+        "can_auto_fix": false,
+        "estimated_time": "",
+        "user_status": "open",
+        "what_to_do_steps": [],
+        "raw_finding": {
+          "verified_urls": [],
+          "redirect_outcome": "redirect_to_wrong_destination",
+          "redirect_fetch_evidence": {
+            "requested_url": "https://example.com/legacy-page",
+            "redirect_chain": [
+              {
+                "url": "https://example.com/legacy-page",
+                "status": 301,
+                "location": "https://example.com/"
+              }
+            ],
+            "final_url": "https://example.com/",
+            "final_status": 200,
+            "final_content_type": "text/html; charset=utf-8",
+            "body_bytes": 1234,
+            "html_parse_ok": true,
+            "fetch_error": "",
+            "robots_status": "allowed",
+            "canonical_url": "https://example.com/",
+            "noindex": false,
+            "classification": "redirect_to_wrong_destination"
+          },
+          "redirect_fetch_evidence_samples": [
+            {
+              "requested_url": "https://example.com/legacy-page",
+              "redirect_chain": [
+                {
+                  "url": "https://example.com/legacy-page",
+                  "status": 301,
+                  "location": "https://example.com/"
+                }
+              ],
+              "final_url": "https://example.com/",
+              "final_status": 200,
+              "final_content_type": "text/html; charset=utf-8",
+              "body_bytes": 1234,
+              "html_parse_ok": true,
+              "fetch_error": "",
+              "robots_status": "allowed",
+              "canonical_url": "https://example.com/",
+              "noindex": false,
+              "classification": "redirect_to_wrong_destination"
+            }
+          ],
+          "redirect_observed_count": 1,
+          "redirect_evidence_truncated": false,
+          "non_scoring": false,
+          "score_impact": 0,
+          "repair_observation_samples": [
+            {
+              "page_url": "/legacy-page",
+              "canonical_url": "",
+              "issue_type": "canonical_missing",
+              "status": 200
+            },
+            {
+              "page_url": "/other-page",
+              "meta_description": "",
+              "meta_description_state": "missing",
+              "issue_type": "missing_meta_description",
+              "status": 200
+            }
+          ],
+          "repair_observation_count": 2
+        },
+        "authority_proof": "72c2f5ddcda93bc26992f0a0955409a9e6b9ba20400d5a767a53798f3d8470a4",
+        "owner_user_id": "u",
+        "id": "row_1",
+        "page_count": 0,
+        "family_breakdown": {},
+        "representative_pages_by_family": {},
+        "metadata_state_counts": {
+          "missing": 0,
+          "empty": 0,
+          "malformed": 0
+        },
+        "combined_rules": [],
+        "carried_over": false,
+        "created_date": "2026-09-18T12:00:02.000Z"
+      }
+    ],
+    "userId": "u"
+  },
+  "snapshot": {
+    "version": "standard_review_snapshot_hmac_geo_v1",
+    "sealed_at": "2026-09-18T12:00:00.000Z",
+    "owner_user_id": "u",
+    "scan_id": "s",
+    "project_id": "p",
+    "normalized_domain": "example.com",
+    "release_fingerprint": "",
+    "scan": {
+      "geo_readiness": {
+        "geo_readiness_version": "geo_readiness_v1_experimental",
+        "assessment_status": "assessed",
+        "score": 83,
+        "coverage": 1,
+        "score_bounds": {
+          "lower": 83.333333,
+          "upper": 83.333333
+        },
+        "bounds_kind": "unknown_outcome_range_not_statistical_confidence",
+        "sample_pages": 1,
+        "dimensions": {
+          "access": {
+            "coverage": 1,
+            "checks": {
+              "search_policy": {
+                "counts": {
+                  "fail": 1,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 0
+                },
+                "applicable_or_unknown": 1
+              },
+              "indexability": {
+                "counts": {
+                  "fail": 0,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 1
+                },
+                "applicable_or_unknown": 1
+              },
+              "discovery": {
+                "counts": {
+                  "fail": 0,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 1
+                },
+                "applicable_or_unknown": 1
+              }
+            },
+            "score": 66.666667
+          },
+          "clarity": {
+            "coverage": 1,
+            "checks": {
+              "main_text": {
+                "counts": {
+                  "fail": 0,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 1
+                },
+                "applicable_or_unknown": 1
+              },
+              "page_identity": {
+                "counts": {
+                  "fail": 0,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 1
+                },
+                "applicable_or_unknown": 1
+              },
+              "template_integrity": {
+                "counts": {
+                  "fail": 1,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 0
+                },
+                "applicable_or_unknown": 1
+              }
+            },
+            "score": 66.666667
+          },
+          "entity": {
+            "coverage": 1,
+            "checks": {
+              "subject_identity": {
+                "counts": {
+                  "fail": 0,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 1
+                },
+                "applicable_or_unknown": 1
+              },
+              "entity_details": {
+                "counts": {
+                  "fail": 0,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 1
+                },
+                "applicable_or_unknown": 1
+              },
+              "schema_agreement": {
+                "counts": {
+                  "fail": 0,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 1
+                },
+                "applicable_or_unknown": 1
+              }
+            },
+            "score": 100
+          },
+          "support": {
+            "coverage": 1,
+            "checks": {
+              "accountability": {
+                "counts": {
+                  "fail": 0,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 1
+                },
+                "applicable_or_unknown": 1
+              },
+              "date_context": {
+                "counts": {
+                  "fail": 0,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 1
+                },
+                "applicable_or_unknown": 1
+              },
+              "source_attribution": {
+                "counts": {
+                  "fail": 0,
+                  "not_applicable": 0,
+                  "not_verified": 0,
+                  "pass": 1
+                },
+                "applicable_or_unknown": 1
+              }
+            },
+            "score": 100
+          }
+        },
+        "reasons": [],
+        "authority_verified": false,
+        "evidence_adapter_version": "geo_evidence_v1",
+        "observations": [
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "search_policy",
+            "state": "fail",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:search_policy:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Observed OAI-SearchBot directive; not proof of provider access"
+          },
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "indexability",
+            "state": "pass",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:indexability:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "No noindex observed in retained search directives; indexing not guaranteed"
+          },
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "discovery",
+            "state": "pass",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:discovery:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Observed incoming link in the sampled graph"
+          },
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "main_text",
+            "state": "pass",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:main_text:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Extractable text in a main content landmark"
+          },
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "page_identity",
+            "state": "pass",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:page_identity:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Nonempty page title and primary heading"
+          },
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "template_integrity",
+            "state": "fail",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:template_integrity:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Template token syntax in ordinary text"
+          },
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "subject_identity",
+            "state": "pass",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:subject_identity:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Explicitly labelled subject name"
+          },
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "entity_details",
+            "state": "pass",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:entity_details:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Visible semantic contact address"
+          },
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "schema_agreement",
+            "state": "pass",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:schema_agreement:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Page-linked structured name agrees with primary heading"
+          },
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "accountability",
+            "state": "pass",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:accountability:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Article contains an identified author link"
+          },
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "date_context",
+            "state": "pass",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:date_context:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Article contains a labelled machine-readable date"
+          },
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "source_attribution",
+            "state": "pass",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:source_attribution:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Article quotation links its declared source"
+          }
+        ],
+        "findings": [
+          {
+            "rule_id": "geo_search_policy",
+            "root_cause_id": "geo_search_policy",
+            "check_id": "search_policy",
+            "label": "OAI-SearchBot robots directive",
+            "affected_page_count": 1,
+            "page_ids": [
+              "p_0f115db062b7c0dd030b1687"
+            ],
+            "evidence_samples": [
+              {
+                "page_id": "p_0f115db062b7c0dd030b1687",
+                "check_id": "search_policy",
+                "state": "fail",
+                "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:search_policy:aaaaaaaaaaaaaaaaaaaaaaaa",
+                "reason": "Observed OAI-SearchBot directive; not proof of provider access",
+                "page_url": "https://example.com/"
+              }
+            ],
+            "sample_truncated": false,
+            "suggested_action": "Review whether the OAI-SearchBot restriction matches intended search access.",
+            "verification_step": "Recheck the robots directive for the affected page after any intended change."
+          },
+          {
+            "rule_id": "geo_template_integrity",
+            "root_cause_id": "geo_template_integrity",
+            "check_id": "template_integrity",
+            "label": "Template token syntax in ordinary text",
+            "affected_page_count": 1,
+            "page_ids": [
+              "p_0f115db062b7c0dd030b1687"
+            ],
+            "evidence_samples": [
+              {
+                "page_id": "p_0f115db062b7c0dd030b1687",
+                "check_id": "template_integrity",
+                "state": "fail",
+                "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:template_integrity:aaaaaaaaaaaaaaaaaaaaaaaa",
+                "reason": "Template token syntax in ordinary text",
+                "page_url": "https://example.com/"
+              }
+            ],
+            "sample_truncated": false,
+            "suggested_action": "Review the token syntax in ordinary page text and replace any unintended placeholder.",
+            "verification_step": "Confirm the published main text no longer contains the unintended token."
+          }
+        ],
+        "assessment_gates": {
+          "parent_authoritative": true,
+          "entry_verified": true,
+          "access_limited": false
+        }
+      },
+      "status": "complete",
+      "release_gate_eligible": true,
+      "score_is_provisional": false,
+      "evidence_quality_blocking": false,
+      "website_url": "https://example.com/",
+      "normalized_domain": "example.com",
+      "scope_type": "",
+      "parent_scan_id": "",
+      "requested_origin": "",
+      "requested_path_prefix": "",
+      "discovered_from": "",
+      "user_confirmed": false,
+      "scanner_version": "",
+      "scanner_build_revision": "",
+      "scanner_wrapper_version": "",
+      "advanced_scan_backend": "python_scanner_api",
+      "deno_fallback_used": false,
+      "archetype_classifier_version": "",
+      "review_version": "",
+      "review_evidence_calibration_version": "",
+      "ai_review_backend": "python_review_api",
+      "python_review_fallback_used": false,
+      "beta_revision_fingerprint": "",
+      "metadata_evidence_version": "",
+      "title_evidence_version": "",
+      "pages_found": 1,
+      "pages_crawled": 1,
+      "scan_coverage": {},
+      "scan_status": "complete",
+      "review_confidence_state": "",
+      "evidence_quality_state": "",
+      "evidence_quality_score": 0,
+      "evidence_quality_reasons": [],
+      "pages_retained": 0,
+      "usable_html_page_count": 0,
+      "representative_html_page_count": 0,
+      "default_route_page_count": 0,
+      "discovery_quality_state": "",
+      "evidence_quality_gate_version": "",
+      "crawl_timing": {},
+      "sampling_evidence": {},
+      "health_score": 93,
+      "health_grade": "",
+      "health_score_explanation": {},
+      "customer_summary": "",
+      "next_best_step": "",
+      "no_high_confidence_findings": false,
+      "completed_at": "2026-09-18T12:00:00.000Z"
+    },
+    "fix_list": {
+      "website_url": "https://example.com/",
+      "ai_review_backend": "python_review_api",
+      "python_review_fallback_used": false,
+      "is_authoritative": true,
+      "health_score": 93,
+      "health_grade": "",
+      "scan_status": "complete",
+      "score_is_provisional": false,
+      "no_high_confidence_findings": false,
+      "total_fixes": 1,
+      "critical_count": 0,
+      "high_count": 1,
+      "medium_count": 0,
+      "low_count": 0,
+      "completed_count": 0,
+      "top_action_fix_ids": [
+        "redirect-wrong-destination-1"
+      ],
+      "generated_at": "2026-09-18T12:00:00.000Z"
+    },
+    "recommendations": [
+      {
+        "fix_id": "redirect-wrong-destination-1",
+        "rule": "redirect_destination_failed",
+        "category": "indexability",
+        "customer_category": "",
+        "issue_title": "Fix a redirect that sends visitors to the wrong page",
+        "plain_english_explanation": "The requested deep URL collapses to the homepage.",
+        "why_it_matters": "The destination is usable but not a relevant replacement.",
+        "current_value": "",
+        "recommended_value": "Restore the intended page or choose a verified relevant replacement.",
+        "simple_next_step": "Review the observed destination before changing the redirect.",
+        "page_scope": "page",
+        "page_template_family": "standard",
+        "page_url": "/legacy-page",
+        "affected_pages": [
+          "/legacy-page"
+        ],
+        "source_pages": [],
+        "evidence_status": "confirmed",
+        "verification_state": "verified",
+        "confidence_score": 99,
+        "priority": "high",
+        "difficulty": "developer",
+        "who_can_do_this": "your_web_person",
+        "requires_developer": true,
+        "requires_approval": false,
+        "can_auto_fix": false,
+        "estimated_time": "",
+        "user_status": "open",
+        "what_to_do_steps": [],
+        "raw_finding": {
+          "verified_urls": [],
+          "redirect_outcome": "redirect_to_wrong_destination",
+          "redirect_fetch_evidence": {
+            "requested_url": "https://example.com/legacy-page",
+            "redirect_chain": [
+              {
+                "url": "https://example.com/legacy-page",
+                "status": 301,
+                "location": "https://example.com/"
+              }
+            ],
+            "final_url": "https://example.com/",
+            "final_status": 200,
+            "final_content_type": "text/html; charset=utf-8",
+            "body_bytes": 1234,
+            "html_parse_ok": true,
+            "fetch_error": "",
+            "robots_status": "allowed",
+            "canonical_url": "https://example.com/",
+            "noindex": false,
+            "classification": "redirect_to_wrong_destination"
+          },
+          "redirect_fetch_evidence_samples": [
+            {
+              "requested_url": "https://example.com/legacy-page",
+              "redirect_chain": [
+                {
+                  "url": "https://example.com/legacy-page",
+                  "status": 301,
+                  "location": "https://example.com/"
+                }
+              ],
+              "final_url": "https://example.com/",
+              "final_status": 200,
+              "final_content_type": "text/html; charset=utf-8",
+              "body_bytes": 1234,
+              "html_parse_ok": true,
+              "fetch_error": "",
+              "robots_status": "allowed",
+              "canonical_url": "https://example.com/",
+              "noindex": false,
+              "classification": "redirect_to_wrong_destination"
+            }
+          ],
+          "redirect_observed_count": 1,
+          "redirect_evidence_truncated": false,
+          "non_scoring": false,
+          "score_impact": 0,
+          "repair_observation_samples": [
+            {
+              "page_url": "/legacy-page",
+              "canonical_url": "",
+              "issue_type": "canonical_missing",
+              "status": 200
+            },
+            {
+              "page_url": "/other-page",
+              "meta_description": "",
+              "meta_description_state": "missing",
+              "issue_type": "missing_meta_description",
+              "status": 200
+            }
+          ],
+          "repair_observation_count": 2
+        }
+      }
+    ]
+  },
+  "proof": "72c2f5ddcda93bc26992f0a0955409a9e6b9ba20400d5a767a53798f3d8470a4",
+  "serialized_sha256": "c77dacd07f69a82228577a3763c65a1a873ca54c1914b3d66a3db9b4f46099bb",
+  "preview": {
+    "version": "standard_customer_preview_hmac_v2_geo_readiness",
+    "payload": {
+      "scan_id": "s",
+      "project_id": "p",
+      "owner_user_id": "u",
+      "normalized_domain": "example.com",
+      "release_fingerprint": "",
+      "authority_seal_version": "standard_review_snapshot_hmac_geo_v1",
+      "authority_sealed_at": "2026-09-18T12:00:00.000Z",
+      "full_authority_proof": "72c2f5ddcda93bc26992f0a0955409a9e6b9ba20400d5a767a53798f3d8470a4",
+      "sealed_at": "2026-09-18T12:00:00.000Z",
+      "run": {
+        "id": "s",
+        "project_id": "p",
+        "website_url": "https://example.com/",
+        "normalized_domain": "example.com",
+        "status": "complete",
+        "status_detail": "",
+        "pages_found": 1,
+        "pages_crawled": 1,
+        "pages_retained": 0,
+        "completed_at": "2026-09-18T12:00:00.000Z",
+        "health_score": 93,
+        "health_grade": "",
+        "release_gate_eligible": true,
+        "beta_revision_fingerprint": "",
+        "health_score_status": "authoritative",
+        "geo_readiness": {
+          "geo_readiness_version": "geo_readiness_v1_experimental",
+          "evidence_adapter_version": "geo_evidence_v1",
+          "assessment_status": "assessed",
+          "score": 83,
+          "coverage": 1,
+          "sample_pages": 1,
+          "score_bounds": {
+            "lower": 83.333333,
+            "upper": 83.333333
+          },
+          "bounds_kind": "unknown_outcome_range_not_statistical_confidence"
+        }
+      },
+      "fixList": {
+        "id": "f",
+        "scan_run_id": "s",
+        "project_id": "p",
+        "website_url": "https://example.com/",
+        "health_score": 93,
+        "health_grade": "",
+        "total_fixes": 1,
+        "critical_count": 0,
+        "high_count": 1,
+        "medium_count": 0,
+        "low_count": 0,
+        "generated_at": "2026-09-18T12:00:00.000Z"
+      },
+      "fixItems": [
+        {
+          "id": "row_1",
+          "fix_id": "redirect-wrong-destination-1",
+          "issue_title": "Fix a redirect that sends visitors to the wrong page",
+          "customer_category": "",
+          "priority": "high",
+          "page_count": 0,
+          "plain_english_explanation": "The requested deep URL collapses to the homepage.",
+          "why_it_matters": "The destination is usable but not a relevant replacement.",
+          "recommended_value": "Restore the intended page or choose a verified relevant replacement.",
+          "simple_next_step": "Review the observed destination before changing the redirect.",
+          "difficulty": "developer",
+          "who_can_do_this": "your_web_person",
+          "requires_developer": true,
+          "preview_locked_detail": false,
+          "preview_example_page": "/legacy-page"
+        }
+      ]
+    },
+    "proof": "dc355d9b85e824650b35240d0be93a863b4fded7867569cf8e22a4d5797fdedf"
+  }
+}

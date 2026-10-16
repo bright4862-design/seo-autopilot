@@ -92,3 +92,70 @@ export function evidenceUrlKey(value) {
   const query = canonicalQuery(value);
   return query ? `${path}?${query}` : path;
 }
+
+export const PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION = "evidence_url_identity_v2_published_route";
+
+const OBSERVED_URL_FORBIDDEN = /[\u0000-\u0020\u007f-\u009f\\]/;
+const OBSERVED_ABSOLUTE_URL = /^(https?):\/\/([^/?#]+)([\s\S]*)$/i;
+
+function publishedOrigin(scheme, authority) {
+  if (authority.includes("@") || authority.includes("%")) return "";
+  const ipv6 = authority.startsWith("[");
+  const parts = ipv6
+    ? authority.match(/^\[([^\]]+)\](?::([0-9]+))?$/)
+    : authority.match(/^([^:\[\]]+)(?::([0-9]+))?$/);
+  if (!parts) return "";
+  scheme = scheme.toLowerCase();
+  let port = "";
+  if (parts[2] !== undefined) {
+    const number = Number(parts[2]);
+    if (!Number.isInteger(number) || number > 65535) return "";
+    if (number !== (scheme === "https" ? 443 : 80)) port = `:${number}`;
+  }
+  try {
+    // The URL parser sees only the origin: it may normalize IDN/IPv6, but must
+    // never rewrite the observed path, dot segments, escapes or query.
+    const host = new URL(`${scheme}://${ipv6 ? `[${parts[1]}]` : parts[1]}/`).hostname;
+    if (!ipv6) {
+      // Validate the UTS-46 host without URL's non-canonical IPv4 coercions.
+      // A dummy nonnumeric suffix keeps numeric inputs in domain parsing mode.
+      const domain = new URL(`https://${parts[1]}.invalid/`).hostname.slice(0, -8);
+      const labels = domain.replace(/\.$/, "").split(".");
+      if (domain.replace(/\.$/, "").length > 253 || labels.some((label) => (
+        label.length > 63 || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)
+      ))) return "";
+      if (host !== domain) return "";
+      const last = labels.at(-1);
+      if (/^(?:[0-9]+|0x[0-9a-f]*)$/.test(last)) {
+        if (domain.endsWith(".") || labels.length !== 4 || labels.some((label) => (
+          !/^(?:0|[1-9][0-9]{0,2})$/.test(label) || Number(label) > 255
+        ))) return "";
+      }
+    }
+    return `${scheme}://${host}${port}`;
+  } catch {
+    return "";
+  }
+}
+
+/** Exact observed HTTP(S) route, with only origin/fragment normalization. */
+export function publishedEvidenceUrlKey(value, { scanOrigin = "" } = {}) {
+  if (typeof value !== "string" || !value || OBSERVED_URL_FORBIDDEN.test(value)) return "";
+  const raw = value.split("#", 1)[0];
+  const absolute = raw.match(OBSERVED_ABSOLUTE_URL);
+  let origin;
+  let route;
+  if (absolute) {
+    origin = publishedOrigin(absolute[1], absolute[2]);
+    route = absolute[3];
+  } else if (raw.startsWith("/") && !raw.startsWith("//")) {
+    if (typeof scanOrigin !== "string" || OBSERVED_URL_FORBIDDEN.test(scanOrigin)) return "";
+    const base = scanOrigin.match(OBSERVED_ABSOLUTE_URL);
+    if (!base) return "";
+    origin = publishedOrigin(base[1], base[2]);
+    route = raw;
+  } else {
+    return "";
+  }
+  return origin ? origin + (route.startsWith("/") ? route : `/${route}`) : "";
+}

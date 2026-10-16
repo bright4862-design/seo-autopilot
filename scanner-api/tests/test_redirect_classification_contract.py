@@ -267,7 +267,7 @@ async def test_200_html_with_zero_internal_links_is_usable_and_not_a_redirect_fa
 def test_redirect_repairs_do_not_merge_missing_h1_meta_image_or_canonical_repairs():
     html = (
         '<html><head><title>Service page</title></head>'
-        '<body><p>Useful content.</p><img src="/team.jpg"></body></html>'
+        '<body><p>Useful content.</p><figure><img src="/team.jpg"><figcaption>Our team</figcaption></figure></body></html>'
     )
     page = extract_page(
         html,
@@ -353,7 +353,7 @@ def test_wrong_destination_evidence_survives_final_url_dedup_against_retained_ho
 async def test_usable_redirect_destination_keeps_its_own_content_findings_on_final_url(policy):
     final_html = (
         '<html><head><title>Final service page</title></head>'
-        '<body><p>Useful final-page content.</p><img src="/hero.jpg"></body></html>'
+        '<body><p>Useful final-page content.</p><figure><img src="/hero.jpg"><figcaption>Our service</figcaption></figure></body></html>'
     )
     client = FakeClient({
         "https://example.com/old-service": _response(
@@ -378,7 +378,7 @@ async def test_usable_redirect_destination_keeps_its_own_content_findings_on_fin
     )
     for rule in {"missing_meta_description", "missing_h1", "canonical_missing", "image_alt_text"}:
         finding = next(item for item in findings if item["rule"] == rule)
-        assert finding["affected_pages"] == ["/final-service"]
+        assert finding["affected_pages"] == ["https://example.com/final-service" if rule == "image_alt_text" else "/final-service"]
     assert not any(item["rule"] == "sitemap_indexability_conflict" for item in findings)
 
 

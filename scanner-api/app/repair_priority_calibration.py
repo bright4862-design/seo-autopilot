@@ -249,15 +249,16 @@ def _score(
     return score
 
 
-def annotate_calibrated_repair_priority(fix: dict[str, Any], pages: list[dict[str, Any]]) -> dict[str, Any]:
+def annotate_calibrated_repair_priority(fix: dict[str, Any], pages: list[dict[str, Any]], *, scan_origin: str = "", identity_version: str = "") -> dict[str, Any]:
     """Recalibrate one repair without changing its underlying finding.
 
     Legacy `priority`, crawl evidence, and normal review output remain intact.
     The post-review repair-contract wrapper may use this annotation to build a
     separate canonical snapshot after the ordinary review has finished.
     """
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
     normalized_pages = _canonical_priority_pages(pages or [])
-    annotated = annotate_repair_priority(dict(fix), normalized_pages)
+    annotated = annotate_repair_priority(dict(fix), normalized_pages, **identity_context)
     base_severity, severity_source = technical_base_severity(fix)
     evidence_class = calibrated_evidence_class(fix)
     context = dict(annotated.get("priority_context") or {})
@@ -268,6 +269,7 @@ def annotate_calibrated_repair_priority(fix: dict[str, Any], pages: list[dict[st
         fix,
         normalized_pages,
         checked_eligible=context.get("checked_eligible"),
+        **identity_context,
     )
     score = _score(
         base_severity,
@@ -295,6 +297,7 @@ def annotate_calibrated_repair_priority(fix: dict[str, Any], pages: list[dict[st
         fix,
         normalized_pages,
         checked_eligible=context.get("checked_eligible"),
+        **identity_context,
         fallback_reason=str(annotated.get("priority_reason") or ""),
     )
 

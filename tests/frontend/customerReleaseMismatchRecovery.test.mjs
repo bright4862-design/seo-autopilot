@@ -20,7 +20,7 @@ test("a known-compatible historical release remains readable after the app advan
   );
   assert.match(
     compatibility,
-    /CUSTOMER_RESULT_READER_VERSION = "customer_result_reader_v6_authority_reconstruction_parity"/,
+    /CUSTOMER_RESULT_READER_VERSION = "customer_result_reader_v9_published_route_identity"/,
     "historical reader semantics must carry an explicit release component version",
   );
   assert.match(

@@ -52,7 +52,7 @@ test("all five v5 scoreExplanation seal and projection copies stay byte-identica
   const copies = [
     "base44/functions/persistDurableScanAuthorityV4/authoritySnapshot.js",
     "base44/functions/getCustomerScanResultV4/projection.js",
-    "base44/functions/grokChat/authoritySnapshot.js",
+    "base44/functions/grokChat/authoritySnapshotStage1Legacy.js",
     "base44/functions/persistDurableScanAuthority/authoritySnapshot.js",
     "base44/functions/getCustomerScanResult/projection.js",
   ].map(extractScoreExplanation);

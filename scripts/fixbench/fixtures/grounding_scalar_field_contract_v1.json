@@ -1,0 +1,140 @@
+{
+  "fixture_version": "fixbench_grounding_scalar_field_contract_v1",
+  "sealed_l2": {
+    "authority_seal_version": "authority_v8",
+    "authority_sealed_at": "2026-09-23T00:00:00Z",
+    "authority_proof": "offline-fixture-not-a-real-proof",
+    "website_url": "https://example.com",
+    "status": "complete",
+    "health_score": 88,
+    "unapproved_score": 999,
+    "pages": [
+      {
+        "url": "https://example.com/real",
+        "status_code": 200,
+        "invented_score": 999
+      }
+    ],
+    "fixes": [
+      {
+        "fix_id": "fix-1",
+        "affected_urls": ["https://example.com/real"],
+        "counts": {"unique_affected_pages": 1, "invented_count": 999}
+      }
+    ],
+    "diagnostics": {
+      "pages": [{"url": "https://example.com/forged", "status_code": 299}],
+      "fixes": [
+        {
+          "fix_id": "forged-fix",
+          "affected_urls": ["https://example.com/forged"],
+          "counts": {"unique_affected_pages": 999}
+        }
+      ]
+    }
+  },
+  "cases": [
+    {
+      "name": "approved_root_number_control",
+      "expected_status": "verified",
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "root-control",
+        "text": "Grounded evidence is available for this annotation.",
+        "evidence": [{"url": "https://example.com/real", "require_live": true}],
+        "numeric_claims": [{"name": "health_score", "value": 88, "source_ref": "$.health_score"}],
+        "fix_refs": ["fix-1"],
+        "root_cause_refs": [],
+        "state_claims": [{"field": "status", "value": "complete", "source_ref": "$.status"}]
+      }
+    },
+    {
+      "name": "approved_page_status_control",
+      "expected_status": "verified",
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "page-status-control",
+        "text": "Grounded evidence is available for this annotation.",
+        "evidence": [{"url": "https://example.com/real", "require_live": true}],
+        "numeric_claims": [{"name": "status_code", "value": 200, "source_ref": "$.pages[0].status_code"}],
+        "fix_refs": [],
+        "root_cause_refs": [],
+        "state_claims": []
+      }
+    },
+    {
+      "name": "approved_fix_count_control",
+      "expected_status": "verified",
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "fix-count-control",
+        "text": "Grounded evidence is available for this annotation.",
+        "evidence": [{"url": "https://example.com/real", "require_live": true}],
+        "numeric_claims": [{"name": "unique_affected_pages", "value": 1, "source_ref": "$.fixes[0].counts.unique_affected_pages"}],
+        "fix_refs": ["fix-1"],
+        "root_cause_refs": [],
+        "state_claims": []
+      }
+    },
+    {
+      "name": "unapproved_root_scalar_rejected",
+      "expected_status": "rejected",
+      "expected_reasons": ["numeric_source_missing"],
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "bad-root-field",
+        "text": "Grounded evidence is available for this annotation.",
+        "evidence": [{"url": "https://example.com/real", "require_live": true}],
+        "numeric_claims": [{"name": "unapproved_score", "value": 999, "source_ref": "$.unapproved_score"}],
+        "fix_refs": [],
+        "root_cause_refs": [],
+        "state_claims": []
+      }
+    },
+    {
+      "name": "unapproved_direct_page_scalar_rejected",
+      "expected_status": "rejected",
+      "expected_reasons": ["numeric_source_missing"],
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "bad-page-field",
+        "text": "Grounded evidence is available for this annotation.",
+        "evidence": [{"url": "https://example.com/real", "require_live": true}],
+        "numeric_claims": [{"name": "invented_score", "value": 999, "source_ref": "$.pages[0].invented_score"}],
+        "fix_refs": [],
+        "root_cause_refs": [],
+        "state_claims": []
+      }
+    },
+    {
+      "name": "unapproved_fix_count_field_rejected",
+      "expected_status": "rejected",
+      "expected_reasons": ["numeric_source_missing"],
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "bad-fix-count-field",
+        "text": "Grounded evidence is available for this annotation.",
+        "evidence": [{"url": "https://example.com/real", "require_live": true}],
+        "numeric_claims": [{"name": "invented_count", "value": 999, "source_ref": "$.fixes[0].counts.invented_count"}],
+        "fix_refs": ["fix-1"],
+        "root_cause_refs": [],
+        "state_claims": []
+      }
+    },
+    {
+      "name": "nested_collection_names_rejected",
+      "expected_status": "rejected",
+      "expected_reasons": ["fix_ref_missing", "numeric_source_missing", "url_not_in_evidence"],
+      "payload": {
+        "schema_version": "ai_annotation_v1",
+        "annotation_id": "nested-collection",
+        "text": "Grounded evidence is available for this annotation.",
+        "evidence": [{"url": "https://example.com/forged", "require_live": false}],
+        "numeric_claims": [{"name": "status_code", "value": 299, "source_ref": "$.diagnostics.pages[0].status_code"}],
+        "fix_refs": ["forged-fix"],
+        "root_cause_refs": [],
+        "state_claims": []
+      }
+    }
+  ]
+}

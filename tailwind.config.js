@@ -10,11 +10,13 @@ module.exports = {
 			sm: 'calc(var(--radius) - 4px)'
 		},
 		colors: {
-			paper: '#FAFAF9',
+			// The approved Results canvas. Muted and faint text both keep at
+			// least 4.5:1 on it and on the ink-over-cream quiet fills.
+			paper: '#F6F4EF',
 			ink: {
 				DEFAULT: '#1C1917',
-				muted: '#78716C',
-				faint: '#A8A29E'
+				muted: '#5C5651',
+				faint: '#6C6560'
 			},
 			good: '#15803D',
 			warnink: '#B45309',

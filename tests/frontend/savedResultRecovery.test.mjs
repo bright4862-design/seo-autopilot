@@ -9,7 +9,7 @@ const recentScanRow = readFileSync("src/components/fixlist/RecentScanRow.jsx", "
 
 test("the dashboard lists recent account-wide ScanRuns only when no exact scan is requested", () => {
   assert.doesNotMatch(fixList, /import \{ getActiveProject \} from "@\/lib\/activeProject"/);
-  assert.match(fixList, /import \{ getScanRunWithFixList, listAccountScanRuns \} from "@\/lib\/scanRuns"/);
+  assert.match(fixList, /import \{[^}]*\bgetScanRunWithFixList\b[^}]*\blistAccountScanRuns\b[^}]*\} from "@\/lib\/scanRuns"/);
   assert.match(fixList, /if \(requestedScanId\)[\s\S]*?setRecentScans\(\[\]\)[\s\S]*?return/);
   assert.match(fixList, /await listAccountScanRuns\(/);
 });

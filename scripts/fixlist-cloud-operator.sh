@@ -756,7 +756,28 @@ require_target_revision() {
   require_confirmation "$TARGET_REVISION"
 }
 
+refuse_unaccepted_direct_vpc_promotion() {
+  local revision="$1" tmp
+  tmp="$(mktemp)"
+  gcloud run revisions describe "$revision" \
+    --region="$GCP_REGION" --project="$GCP_PROJECT" --format=json > "$tmp"
+  python3 - "$tmp" <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+annotations = value.get("metadata", {}).get("annotations", {}) or {}
+spec = value.get("spec", {}) or {}
+containers = spec.get("containers") or [{}]
+env = {item.get("name"): item.get("value", "") for item in containers[0].get("env", [])}
+mode = str(env.get("FIXLIST_EGRESS_MODE") or "none")
+direct = bool(annotations.get("run.googleapis.com/network-interfaces"))
+if direct or mode != "none":
+    raise SystemExit("Refusing promotion: Direct-VPC/static-egress candidates require a dedicated accepted-egress promotion gate")
+PY
+  rm -f "$tmp"
+}
+
 promote_revision() {
+  refuse_unaccepted_direct_vpc_promotion "$TARGET_REVISION"
   gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
     --region="$GCP_REGION" \
     --project="$GCP_PROJECT" \

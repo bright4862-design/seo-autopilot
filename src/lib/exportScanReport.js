@@ -1,5 +1,5 @@
 import { jsPDF } from "jspdf";
-import { evidenceLink } from "./evidenceUrl.js";
+import { evidenceLink, evidenceIdentityOptions } from "./evidenceUrl.js";
 import {
   buildRepairCards,
   customerEvidenceGroupHeading,
@@ -23,8 +23,8 @@ export function buildExportRepairModel({ issues = [] } = {}) {
   };
 }
 
-// Generates a customer-friendly PDF scan report and triggers download.
-export function exportScanReportPdf({ project, crawlJob, issues = [], devRecs = [], insights = [] }) {
+// Build the actual document separately from the browser download side effect.
+export function buildScanReportPdf({ project, crawlJob, issues = [], devRecs = [], insights = [] }) {
   const doc = new jsPDF();
   const pageW = doc.internal.pageSize.getWidth();
   const marginX = 16;
@@ -60,7 +60,7 @@ export function exportScanReportPdf({ project, crawlJob, issues = [], devRecs = 
   };
 
   const evidenceLine = (page, options = {}) => {
-    const link = evidenceLink(page, siteOrigin);
+    const link = evidenceLink(page, siteOrigin, options);
     const prefix = options.prefix || "- ";
     const text = `${prefix}${link.label}`;
     const indent = options.indent || 0;
@@ -134,13 +134,13 @@ export function exportScanReportPdf({ project, crawlJob, issues = [], devRecs = 
           const groupName = group.familyLabel || `Group ${index + 1}`;
           const locale = group.locale ? ` · ${group.locale.toUpperCase()}` : "";
           line(`${groupName}${locale} · ${group.count} ${group.count === 1 ? "page" : "pages"}`, { indent: 8, size: 9, gap: 1 });
-          if (group.representativePage) evidenceLine(group.representativePage, { prefix: "Representative: ", indent: 12, color: [107, 114, 128], size: 9, gap: 1 });
+          if (group.representativePage) evidenceLine(group.representativePage, { ...evidenceIdentityOptions(item), prefix: "Representative: ", indent: 12, color: [107, 114, 128], size: 9, gap: 1 });
         });
       }
       const affectedPages = Array.isArray(item?.evidence?.affectedPages) ? item.evidence.affectedPages : [];
       if (affectedPages.length > 0) {
         line("Affected pages:", { indent: 4, bold: true, size: 9, gap: 1 });
-        affectedPages.forEach(page => evidenceLine(page, { indent: 8, color: [107, 114, 128], size: 9, gap: 1 }));
+        affectedPages.forEach(page => evidenceLine(page, { ...evidenceIdentityOptions(item), indent: 8, color: [107, 114, 128], size: 9, gap: 1 }));
       }
     });
   };
@@ -178,6 +178,11 @@ export function exportScanReportPdf({ project, crawlJob, issues = [], devRecs = 
   steps.push("Run a new scan after making changes to track your progress.");
   steps.forEach((s, i) => line(`${i + 1}. ${s}`));
 
-  const safeName = (project.business_name || "website").replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+  return doc;
+}
+
+export function exportScanReportPdf(options) {
+  const doc = buildScanReportPdf(options);
+  const safeName = (options.project.business_name || "website").replace(/[^a-z0-9]+/gi, "-").toLowerCase();
   doc.save(`scan-report-${safeName}.pdf`);
 }

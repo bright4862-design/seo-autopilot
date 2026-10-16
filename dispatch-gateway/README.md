@@ -11,9 +11,49 @@ validates the document against its own configuration and creates the Cloud
 Task using its **attached service identity** through Application Default
 Credentials. No Google private key exists anywhere in the path.
 
-This directory is the canonical source. The Cloud Shell bootstrap block that
+This directory is the canonical gateway source. The Cloud Shell bootstrap block that
 first deployed the gateway wrote an identical `main.py` to `/tmp`; any change
 must be made here and redeployed from here, never by editing a pasted copy.
+
+## Read-only rescan comparison
+
+`POST /compare` runs the existing canonical Python comparison library over two
+sealed snapshots. The Base44 result reader owns user authentication, paid access,
+and the service-owned previous-scan lookup. Browser input may select only the
+current scan; it never supplies the previous scan, evidence, or owner identity.
+The gateway independently verifies both historic result seals and the asserted
+owner/project/scope/lineage pair before calling `compare_repair_runs`.
+
+Requests use the `scan_comparison_request_v1` contract with a 32-character
+lowercase hexadecimal nonce. `x-fixlist-timestamp` is an integer Unix timestamp
+within 300 seconds of gateway time. The request key is HMAC-SHA256 of
+`fixlist-scan-comparison-request-v1` using the existing signing root; the request
+signature covers `timestamp + "\n" + raw_body`. This domain is distinct from
+dispatch and response signatures.
+
+Successful responses contain only `payload` and `proof`. The payload binds
+`scan_comparison_response_v1`, the request nonce, exact current and previous scan
+IDs, customer presentation, gateway source SHA, and integer `generated_at`.
+The response key uses the domain `fixlist-scan-comparison-response-v1`; the proof
+covers the canonical stable serialization of that payload. The Base44 reader
+must verify the proof, nonce, IDs, and freshness before projecting presentation.
+Snapshots, result proofs, lineage artifacts, and signing material are never
+returned in this response or customer projection. Responses to rejected requests
+contain bounded error codes only.
+
+Comparison requests have a 4,100,000-byte limit, enough for two separately
+bounded authority snapshots. `/dispatch` retains its smaller 256 KiB limit,
+including chunked bodies. Fresh duplicate comparison requests are safe to repeat:
+the operation performs no entity writes, URL requests, or task creation. Response
+nonce verification prevents reuse for a different reader request. Comparison
+failure must leave the current saved FixList available.
+
+The deployment script creates a minimal build context from the exact release
+commit with this gateway and seven canonical modules from `scanner-api/app`.
+The comparator is not copied into a second maintained implementation. Its seal
+primitives are shared with the worker through `authority_seal.py`; their historic
+serialization remains unchanged. The comparison route needs no new IAM grants,
+service account key, worker route, or runtime model access.
 
 ## Contract
 

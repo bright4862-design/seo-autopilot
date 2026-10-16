@@ -49,6 +49,23 @@ test("a well-formed repair passes", () => {
   assert.equal(repairCoverageIsValid(repair()), true);
 });
 
+const publishedContext = { scanOrigin: "https://example.com", identityVersion: "evidence_url_identity_v2_published_route" };
+test("published invariant retains case/slash/query/origin and resolves only trusted relative evidence", () => {
+  const value = repair({ affected_pages: ["/x", "/x/", "/X"],
+    representative_pages_by_family: { product_page: "https://example.com/x/" },
+    evidence_url_identity_version: publishedContext.identityVersion });
+  assert.equal(firstFailedRepairInvariant(value, publishedContext), "");
+  assert.equal(firstFailedRepairInvariant(value), "page_count_disagrees_with_unique_affected_pages");
+  value.representative_pages_by_family.product_page = "https://foreign.example/x/";
+  assert.equal(firstFailedRepairInvariant(value, publishedContext), "representative_is_not_an_affected_page");
+});
+test("published invariant rejects missing/unknown context and unresolved evidence", () => {
+  assert.equal(firstFailedRepairInvariant(repair(), publishedContext), "evidence_url_identity_version_mismatch");
+  assert.equal(firstFailedRepairInvariant(repair(), { ...publishedContext, identityVersion: "unknown" }), "unsupported_evidence_url_identity_version");
+  assert.equal(firstFailedRepairInvariant(repair({ evidence_url_identity_version: publishedContext.identityVersion,
+    affected_pages: ["/p0", "/p1", "/p2", "relative"] }), publishedContext), "unresolvable_affected_evidence");
+});
+
 // ------------------------------------------------------ the cardinal order --
 
 test("affected_eligible may not exceed affected_observed", () => {

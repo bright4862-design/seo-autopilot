@@ -19,7 +19,10 @@ def install_mock_network(monkeypatch, routes: dict):
     `routes` maps a full URL to {"body": str, "status": int, "content_type": str}.
     """
 
+    requests: list[httpx.Request] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
         # Production connects to the validated numeric IP. Rebuild the logical
         # fixture URL from the preserved Host header without changing that
         # transport behavior in application code.
@@ -56,10 +59,11 @@ def install_mock_network(monkeypatch, routes: dict):
             (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", port))
         ],
     )
+    return requests
 
 
 @pytest.fixture
 def mock_network(monkeypatch):
     def _install(routes):
-        install_mock_network(monkeypatch, routes)
+        return install_mock_network(monkeypatch, routes)
     return _install

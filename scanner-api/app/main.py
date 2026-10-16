@@ -18,6 +18,7 @@ from .grok_chat import (
     run_grok_chat,
 )
 from .indexability_postprocess import apply_indexability_quality_to_result
+from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
 from .indexability_quality import INDEXABILITY_QUALITY_VERSION
 from .navigation_indexability import NAVIGATION_INDEXABILITY_VERSION
 from .observability import (
@@ -181,7 +182,7 @@ def apply_post_crawl_transforms(result: dict[str, Any]) -> dict[str, Any]:
     Bundled so the worker can bound it and keep the loop free for the liveness
     heartbeat. Ordering and behavior are identical to the previous inline calls.
     """
-    result = apply_indexability_quality_to_result(result)
+    result = apply_indexability_quality_to_result(result, identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
     result = apply_render_evidence_quality(result)
     # Server-side 150-page cap. Discovery stays broad; only the crawl sample is
     # bounded.
@@ -326,7 +327,7 @@ async def scan(payload: ScanRequest, x_scanner_key: str | None = Header(default=
             warnings.append("Bounded trust-page discovery timed out; existing crawl evidence was preserved.")
             result["crawl_warnings"] = warnings
             result["trust_page_discovery"] = {"version": "trust_page_discovery_v1", "attempted": True, "conclusive": False, "timed_out": True, "checked": 0, "responses_received": 0, "found": [], "found_urls": [], "evidence": []}
-        result = apply_indexability_quality_to_result(result)
+        result = apply_indexability_quality_to_result(result, identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
         result = apply_render_evidence_quality(result)
         result = enforce_scan_response_page_budget(result, payload.scan_mode)
         result["beta_revision_fingerprint"] = live_revision()["fingerprint"]

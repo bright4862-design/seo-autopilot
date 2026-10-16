@@ -316,6 +316,21 @@ export function customerCopyForFix(item = {}) {
     };
   }
 
+  if (rule === "image_alt_review") {
+    return { customerCategory: "Images", title: "Review images whose purpose is uncertain",
+      explanation: "These images have no alt attribute. The saved HTML does not establish whether they are informative, functional or decorative.",
+      whyItMatters: "The appropriate text depends on the image's purpose. This review item does not reduce the health score.",
+      recommendation: "Review each image in context before changing it. Describe informative images, name functional controls, and keep decorative images intentionally empty.",
+      technicalLabel: "Image purpose review" };
+  }
+  if (rule === "visible_template_content") {
+    return { customerCategory: "Page content", title: "Fix unfinished visible page content",
+      explanation: item.explanation || item.plain_english_explanation || "Accepted HTML contains unfinished content. Review the recorded placement and excerpts.",
+      whyItMatters: "Unresolved variables and unfinished page shells can prevent visitors from understanding the page.",
+      recommendation: item.recommendation || item.recommended_value || "Correct the source field or template, then verify the published content.",
+      technicalLabel: "Visible template content" };
+  }
+
   if (rule === "image_alt_text" || rule.includes("image_alt") || rule.includes("alt_text")) {
     const title = count > 1
       ? `Add image descriptions to ${titleFamily(family)}`

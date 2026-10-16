@@ -1,4 +1,4 @@
-import { evidenceUrlKey } from "./evidenceUrlIdentity.js";
+import { evidenceUrlKey, publishedEvidenceUrlKey, PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION } from "./evidenceUrlIdentity.js";
 
 /**
  * Base44 refuses an impossible repair on its own arithmetic.
@@ -13,6 +13,7 @@ import { evidenceUrlKey } from "./evidenceUrlIdentity.js";
  */
 
 export const REPAIR_INVARIANT_VERSION = "repair_invariant_v1_family_consistent_coverage";
+export const PUBLISHED_REPAIR_INVARIANT_VERSION = "repair_invariant_v2_published_route_identity";
 
 const NON_SPECIFIC_FAMILIES = new Set(["", "mixed", "sitewide", "cross_cutting", "unknown"]);
 
@@ -27,10 +28,10 @@ function optionalCount(value) {
   return Number.isFinite(parsed) ? Math.trunc(parsed) : null;
 }
 
-function uniqueAffectedKeys(repair) {
+function uniqueAffectedKeys(repair, keyFor = evidenceUrlKey) {
   const keys = new Set();
   for (const url of repair?.affected_pages || []) {
-    const key = evidenceUrlKey(url);
+    const key = keyFor(url);
     if (key) keys.add(key);
   }
   return keys;
@@ -48,8 +49,12 @@ function breakdown(repair) {
  * without the caller re-deriving it, and so a new invariant cannot be added
  * without a name that appears in the logs.
  */
-export function firstFailedRepairInvariant(repair) {
+export function firstFailedRepairInvariant(repair, { scanOrigin = "", identityVersion = "" } = {}) {
   if (!repair || typeof repair !== "object") return "repair_missing";
+  if (identityVersion && identityVersion !== PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION) return "unsupported_evidence_url_identity_version";
+  if (identityVersion && repair.evidence_url_identity_version !== identityVersion) return "evidence_url_identity_version_mismatch";
+  const keyFor = identityVersion ? url => publishedEvidenceUrlKey(url, { scanOrigin }) : evidenceUrlKey;
+  if (identityVersion && (!Array.isArray(repair.affected_pages) || repair.affected_pages.some(url => !keyFor(url)))) return "unresolvable_affected_evidence";
 
   const reported = count(repair.affected_reported ?? repair.page_count);
   const observed = count(repair.affected_observed ?? reported);
@@ -86,7 +91,7 @@ export function firstFailedRepairInvariant(repair) {
 
   // A truncated list is a sample; only a complete one can be counted against
   // page_count, and its ratio is suppressed rather than compared with a total.
-  if (complete && uniqueAffectedKeys(repair).size !== pageCount) {
+  if (complete && uniqueAffectedKeys(repair, keyFor).size !== pageCount) {
     return "page_count_disagrees_with_unique_affected_pages";
   }
 
@@ -101,12 +106,12 @@ export function firstFailedRepairInvariant(repair) {
 
   const representatives = repair.representative_pages_by_family;
   if (representatives && typeof representatives === "object" && complete) {
-    const affected = uniqueAffectedKeys(repair);
+    const affected = uniqueAffectedKeys(repair, keyFor);
     for (const [family, value] of Object.entries(representatives)) {
       const urls = Array.isArray(value) ? value : [value];
       if (urls.length === 0) return "representative_is_not_an_affected_page";
       for (const url of urls) {
-        if (!affected.has(evidenceUrlKey(url))) return "representative_is_not_an_affected_page";
+        if (!affected.has(keyFor(url))) return "representative_is_not_an_affected_page";
       }
       if (namedFamilies.length && !(family in partitions)) return "representative_family_not_in_breakdown";
     }
@@ -115,8 +120,8 @@ export function firstFailedRepairInvariant(repair) {
   return "";
 }
 
-export function repairCoverageIsValid(repair) {
-  return firstFailedRepairInvariant(repair) === "";
+export function repairCoverageIsValid(repair, context = {}) {
+  return firstFailedRepairInvariant(repair, context) === "";
 }
 
 /**
@@ -124,8 +129,8 @@ export function repairCoverageIsValid(repair) {
  * no denominator, an incomplete affected list, or a repair that fails its own
  * invariants. The caller renders an absolute count instead.
  */
-export function recomputedCoverageRatio(repair) {
-  if (!repairCoverageIsValid(repair)) return null;
+export function recomputedCoverageRatio(repair, context = {}) {
+  if (!repairCoverageIsValid(repair, context)) return null;
   if (repair?.affected_pages_complete === false) return null;
   const checkedEligible = optionalCount(repair?.checked_eligible);
   if (checkedEligible === null || checkedEligible <= 0) return null;

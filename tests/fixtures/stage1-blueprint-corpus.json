@@ -1,0 +1,620 @@
+{
+  "version": "stage1_blueprint_corpus_v1",
+  "provenance": "synthetic",
+  "scope": "stage_one_B01_B05_B25_synthetic_B27",
+  "full_30_site_gate": "not_assessed",
+  "blueprint_pdf_sha256": "c76efed66f373e2455c326b2804a8148489509f8625f84377b9f21bef4f1f6f9",
+  "host_provenance": "Supplied FixList Scanner Gap Analysis & Blueprint PDF: pretto.fr, centerstreetlending.com, www.ikessandwich.com, locations.ikessandwich.com; existing own-site and Ironwood diagnostic docs. HTML is newly authored synthetic input, never a captured/live finding.",
+  "cases": [
+    {
+      "id": "pretto_published_routes",
+      "site": "Pretto",
+      "origin": "https://pretto.fr",
+      "provenance": "synthetic",
+      "mode": "extract_review",
+      "pages": [
+        {
+          "path": "/guide",
+          "html": "<!doctype html><html><head><title>Useful page</title><link rel=\"canonical\" href=\"https://pretto.fr/guide\"></head><body><main><h1>Useful page</h1><p>Specific information for visitors about this service.</p></main></body></html>"
+        },
+        {
+          "path": "/guide/",
+          "html": "<!doctype html><html><head><title>Useful page</title><link rel=\"canonical\" href=\"https://pretto.fr/guide/\"></head><body><main><h1>Useful page</h1><p>Specific information for visitors about this service.</p></main></body></html>"
+        },
+        {
+          "path": "/Guide",
+          "html": "<!doctype html><html><head><title>Useful page</title><link rel=\"canonical\" href=\"https://pretto.fr/Guide\"></head><body><main><h1>Useful page</h1><p>Specific information for visitors about this service.</p></main></body></html>"
+        },
+        {
+          "path": "/guide%2Fdetails",
+          "html": "<!doctype html><html><head><title>Useful page</title><link rel=\"canonical\" href=\"https://pretto.fr/guide%2Fdetails\"></head><body><main><h1>Useful page</h1><p>Specific information for visitors about this service.</p></main></body></html>"
+        },
+        {
+          "path": "/guide/details",
+          "html": "<!doctype html><html><head><title>Useful page</title><link rel=\"canonical\" href=\"https://pretto.fr/guide/details\"></head><body><main><h1>Useful page</h1><p>Specific information for visitors about this service.</p></main></body></html>"
+        },
+        {
+          "path": "/guide?variant=a",
+          "html": "<!doctype html><html><head><title>Useful page</title><link rel=\"canonical\" href=\"https://pretto.fr/guide?variant=a\"></head><body><main><h1>Useful page</h1><p>Specific information for visitors about this service.</p></main></body></html>"
+        },
+        {
+          "path": "/guide?variant=b",
+          "html": "<!doctype html><html><head><title>Useful page</title><link rel=\"canonical\" href=\"https://pretto.fr/guide?variant=b\"></head><body><main><h1>Useful page</h1><p>Specific information for visitors about this service.</p></main></body></html>"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "affected_urls",
+          "rule": "missing_meta_description",
+          "equals": [
+            "https://pretto.fr/guide",
+            "https://pretto.fr/guide/",
+            "https://pretto.fr/Guide",
+            "https://pretto.fr/guide%2Fdetails",
+            "https://pretto.fr/guide/details",
+            "https://pretto.fr/guide?variant=a",
+            "https://pretto.fr/guide?variant=b"
+          ]
+        },
+        {
+          "kind": "page_field",
+          "url": "https://pretto.fr/guide%2Fdetails",
+          "field": "url",
+          "equals": "https://pretto.fr/guide%2Fdetails"
+        },
+        {
+          "kind": "page_field",
+          "url": "https://pretto.fr/guide?variant=b",
+          "field": "url",
+          "equals": "https://pretto.fr/guide?variant=b"
+        }
+      ]
+    },
+    {
+      "id": "pretto_visible_year",
+      "site": "Pretto",
+      "origin": "https://pretto.fr",
+      "provenance": "synthetic",
+      "mode": "extract_review",
+      "pages": [
+        {
+          "path": "/pret-immobilier/ptz",
+          "html": "<!doctype html><html><head><title>PTZ {{year}}</title><meta name=\"description\" content=\"A useful description for visitors.\"></head><body><main><h1>PTZ financing</h1><p>Read the current mortgage eligibility details.</p></main></body></html>"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "rule",
+          "rule": "visible_template_content",
+          "present": true
+        },
+        {
+          "kind": "page_field",
+          "url": "https://pretto.fr/pret-immobilier/ptz",
+          "field": "visible_template_evidence.issue_count",
+          "equals": 1
+        },
+        {
+          "kind": "template_samples",
+          "url": "https://pretto.fr/pret-immobilier/ptz",
+          "placements": [
+            "title"
+          ],
+          "max_samples": 4,
+          "max_length": 260
+        }
+      ]
+    },
+    {
+      "id": "pretto_redirect_aliases",
+      "site": "Pretto",
+      "origin": "https://pretto.fr",
+      "provenance": "synthetic",
+      "mode": "run_scan",
+      "pages": [],
+      "assertions": [
+        {
+          "kind": "redirect_aliases",
+          "final_url": "https://pretto.fr/final/",
+          "source_urls": [
+            "https://pretto.fr/one",
+            "https://pretto.fr/two"
+          ],
+          "duplicates": 1
+        }
+      ],
+      "routes": {
+        "/": {
+          "body": "<!doctype html><html><head><title>Useful page</title><meta name=\"description\" content=\"A useful description for visitors.\"></head><body><main><h1>Useful page</h1><p>Specific information for visitors about this service.</p></main></body></html>"
+        },
+        "/one": {
+          "status": 301,
+          "headers": {
+            "location": "/final/"
+          }
+        },
+        "/two": {
+          "status": 302,
+          "headers": {
+            "location": "/final/"
+          }
+        },
+        "/final/": {
+          "body": "<!doctype html><html><head><title>Useful page</title><meta name=\"description\" content=\"A useful description for visitors.\"><link rel=\"canonical\" href=\"https://pretto.fr/final/\"></head><body><main><h1>Useful page</h1><p>Specific information for visitors about this service.</p></main></body></html>"
+        }
+      },
+      "sitemap_paths": [
+        "/one",
+        "/two"
+      ]
+    },
+    {
+      "id": "center_visible_templates",
+      "site": "Center Street",
+      "origin": "https://centerstreetlending.com",
+      "provenance": "synthetic",
+      "mode": "extract_review",
+      "pages": [
+        {
+          "path": "/programs/bridge",
+          "html": "<!doctype html><html><head><title>Loans {{product}}</title><meta name=\"description\" content=\"Loans {% assign name %}\"></head><body><main><h1>Loans #PRODUCT#</h1><p>Welcome %%NAME%%; price ${price}; [object Object]</p><p>Price: undefined</p><p>Price: NaN</p><p>Lorem ipsum dolor sit amet.</p></main></body></html>"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "rule",
+          "rule": "visible_template_content",
+          "present": true
+        },
+        {
+          "kind": "page_field",
+          "url": "https://centerstreetlending.com/programs/bridge",
+          "field": "visible_template_evidence.issue_count",
+          "minimum": 9
+        },
+        {
+          "kind": "template_samples",
+          "url": "https://centerstreetlending.com/programs/bridge",
+          "placements": [
+            "title",
+            "meta",
+            "h1",
+            "main"
+          ],
+          "max_samples": 4,
+          "max_length": 260
+        },
+        {
+          "kind": "page_field",
+          "url": "https://centerstreetlending.com/programs/bridge",
+          "field": "visible_template_evidence.samples_truncated",
+          "equals": true
+        }
+      ]
+    },
+    {
+      "id": "center_hidden_examples",
+      "site": "Center Street",
+      "origin": "https://centerstreetlending.com",
+      "provenance": "synthetic",
+      "mode": "extract_review",
+      "pages": [
+        {
+          "path": "/locations/alaska",
+          "html": "<!doctype html><html><head><title>Useful page</title><meta name=\"description\" content=\"A useful description for visitors.\"></head><body><main><h1>Alaska lending</h1><p>Fast financing for Alaska investors.</p><pre><code>{{location}}</code></pre><script>const x=\"#location#\";</script><style>.x{content:\"#location#\"}</style><template>#location#</template><span hidden>#location#</span><div aria-hidden=\"true\">{{city}}</div><div style=\"display:none\"><span style=\"visibility:hidden\">${market}</span></div></main></body></html>"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "rule",
+          "rule": "visible_template_content",
+          "present": false
+        },
+        {
+          "kind": "rule",
+          "rule": "broken_location_template_content",
+          "present": false
+        },
+        {
+          "kind": "page_field",
+          "url": "https://centerstreetlending.com/locations/alaska",
+          "field": "visible_template_evidence.issue_count",
+          "equals": 0
+        },
+        {
+          "kind": "page_field",
+          "url": "https://centerstreetlending.com/locations/alaska",
+          "field": "geo_evidence.signals.template_integrity",
+          "equals": true
+        }
+      ]
+    },
+    {
+      "id": "ike_main_utility_noindex",
+      "site": "Ike main",
+      "origin": "https://www.ikessandwich.com",
+      "provenance": "synthetic",
+      "mode": "extract_review",
+      "pages": [
+        {
+          "path": "/login",
+          "html": "<!doctype html><html><head><meta name=\"robots\" content=\"noindex\"></head><body><main><a href=\"/help\"><img src=\"help.png\"></a><p>Sign in to manage your account.</p></main></body></html>"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "no_search_metadata",
+          "url": "https://www.ikessandwich.com/login"
+        },
+        {
+          "kind": "rule",
+          "rule": "image_alt_text",
+          "present": true,
+          "url": "https://www.ikessandwich.com/login",
+          "non_scoring": false
+        },
+        {
+          "kind": "page_field",
+          "url": "https://www.ikessandwich.com/login",
+          "field": "image_alt_applicability.material_missing_alt_count",
+          "equals": 1
+        }
+      ]
+    },
+    {
+      "id": "ike_main_sitemap_conflict",
+      "site": "Ike main",
+      "origin": "https://www.ikessandwich.com",
+      "provenance": "synthetic",
+      "mode": "extract_review",
+      "pages": [
+        {
+          "path": "/menu/location/example",
+          "html": "<!doctype html><html><head><meta name=\"robots\" content=\"noindex\"></head><body><main><p>A location selection utility.</p></main></body></html>",
+          "discovered_from": [
+            "sitemap"
+          ]
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "no_search_metadata",
+          "url": "https://www.ikessandwich.com/menu/location/example"
+        },
+        {
+          "kind": "rule",
+          "rule": "sitemap_indexability_conflict",
+          "present": true,
+          "url": "https://www.ikessandwich.com/menu/location/example"
+        },
+        {
+          "kind": "rule_count",
+          "rule": "sitemap_indexability_conflict",
+          "equals": 1
+        }
+      ]
+    },
+    {
+      "id": "ike_locations_canonical_away",
+      "site": "Ike locations",
+      "origin": "https://locations.ikessandwich.com",
+      "provenance": "synthetic",
+      "mode": "extract_review",
+      "pages": [
+        {
+          "path": "/california/store?view=print",
+          "html": "<!doctype html><html><head><link rel=\"canonical\" href=\"https://locations.ikessandwich.com/california/store\"></head><body><main><figure><img src=\"store.jpg\"><figcaption>Store entrance</figcaption></figure></main></body></html>"
+        },
+        {
+          "path": "/california/store",
+          "html": "<!doctype html><html><head><title>Useful page</title><meta name=\"description\" content=\"A useful description for visitors.\"><link rel=\"canonical\" href=\"https://locations.ikessandwich.com/california/store\"></head><body><main><h1>Useful page</h1><p>Specific information for visitors about this service.</p></main></body></html>"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "no_search_metadata",
+          "url": "https://locations.ikessandwich.com/california/store?view=print"
+        },
+        {
+          "kind": "rule",
+          "rule": "image_alt_text",
+          "present": true,
+          "url": "https://locations.ikessandwich.com/california/store?view=print",
+          "non_scoring": false
+        },
+        {
+          "kind": "page_field",
+          "url": "https://locations.ikessandwich.com/california/store?view=print",
+          "field": "canonical_target_state",
+          "equals": "valid"
+        },
+        {
+          "kind": "no_search_metadata",
+          "url": "https://locations.ikessandwich.com/california/store"
+        }
+      ]
+    },
+    {
+      "id": "ike_locations_shells",
+      "site": "Ike locations",
+      "origin": "https://locations.ikessandwich.com",
+      "provenance": "synthetic",
+      "mode": "extract_review",
+      "pages": [
+        {
+          "path": "/new-store",
+          "html": "<!doctype html><html><head><title>Useful page</title><meta name=\"description\" content=\"A useful description for visitors.\"></head><body><main><h1>Coming Soon</h1></main></body></html>"
+        },
+        {
+          "path": "/empty-store",
+          "html": "<!doctype html><html><head><title>Useful page</title><meta name=\"description\" content=\"A useful description for visitors.\"></head><body><main></main></body></html>"
+        },
+        {
+          "path": "/opening-announcement",
+          "html": "<!doctype html><html><head><title>Useful page</title><meta name=\"description\" content=\"A useful description for visitors.\"></head><body><main><h1>Oakland opening announcement</h1><p>Coming soon: our Oakland shop opens in October. Contact the team about catering and visit our existing stores today.</p></main></body></html>"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "rule",
+          "rule": "visible_template_content",
+          "present": true,
+          "url": "https://locations.ikessandwich.com/new-store"
+        },
+        {
+          "kind": "rule",
+          "rule": "visible_template_content",
+          "present": true,
+          "url": "https://locations.ikessandwich.com/empty-store"
+        },
+        {
+          "kind": "rule",
+          "rule": "visible_template_content",
+          "present": false,
+          "url": "https://locations.ikessandwich.com/opening-announcement"
+        },
+        {
+          "kind": "page_field",
+          "url": "https://locations.ikessandwich.com/new-store",
+          "field": "visible_template_evidence.issue_types",
+          "equals": [
+            "coming_soon_shell"
+          ]
+        },
+        {
+          "kind": "page_field",
+          "url": "https://locations.ikessandwich.com/empty-store",
+          "field": "visible_template_evidence.issue_types",
+          "equals": [
+            "empty_shell"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "getfixlist_image_applicability",
+      "site": "getfixlist",
+      "origin": "https://getfixlist.com",
+      "provenance": "synthetic",
+      "mode": "extract_review",
+      "pages": [
+        {
+          "path": "/images/uncertain",
+          "html": "<!doctype html><html><head><title>Useful page</title><meta name=\"description\" content=\"A useful description for visitors.\"></head><body><main><h1>Images</h1><img src=\"large-hero.jpg\" width=\"1200\" height=\"700\"></main></body></html>"
+        },
+        {
+          "path": "/images/empty-alt",
+          "html": "<!doctype html><html><head><title>Useful page</title><meta name=\"description\" content=\"A useful description for visitors.\"></head><body><main><h1>Images</h1><img src=\"one.svg\" alt=\"\"><img src=\"two.svg\" alt=\"   \"></main></body></html>"
+        },
+        {
+          "path": "/images/material",
+          "html": "<!doctype html><html><head><title>Useful page</title><meta name=\"description\" content=\"A useful description for visitors.\"></head><body><main><h1>Product</h1><figure><img src=\"product.jpg\"><figcaption>The product control panel.</figcaption></figure></main></body></html>"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "page_field",
+          "url": "https://getfixlist.com/images/uncertain",
+          "field": "image_missing_alt_count",
+          "equals": 1
+        },
+        {
+          "kind": "page_field",
+          "url": "https://getfixlist.com/images/uncertain",
+          "field": "image_alt_applicability.uncertain_missing_alt_count",
+          "equals": 1
+        },
+        {
+          "kind": "rule",
+          "rule": "image_alt_review",
+          "present": true,
+          "url": "https://getfixlist.com/images/uncertain",
+          "non_scoring": true,
+          "verification_state": "needs_verification"
+        },
+        {
+          "kind": "page_field",
+          "url": "https://getfixlist.com/images/empty-alt",
+          "field": "image_missing_alt_count",
+          "equals": 0
+        },
+        {
+          "kind": "rule",
+          "rule": "image_alt_text",
+          "present": false,
+          "url": "https://getfixlist.com/images/empty-alt"
+        },
+        {
+          "kind": "rule",
+          "rule": "missing_image_alt",
+          "present": false,
+          "url": "https://getfixlist.com/images/empty-alt"
+        },
+        {
+          "kind": "rule",
+          "rule": "image_alt_text",
+          "present": true,
+          "url": "https://getfixlist.com/images/material",
+          "non_scoring": false
+        },
+        {
+          "kind": "rule",
+          "rule": "image_alt_text",
+          "present": false,
+          "url": "https://getfixlist.com/images/uncertain"
+        }
+      ]
+    },
+    {
+      "id": "getfixlist_search_metadata",
+      "site": "getfixlist",
+      "origin": "https://getfixlist.com",
+      "provenance": "synthetic",
+      "mode": "extract_review",
+      "pages": [
+        {
+          "path": "/features",
+          "html": "<!doctype html><html><head></head><body><main><h1>Site audit features</h1><p>Page checks and actionable repairs for site owners.</p></main></body></html>"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "rule",
+          "rule": "missing_title",
+          "present": true,
+          "url": "https://getfixlist.com/features"
+        },
+        {
+          "kind": "rule",
+          "rule": "missing_meta_description",
+          "present": true,
+          "url": "https://getfixlist.com/features"
+        },
+        {
+          "kind": "page_field",
+          "url": "https://getfixlist.com/features",
+          "field": "page_evidence_class",
+          "equals": "usable_html"
+        }
+      ]
+    },
+    {
+      "id": "ironwood_siteground_200",
+      "site": "Ironwood",
+      "origin": "https://ironwoodcrecapital.com",
+      "provenance": "synthetic",
+      "mode": "run_scan",
+      "pages": [],
+      "assertions": [
+        {
+          "kind": "page_field",
+          "url": "https://ironwoodcrecapital.com/",
+          "field": "page_evidence_class",
+          "equals": "failed_access"
+        },
+        {
+          "kind": "access_limited"
+        },
+        {
+          "kind": "rule",
+          "rule": "visible_template_content",
+          "present": false
+        },
+        {
+          "kind": "rule",
+          "rule": "image_alt_text",
+          "present": false
+        },
+        {
+          "kind": "no_search_metadata",
+          "url": "https://ironwoodcrecapital.com/"
+        }
+      ],
+      "routes": {
+        "/": {
+          "body": "<html><head><title>Security check</title></head><body><h1>Checking your browser before accessing the website</h1><p>Powered by SiteGround Security. Please enable JavaScript and cookies to continue.</p><script src=\"/.well-known/sgcaptcha/\"></script></body></html>",
+          "status": 200
+        }
+      },
+      "sitemap_paths": []
+    },
+    {
+      "id": "ironwood_siteground_403",
+      "site": "Ironwood",
+      "origin": "https://ironwoodcrecapital.com",
+      "provenance": "synthetic",
+      "mode": "run_scan",
+      "pages": [],
+      "assertions": [
+        {
+          "kind": "page_field",
+          "url": "https://ironwoodcrecapital.com/",
+          "field": "page_evidence_class",
+          "equals": "failed_access"
+        },
+        {
+          "kind": "access_limited"
+        },
+        {
+          "kind": "rule",
+          "rule": "visible_template_content",
+          "present": false
+        },
+        {
+          "kind": "rule",
+          "rule": "image_alt_text",
+          "present": false
+        },
+        {
+          "kind": "no_search_metadata",
+          "url": "https://ironwoodcrecapital.com/"
+        }
+      ],
+      "routes": {
+        "/": {
+          "body": "<html><head><title>Security check</title></head><body><h1>Checking your browser before accessing the website</h1><p>Powered by SiteGround Security. Please enable JavaScript and cookies to continue.</p><script src=\"/.well-known/sgcaptcha/\"></script></body></html>",
+          "status": 403
+        }
+      },
+      "sitemap_paths": []
+    },
+    {
+      "id": "ironwood_truncated",
+      "site": "Ironwood",
+      "origin": "https://ironwoodcrecapital.com",
+      "provenance": "synthetic",
+      "mode": "extract_review",
+      "pages": [
+        {
+          "path": "/truncated",
+          "html": "<!doctype html><html><head><title>{{title}}</title><meta name=\"description\" content=\"A useful description for visitors.\"></head><body><main><h1>{{heading}}</h1><figure><img src=\"one.jpg\"><figcaption>Product</figcaption></figure></main></body></html>",
+          "body_truncated": true
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "page_field",
+          "url": "https://ironwoodcrecapital.com/truncated",
+          "field": "visible_template_evidence.state",
+          "equals": "not_verified"
+        },
+        {
+          "kind": "page_field",
+          "url": "https://ironwoodcrecapital.com/truncated",
+          "field": "image_alt_applicability.state",
+          "equals": "not_verified"
+        },
+        {
+          "kind": "rule",
+          "rule": "visible_template_content",
+          "present": false
+        },
+        {
+          "kind": "rule",
+          "rule": "image_alt_text",
+          "present": false
+        }
+      ]
+    }
+  ]
+}

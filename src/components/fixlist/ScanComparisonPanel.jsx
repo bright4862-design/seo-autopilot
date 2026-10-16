@@ -1,0 +1,66 @@
+import { useId } from "react";
+import { buildScanComparisonPanelModel } from "../../lib/scanComparisonPanelModel.js";
+import { scanComparisonSupportReference } from "../../lib/scanComparisonSupport.js";
+
+/**
+ * Presentation only. The caller must obtain presentation from the authenticated
+ * comparison reader, after server-side authority and lineage validation. The
+ * boolean below is a UI gate, never a substitute for that server verification.
+ */
+export default function ScanComparisonPanel({
+  presentation = null,
+  currentScanId,
+  authorityVerified = false,
+  supportReference = "",
+}) {
+  const headingId = useId();
+  if (presentation === null || presentation === undefined) return null;
+
+  const model = buildScanComparisonPanelModel(presentation);
+  const ready = authorityVerified === true
+    && model.state === "ready"
+    && typeof currentScanId === "string"
+    && currentScanId === model.currentScanId;
+
+  if (!ready) {
+    const reference = scanComparisonSupportReference(supportReference);
+    return (
+      <section aria-labelledby={headingId} className="rounded-xl border border-hairline bg-white p-5">
+        <h2 id={headingId} className="text-base font-semibold text-ink">Comparison unavailable</h2>
+        <p className="mt-2 text-sm text-ink-muted">
+          We couldn’t compare these scans. Your current FixList is still available.
+        </p>
+        {reference ? <p className="mt-2 text-xs text-ink-muted">Support reference: {reference}</p> : null}
+      </section>
+    );
+  }
+
+  const metrics = model.metrics;
+
+  return (
+    <section aria-labelledby={headingId} className="rounded-xl border border-hairline bg-white p-5 sm:p-6">
+      <h2 id={headingId} className="text-lg font-semibold text-ink">{model.headline}</h2>
+      <dl className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        {metrics.map(({ key, label, count }) => (
+          <div key={key} className="min-w-0 rounded-lg bg-ink/[0.025] p-3">
+            <dt className="text-sm leading-snug text-ink-muted">{label}</dt>
+            <dd className="mt-2 text-2xl font-semibold tabular-nums text-ink">{count}</dd>
+          </div>
+        ))}
+      </dl>
+      <div className="mt-5 space-y-1 text-sm text-ink-muted">
+        <p>{model.scoreLine}</p>
+        <p>{model.sampleLine}</p>
+      </div>
+      <p className="mt-3 rounded-lg bg-ink/[0.025] p-3 text-sm leading-relaxed text-ink-muted">
+        {model.sampleScopeWarning}
+      </p>
+      <p className="mt-3 text-xs leading-relaxed text-ink-muted">
+        “Not matched” means current findings that could not be matched to the previous
+        scan. Differences in coverage or repair identity may explain this.
+        “Could not verify” means the available evidence cannot establish whether
+        a previous repair changed.
+      </p>
+    </section>
+  );
+}

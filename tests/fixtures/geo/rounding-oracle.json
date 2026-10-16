@@ -1,0 +1,154 @@
+{
+  "geo_readiness_version": "geo_readiness_v1_experimental",
+  "assessment_status": "insufficient_evidence",
+  "score": null,
+  "coverage": 0.007812,
+  "score_bounds": {
+    "lower": 0.78125,
+    "upper": 100.0
+  },
+  "bounds_kind": "unknown_outcome_range_not_statistical_confidence",
+  "sample_pages": 128,
+  "dimensions": {
+    "access": {
+      "coverage": 0.007812,
+      "checks": {
+        "search_policy": {
+          "counts": {
+            "fail": 0,
+            "not_applicable": 0,
+            "not_verified": 127,
+            "pass": 1
+          },
+          "applicable_or_unknown": 128
+        },
+        "indexability": {
+          "counts": {
+            "fail": 0,
+            "not_applicable": 0,
+            "not_verified": 127,
+            "pass": 1
+          },
+          "applicable_or_unknown": 128
+        },
+        "discovery": {
+          "counts": {
+            "fail": 0,
+            "not_applicable": 0,
+            "not_verified": 127,
+            "pass": 1
+          },
+          "applicable_or_unknown": 128
+        }
+      },
+      "score": 100.0
+    },
+    "clarity": {
+      "coverage": 0.007812,
+      "checks": {
+        "main_text": {
+          "counts": {
+            "fail": 0,
+            "not_applicable": 0,
+            "not_verified": 127,
+            "pass": 1
+          },
+          "applicable_or_unknown": 128
+        },
+        "page_identity": {
+          "counts": {
+            "fail": 0,
+            "not_applicable": 0,
+            "not_verified": 127,
+            "pass": 1
+          },
+          "applicable_or_unknown": 128
+        },
+        "template_integrity": {
+          "counts": {
+            "fail": 0,
+            "not_applicable": 0,
+            "not_verified": 127,
+            "pass": 1
+          },
+          "applicable_or_unknown": 128
+        }
+      },
+      "score": 100.0
+    },
+    "entity": {
+      "coverage": 0.007812,
+      "checks": {
+        "subject_identity": {
+          "counts": {
+            "fail": 0,
+            "not_applicable": 0,
+            "not_verified": 127,
+            "pass": 1
+          },
+          "applicable_or_unknown": 128
+        },
+        "entity_details": {
+          "counts": {
+            "fail": 0,
+            "not_applicable": 0,
+            "not_verified": 127,
+            "pass": 1
+          },
+          "applicable_or_unknown": 128
+        },
+        "schema_agreement": {
+          "counts": {
+            "fail": 0,
+            "not_applicable": 0,
+            "not_verified": 127,
+            "pass": 1
+          },
+          "applicable_or_unknown": 128
+        }
+      },
+      "score": 100.0
+    },
+    "support": {
+      "coverage": 0.007812,
+      "checks": {
+        "accountability": {
+          "counts": {
+            "fail": 0,
+            "not_applicable": 0,
+            "not_verified": 127,
+            "pass": 1
+          },
+          "applicable_or_unknown": 128
+        },
+        "date_context": {
+          "counts": {
+            "fail": 0,
+            "not_applicable": 0,
+            "not_verified": 127,
+            "pass": 1
+          },
+          "applicable_or_unknown": 128
+        },
+        "source_attribution": {
+          "counts": {
+            "fail": 0,
+            "not_applicable": 0,
+            "not_verified": 127,
+            "pass": 1
+          },
+          "applicable_or_unknown": 128
+        }
+      },
+      "score": 100.0
+    }
+  },
+  "reasons": [
+    "overall_coverage_below_80_percent",
+    "access_coverage_below_50_percent",
+    "clarity_coverage_below_50_percent",
+    "entity_coverage_below_50_percent",
+    "support_coverage_below_50_percent"
+  ],
+  "authority_verified": false
+}

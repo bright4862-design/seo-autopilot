@@ -184,11 +184,11 @@ test("every kind reads differently to a customer", () => {
   assert.equal(new Set(seen.values()).size, new Set(CASES.map((entry) => entry.kind)).size);
 });
 
-test("a blocked site is not told to try again straight away", () => {
-  // Retrying into a rate limit produces another rate limit. The advice has to
-  // be tailored to the reason or it is a loop with a confident tone.
+test("access-limited advice distinguishes a rate limit from a bot challenge", () => {
   const view = durableScanStatePresentation(CASES[0].record);
-  assert.match(view.retryAdvice, /wait/i);
+  assert.match(view.retryAdvice, /rate limit may clear/i);
+  assert.match(view.retryAdvice, /bot challenge will not clear just by waiting/i);
+  assert.match(view.retryAdvice, /must allow FixList through first/i);
   assert.doesNotMatch(view.retryAdvice, /straight away|right now|immediately/i);
   assert.doesNotMatch(`${view.detail} ${view.retryAdvice}`, /will work|should work|will succeed/i);
 });

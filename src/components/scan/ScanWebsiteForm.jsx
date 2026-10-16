@@ -24,7 +24,6 @@ import {
   OWNERSHIP_OWNER_MANAGED,
   ownerManagedRobotsPolicy,
   ownershipOnSiteChange,
-  projectAttestationUpdate,
   readSiteOwnership,
   siteOwnershipStorageKey,
   writeSiteOwnership,
@@ -35,7 +34,7 @@ import {
   readCustomerActiveProject,
 } from "@/lib/customerBrowserCache";
 
-const ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV5";
+const ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV8";
 
 // Standard 150 is the only customer scan. There is no scan-size selector and no
 // customer-controlled scanner budget. The gateway owns the Python compatibility
@@ -281,21 +280,8 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
         businessName: trimmedBusinessName,
         cmsPlatform,
         importantKeywords: cleanedKeywords,
+        siteOwnerAttestation: siteOwnership,
       });
-
-      // Persist the attestation on the customer's own owned record, so it is
-      // something a server can verify rather than a claim held in one browser.
-      // Best-effort: a scan the customer has already paid for must not fail
-      // because their answer could not be filed, and the run carries the answer
-      // regardless, so the explanation survives either way.
-      const attestation = projectAttestationUpdate(scanProject, siteOwnership);
-      if (attestation) {
-        try {
-          await base44.entities.BusinessProject.update(scanProject.id, attestation);
-        } catch {
-          // Non-fatal by design; see above.
-        }
-      }
 
       submitLockRef.current = true;
       requestEpoch = requestEpochRef.current + 1;

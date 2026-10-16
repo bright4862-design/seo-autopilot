@@ -3,9 +3,10 @@ from __future__ import annotations
 from collections import Counter
 import re
 from urllib.parse import parse_qsl, urlparse
+from .metadata_title_evidence import relative_evidence_url
 
 
-NAVIGATION_INDEXABILITY_VERSION = "navigation_indexability_v1"
+NAVIGATION_INDEXABILITY_VERSION = "navigation_indexability_v2_published_evidence"
 MIN_GROUP_SIZE = 3
 
 PAGINATION_KEYS = {
@@ -79,7 +80,9 @@ def _page_url(page: dict) -> str:
     return str(page.get("url") or page.get("final_url") or "")
 
 
-def _display_url(page: dict) -> str:
+def _display_url(page: dict, *, scan_origin: str = "", identity_version: str = "") -> str:
+    if identity_version:
+        return relative_evidence_url(page, scan_origin=scan_origin, identity_version=identity_version)
     raw = _page_url(page)
     try:
         parsed = urlparse(raw)
@@ -198,7 +201,8 @@ def _verification_finding(
     return finding
 
 
-def build_navigation_indexability_findings(pages: list[dict], create_finding) -> list[dict]:
+def build_navigation_indexability_findings(pages: list[dict], create_finding, *, scan_origin: str = "", identity_version: str = "") -> list[dict]:
+    identity = {"scan_origin": scan_origin, "identity_version": identity_version}
     orphan_candidates = [
         page for page in pages
         if page.get("potential_orphan_in_sample") and not page.get("trust_discovery_probe")
@@ -210,7 +214,7 @@ def build_navigation_indexability_findings(pages: list[dict], create_finding) ->
 
     findings: list[dict] = []
     if len(orphan_candidates) >= MIN_GROUP_SIZE:
-        affected = list(dict.fromkeys(_display_url(page) for page in orphan_candidates))
+        affected = list(dict.fromkeys(_display_url(page, **identity) for page in orphan_candidates))
         findings.append(_verification_finding(
             create_finding,
             rule="potential_orphan_pages",
@@ -230,7 +234,7 @@ def build_navigation_indexability_findings(pages: list[dict], create_finding) ->
         ))
 
     if len(faceted_candidates) >= MIN_GROUP_SIZE:
-        affected = list(dict.fromkeys(_display_url(page) for page in faceted_candidates))
+        affected = list(dict.fromkeys(_display_url(page, **identity) for page in faceted_candidates))
         findings.append(_verification_finding(
             create_finding,
             rule="indexable_faceted_navigation",
@@ -252,7 +256,8 @@ def build_navigation_indexability_findings(pages: list[dict], create_finding) ->
     return findings
 
 
-def summarize_navigation_indexability(pages: list[dict]) -> dict:
+def summarize_navigation_indexability(pages: list[dict], *, scan_origin: str = "", identity_version: str = "") -> dict:
+    identity = {"scan_origin": scan_origin, "identity_version": identity_version}
     orphan_states = Counter(str(page.get("orphan_evidence_state") or "unknown") for page in pages)
     return {
         "version": NAVIGATION_INDEXABILITY_VERSION,
@@ -264,10 +269,10 @@ def summarize_navigation_indexability(pages: list[dict]) -> dict:
         "indexable_faceted_pages": sum(1 for page in pages if page.get("indexable_faceted_url")),
         "orphan_evidence_state_counts": dict(sorted(orphan_states.items())),
         "representative_orphan_candidates": [
-            _display_url(page) for page in pages if page.get("potential_orphan_in_sample")
+            _display_url(page, **identity) for page in pages if page.get("potential_orphan_in_sample")
         ][:20],
         "representative_faceted_pages": [
-            _display_url(page) for page in pages if page.get("indexable_faceted_url")
+            _display_url(page, **identity) for page in pages if page.get("indexable_faceted_url")
         ][:20],
         "orphan_evidence_limitation": "A representative sampled crawl cannot prove that a sitemap-only URL has no internal links anywhere on the site.",
     }

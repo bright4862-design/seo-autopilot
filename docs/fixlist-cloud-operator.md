@@ -84,6 +84,11 @@ verifies:
 - project-level `roles/cloudbuild.builds.viewer`, required only so
   `verify-worker-routes` can read Cloud Build provenance
 
+The operator has no network-create rights. The static-egress canary network is
+provisioned once by an admin; the operator only gets a read-only verifier role
+(`scripts/bootstrap-fixlist-static-egress-canary.sh`). See
+[static-egress-canary-permissions.md](static-egress-canary-permissions.md).
+
 The WIF provider resource name and operator service-account email are identifiers,
 not secrets. They are pinned directly in `.github/workflows/fixlist-cloud-operator.yml`;
 no GitHub repository secrets are required for them.

@@ -7,6 +7,8 @@ import zlib
 
 import httpx
 
+from .transport_evidence import TRANSFER_BODY_BYTES_HEADER
+
 
 REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 DEFAULT_MAX_REDIRECTS = 5
@@ -25,6 +27,9 @@ def _decoded_body_headers(headers: httpx.Headers) -> httpx.Headers:
     # and retain the compressed wire length.
     decoded_headers.pop("content-encoding", None)
     decoded_headers.pop("content-length", None)
+    # Never trust a remote server to assert FixList's internal measurement.
+    # The bounded reader overwrites this only after observing every raw chunk.
+    decoded_headers.pop(TRANSFER_BODY_BYTES_HEADER, None)
     return decoded_headers
 
 
@@ -66,6 +71,7 @@ async def _bounded_decoded_response(
 
         chunks: list[bytes] = []
         total = 0
+        transfer_body_bytes = 0
 
         def append_decoded(chunk: bytes) -> None:
             nonlocal total
@@ -79,6 +85,10 @@ async def _bounded_decoded_response(
             chunks.append(chunk)
 
         async for raw_chunk in streamed.aiter_raw():
+            # aiter_raw() is the exact bounded network-body seam used by the
+            # scanner. Count those bytes before content decoding; do not infer
+            # transfer size from Content-Length or the decoded body.
+            transfer_body_bytes += len(raw_chunk)
             if encoding == "deflate" and decoder is None:
                 deflate_prefix.extend(raw_chunk)
                 if len(deflate_prefix) < 2:
@@ -137,13 +147,15 @@ async def _bounded_decoded_response(
             )
 
         body = b"".join(chunks)
+        decoded_headers = _decoded_body_headers(streamed.headers)
+        decoded_headers[TRANSFER_BODY_BYTES_HEADER] = str(transfer_body_bytes)
 
         request = getattr(streamed, "request", None)
         if request is not None:
             request.url = resolved.logical_url
         return httpx.Response(
             status_code=streamed.status_code,
-            headers=_decoded_body_headers(streamed.headers),
+            headers=decoded_headers,
             content=body,
             request=request,
             extensions=dict(getattr(streamed, "extensions", {}) or {}),

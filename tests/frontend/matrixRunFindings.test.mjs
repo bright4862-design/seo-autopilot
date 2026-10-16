@@ -28,7 +28,7 @@ test("every affected URL is clickable without relying on a blocked new-tab popup
   const list = customerCard('All affected URLs', "No affected URL list was persisted");
   assert.ok(list.length > 0, "the affected-URL list must exist");
 
-  assert.match(list, /evidenceLink\(page, websiteUrl\)/, "each row resolves through the shared link contract");
+  assert.match(list, /evidenceLink\(page, websiteUrl, evidenceIdentityOptions\(card\)\)/, "each row resolves through the shared link contract");
   assert.match(list, /pageLink\.isLinkable \?/, "a row links only when the contract says it is safe");
   assert.match(list, /href=\{pageLink\.href\}/);
   assert.match(list, /rel="noopener noreferrer"/, "an external link must not hand the opener over");

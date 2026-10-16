@@ -1,3 +1,4 @@
+import { emptyGeoReadiness } from "../../base44/functions/persistDurableScanAuthority/geoReadiness.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
@@ -93,7 +94,7 @@ function acceptedSnapshot() {
 test("authoritative rows seal and project every Standard 150 observation", () => {
   const snapshot = acceptedSnapshot();
 
-  assert.equal(REVIEW_ATTESTATION_VERSION, "standard_review_snapshot_hmac_v6_report_evidence");
+  assert.equal(REVIEW_ATTESTATION_VERSION, "standard_review_snapshot_hmac_geo_v1");
   assert.equal(snapshot.version, REVIEW_ATTESTATION_VERSION);
   assert.equal(snapshot.scan.coverage_authority_evidence.assessment, "sufficient");
   assert.equal(snapshot.scan.classification_integrity.state, "classified");
@@ -278,6 +279,7 @@ test("customer projection suppresses incomplete current-contract acceptance evid
       status: "complete",
       beta_revision_fingerprint: RELEASE_FINGERPRINT,
       authority_seal_version: REVIEW_ATTESTATION_VERSION,
+      geo_readiness: emptyGeoReadiness(),
       coverage_authority_evidence: {
         coverage_authority_evidence_version: "coverage_authority_evidence_v2_authoritative",
         assessment: "sufficient",

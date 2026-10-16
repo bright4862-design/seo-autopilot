@@ -14,12 +14,12 @@ const expectedCanonicals = [
   "deleteCustomerScanData",
 ];
 
-test("V4 remains a complete historical Base44 generation after the V5 cutover", () => {
+test("V4 remains a complete historical Base44 generation after the V7 cutover", () => {
   assert.equal(contract.schema_version, "base44_function_routes_v1");
-  assert.equal(contract.generation, "v5");
+  assert.equal(contract.generation, "v8");
   assert.deepEqual(Object.keys(contract.routes).sort(), [...expectedCanonicals].sort());
   for (const canonical of expectedCanonicals) {
-    assert.equal(contract.routes[canonical], `${canonical}V5`);
+    assert.equal(contract.routes[canonical], `${canonical}V8`);
     assert.equal(contract.historical_routes.v4[canonical], `${canonical}V4`);
     assert.equal(contract.historical_routes.v3[canonical], `${canonical}V3`);
     assert.equal(contract.historical_routes.v2[canonical], `${canonical}V2`);
@@ -64,7 +64,7 @@ test("V4 executable packages preserve canonical behavior except fresh activation
     if (canonical === "getCustomerScanResult") {
       const v4Projection = source(path.join(v4Dir, "projection.js"));
       assert.match(v4Projection, /"preview_example_page"/, "V4 preview projection may expose only its pre-signed example page addition");
-      assert.match(source(path.join(v4Dir, "releaseCompatibility.js")), /customer_result_reader_v7_signed_preview_authority/);
+      assert.match(source(path.join(v4Dir, "releaseCompatibility.js")), /customer_result_reader_v9_published_route_identity/);
     }
   }
 });
@@ -74,13 +74,13 @@ test("V4 routes are retained for history but retired from active customer and wo
   const scanRuns = source("src/lib/scanRuns.js");
   const scanHistory = source("src/lib/scanHistory.js");
   const worker = source("scanner-api/app/scan_job.py");
-  assert.match(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV5"/);
+  assert.match(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV8"/);
   assert.doesNotMatch(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV4"/);
-  assert.match(scanRuns, /"getCustomerScanResultV5"/);
+  assert.match(scanRuns, /"getCustomerScanResultV8"/);
   assert.doesNotMatch(scanRuns, /"getCustomerScanResultV4"/);
-  assert.match(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV5"/);
+  assert.match(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV8"/);
   assert.doesNotMatch(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV4"/);
-  for (const name of ["durableScanWorkerControlV5", "persistDurableScanAuthorityV5", "persistLimitedScanResultV5"]) assert.ok(worker.includes(`"${name}"`), name);
+  for (const name of ["durableScanWorkerControlV8", "persistDurableScanAuthorityV8", "persistLimitedScanResultV8"]) assert.ok(worker.includes(`"${name}"`), name);
   for (const retired of ["durableScanWorkerControlV4", "persistDurableScanAuthorityV4", "persistLimitedScanResultV4"]) assert.ok(!worker.includes(`"${retired}"`), retired);
 });
 

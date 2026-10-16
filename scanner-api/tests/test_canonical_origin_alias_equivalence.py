@@ -115,7 +115,7 @@ def test_hostless_scheme_relative_same_path_canonical_uses_final_origin():
 
     assert page["canonical"] == "https://www.hartzlerdairy.com/chocolate-milk/"
     assert page["canonical_status"] == "self_or_equivalent"
-    assert page["canonical_href_resolution_version"] == "canonical_href_resolution_v2_absolute_single_label_same_path"
+    assert page["canonical_href_resolution_version"] == "canonical_href_resolution_v3_published_route_identity"
     assert not any(item["rule"] == "canonical_cross_domain" for item in build_findings([page]))
 
 
@@ -154,7 +154,7 @@ def test_absolute_single_label_same_path_canonical_uses_final_origin():
 
     assert page["canonical"] == "https://www.hartzlerdairy.com/chocolate-milk/"
     assert page["canonical_status"] == "self_or_equivalent"
-    assert page["canonical_href_resolution_version"] == "canonical_href_resolution_v2_absolute_single_label_same_path"
+    assert page["canonical_href_resolution_version"] == "canonical_href_resolution_v3_published_route_identity"
     assert not any(item["rule"] == "canonical_cross_domain" for item in build_findings([page]))
 
 

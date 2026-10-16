@@ -78,3 +78,14 @@ test("terminal recovery exposes the durable scan reference", () => {
   assert.match(source, /reference=\{scanRecord\.scan_id \|\| scanRecord\.id\}/);
   assert.match(source, /Scan reference:/);
 });
+
+
+test("access-limited copy does not imply waiting clears a bot challenge", () => {
+  const view = durableScanStatePresentation({
+    status: "limited",
+    evidence_quality_state: "access_limited",
+  });
+  assert.match(view.retryAdvice, /rate limit may clear/i);
+  assert.match(view.retryAdvice, /challenge will not clear just by waiting/i);
+  assert.match(view.retryAdvice, /allow FixList through first/i);
+});

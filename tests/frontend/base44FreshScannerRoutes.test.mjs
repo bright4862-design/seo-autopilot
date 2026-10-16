@@ -11,7 +11,7 @@ const routes = contract.routes;
 
 const source = (p) => fs.readFileSync(p, "utf8");
 
-test("every active V5 effective handler returns its expected runtime identity before authentication", async () => {
+test("every active V8 effective handler returns its expected runtime identity before authentication", async () => {
   for (const active of Object.values(routes)) {
     const root = path.resolve("base44/functions", active);
     const cache = new Map();
@@ -55,7 +55,7 @@ test("every active V5 effective handler returns its expected runtime identity be
 
 test("Base44 scanner route generation is explicit and complete", () => {
   assert.equal(contract.schema_version, "base44_function_routes_v1");
-  assert.equal(contract.generation, "v5");
+  assert.equal(contract.generation, "v8");
   assert.deepEqual(Object.keys(routes).sort(), [
     "deleteCustomerScanData",
     "durableScanWorkerControl",
@@ -65,23 +65,37 @@ test("Base44 scanner route generation is explicit and complete", () => {
     "startStandardScanJob",
   ]);
   for (const [canonical, active] of Object.entries(routes)) {
-    assert.equal(active, `${canonical}V5`);
+    assert.equal(active, `${canonical}V8`);
     assert.ok(fs.existsSync(path.join("base44/functions", active, "entry.ts")));
     assert.match(source(path.join("base44/functions", active, "function.jsonc")), new RegExp(`"name"\\s*:\\s*"${active}"`));
   }
 });
 
-test("fresh Base44 routes preserve canonical source except the bounded signed-preview delta", () => {
+test("fresh Base44 routes preserve canonical source outside preview, Stage 3, and comparison additions", () => {
   const withoutActivationNonce = (value) => value.replace(
     /(BASE44_RUNTIME_ACTIVATION_ID\s*=\s*)["'][^"']+["']/g,
     '$1"<deployment-activation-nonce>"',
   );
-  const v4OnlyFiles = new Map([
-    ["persistDurableScanAuthority", ["customerPreviewSeal.js"]],
-    ["getCustomerScanResult", ["customerPreviewSeal.js"]],
+  const v7OnlyFiles = new Map([
+    ["persistDurableScanAuthority", [
+      "authoritySnapshotStage1Legacy.js",
+      "comparisonEvidence.js",
+      "customerPreviewSeal.js",
+      "customerPreviewSealStage1Legacy.js",
+      "stage3V7Delivery.js",
+      "stage3V7DeliveryStrict.js",
+    ]],
+    ["getCustomerScanResult", [
+      "comparisonEvidence.js",
+      "comparisonGateway.js",
+      "comparisonReader.js",
+      "customerPreviewSeal.js",
+      "projectionStage1Legacy.js",
+      "stage3V7Delivery.js",
+    ]],
   ]);
   const intentionallyChangedInheritedFiles = new Map([
-    ["persistDurableScanAuthority", new Set(["entry.ts"])],
+    ["persistDurableScanAuthority", new Set(["entry.ts", "authoritySnapshot.js"])],
     ["getCustomerScanResult", new Set(["entry.ts", "projection.js", "releaseCompatibility.js"])],
   ]);
   for (const [canonical, active] of Object.entries(routes)) {
@@ -93,7 +107,7 @@ test("fresh Base44 routes preserve canonical source except the bounded signed-pr
     const activeFiles = fs.readdirSync(activeDir)
       .filter((name) => !["function.jsonc", "generatedBuildId.js"].includes(name))
       .sort();
-    const allowedExtras = v4OnlyFiles.get(canonical) || [];
+    const allowedExtras = v7OnlyFiles.get(canonical) || [];
     assert.deepEqual(activeFiles, [...canonicalFiles, ...allowedExtras].sort(), active);
     const intentionalChanges = intentionallyChangedInheritedFiles.get(canonical) || new Set();
     for (const file of canonicalFiles) {
@@ -108,29 +122,32 @@ test("fresh Base44 routes preserve canonical source except the bounded signed-pr
       assert.match(source(path.join(activeDir, "entry.ts")), /customerPreviewSeal\.js/, `${active} must wire the signed preview helper`);
     }
     if (canonical === "getCustomerScanResult") {
-      assert.match(source(path.join(activeDir, "projection.js")), /"preview_example_page"/);
-      assert.match(source(path.join(activeDir, "releaseCompatibility.js")), /customer_result_reader_v7_signed_preview_authority/);
+      assert.match(source(path.join(activeDir, "entry.ts")), /readCustomerScanComparison\(\{/);
+      assert.match(source(path.join(activeDir, "comparisonGateway.js")), /fixlist-scan-comparison-response-v1/);
+      assert.match(source(path.join(activeDir, "projectionStage1Legacy.js")), /"preview_example_page"/);
+      assert.match(source(path.join(activeDir, "projection.js")), /projectionStage1Legacy\.js/);
+      assert.match(source(path.join(activeDir, "releaseCompatibility.js")), /customer_result_reader_v9_published_route_identity/);
     }
   }
 });
 
-test("customer and worker call sites use only V5 scanner routes", () => {
+test("customer and worker call sites use only V8 scanner routes", () => {
   const scanForm = source("src/components/scan/ScanWebsiteForm.jsx");
   const scanRuns = source("src/lib/scanRuns.js");
   const scanHistory = source("src/lib/scanHistory.js");
   const worker = source("scanner-api/app/scan_job.py");
 
-  assert.match(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV5"/);
+  assert.match(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV8"/);
   assert.doesNotMatch(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV2"/);
-  assert.match(scanRuns, /"getCustomerScanResultV5"/);
+  assert.match(scanRuns, /"getCustomerScanResultV8"/);
   assert.doesNotMatch(scanRuns, /"getCustomerScanResultV2"/);
-  assert.match(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV5"/);
+  assert.match(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV8"/);
   assert.doesNotMatch(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV2"/);
 
   for (const name of [
-    "durableScanWorkerControlV5",
-    "persistDurableScanAuthorityV5",
-    "persistLimitedScanResultV5",
+    "durableScanWorkerControlV8",
+    "persistDurableScanAuthorityV8",
+    "persistLimitedScanResultV8",
   ]) assert.ok(worker.includes(`"${name}"`), name);
   for (const stale of [
     '"durableScanWorkerControlV2"',

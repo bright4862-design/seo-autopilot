@@ -6,9 +6,16 @@ from urllib.parse import urljoin, urldefrag, urlparse
 
 from bs4 import BeautifulSoup
 
+from .accepted_content_evidence import extract_accepted_content_evidence
+from .geo_evidence import VERSION as GEO_EVIDENCE_ADAPTER_VERSION, extract_geo_evidence
 from .location_template_content import detect_location_template_content
 from .market_scope import strip_market_locale_prefix
-from .page_evidence_gate import PAGE_EVIDENCE_GATE_VERSION, classify_page_evidence
+from .page_evidence_gate import (
+    PAGE_EVIDENCE_GATE_VERSION,
+    access_block_header_evidence,
+    classify_page_evidence,
+    detect_access_block,
+)
 from .metadata_title_evidence import (
     METADATA_EVIDENCE_VERSION,
     TITLE_EVIDENCE_VERSION,
@@ -17,9 +24,13 @@ from .metadata_title_evidence import (
     is_generic_fallback_title,
     title_width_state,
 )
+from .transport_evidence import (
+    TRANSFER_BODY_BYTES_BASIS,
+    measured_transfer_body_bytes,
+)
 
 
-CANONICAL_HREF_RESOLUTION_VERSION = "canonical_href_resolution_v2_absolute_single_label_same_path"
+CANONICAL_HREF_RESOLUTION_VERSION = "canonical_href_resolution_v3_published_route_identity"
 
 
 def _canonical_path_key(value: str) -> str:
@@ -107,6 +118,24 @@ def client_rendering_signals(html: str, status_code: int, word_count: int) -> li
     return [label for label, pattern in APP_SHELL_MARKERS if pattern.search(source)][:4]
 
 
+def _anchor_navigation_presence(anchor: Any) -> bool:
+    """Return only semantic raw-HTML navigation evidence for an anchor.
+
+    Class names such as ``menu`` are not treated as proof. A verified source page
+    can therefore establish navigation presence only through a ``nav`` ancestor
+    or an ancestor explicitly carrying ``role=navigation``.
+    """
+    current = anchor
+    while current is not None:
+        if getattr(current, "name", None) == "nav":
+            return True
+        role = str(getattr(current, "attrs", {}).get("role", "")).strip().lower()
+        if role == "navigation":
+            return True
+        current = getattr(current, "parent", None)
+    return False
+
+
 def extract_links_from_soup(soup: BeautifulSoup, base_url: str, limit: int = 2000) -> list[dict]:
     links: list[dict] = []
     for anchor in soup.find_all("a", href=True):
@@ -116,7 +145,13 @@ def extract_links_from_soup(soup: BeautifulSoup, base_url: str, limit: int = 200
             continue
         if not href:
             continue
-        links.append({"href": href, "text": clean_text(anchor.get_text(" "))[:180]})
+        links.append(
+            {
+                "href": href,
+                "text": clean_text(anchor.get_text(" "))[:180],
+                "navigation_presence": _anchor_navigation_presence(anchor),
+            }
+        )
         if len(links) >= max(1, int(limit or 2000)):
             break
     return links
@@ -192,7 +227,7 @@ def extract_page(
 
     h1s = [clean_text(h.get_text(" ")) for h in soup.find_all("h1") if clean_text(h.get_text(" "))]
     images = soup.find_all("img")
-    missing_alt = sum(1 for img in images if not clean_text(img.get("alt", "")))
+    missing_alt = sum(1 for img in images if not img.has_attr("alt"))
     schema_types = extract_schema_types(soup)
     visible_text = clean_text(soup.get_text(" "))
     word_count = len([w for w in visible_text.split(" ") if w])
@@ -209,14 +244,8 @@ def extract_page(
     indexable = 200 <= status_code < 300 and not fetch_error and not noindexed
     indexability_state = classify_indexability_state(status_code, fetch_error, noindexed)
     page_template_family = classify_template(path, title, h1s[0] if h1s else "", schema_types)
-    template_content = detect_location_template_content(
-        path,
-        title,
-        h1s[0] if h1s else "",
-        visible_text,
-    )
-
     rendering_signals = client_rendering_signals(html, status_code, word_count)
+    access_block = detect_access_block(status_code, response_headers, html)
     page_evidence_class = classify_page_evidence(
         status_code=status_code,
         content_type=content_type,
@@ -225,9 +254,21 @@ def extract_page(
         # A body cut at the parse ceiling is incomplete evidence: the gate must
         # see that here, while it is stamping, not after the fact.
         body_truncated=body_truncated,
+        response_headers=response_headers,
     )
+    content_evidence = extract_accepted_content_evidence(html or "", page_evidence_class)
+    transfer_body_bytes = measured_transfer_body_bytes(response_headers)
+    if page_evidence_class == "usable_html" and transfer_body_bytes is not None:
+        content_evidence.update({
+            "transfer_bytes": transfer_body_bytes,
+            "transfer_bytes_state": "measured",
+            "transfer_bytes_basis": TRANSFER_BODY_BYTES_BASIS,
+        })
+    location_context = content_evidence.pop("location_context")
+    template_content = detect_location_template_content(path, **location_context)
 
     page = {
+        **content_evidence,
         "url": url,
         "final_url": final_url or url,
         "path": path,
@@ -291,8 +332,40 @@ def extract_page(
             path, title, h1s[0] if h1s else "", status_code, page_template_family, schema_types
         ),
     }
+    if access_block:
+        page.update({
+            "access_block_vendor": access_block["vendor"],
+            "access_block_kind": access_block["kind"],
+            "access_block_signal": access_block["signal"],
+            "access_block_headers": access_block_header_evidence(response_headers),
+        })
+
+    # GEO only consumes the same accepted response; no secondary fetch.
+    if page_evidence_class == "usable_html":
+        try:
+            page["geo_evidence"] = extract_geo_evidence(html or "", page)
+        except Exception:
+            # This optional diagnostic must not invalidate accepted SEO evidence.
+            # Keep the rejection explicit without retaining exception/body data.
+            page["geo_evidence"] = {
+                "version": GEO_EVIDENCE_ADAPTER_VERSION, "origin": "raw_html",
+                "accepted": False, "signals": {}, "content_digest": "",
+            }
+            page["geo_evidence_error"] = "extraction_error"
+
     if include_links and 200 <= int(status_code or 0) < 300 and html:
-        page["_links"] = extract_links_from_soup(soup, final_url or url)
+        links = extract_links_from_soup(soup, final_url or url)
+        page["_links"] = links
+        if page_evidence_class == "usable_html":
+            page["_reachability_links"] = [
+                {
+                    "href": link.get("href", ""),
+                    "navigation_presence": link.get("navigation_presence")
+                    if isinstance(link.get("navigation_presence"), bool)
+                    else None,
+                }
+                for link in links
+            ]
     return page
 
 
@@ -601,9 +674,6 @@ def estimate_intent(
 
 
 def same_path(left: str, right: str) -> bool:
-    try:
-        l = urlparse(left)
-        r = urlparse(right)
-        return l.netloc == r.netloc and l.path.rstrip("/") == r.path.rstrip("/")
-    except Exception:
-        return False
+    from .repair_coverage import published_evidence_url_key
+    left_key = published_evidence_url_key(left)
+    return bool(left_key and left_key == published_evidence_url_key(right))

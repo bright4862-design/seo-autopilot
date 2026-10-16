@@ -46,9 +46,10 @@ def deterministic_public_dns(monkeypatch):
     )
 
 
-def _response(status, text=""):
+def _response(status, text="", headers=None):
     return httpx.Response(
         status,
+        headers=headers or {},
         stream=httpx.ByteStream(text.encode("utf-8")),
         request=httpx.Request("GET", "https://example.com/robots.txt"),
     )
@@ -85,6 +86,23 @@ async def test_access_limited_robots_file_stays_unknown(monkeypatch):
     assert policy.status == "access_limited"
     assert policy.rules_known is False
     assert policy.allowed("Googlebot", "https://example.com/private") is None
+
+@pytest.mark.asyncio
+async def test_siteground_challenge_robots_file_stays_unknown(monkeypatch):
+    monkeypatch.setattr("app.security.is_public_http_url", lambda _url: True)
+    body = (
+        '<html><head><meta http-equiv="refresh" '
+        'content="0;/.well-known/sgcaptcha/?r=%2F"></head></html>'
+    )
+    policy = await load_robots_policy(
+        _Client(_response(202, body, {"sg-captcha": "challenge"})),
+        "https://example.com",
+    )
+
+    assert policy.status == "access_limited"
+    assert policy.status_code == 202
+    assert policy.rules_known is False
+    assert policy.allowed(SCANNER_USER_AGENT, "https://example.com/private") is None
 
 
 def _blocked_policy():

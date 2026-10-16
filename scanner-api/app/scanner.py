@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import inspect
 import math
 import re
 import time
@@ -9,12 +10,20 @@ from urllib.parse import urldefrag, urlparse
 
 import httpx
 
+from .active_soft404_orchestration import uniform_observed_group_provenance
 from .artifact_filter import MAX_ARTIFACT_EVIDENCE, is_artifact_url, record_artifact
 from .canonical_validation import validate_canonical_targets
+from .coverage_probes import (
+    COVERAGE_PROBE_SCHEDULER_VERSION,
+    LINK_INTEGRITY_PROBE_VERSION,
+    SharedCoverageProbeScheduler,
+    coverage_probe_request_limit,
+)
 from .redirect_validation import apply_redirect_evidence, fetch_with_redirect_evidence, summarize_redirect_evidence
 from .extract import classify_template, extract_links, extract_page
 from .market_scope import market_pair_prefix, path_within_scope
 from .page_evidence_gate import (
+    ACCESS_BLOCK_HEADER_ALLOWLIST,
     PAGE_EVIDENCE_GATE_VERSION,
     page_evidence_class,
     page_has_usable_html,
@@ -28,6 +37,11 @@ from .metadata_title_evidence import (
     normalize_title_key,
     relative_evidence_url,
 )
+from .search_applicability import search_applicability, search_metadata_applicable, filter_search_findings
+from .stage2_shared_probe_orchestration import run_stage2_shared_probe_orchestration
+from .content_evidence_findings import content_evidence_findings
+from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
+from .missing_h1_contract import apply_missing_h1_contract
 from .sampling import SAMPLING_VERSION, enrich_checked_coverage, sampling_report, select_balanced_urls
 from .scan_timing import (
     SITEMAP_TIME_RESERVATION_VERSION,
@@ -41,7 +55,7 @@ from .security import is_public_http_url, safe_get
 from .sitemap import load_sitemap_urls
 from .url_frontier_policy import FRONTIER_POLICY_VERSION, classify_frontier_url
 
-VERSION = "python_scanner_v3_bounded_request"
+VERSION = "python_scanner_v5_observed_finding_identity"
 RENDER_EVIDENCE_VERSION = "render_evidence_v1"
 FINAL_URL_DEDUP_VERSION = "final_url_dedup_v1_normalized_identity"
 # How findings become customer repair cards. A change here changes what the
@@ -49,7 +63,7 @@ FINAL_URL_DEDUP_VERSION = "final_url_dedup_v1_normalized_identity"
 # marker: reusing scanner_version would churn every historical seal fixture,
 # and leaving the release identity unmoved would ship two different grouping
 # behaviours under one fingerprint.
-REPAIR_SURFACE_GROUPING_VERSION = "repair_surface_grouping_v1_shared_artifact"
+REPAIR_SURFACE_GROUPING_VERSION = "repair_surface_grouping_v2_evidenced_search_intent"
 
 # The Python crawler does not derive an AI crawl policy (no InvokeLLM here), but it
 # still emits the policy contract so AI Review keeps provenance. source="disabled"
@@ -68,6 +82,8 @@ def _access_unverified_observation(page: dict) -> bool:
     status = int(page.get("status_code") or 0)
     redirect_state = str(page.get("redirect_state") or "")
     fetch_error = str(page.get("fetch_error") or "").strip()
+    if str(page.get("access_block_kind") or "").strip().lower() in {"challenge", "block", "rate_limit"}:
+        return True
     if redirect_state in {
         "redirect_destination_unverified",
         "redirect_destination_blocked_by_robots",
@@ -140,6 +156,7 @@ RATE_LIMIT_PROACTIVE_REQUEST_INTERVAL_SECONDS = 1.0
 # that detected profile only; normal sites and generic 429 recovery stay unchanged.
 RATE_LIMIT_CLOUDFLARE_SHOPIFY_INTERVAL_SECONDS = 2.5
 RATE_LIMIT_INITIAL_COOLDOWN_SECONDS = 30.0
+RATE_LIMIT_MIN_REMAINING_CRAWL_SECONDS = 20.0
 RATE_LIMIT_BACKOFF_INTERVAL_SECONDS = 2.5
 RATE_LIMIT_MAX_INTERVAL_SECONDS = 4.0
 RATE_LIMIT_MAX_RETRIES = 8
@@ -160,6 +177,9 @@ def transient_pressure_kind(page: dict | None) -> str:
     if not isinstance(page, dict):
         return ""
     status = int(page.get("status_code") or 0)
+    access_kind = str(page.get("access_block_kind") or "").strip().lower()
+    if access_kind in {"challenge", "block"}:
+        return ""
     if status == 429:
         return "429"
     if status in TRANSIENT_PRESSURE_STATUS_CODES:
@@ -200,10 +220,12 @@ def parse_retry_after_seconds(value: str, *, now: datetime | None = None) -> flo
         return 0.0
 
 
+def is_rate_limited_response(response) -> bool:
+    return response is not None and int(getattr(response, "status_code", 0) or 0) == 429
+
+
 def is_cloudflare_rate_limited_response(response) -> bool:
-    if response is None or int(getattr(response, "status_code", 0) or 0) != 429:
-        return False
-    return "cloudflare" in str(response.headers.get("server", "")).lower()
+    return is_rate_limited_response(response) and "cloudflare" in str(response.headers.get("server", "")).lower()
 
 
 def detect_rate_limit_profile(response) -> str:
@@ -385,6 +407,43 @@ def resolve_scan_budget(scan_mode: str, timeout_seconds: float | None = None, *,
     return budget
 
 
+def _link_probe_observed_url(target: str, probe_page: dict | None = None) -> str:
+    """Return the exact HTTP identity used for a bounded link probe.
+
+    Link hrefs may contain spaces or other characters that HTTP clients
+    percent-encode before requesting them. Preserve the original link target
+    semantics, but publish the normalized request identity so downstream
+    evidence cannot collapse an otherwise verified broken target to an empty
+    route/homepage fallback.
+    """
+    raw = str(target or "").strip()
+    if raw:
+        try:
+            return str(httpx.URL(raw))
+        except Exception:
+            pass
+    if isinstance(probe_page, dict):
+        return str(probe_page.get("final_url") or probe_page.get("url") or "").strip()
+    return raw
+
+
+def _supports_stage2_probe_fetch(fetcher) -> bool:
+    """Require the hardened callback seam before active Standard-150 probes run.
+
+    Stage-2 active probes are allowed only when the active fetch callback accepts
+    both robots policy and the shared scheduler's request provider. This keeps the
+    finite request pool enforceable and fails closed for legacy/injected callbacks
+    that cannot honor that contract.
+    """
+    try:
+        parameters = inspect.signature(fetcher).parameters
+    except (TypeError, ValueError):
+        return False
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
+        return True
+    return "robots_policy" in parameters and "request_provider" in parameters
+
+
 async def run_scan(
     website_url: str,
     path_prefix: str | None = None,
@@ -437,7 +496,7 @@ async def run_scan(
     artifacts: list[dict] = []
 
     def enqueue(url: str, source: str, source_page: str = "", link_text: str = "") -> None:
-        clean = normalize_published_request_url(url) if source == "seed" else normalize_url(url)
+        clean = normalize_published_request_url(url)
         if not clean:
             if is_artifact_url(url):
                 record_artifact(artifacts, url, source, source_page, link_text)
@@ -493,21 +552,50 @@ async def run_scan(
                     start_url,
                     max_decoded_bytes=MAX_DECODED_RESPONSE_BYTES,
                 )
-                if job_mode and is_cloudflare_rate_limited_response(landing):
-                    remaining_for_crawl = max(0.0, deadline - time.monotonic() - 20.0)
-                    cooldown = min(RATE_LIMIT_INITIAL_COOLDOWN_SECONDS, remaining_for_crawl)
-                    if cooldown > 0:
+                if job_mode and is_rate_limited_response(landing):
+                    retry_started_at = time.monotonic()
+                    retry_budget = allocate_scan_time_budget(
+                        scan_started_at, budget["timeout"], fetch_timeout, now=retry_started_at,
+                    )
+                    remaining_for_wait = max(
+                        0.0, retry_budget["crawl_deadline"] - retry_started_at
+                        - fetch_timeout - RATE_LIMIT_MIN_REMAINING_CRAWL_SECONDS,
+                    )
+                    retry_after = parse_retry_after_seconds(landing.headers.get("retry-after", ""))
+                    cooldown = max(RATE_LIMIT_INITIAL_COOLDOWN_SECONDS, retry_after)
+                    # Do not shorten the server's requested wait to fit our
+                    # deadline. Reserve a retry, useful crawling and response
+                    # assembly; otherwise retain the blocked evidence.
+                    if 0 < cooldown < remaining_for_wait:
                         await asyncio.sleep(cooldown)
-                        initial_rate_limit_retry_count = 1
-                        landing = await safe_get(
-                            client,
-                            start_url,
-                            max_decoded_bytes=MAX_DECODED_RESPONSE_BYTES,
-                        )
-                        initial_rate_limit_recovered = not is_cloudflare_rate_limited_response(landing)
-                    if is_cloudflare_rate_limited_response(landing):
+                        # Recheck after sleeping: scheduling delays must not
+                        # consume the reserved crawl window either.
+                        if retry_budget["crawl_deadline"] - time.monotonic() > (
+                            fetch_timeout + RATE_LIMIT_MIN_REMAINING_CRAWL_SECONDS
+                        ):
+                            initial_rate_limit_retry_count = 1
+                            try:
+                                retried_landing = await asyncio.wait_for(
+                                    safe_get(
+                                        client, start_url,
+                                        max_decoded_bytes=MAX_DECODED_RESPONSE_BYTES,
+                                    ),
+                                    timeout=fetch_timeout,
+                                )
+                            except (httpx.HTTPError, TimeoutError):
+                                retried_landing = None
+                            # No response does not prove the throttle cleared.
+                            # Retain the original 429 and suppress follow-ups.
+                            if retried_landing is not None:
+                                landing = retried_landing
+                                initial_rate_limit_recovered = not is_rate_limited_response(landing)
+                    if is_rate_limited_response(landing):
                         initial_rate_limit_blocked = True
-                        rate_limit_profile = "cloudflare_initial_throttle"
+                        rate_limit_profile = (
+                            "cloudflare_initial_throttle"
+                            if is_cloudflare_rate_limited_response(landing)
+                            else "initial_throttle"
+                        )
                         snapshot = {key: list(value) for key, value in discovery.get(start_url, empty_discovery()).items()}
                         initial_rate_limit_page = extract_page(
                             str(getattr(landing, "text", "") or ""),
@@ -742,18 +830,177 @@ async def run_scan(
         # overstatement the selection counts were already making.
         enrich_checked_coverage(sampling_evidence, pages, path_of)
         scan_coverage = _finalize_scan_coverage(scan_coverage_counters, pages)
+
+        # Stage 2 coverage probes share the crawler's finite frontier-request
+        # ceiling, but they never become assessed pages. This lets Standard 150
+        # verify bounded discovered targets beyond its assessed sample without
+        # quietly turning into a larger crawl.
+        probe_started_at = time.monotonic()
+        remaining_crawl_seconds = max(0.0, timing_budget["crawl_deadline"] - probe_started_at)
+        # Coverage is additive. It must not consume the whole remainder and
+        # starve the pre-existing canonical validator that follows it.
+        probe_time_budget_seconds = (
+            0.0 if initial_rate_limit_blocked else min(12.0, remaining_crawl_seconds * 0.25)
+        )
+        probe_scheduler = SharedCoverageProbeScheduler(
+            max_probe_requests=coverage_probe_request_limit(scan_mode),
+            shared_request_limit=max_pages * 8,
+            initial_request_count=crawl_state["claimed"],
+            deadline=probe_started_at + probe_time_budget_seconds,
+        )
+        for target, record in discovery.items():
+            if target in seen or "internal_link" not in set(record.get("discovered_from") or []):
+                continue
+            probe_scheduler.register(
+                purpose="internal_link",
+                url=target,
+                source_pages=record.get("source_pages") or [],
+                link_text_samples=record.get("link_text_samples") or [],
+            )
+
+        link_probe_findings = []
+        for candidate in probe_scheduler.candidates("internal_link"):
+            target = candidate["url"]
+            if not probe_scheduler.can_start_candidate("internal_link", target):
+                probe_scheduler.record_exhausted(
+                    "internal_link",
+                    target,
+                    source_pages=candidate.get("source_pages") or [],
+                    link_text_samples=candidate.get("link_text_samples") or [],
+                )
+                continue
+            if robots_policy.allowed(SCANNER_USER_AGENT, target) is False:
+                probe_scheduler.record_skipped(
+                    "internal_link",
+                    target,
+                    reason="blocked_by_robots_txt",
+                    source_pages=candidate.get("source_pages") or [],
+                    link_text_samples=candidate.get("link_text_samples") or [],
+                )
+                continue
+
+            probe_scheduler.begin_candidate("internal_link")
+            probe_page = await fetch_and_extract(
+                client,
+                target,
+                {
+                    "discovered_from": ["internal_link"],
+                    "source_pages": candidate.get("source_pages") or [],
+                    "link_text_samples": candidate.get("link_text_samples") or [],
+                },
+                robots_policy=robots_policy,
+                request_provider=probe_scheduler.fetch_once,
+            )
+            annotate_robots_evidence(probe_page, robots_policy, target)
+            status_code = int(probe_page.get("status_code") or 0)
+            evidence_class = page_evidence_class(probe_page)
+            fetch_error = str(probe_page.get("fetch_error") or "").strip()
+            access_kind = str(probe_page.get("access_block_kind") or "").strip().lower()
+            if (
+                access_kind in {"challenge", "block", "rate_limit"}
+                or status_code in {401, 403, 407, 408, 425, 429}
+                or (status_code <= 0 and fetch_error)
+            ):
+                probe_scheduler.record_result(
+                    "internal_link",
+                    target,
+                    state="not_verified",
+                    reason=fetch_error or access_kind or evidence_class or "access_unverified",
+                    status_code=status_code,
+                    final_url=probe_page.get("final_url") or target,
+                    source_pages=candidate.get("source_pages") or [],
+                    link_text_samples=candidate.get("link_text_samples") or [],
+                )
+                continue
+
+            failed = status_code >= 400
+            probe_scheduler.record_result(
+                "internal_link",
+                target,
+                state="fail" if failed else "pass",
+                reason=f"http_{status_code}" if status_code else "no_status",
+                status_code=status_code,
+                final_url=probe_page.get("final_url") or target,
+                source_pages=candidate.get("source_pages") or [],
+                link_text_samples=candidate.get("link_text_samples") or [],
+            )
+            if status_code in {404, 410}:
+                rule = "410_error" if status_code == 410 else "404_error"
+                observed_probe_url = _link_probe_observed_url(target, probe_page)
+                link_probe_findings.append(create_finding(
+                    rule=rule,
+                    category="404_error",
+                    priority="high",
+                    title="Fix a broken internal link",
+                    page_url=relative_evidence_url(
+                        {"url": observed_probe_url},
+                        scan_origin=scope_evidence["requested_origin"],
+                        identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION,
+                    ),
+                    current_value=f"HTTP {status_code} verified by bounded same-site link probe",
+                    explanation=(
+                        "A link on an assessed page points to a same-site URL outside the assessed-page sample, "
+                        f"and a bounded follow-up request verified HTTP {status_code}."
+                    ),
+                    recommendation=(
+                        "Restore the target, redirect it to the closest relevant live page, or update the source link."
+                    ),
+                    difficulty="developer",
+                    source_pages=candidate.get("source_pages") or [],
+                    link_text_samples=candidate.get("link_text_samples") or [],
+                ))
+                link_probe_findings[-1].update({
+                    "evidence_status": "confirmed",
+                    "verification_state": "verified",
+                    "confidence_score": 96,
+                    "observed_evidence_version": LINK_INTEGRITY_PROBE_VERSION,
+                    "verified_observed_pages": [observed_probe_url],
+                    # Stage 3 owns score/root-cause semantics. Coverage evidence
+                    # is intentionally non-scoring until those caps land.
+                    "non_scoring": True,
+                    "score_impact": 0,
+                })
+
+        if initial_rate_limit_blocked:
+            coverage_probe_evidence = probe_scheduler.summary()
+            coverage_probe_evidence.update({
+                "stage2_orchestration_state": "not_verified",
+                "stage2_orchestration_reason": "initial_rate_limited",
+            })
+        elif int(budget.get("max_pages") or 0) >= 150 and _supports_stage2_probe_fetch(fetch_and_extract):
+            coverage_probe_evidence = await run_stage2_shared_probe_orchestration(
+                client=client,
+                pages=pages,
+                sitemap_urls=sitemap_urls,
+                sitemap_diagnostics=sitemap_diagnostics,
+                origin=origin,
+                scope_prefix=prefix,
+                robots_policy=robots_policy,
+                probe_scheduler=probe_scheduler,
+                fetch_page=fetch_and_extract,
+            )
+        else:
+            coverage_probe_evidence = probe_scheduler.summary()
+            if int(budget.get("max_pages") or 0) >= 150:
+                coverage_probe_evidence.update({
+                    "stage2_orchestration_state": "not_verified",
+                    "stage2_orchestration_reason": "hardened_probe_fetch_contract_unavailable",
+                })
         canonical_target_evidence = await validate_canonical_targets(
             client,
             pages,
             robots_policy,
-            deadline=timing_budget["crawl_deadline"],
+            deadline=probe_started_at if initial_rate_limit_blocked else timing_budget["crawl_deadline"],
         )
         redirect_evidence = summarize_redirect_evidence(pages)
         for page in pages:
             page.pop("_redirect_alias_identity_keys", None)
 
-    findings = build_findings(pages)
-    findings.extend(duplicate_title_findings(pages))
+    finding_identity = {"scan_origin": scope_evidence["requested_origin"],
+                        "identity_version": PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION}
+    findings = build_findings(pages, **finding_identity)
+    findings.extend(link_probe_findings)
+    findings.extend(duplicate_title_findings(pages, **finding_identity))
     findings.extend(duplicate_casing_findings(pages))
     grouped = group_findings(findings)
     verified_failed = [page_evidence(page) for page in pages if is_verified_failed(page)]
@@ -765,6 +1012,7 @@ async def run_scan(
     render_followup = await run_render_followup(
         pages if material_render_risk else [],
         render_page=kwargs.get("_render_page") if material_render_risk else None,
+        evidence_pages=pages,
     )
     render_evidence["browser_followup_version"] = RENDER_FOLLOWUP_VERSION
     render_evidence["browser_followup"] = render_followup
@@ -835,6 +1083,9 @@ async def run_scan(
         "crawl_timing": crawl_timing,
         "render_evidence_version": RENDER_EVIDENCE_VERSION,
         "render_evidence": render_evidence,
+        "coverage_probe_scheduler_version": COVERAGE_PROBE_SCHEDULER_VERSION,
+        "link_integrity_probe_version": LINK_INTEGRITY_PROBE_VERSION,
+        "coverage_probe_evidence": coverage_probe_evidence,
         "screaming_frog_lite_enabled": True,
         "website_url": start_url,
         "normalized_url": start_url,
@@ -893,6 +1144,9 @@ async def run_scan(
             "redirect_evidence": redirect_evidence,
             "render_evidence_version": RENDER_EVIDENCE_VERSION,
             "render_evidence": render_evidence,
+            "coverage_probe_scheduler_version": COVERAGE_PROBE_SCHEDULER_VERSION,
+            "link_integrity_probe_version": LINK_INTEGRITY_PROBE_VERSION,
+            "coverage_probe_evidence": coverage_probe_evidence,
             "duplicate_casing_routes": detect_duplicate_casing_routes(pages),
             "screaming_frog_lite_enabled": True,
         },
@@ -932,6 +1186,7 @@ async def fetch_and_extract(
     url: str,
     discovery: dict,
     robots_policy=None,
+    request_provider=None,
 ) -> dict:
     if not is_public_http_url(url):
         return extract_page("", url, url, 0, "", discovery, fetch_error="blocked_non_public_host")
@@ -951,6 +1206,7 @@ async def fetch_and_extract(
                 url,
                 robots_policy,
                 max_decoded_bytes=MAX_DECODED_RESPONSE_BYTES,
+                request_provider=request_provider,
             )
             if response is None:
                 page = extract_page(
@@ -980,7 +1236,11 @@ async def fetch_and_extract(
             response.status_code,
             content_type,
             discovery,
-            response_headers={"x-robots-tag": response.headers.get_list("x-robots-tag")},
+            response_headers={
+                name: response.headers.get_list(name)
+                for name in ("x-robots-tag", *ACCESS_BLOCK_HEADER_ALLOWLIST)
+                if response.headers.get_list(name)
+            },
             body_truncated=html_truncated,
             include_links=True,
         )
@@ -994,7 +1254,11 @@ async def fetch_and_extract(
         return extract_page("", url, url, 0, "", discovery, fetch_error=str(exc)[:220])
 
 
-def _redirect_destination_content_view(page: dict) -> dict | None:
+def _redirect_destination_content_view(page: dict, *, identity_version: str = "") -> dict | None:
+    if identity_version:
+        from .url_evidence import verified_redirect_content_url
+        if not verified_redirect_content_url(page):
+            return None
     evidence = page.get("redirect_fetch_evidence")
     if not isinstance(evidence, dict) or evidence.get("html_parse_ok") is not True:
         return None
@@ -1029,48 +1293,57 @@ def _redirect_destination_content_view(page: dict) -> dict | None:
     return view
 
 
-def build_findings(pages: list[dict]) -> list[dict]:
+def build_findings(pages: list[dict], *, scan_origin: str = "", identity_version: str = "") -> list[dict]:
     findings: list[dict] = []
+    identity = {"scan_origin": scan_origin, "identity_version": identity_version}
     for page in pages:
-        path = page.get("path") or "/"
+        path = relative_evidence_url(page, **identity)
         if page.get("url_confidence") == "crawler_artifact":
             continue
-        redirect_finding = redirect_finding_for_page(page)
+        redirect_finding = redirect_finding_for_page(page, **identity)
         if redirect_finding is not None:
             findings.append(redirect_finding)
         for alias in page.get("redirect_aliases") or []:
             if not isinstance(alias, dict):
                 continue
-            alias_finding = redirect_finding_for_page(alias)
+            alias_finding = redirect_finding_for_page(alias, **identity)
             if alias_finding is not None:
                 findings.append(alias_finding)
         if page_is_redirect_source(page):
-            destination_page = _redirect_destination_content_view(page)
+            destination_page = _redirect_destination_content_view(page, identity_version=identity_version)
             if destination_page is None:
                 continue
             page = destination_page
-            path = page.get("path") or "/"
+            path = relative_evidence_url(page, **identity)
         if sitemap_indexability_conflict(page):
-            findings.append(create_finding(
+            sitemap_intent = "sitemap" in (page.get("discovered_from") or [])
+            conflict = create_finding(
                 rule="sitemap_indexability_conflict",
                 category="indexability",
                 priority="medium",
-                title="Remove non-indexable URLs from the sitemap",
+                title="Remove non-indexable URLs from the sitemap" if sitemap_intent else "Resolve conflicting search-indexing intent",
                 page_url=path,
                 current_value=str(page.get("indexability_state") or "Not indexable"),
                 explanation=(
                     "This URL was explicitly listed in a sitemap but the scanner found a "
-                    "noindex directive or a Googlebot robots.txt block."
+                    "noindex directive or a Googlebot robots.txt block." if sitemap_intent else
+                    "This page has declared search intent, but its accepted HTML contains a noindex directive."
                 ),
                 recommendation=(
                     "Remove the URL from the sitemap unless it should be indexable. If it should "
-                    "be indexed, resolve the noindex or Googlebot block first."
+                    "be indexed, resolve the noindex or Googlebot block first." if sitemap_intent else
+                    "Decide whether this page should appear in search. Remove noindex if it should; otherwise keep noindex and remove the declared search intent."
                 ),
                 difficulty="developer",
                 source_pages=page.get("source_pages", []),
                 link_text_samples=page.get("link_text_samples", []),
-            ))
-        canonical_finding = canonical_target_finding(page)
+            )
+            # Grouped guidance must not turn an explicit search-intent conflict
+            # into invented sitemap evidence. This is producer-side provenance;
+            # the resulting customer copy uses the existing authenticated fields.
+            conflict["indexability_intent_sources"] = search_applicability(page)["intent_sources"]
+            findings.append(conflict)
+        canonical_finding = canonical_target_finding(page, **identity)
         if canonical_finding is not None:
             findings.append(canonical_finding)
         if str(page.get("fetch_error") or "").startswith("blocked_"):
@@ -1161,9 +1434,10 @@ def build_findings(pages: list[dict]) -> list[dict]:
         if not page.get("canonical") and page.get("indexable"):
             findings.append(create_finding("canonical_missing", "canonical", "medium", "Add a canonical URL", path, explanation="The page does not expose a canonical URL.", recommendation="Add a self-referencing canonical or point to the preferred version.", difficulty="developer"))
         missing_alt = int(page.get("image_missing_alt_count") or 0)
-        if missing_alt > 0:
+        if missing_alt > 0 and not page.get("image_alt_applicability"):
             findings.append(create_finding("image_alt_text", "image_alt_text", "medium" if missing_alt >= 10 else "low", "Add useful image descriptions", path, current_value=f"{missing_alt} images missing alt text", explanation="Some meaningful images may not have text descriptions.", recommendation="Add short, specific alt text to meaningful images."))
-    return findings
+    findings.extend(content_evidence_findings(pages))
+    return filter_search_findings(findings, pages)
 
 
 
@@ -1181,7 +1455,7 @@ def page_is_redirect_source(page: dict) -> bool:
     }
 
 
-def redirect_finding_for_page(page: dict) -> dict | None:
+def redirect_finding_for_page(page: dict, *, scan_origin: str = "", identity_version: str = "") -> dict | None:
     if not page_is_redirect_source(page):
         return None
 
@@ -1189,6 +1463,11 @@ def redirect_finding_for_page(page: dict) -> dict | None:
     outcome = str(page.get("redirect_outcome") or "")
     sources = set(page.get("discovered_from") or [])
     source_path = str(page.get("redirect_source_path") or urlparse(str(page.get("url") or "")).path or "/")
+    if identity_version:
+        source_path = relative_evidence_url(
+            {"url": page.get("url") or page.get("redirect_source_path")},
+            scan_origin=scan_origin, identity_version=identity_version,
+        )
     destination = str(page.get("redirect_destination_url") or page.get("final_url") or "")
     destination_status = int(page.get("redirect_destination_status_code") or 0)
     destination_indexability = str(page.get("redirect_destination_indexability_state") or "")
@@ -1199,8 +1478,8 @@ def redirect_finding_for_page(page: dict) -> dict | None:
     if outcome == "redirect_to_wrong_destination":
         details = (
             "redirect_wrong_destination", "high", "Fix a redirect that sends visitors to the wrong page",
-            "This URL reaches a working page, but the redirect collapses a specific deep URL onto the site homepage instead of a relevant replacement page.",
-            "Point the source URL to the closest relevant replacement page, or restore the intended page. Do not use the homepage as a catch-all destination.",
+            "This URL reaches working HTML, but the redirect sends a specific URL to an unrelated or catch-all destination instead of a relevant replacement page.",
+            "Point the source URL to the closest relevant replacement page, or restore the intended page. Avoid unrelated or catch-all redirects that erase the source URL meaning.",
         )
     elif state == "redirect_destination_unverified":
         needs_verification = True
@@ -1309,7 +1588,7 @@ def redirect_finding_for_page(page: dict) -> dict | None:
     return finding
 
 
-def canonical_target_finding(page: dict) -> dict | None:
+def canonical_target_finding(page: dict, *, scan_origin: str = "", identity_version: str = "") -> dict | None:
     state = str(page.get("canonical_target_state") or "")
     target = str(page.get("canonical_target_url") or page.get("canonical") or "")
     status_code = int(page.get("canonical_target_status_code") or 0)
@@ -1389,7 +1668,8 @@ def canonical_target_finding(page: dict) -> dict | None:
         category="canonical",
         priority=priority,
         title=title,
-        page_url=page.get("path") or "/",
+        page_url=(relative_evidence_url(page, scan_origin=scan_origin, identity_version=identity_version)
+                  if identity_version else page.get("path") or "/"),
         current_value=" — ".join(part for part in current_parts if part),
         explanation=explanation,
         recommendation=recommendation,
@@ -1413,18 +1693,16 @@ def canonical_target_finding(page: dict) -> dict | None:
 
 
 def sitemap_indexability_conflict(page: dict) -> bool:
-    if "sitemap" not in set(page.get("discovered_from") or []):
-        return False
-    return str(page.get("indexability_state") or "") in {
-        "Noindexed",
-        "Blocked by robots.txt",
-    }
+    if search_applicability(page)["index_or_drop"]:
+        return True
+    return ("sitemap" in (page.get("discovered_from") or [])
+            and str(page.get("indexability_state") or "") == "Blocked by robots.txt")
 
 
 def create_finding(rule: str, category: str, priority: str, title: str, page_url: str, current_value: str = "", explanation: str = "", recommendation: str = "", difficulty: str = "easy", source_pages: list[str] | None = None, link_text_samples: list[str] | None = None) -> dict:
     developer = difficulty == "developer" or any(token in f"{rule} {category} {title}" for token in ["429", "schema", "canonical", "web_dev"])
     finding_id = stable_id(f"{rule}|{page_url}|{title}")
-    return {
+    finding = {
         "id": finding_id,
         "fix_id": finding_id,
         "rule": rule,
@@ -1454,6 +1732,7 @@ def create_finding(rule: str, category: str, priority: str, title: str, page_url
         "who_can_do_this": "your_web_person" if developer else "you",
         "confidence_score": 88,
     }
+    return apply_missing_h1_contract(finding)
 
 
 FAILURE_RULES = {"rate_limited_page", "failed_page", "server_error", "404_error", "410_error"}
@@ -1509,9 +1788,9 @@ SITE_SURFACE_GUIDANCE = {
         "Update the redirect rules so each source points in one hop to a final, indexable 200-status URL.",
     ),
     "redirect_destination_fit": (
-        "These source URLs reach working HTML, but they collapse onto a generic homepage rather than a relevant replacement. "
+        "These source URLs reach working HTML, but they collapse onto unrelated or catch-all destinations rather than relevant replacements. "
         "That is a redirect-destination problem, not a page-availability failure.",
-        "Map each source URL to the closest relevant replacement page, or restore the intended page. Avoid homepage catch-all redirects.",
+        "Map each source URL to the closest relevant replacement page, or restore the intended page. Avoid unrelated or catch-all redirects that erase the source URL meaning.",
     ),
     "redirect_access_checks": (
         "The scanner followed these redirects but could not verify the final responses because of transport or decoding failures. "
@@ -1590,7 +1869,7 @@ def group_template_title(rule: str, family: str) -> str:
     if rule == "redirect_destination_unverified":
         return "Verify redirect destinations the scan could not load"
     if rule == "redirect_wrong_destination":
-        return "Fix redirects that send specific URLs to the homepage"
+        return "Fix redirects that send specific URLs to unrelated destinations"
     if rule == "redirect_destination_blocked":
         return "Review redirects to robots-blocked pages"
     if rule == "redirect_destination_noindex":
@@ -1604,6 +1883,44 @@ def group_template_title(rule: str, family: str) -> str:
     if rule == "sitemap_indexability_conflict":
         return "Remove non-indexable URLs from the sitemap"
     return f"Fix repeated {fam} template issue"
+
+
+def _group_indexability_intent_sources(members: list[dict]) -> list[str]:
+    # Before explicit search intent was supported, this rule meant sitemap
+    # evidence only. Preserve that meaning for legacy producer rows.
+    return sorted({
+        source
+        for member in members
+        for source in member.get("indexability_intent_sources", ["sitemap"])
+        if source in {"sitemap", "declared_search_intent"}
+    })
+
+
+def _group_indexability_guidance(members: list[dict]) -> tuple[str, str, str]:
+    sources = _group_indexability_intent_sources(members)
+    if sources == ["sitemap"]:
+        return (
+            "Remove non-indexable URLs from the sitemap",
+            "These URLs are explicitly listed in the sitemap, but the scanner found a noindex "
+            "directive or a Googlebot robots.txt block on each affected URL.",
+            "Remove non-indexable URLs from the sitemap unless they should be indexed. "
+            "For URLs that should be indexed, resolve the noindex directive or Googlebot block first.",
+        )
+    if "sitemap" not in sources:
+        return (
+            "Resolve conflicting search-indexing intent",
+            "These pages have declared search intent, but their accepted HTML contains a noindex directive.",
+            "Decide whether each page should appear in search. Remove noindex if it should; "
+            "otherwise keep noindex and remove the declared search intent.",
+        )
+    return (
+        "Resolve conflicting search-indexing intent",
+        "These non-indexable URLs have conflicting search intent from sitemap entries, declared search "
+        "intent, or both. The scanner found a noindex directive or a Googlebot robots.txt block on each affected URL.",
+        "Decide whether each page should appear in search and resolve the noindex directive or Googlebot block "
+        "if it should. For URLs listed in the sitemap, remove entries that should remain non-indexable. "
+        "For URLs with declared search intent, remove the declared search intent if they should remain non-indexable.",
+    )
 
 
 def group_findings(findings: list[dict]) -> list[dict]:
@@ -1629,6 +1946,8 @@ def group_findings(findings: list[dict]) -> list[dict]:
             title = "Check pages blocked by rate limiting"
             explanation = "Several similar pages returned HTTP 429 or rate limiting. Treat this as one crawler-access problem."
             recommendation = "Ask your web person to check server, CDN, firewall, and rate-limit logs. Confirm Googlebot and normal users can access the affected URLs."
+        elif sample.get("rule") == "sitemap_indexability_conflict":
+            title, explanation, recommendation = _group_indexability_guidance(members)
         else:
             title = group_template_title(sample.get("rule", ""), family)
             surface_guidance = SITE_SURFACE_GUIDANCE.get(SITE_SURFACE_RULES.get(sample.get("rule", "")))
@@ -1643,8 +1962,14 @@ def group_findings(findings: list[dict]) -> list[dict]:
             if isinstance(finding.get("redirect_fetch_evidence"), dict)
             and finding.get("redirect_fetch_evidence")
         ][:10]
+        group_provenance = uniform_observed_group_provenance(members)
         group_id = stable_id(f"group|{key}")
         grouped = dict(sample)
+        # A lead/sample row must never lend active observed authority to
+        # an unversioned group member. Restore provenance only through
+        # the all-members-same-version contract above.
+        grouped.pop("observed_evidence_version", None)
+        grouped.pop("verified_observed_pages", None)
         grouped.update({
             "id": group_id,
             "fix_id": group_id,
@@ -1665,6 +1990,9 @@ def group_findings(findings: list[dict]) -> list[dict]:
             "page_count": len(affected),
             "source_pages": _unique_nonempty([p for f in members for p in (f.get("source_pages") or [])]),
             "link_text_samples": _unique_nonempty([t for f in members for t in (f.get("link_text_samples") or [])]),
+            **group_provenance,
+            **({"indexability_intent_sources": _group_indexability_intent_sources(members)}
+               if sample.get("rule") == "sitemap_indexability_conflict" else {}),
             **({"redirect_fetch_evidence_samples": redirect_samples} if redirect_samples else {}),
         })
         direct.append(grouped)
@@ -1683,12 +2011,12 @@ def _unique_nonempty(values: list) -> list:
 
 
 
-def duplicate_title_findings(pages: list[dict]) -> list[dict]:
+def duplicate_title_findings(pages: list[dict], *, scan_origin: str = "", identity_version: str = "") -> list[dict]:
     buckets: dict[str, list[dict]] = {}
     for page in pages:
         status = int(page.get("status_code") or 0)
         title = str(page.get("title") or "").strip()
-        if not title or page.get("indexable") is False or not page_has_usable_html(page):
+        if not title or page.get("indexable") is False or not page_has_usable_html(page) or not search_metadata_applicable(page):
             continue
         if not is_html_page_evidence(page):
             continue
@@ -1697,7 +2025,7 @@ def duplicate_title_findings(pages: list[dict]) -> list[dict]:
     findings: list[dict] = []
     for title_key in sorted(buckets):
         members = buckets[title_key]
-        urls = sorted(_unique_nonempty([relative_evidence_url(page) for page in members]))
+        urls = sorted(_unique_nonempty([relative_evidence_url(page, scan_origin=scan_origin, identity_version=identity_version) for page in members]))
         if len(urls) < 2:
             continue
         title = str(members[0].get("title") or "").strip()

@@ -1,0 +1,245 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { readFile } from "node:fs/promises";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { transform } from "esbuild";
+import { repairRoleExplanation } from "../../src/lib/repairRoleExplanations.js";
+
+async function loadJsx(relativePath, replacements = {}) {
+  let source = await readFile(new URL(relativePath, import.meta.url), "utf8");
+  for (const [from, to] of Object.entries(replacements)) source = source.replace(JSON.stringify(from), JSON.stringify(to));
+  source = source.replace('from "react"', `from ${JSON.stringify(import.meta.resolve("react"))}`);
+  const compiled = await transform(source, { loader: "jsx", jsxFactory: "React.createElement", format: "esm" });
+  return `data:text/javascript;base64,${Buffer.from(compiled.code).toString("base64")}`;
+}
+const library = (file) => new URL(`../../src/lib/${file}`, import.meta.url).href;
+const componentUrl = await loadJsx("../../src/components/fixlist/CustomerRepairGuidance.jsx", {
+  "../../lib/implementationPlan.js": library("implementationPlan.js"),
+  "../../lib/repairRoleExplanations.js": library("repairRoleExplanations.js"),
+  "../../lib/repairSuggestions.js": library("repairSuggestions.js"),
+});
+const { default: CustomerRepairGuidance, CustomerRepairGuidanceView } = await import(componentUrl);
+
+const scanId = "scan:current";
+const source = { id: "repair:heading", scan_run_id: scanId, rule: "missing_h1", title: "Check the main heading", recommendation: "Use the existing page-title field.", action_priority: "important" };
+const card = { rule: source.rule, title: source.title, whatToChange: "Preserve this exact canonical instruction.", whyItMatters: "Original explanation.", evidence: { pageCount: 2, affectedPages: ["/first", "/second"] } };
+const render = (props, Component = CustomerRepairGuidanceView) => renderToStaticMarkup(React.createElement(Component, props));
+function renderCard(item, guidance) {
+  return React.createElement("article", null,
+    React.createElement("h4", null, item.title),
+    React.createElement("h5", null, guidance.explanationHeading),
+    React.createElement("p", { className: "explanation" }, guidance.explanation),
+    React.createElement("p", { className: "instruction" }, item.whatToChange),
+    React.createElement("p", { className: "evidence" }, JSON.stringify(item.evidence)));
+}
+const props = () => ({ sourceItems: [structuredClone(source)], cards: [structuredClone(card)], trustedScanId: scanId, sourceScanId: scanId, cardsScanId: scanId, authorityVerified: true, role: "owner", onRoleChange() {}, renderCard });
+const escaped = (value) => renderToStaticMarkup(React.createElement(React.Fragment, null, value));
+
+test("controlled role explanations preserve exact instructions, evidence and inputs without a chooser", () => {
+  const input = props();
+  const before = structuredClone({ sourceItems: input.sourceItems, cards: input.cards });
+  const ownerHtml = render({ ...input, role: "owner" });
+  const developerHtml = render({ ...input, role: "developer" });
+  assert.ok(ownerHtml.includes(escaped(repairRoleExplanation(card, "owner").explanation)));
+  assert.ok(developerHtml.includes(escaped(repairRoleExplanation(card, "developer").explanation)));
+  assert.notEqual(ownerHtml, developerHtml);
+  for (const html of [ownerHtml, developerHtml]) {
+    assert.doesNotMatch(html, /<select|Explain for|Role guidance is available/);
+    assert.ok(html.includes(card.whatToChange));
+    assert.ok(html.includes(escaped(JSON.stringify(card.evidence))));
+  }
+  assert.deepEqual({ sourceItems: input.sourceItems, cards: input.cards }, before);
+});
+
+test("unmapped rules retain their original explanation and have no inert role selector", () => {
+  const input = props();
+  input.cards[0].rule = "future_rule";
+  const html = render(input);
+  assert.doesNotMatch(html, /<select/);
+  assert.ok(html.includes(card.whyItMatters));
+  assert.ok(html.includes(card.whatToChange));
+  assert.doesNotMatch(html, /Review this issue based on the evidence collected/);
+});
+
+test("mixed card coverage changes only supported explanations without joining cards to source rows", () => {
+  const input = props();
+  input.cards = [{ ...card, rule: "future_rule", title: "Unmapped card" }, card];
+  input.renderCards = (cards, { role, explanationForCard }) => {
+    assert.equal(cards, input.cards);
+    assert.equal(role, "seo");
+    return React.createElement("section", { "data-preserved-sections": true }, cards.map((item, index) =>
+      React.createElement("div", { key: index }, renderCard(item, explanationForCard(item)))));
+  };
+  const html = render({ ...input, role: "seo" });
+  assert.match(html, /data-preserved-sections/);
+  assert.ok(html.includes(card.whyItMatters));
+  assert.ok(html.includes(escaped(repairRoleExplanation(card, "seo").explanation)));
+  assert.equal((html.match(new RegExp(card.whatToChange, "g")) || []).length, 2);
+});
+
+test("Funbooker repair population explains the first card and all four previously uncovered cards for each role", () => {
+  // The production 2026-09-23 scan's seven rules, in its canonical order.
+  const rules = ["redirect_chain", "canonical_missing", "meta_description_unusable", "meta_description_unusable", "missing_h1", "title_over_pixel_limit", "potential_orphan_pages"];
+  const input = props();
+  input.sourceItems = rules.map((rule, index) => ({ ...source, id: `repair:${index}`, rule, title: `Repair ${index}` }));
+  input.cards = rules.map((rule, index) => ({ ...card, rule, title: `Repair ${index}` }));
+  const before = structuredClone({ sourceItems: input.sourceItems, cards: input.cards });
+  const expectedHeadings = { owner: "Business decision", marketing: "Content review", seo: "SEO review", developer: "Implementation guidance" };
+  const copyByRole = {};
+  for (const role of Object.keys(expectedHeadings)) {
+    const html = render({ ...input, role });
+    const articles = [...html.matchAll(/<article>([\s\S]*?)<\/article>/g)].map((match) => match[1]);
+    assert.equal(articles.length, 7);
+    assert.doesNotMatch(html, /<select|Explain for|Role guidance is available/);
+    copyByRole[role] = articles.map((article) => {
+      assert.ok(article.includes(`<h5>${expectedHeadings[role]}</h5>`));
+      assert.ok(article.includes(card.whatToChange));
+      assert.ok(article.includes(escaped(JSON.stringify(card.evidence))));
+      assert.ok(!article.includes(card.whyItMatters));
+      return article.match(/<p class="explanation">([\s\S]*?)<\/p>/)[1];
+    });
+  }
+  for (let index = 0; index < rules.length; index += 1) {
+    assert.equal(new Set(Object.values(copyByRole).map((copy) => copy[index])).size, 4, rules[index]);
+  }
+  // Useful responsibility and validation changes, beyond different strings.
+  assert.match(copyByRole.owner[0], /maintainer/);
+  assert.match(copyByRole.seo[0], /indexab|canonical/i);
+  assert.match(copyByRole.developer[0], /redirect rule|routing/i);
+  assert.match(copyByRole.owner[2], /content editor|content team/i);
+  assert.match(copyByRole.seo[2], /missing|empty|malformed/i);
+  assert.match(copyByRole.developer[2], /HTML|document head/i);
+  assert.match(copyByRole.owner[5], /key message|purpose/i);
+  assert.match(copyByRole.seo[5], /pixel|width/i);
+  assert.match(copyByRole.developer[5], /template|generat/i);
+  assert.deepEqual({ sourceItems: input.sourceItems, cards: input.cards }, before);
+});
+
+test("partial coverage retains mapped and original guidance without a selector or helper count", () => {
+  const input = props();
+  input.cards.push({ ...card, rule: "unmapped_rule" });
+  const html = render(input);
+  assert.doesNotMatch(html, /<select|Explain for|Role guidance is available/);
+  assert.ok(html.includes(escaped(repairRoleExplanation(card, "owner").explanation)));
+  assert.ok(html.includes(card.whyItMatters));
+});
+
+test("a fully covered list has no role control and avoids a duplicate plan", () => {
+  const html = render(props());
+  assert.doesNotMatch(html, /<select|Explain for|Role guidance is available/);
+  assert.doesNotMatch(html, /view\.|Findings and recommended changes|Before you start|Implementation order|Related work:/);
+  assert.equal((html.match(/class="instruction"/g) || []).length, 1);
+});
+
+for (const [label, change] of [
+  ["unverified authority", (input) => { input.authorityVerified = false; }],
+  ["truthy authority string", (input) => { input.authorityVerified = "true"; }],
+  ["missing trusted scan", (input) => { input.trustedScanId = ""; }],
+  ["wrong scan identity", (input) => { input.sourceItems[0].scan_run_id = "scan:other"; }],
+  ["conflicting original identity", (input) => { input.sourceItems[0].original = { scan_id: "scan:other" }; }],
+  ["missing source population identity", (input) => { delete input.sourceScanId; }],
+  ["stale source population", (input) => { input.sourceScanId = "scan:previous"; }],
+  ["missing card population identity", (input) => { delete input.cardsScanId; }],
+  ["stale card population", (input) => { input.cardsScanId = "scan:previous"; }],
+  ["stale card scan identity", (input) => { input.cards[0].scan_id = "scan:previous"; }],
+  ["stale original card identity", (input) => { input.cards[0].original = { scan_run_id: "scan:previous" }; }],
+  ["no source rows", (input) => { input.sourceItems = []; }],
+]) {
+  test(`${label} leaves original cards readable without adding guidance`, () => {
+    const input = props();
+    change(input);
+    const html = render(input);
+    assert.doesNotMatch(html, /<select|Before you start|What this means/);
+    assert.ok(html.includes(card.whyItMatters));
+    assert.ok(html.includes(card.whatToChange));
+  });
+}
+
+test("V8 recommendation rows without local scan IDs use the exact authenticated population identities", () => {
+  const row = { fix_id: "repair:v8", rule: "missing_h1", title: "Check the main heading", simple_next_step: "Use the existing heading field.", action_priority: "important" };
+  const input = { ...props(), sourceItems: [row] };
+  const html = render(input);
+  assert.doesNotMatch(html, /<select|Explain for/);
+  assert.ok(html.includes(escaped(repairRoleExplanation(card, "owner").explanation)));
+  assert.doesNotMatch(html, /Before you start/);
+  assert.ok(html.includes(card.whatToChange));
+  assert.deepEqual(row, { fix_id: "repair:v8", rule: "missing_h1", title: "Check the main heading", simple_next_step: "Use the existing heading field.", action_priority: "important" });
+  for (const sourceScanId of [undefined, "scan:previous", { id: scanId }]) {
+    const rejected = render({ ...input, sourceScanId });
+    assert.doesNotMatch(rejected, /<select|Before you start|What this means/);
+    assert.ok(rejected.includes(card.whatToChange));
+  }
+});
+
+test("source instruction variants do not duplicate or replace the canonical card instruction", () => {
+  for (const overrides of [
+    { recommendation: "Scanner recommendation wins.", simple_next_step: "Lower-precedence step." },
+    { recommendation: "", simple_next_step: "Scanner next step wins.", recommended_value: "Lower-precedence value." },
+    { recommendation: "", simple_next_step: "", recommended_value: "Scanner recommended value." },
+    { recommendation: "", simple_next_step: "", recommended_value: "", original: { simple_next_step: "Original scanner instruction." } },
+    { recommendation: "", simple_next_step: "", recommended_value: "" },
+    { recommendation: "", simple_next_step: "", recommended_value: "", rule: "unmapped_rule" },
+  ]) {
+    const row = { ...source, ...overrides };
+    const html = render({ ...props(), sourceItems: [row] });
+    assert.ok(html.includes(card.whatToChange));
+    assert.equal((html.match(/class="instruction"/g) || []).length, 1);
+    assert.doesNotMatch(html, /Before you start/);
+  }
+});
+
+for (const [label, items] of [
+  ["duplicate IDs", [source, { ...source }]],
+  ["missing IDs", [{ ...source, id: "" }]],
+  ["non-string IDs", [{ ...source, id: { hostile: true } }]],
+]) {
+  test(`${label} hide the implementation plan without losing cards or role copy`, () => {
+    const html = render({ ...props(), sourceItems: items });
+    assert.doesNotMatch(html, /Before you start/);
+    assert.doesNotMatch(html, /<select|Explain for/);
+    assert.ok(html.includes(escaped(repairRoleExplanation(card, "owner").explanation)));
+    assert.ok(html.includes(card.whatToChange));
+  });
+}
+
+test("implementation groups never flatten non-adjacent repairs out of canonical sequence", () => {
+  const items = [
+    { ...source, id: "a", title: "First repair", repair_surface: "document_head", remediation_family: "metadata" },
+    { ...source, id: "b", title: "Second repair", repair_surface: "content", remediation_family: "headings" },
+    { ...source, id: "c", title: "Third repair", repair_surface: "document_head", remediation_family: "metadata" },
+  ];
+  const html = render({ ...props(), sourceItems: items, cards: items.map((item) => ({ ...card, title: item.title })) });
+  assert.deepEqual([...html.matchAll(/<h4>([^<]*)<\/h4>/g)].map((match) => match[1]), ["First repair", "Second repair", "Third repair"]);
+  assert.doesNotMatch(html, /Before you start|Related work:/);
+});
+
+test("verified explicit dependency changes execution sequence with a reason while card order stays intact", () => {
+  const root = { version: "root_cause_evidence_v1_verified", state: "verified", root_cause_id: "root:redirect", evidence_refs: ["observation:redirect"] };
+  const items = [
+    { ...source, id: "sitemap", title: "Update sitemap", rule: "sitemap_redirect", action_priority: "fix_first", root_cause_evidence: root },
+    { ...source, id: "redirect", title: "Stabilize redirect", rule: "redirect_chain", action_priority: "important", root_cause_evidence: root },
+  ];
+  const original = structuredClone(items);
+  const input = { ...props(), sourceItems: items, cards: items.map((item) => ({ ...card, title: item.title })) };
+  const html = render(input);
+  assert.match(html, /Before you start/);
+  assert.doesNotMatch(html, /<details[^>]*\sopen(?:[\s=>])/);
+  assert.match(html, /Complete <span[^>]*>Stabilize redirect<\/span> before <span[^>]*>Update sitemap<\/span>/);
+  assert.match(html, /Stabilize the final redirect destination before publishing that destination in the sitemap/);
+  assert.deepEqual([...html.matchAll(/<h4>([^<]*)<\/h4>/g)].map((match) => match[1]), ["Update sitemap", "Stabilize redirect"]);
+  assert.equal((html.match(/class="instruction"/g) || []).length, 2);
+  assert.ok(html.includes(card.whatToChange));
+  assert.deepEqual(items, original);
+});
+
+test("the production wrapper uses owner guidance without a chooser and escapes source instructions", () => {
+  const input = props();
+  input.role = "developer";
+  input.cards[0].whatToChange = "<script>unsafe()</script>";
+  const html = render(input, CustomerRepairGuidance);
+  assert.ok(html.includes(escaped(repairRoleExplanation(card, "owner").explanation)));
+  assert.ok(!html.includes(escaped(repairRoleExplanation(card, "developer").explanation)));
+  assert.match(html, /&lt;script&gt;unsafe\(\)&lt;\/script&gt;/);
+  assert.doesNotMatch(html, /<script>|<select|Explain for|Role guidance is available/);
+});

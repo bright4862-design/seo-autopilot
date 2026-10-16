@@ -14,6 +14,13 @@ import google.auth
 from flask import Flask, jsonify, request
 from google.auth.transport.requests import Request as GoogleAuthRequest
 import requests
+from werkzeug.exceptions import RequestEntityTooLarge
+
+from app.authority_seal import stable_serialize
+from app.scan_comparison_authority import (
+    build_authenticated_scan_comparison_v1,
+    build_scan_comparison_lineage_v1,
+)
 
 app = Flask(__name__)
 
@@ -45,7 +52,21 @@ MAX_CLOCK_SKEW_SECONDS = int(os.environ.get("DISPATCH_MAX_CLOCK_SKEW_SECONDS", "
 MAX_DISPATCH_BODY_BYTES = int(os.environ.get("DISPATCH_MAX_BODY_BYTES", str(256 * 1024)))
 if MAX_DISPATCH_BODY_BYTES < 1024:
     raise RuntimeError("DISPATCH_MAX_BODY_BYTES is too small")
-app.config["MAX_CONTENT_LENGTH"] = MAX_DISPATCH_BODY_BYTES
+# The comparison carries two independently bounded, sealed snapshots. Dispatch
+# retains its smaller streaming limit, including when Content-Length is absent.
+MAX_COMPARISON_BODY_BYTES = 4_100_000
+# Permit one sentinel byte at the framework boundary so a chunked stream cannot
+# be silently truncated to a route's exact limit before the overflow check.
+app.config["MAX_CONTENT_LENGTH"] = max(MAX_DISPATCH_BODY_BYTES, MAX_COMPARISON_BODY_BYTES) + 1
+COMPARISON_REQUEST_VERSION = "scan_comparison_request_v1"
+COMPARISON_RESPONSE_VERSION = "scan_comparison_response_v1"
+COMPARISON_REQUEST_DOMAIN = b"fixlist-scan-comparison-request-v1"
+COMPARISON_RESPONSE_DOMAIN = b"fixlist-scan-comparison-response-v1"
+COMPARISON_FIELDS = frozenset({
+    "version", "nonce", "expected_owner_user_id", "expected_project_id",
+    "expected_current_scan_id", "current_previous_scan_id", "previous_snapshot",
+    "previous_proof", "current_snapshot", "current_proof",
+})
 
 worker_parts = urlsplit(WORKER_URL)
 if worker_parts.scheme != "https" or not worker_parts.netloc:
@@ -82,6 +103,33 @@ def _expected_signature(timestamp: str, raw_body: bytes) -> str:
     key = _derive_dispatch_key(SIGNING_ROOT)
     signed = timestamp.encode("ascii") + b"\n" + raw_body
     return hmac.new(key, signed, hashlib.sha256).hexdigest()
+
+
+def _bounded_body(maximum: int) -> bytes:
+    if request.content_length is not None and request.content_length > maximum:
+        raise RequestEntityTooLarge()
+    raw = request.stream.read(maximum + 1)
+    if len(raw) > maximum:
+        raise RequestEntityTooLarge()
+    return raw
+
+
+def _comparison_signature(domain: bytes, message: bytes) -> str:
+    key = hmac.new(SIGNING_ROOT.encode("utf-8"), domain, hashlib.sha256).digest()
+    return hmac.new(key, message, hashlib.sha256).hexdigest()
+
+
+def _unique_json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(_value):
+    raise ValueError("Non-finite JSON number")
 
 
 def _safe_scan_id(value: Any) -> str:
@@ -197,7 +245,7 @@ def health():
 
 @app.post("/dispatch")
 def dispatch():
-    raw = request.get_data(cache=True)
+    raw = _bounded_body(MAX_DISPATCH_BODY_BYTES)
     timestamp = request.headers.get("x-fixlist-timestamp", "").strip()
     supplied = request.headers.get("x-fixlist-signature", "").strip().lower()
 
@@ -275,6 +323,56 @@ def dispatch():
         "deduplicated": False,
         "taskName": created.get("name") or task["name"],
     })
+
+
+@app.post("/compare")
+def compare():
+    """Read-only comparison for an authenticated, owner-bound Base44 reader.
+
+    The request HMAC authenticates the reader's service-owned lineage lookup;
+    result seals authenticate both result snapshots independently. This route
+    neither reads entities nor fetches URLs, creates tasks, or modifies results.
+    Repeating a fresh signed request is safe; consumers bind each signed response
+    to their unique nonce and exact scan pair and reject stale responses.
+    """
+    raw = _bounded_body(MAX_COMPARISON_BODY_BYTES)
+    timestamp = request.headers.get("x-fixlist-timestamp", "")
+    supplied = request.headers.get("x-fixlist-signature", "")
+    if not re.fullmatch(r"[1-9][0-9]{0,11}", timestamp):
+        return response_error("invalid_timestamp", 401)
+    if abs(int(time.time()) - int(timestamp)) > MAX_CLOCK_SKEW_SECONDS:
+        return response_error("stale_request", 401)
+    expected = _comparison_signature(COMPARISON_REQUEST_DOMAIN, timestamp.encode("ascii") + b"\n" + raw)
+    if not re.fullmatch(r"[0-9a-f]{64}", supplied) or not hmac.compare_digest(supplied, expected):
+        return response_error("invalid_signature", 401)
+    try:
+        document = json.loads(raw, object_pairs_hook=_unique_json_object, parse_constant=_reject_json_constant)
+        if not isinstance(document, dict) or set(document) != COMPARISON_FIELDS:
+            raise ValueError("Unsupported comparison fields")
+        if document["version"] != COMPARISON_REQUEST_VERSION:
+            raise ValueError("Unsupported comparison version")
+        if not isinstance(document["nonce"], str) or not re.fullmatch(r"[0-9a-f]{32}", document["nonce"]):
+            raise ValueError("Invalid nonce")
+        pair = {key: value for key, value in document.items()
+                if key not in {"version", "nonce", "current_previous_scan_id"}}
+        pair["signing_key"] = SIGNING_ROOT
+        lineage = build_scan_comparison_lineage_v1(
+            current_previous_scan_id=document["current_previous_scan_id"], **pair)
+        result = build_authenticated_scan_comparison_v1(lineage_artifact=lineage, **pair)
+    except (ValueError, TypeError, KeyError, RecursionError, OverflowError):
+        # Never reflect snapshot data or verification internals to a failed caller.
+        return response_error("comparison_unavailable", 422)
+    payload = {
+        "version": COMPARISON_RESPONSE_VERSION,
+        "nonce": document["nonce"],
+        "current_scan_id": document["expected_current_scan_id"],
+        "previous_scan_id": document["current_previous_scan_id"],
+        "presentation": result["presentation"],
+        "source_sha": GATEWAY_SOURCE_SHA,
+        "generated_at": int(time.time()),
+    }
+    proof = _comparison_signature(COMPARISON_RESPONSE_DOMAIN, stable_serialize(payload).encode("utf-8"))
+    return jsonify({"payload": payload, "proof": proof})
 
 
 if __name__ == "__main__":

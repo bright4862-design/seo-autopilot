@@ -1,44 +1,67 @@
-const ACTION_ORDER = Object.freeze({
-  fix_first: 0,
-  important: 1,
-  improve: 2,
-  review: 3,
-});
+import * as legacy from "./customerRepairPlanLegacy.js";
+import { hasStage3PresentationOrigin } from "./repairCardModel.js";
+
+export * from "./customerRepairPlanLegacy.js";
+
+const STAGE3_PRIORITY_VERSION = "repair_priority_v3_four_factor_v1";
+const STAGE3_DEGRADED_PRESENTATION_MODE = "stage3_per_row_degraded_v1";
 
 function clean(value) {
   return String(value ?? "").trim();
 }
 
-function actionBand(card = {}) {
-  const value = clean(card.actionPriority || card.action_priority).toLowerCase();
-  return Object.prototype.hasOwnProperty.call(ACTION_ORDER, value) ? value : "";
+function isStage3Card(card) {
+  return Boolean(
+    card
+    && typeof card === "object"
+    && card.priorityFactors?.version === STAGE3_PRIORITY_VERSION
+    && card.stage3Counts
+    && typeof card.stage3Counts === "object"
+  );
+}
+
+function stage3Plan(source, { fallbackNextBestStep = "", completeCount = source.length } = {}) {
+  const first = source[0] || {};
+  const nextBestStep = clean(first.whatToChange || first.what_to_change || first.title)
+    || clean(fallbackNextBestStep);
+  const plan = {
+    cards: [...source],
+    fixFirstCount: source.filter((card) => clean(card.actionPriority || card.action_priority).toLowerCase() === "fix_first").length,
+    nextBestStep,
+  };
+  if (completeCount < source.length) {
+    return {
+      ...plan,
+      presentation_mode: STAGE3_DEGRADED_PRESENTATION_MODE,
+      row_coverage: {
+        total_rows: source.length,
+        stage3_complete_rows: completeCount,
+        degraded_rows: source.length - completeCount,
+      },
+    };
+  }
+  return plan;
 }
 
 /**
- * Build the customer work plan from backend-owned action bands only.
- *
- * The server owns the band. The browser is allowed to put those bands in the
- * fixed customer order, but it must preserve the persisted order inside each
- * band and must never promote a repair from technical severity or page count.
+ * The authenticated Stage-3 reader already supplies Python-owned order after
+ * rank-before-truncate. Preserve that order exactly; the browser must not
+ * reconstruct priority from legacy action bands. A malformed Stage-3 row may
+ * lose only its own Stage-3 presentation fields; it must not force valid
+ * neighbours through the historical sorter. An all-malformed Stage-3 batch
+ * still retains its Stage-3 origin and therefore preserves source order while
+ * reporting zero complete rows. Only batches with no Stage-3 origin use the
+ * historical repair-plan path.
  */
 export function buildCustomerRepairPlan(cards = [], { fallbackNextBestStep = "" } = {}) {
   const source = Array.isArray(cards) ? cards.filter(Boolean) : [];
-  const indexed = source.map((card, index) => ({ card, index, band: actionBand(card) }));
-  indexed.sort((left, right) => {
-    const leftRank = left.band ? ACTION_ORDER[left.band] : Number.MAX_SAFE_INTEGER;
-    const rightRank = right.band ? ACTION_ORDER[right.band] : Number.MAX_SAFE_INTEGER;
-    return leftRank - rightRank || left.index - right.index;
-  });
-
-  const ordered = indexed.map(({ card }) => card);
-  const fixFirstCount = indexed.filter(({ band }) => band === "fix_first").length;
-  const first = ordered[0] || {};
-  const nextBestStep = clean(first.whatToChange || first.what_to_change || first.title)
-    || clean(fallbackNextBestStep);
-
-  return {
-    cards: ordered,
-    fixFirstCount,
-    nextBestStep,
-  };
+  if (source.length === 0) {
+    return legacy.buildCustomerRepairPlan(cards, { fallbackNextBestStep });
+  }
+  const hasStage3Origin = source.some((card) => hasStage3PresentationOrigin(card));
+  if (!hasStage3Origin) {
+    return legacy.buildCustomerRepairPlan(cards, { fallbackNextBestStep });
+  }
+  const completeCount = source.filter(isStage3Card).length;
+  return stage3Plan(source, { fallbackNextBestStep, completeCount });
 }

@@ -167,7 +167,7 @@ def test_location_template_findings_group_into_one_developer_repair():
 
     fixes = [
         fix for fix in result["cleaned_fixes"]
-        if fix.get("rule") == "broken_location_template_content"
+        if fix.get("rule") == "visible_template_content"
     ]
 
     assert len(fixes) == 1
@@ -176,7 +176,7 @@ def test_location_template_findings_group_into_one_developer_repair():
     assert any("/locations/houston" in page for page in fix["affected_pages"])
     assert fix["who_can_do_this"] == "your_web_person"
     assert fix["requires_developer"] is True
-    assert "location" in str(fix.get("issue_title") or fix.get("title") or "").lower()
+    assert "content" in str(fix.get("issue_title") or fix.get("title") or "").lower()
 
 
 def test_redirected_location_page_uses_final_url_in_grouped_repair():
@@ -205,6 +205,7 @@ def test_redirected_location_page_uses_final_url_in_grouped_repair():
     )
 
     assert page["template_content_issue_types"] == ["unresolved_location_token"]
+    page["redirect_fetch_evidence"] = {"requested_url": requested_url, "final_url": final_url, "final_status": 200, "html_parse_ok": True}
 
     result = run_review({
         "website_url": "https://example.com",
@@ -219,7 +220,7 @@ def test_redirected_location_page_uses_final_url_in_grouped_repair():
 
     fixes = [
         fix for fix in result["cleaned_fixes"]
-        if fix.get("rule") == "broken_location_template_content"
+        if fix.get("rule") == "visible_template_content"
     ]
 
     assert len(fixes) == 1

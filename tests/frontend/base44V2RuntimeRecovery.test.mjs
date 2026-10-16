@@ -21,13 +21,11 @@ const verifier = fs.readFileSync(VERIFIER, "utf8");
  * `functions deploy` reported them "unchanged", so publication failed at the
  * runtime gate with no redeploy able to move it.
  *
- * The check that failed to catch it is the interesting part. A V2 package is
- * stamped with the build identity of the canonical package it mirrors, so its
- * expected build ID moves only when the canonical moves. The activation refresh
- * touched the V2 entry files alone. Five canonicals happened to change for
- * other reasons; deleteCustomerScanData did not -- so deleteCustomerScanDataV2's
- * expected build ID is still exactly the one its stale handler serves, and a
- * build-only check calls that route current while it runs canonical-era code.
+ * The original check failed because a V2 package was stamped with the build
+ * identity of its canonical package rather than its own bytes. That made an
+ * alias-only change invisible to the build identity. Routed packages now carry
+ * package-local build IDs; the activation marker remains a second independent
+ * discriminator for incident-bound stale-runtime recovery.
  *
  * Every case below is built from the real build IDs and the real 405 bodies,
  * because a fixture that invents either would prove the classifier works on
@@ -65,12 +63,10 @@ const CANONICAL_ACTIVATION = Object.fromEntries(Object.keys(EXPECTED_BUILD).map(
  *   getCustomerScanResultV2        697d83e9d06c03bde76202c5ebd23408098e4fc8…
  *   deleteCustomerScanDataV2       6f6c73c198d7a20df923721d826c994f4d8d40de…  (= expected)
  *
- * Those values are recorded here and not asserted on. Five of them differ from
- * the expected build only because those canonical packages happened to change;
- * pinning that coincidence would fail this file on any later edit to a canonical
- * package, for a reason that has nothing to do with classification. What the
- * tests assert is the property the incident revealed: a route serving the
- * expected build with a canonical-era marker is still stale.
+ * Those incident values are recorded here and not asserted on. The test uses
+ * the generator's current package-local identity and still asserts the separate
+ * property the incident revealed: a route serving the expected build with a
+ * canonical-era activation marker is stale.
  */
 const OTHER_BUILD = "a".repeat(64);
 
@@ -617,7 +613,7 @@ test("recovery touches nothing outside Base44 functions", () => {
 // ------------------------------------------------- the verifier it feeds --
 
 test("runtime verification demands both identities", () => {
-  assert.match(verifier, /--build-id "\$name"/, "the build ID resolves through the alias table");
+  assert.match(verifier, /--build-id "\$name"/, "the build ID is resolved for the routed package itself");
   assert.match(verifier, /--activation-id "\$name"/);
   assert.match(verifier, /"\$actual" == "\$expected" && "\$actual_activation" == "\$expected_activation"/);
   assert.match(verifier, /FUNCTION_RUNTIME_VERIFIED/);
@@ -632,17 +628,17 @@ test("the verifier probes exactly the six live routes", () => {
   assert.deepEqual(listed.sort(), Object.values(active).sort());
 });
 
-test("build IDs resolve through the alias and activation markers do not", () => {
-  // The asymmetry the whole fix rests on. If --activation-id resolved through
-  // the alias too, both routes would report the canonical marker and the pair
-  // would stop discriminating.
+test("routed build IDs identify alias bytes and activation markers remain route-specific", () => {
   for (const name of Object.keys(EXPECTED_BUILD)) {
     const canonical = canonicalOf(name);
     assert.ok(canonical, `${name} has no canonical in the route contract`);
-    assert.equal(
+    const canonicalBuild = execFileSync(
+      "node", ["scripts/generate_release_contracts.mjs", "--build-id", canonical], { encoding: "utf8" },
+    ).trim();
+    assert.notEqual(
       EXPECTED_BUILD[name],
-      execFileSync("node", ["scripts/generate_release_contracts.mjs", "--build-id", canonical], { encoding: "utf8" }).trim(),
-      `${name} must share its canonical's build ID`,
+      canonicalBuild,
+      `${name} must identify its own deployable package rather than the canonical package`,
     );
     assert.notEqual(V2_ACTIVATION[name], CANONICAL_ACTIVATION[name],
       `${name} must not share its canonical's activation marker`);

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .page_output_privacy import project_scan_result_for_external_boundary
+
 
 RENDER_EVIDENCE_QUALITY_VERSION = "render_evidence_quality_v1"
 INSUFFICIENT_RENDER_EVIDENCE_STATE = "insufficient_raw_html_evidence"
@@ -52,19 +54,43 @@ def assess_render_evidence_coverage(
     }
 
 
+def _project_private_page_evidence(result: dict[str, Any]) -> dict[str, Any]:
+    """Project producer-only page evidence after all Stage-2 aggregation.
+
+    ``apply_indexability_quality_to_result`` runs immediately before this pass on
+    every successful scanner boundary and has already consumed B13/B14 raw page
+    observations into the bounded scan-level aggregate. B10/B15 are currently
+    evidence-only and have no authenticated customer contract. Keeping those
+    intermediate page fields after this common post-crawl pass would leak them
+    through the synchronous HTTP result and the durable signed scan envelope.
+
+    The projection is deliberately fail-closed even when renderer evidence is
+    absent or inconclusive. Scan-level aggregates and ordinary page evidence are
+    preserved; only fields explicitly denied by ``page_output_privacy`` leave the
+    producer/review-preparation phase.
+    """
+    return project_scan_result_for_external_boundary(result)
+
+
 def apply_render_evidence_quality(result: dict[str, Any]) -> dict[str, Any]:
     """Prevent weak access coverage from being presented as negative renderer evidence.
 
     Material signals remain material even when coverage is limited. Only negative or
     isolated conclusions are replaced with an explicit insufficient-evidence state.
     This pass is idempotent and does not alter findings or health scoring.
+
+    This is also the final common post-crawl pass before both synchronous output
+    and durable authority handling, so producer-only Stage-2 page evidence is
+    projected out here after scan-level aggregation has consumed it.
     """
-    if not isinstance(result, dict) or not result.get("success"):
+    if not isinstance(result, dict):
         return result
+    if not result.get("success"):
+        return _project_private_page_evidence(result)
 
     evidence = result.get("render_evidence")
     if not isinstance(evidence, dict):
-        return result
+        return _project_private_page_evidence(result)
 
     coverage = assess_render_evidence_coverage(
         evidence,
@@ -106,4 +132,4 @@ def apply_render_evidence_quality(result: dict[str, Any]) -> dict[str, Any]:
         technical["render_evidence"] = evidence
         technical["render_evidence_quality"] = coverage
 
-    return result
+    return _project_private_page_evidence(result)

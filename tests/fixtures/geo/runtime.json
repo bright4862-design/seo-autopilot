@@ -1,0 +1,1244 @@
+{
+  "assessed": {
+    "geo_readiness_version": "geo_readiness_v1_experimental",
+    "assessment_status": "assessed",
+    "score": 100,
+    "coverage": 1.0,
+    "score_bounds": {
+      "lower": 100.0,
+      "upper": 100.0
+    },
+    "bounds_kind": "unknown_outcome_range_not_statistical_confidence",
+    "sample_pages": 1,
+    "dimensions": {
+      "access": {
+        "coverage": 1.0,
+        "checks": {
+          "search_policy": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          },
+          "indexability": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          },
+          "discovery": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          }
+        },
+        "score": 100.0
+      },
+      "clarity": {
+        "coverage": 1.0,
+        "checks": {
+          "main_text": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          },
+          "page_identity": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          },
+          "template_integrity": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          }
+        },
+        "score": 100.0
+      },
+      "entity": {
+        "coverage": 1.0,
+        "checks": {
+          "subject_identity": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          },
+          "entity_details": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          },
+          "schema_agreement": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          }
+        },
+        "score": 100.0
+      },
+      "support": {
+        "coverage": 1.0,
+        "checks": {
+          "accountability": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          },
+          "date_context": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          },
+          "source_attribution": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          }
+        },
+        "score": 100.0
+      }
+    },
+    "reasons": [],
+    "authority_verified": false,
+    "evidence_adapter_version": "geo_evidence_v1",
+    "observations": [
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "search_policy",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:search_policy:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Observed OAI-SearchBot directive; not proof of provider access"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "indexability",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:indexability:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "No noindex observed in retained search directives; indexing not guaranteed"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "discovery",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:discovery:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Observed incoming link in the sampled graph"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "main_text",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:main_text:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Extractable text in a main content landmark"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "page_identity",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:page_identity:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Nonempty page title and primary heading"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "template_integrity",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:template_integrity:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Template token syntax in ordinary text"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "subject_identity",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:subject_identity:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Explicitly labelled subject name"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "entity_details",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:entity_details:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Visible semantic contact address"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "schema_agreement",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:schema_agreement:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Page-linked structured name agrees with primary heading"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "accountability",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:accountability:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Article contains an identified author link"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "date_context",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:date_context:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Article contains a labelled machine-readable date"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "source_attribution",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:source_attribution:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Article quotation links its declared source"
+      }
+    ],
+    "findings": [],
+    "assessment_gates": {
+      "parent_authoritative": true,
+      "entry_verified": true,
+      "access_limited": false
+    }
+  },
+  "entry_unknown": {
+    "geo_readiness_version": "geo_readiness_v1_experimental",
+    "assessment_status": "insufficient_evidence",
+    "score": null,
+    "coverage": 1.0,
+    "score_bounds": {
+      "lower": 100.0,
+      "upper": 100.0
+    },
+    "bounds_kind": "unknown_outcome_range_not_statistical_confidence",
+    "sample_pages": 1,
+    "dimensions": {
+      "access": {
+        "coverage": 1.0,
+        "checks": {
+          "search_policy": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          },
+          "indexability": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          },
+          "discovery": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          }
+        },
+        "score": 100.0
+      },
+      "clarity": {
+        "coverage": 1.0,
+        "checks": {
+          "main_text": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          },
+          "page_identity": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          },
+          "template_integrity": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          }
+        },
+        "score": 100.0
+      },
+      "entity": {
+        "coverage": 1.0,
+        "checks": {
+          "subject_identity": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          },
+          "entity_details": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          },
+          "schema_agreement": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          }
+        },
+        "score": 100.0
+      },
+      "support": {
+        "coverage": 1.0,
+        "checks": {
+          "accountability": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          },
+          "date_context": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          },
+          "source_attribution": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          }
+        },
+        "score": 100.0
+      }
+    },
+    "reasons": [
+      "entry_not_verified"
+    ],
+    "authority_verified": false,
+    "evidence_adapter_version": "geo_evidence_v1",
+    "observations": [
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "search_policy",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:search_policy:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Observed OAI-SearchBot directive; not proof of provider access"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "indexability",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:indexability:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "No noindex observed in retained search directives; indexing not guaranteed"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "discovery",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:discovery:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Observed incoming link in the sampled graph"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "main_text",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:main_text:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Extractable text in a main content landmark"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "page_identity",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:page_identity:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Nonempty page title and primary heading"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "template_integrity",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:template_integrity:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Template token syntax in ordinary text"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "subject_identity",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:subject_identity:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Explicitly labelled subject name"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "entity_details",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:entity_details:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Visible semantic contact address"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "schema_agreement",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:schema_agreement:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Page-linked structured name agrees with primary heading"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "accountability",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:accountability:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Article contains an identified author link"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "date_context",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:date_context:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Article contains a labelled machine-readable date"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "source_attribution",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:source_attribution:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Article quotation links its declared source"
+      }
+    ],
+    "findings": [],
+    "assessment_gates": {
+      "parent_authoritative": true,
+      "entry_verified": false,
+      "access_limited": false
+    }
+  },
+  "unknown": {
+    "geo_readiness_version": "geo_readiness_v1_experimental",
+    "assessment_status": "insufficient_evidence",
+    "score": null,
+    "coverage": 0.0,
+    "score_bounds": {
+      "lower": 0.0,
+      "upper": 100.0
+    },
+    "bounds_kind": "unknown_outcome_range_not_statistical_confidence",
+    "sample_pages": 1,
+    "dimensions": {
+      "access": {
+        "coverage": 0.0,
+        "checks": {
+          "search_policy": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 1,
+              "pass": 0
+            },
+            "applicable_or_unknown": 1
+          },
+          "indexability": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 1,
+              "pass": 0
+            },
+            "applicable_or_unknown": 1
+          },
+          "discovery": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 1,
+              "pass": 0
+            },
+            "applicable_or_unknown": 1
+          }
+        },
+        "score": null
+      },
+      "clarity": {
+        "coverage": 0.0,
+        "checks": {
+          "main_text": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 1,
+              "pass": 0
+            },
+            "applicable_or_unknown": 1
+          },
+          "page_identity": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 1,
+              "pass": 0
+            },
+            "applicable_or_unknown": 1
+          },
+          "template_integrity": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 1,
+              "pass": 0
+            },
+            "applicable_or_unknown": 1
+          }
+        },
+        "score": null
+      },
+      "entity": {
+        "coverage": 0.0,
+        "checks": {
+          "subject_identity": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 1,
+              "pass": 0
+            },
+            "applicable_or_unknown": 1
+          },
+          "entity_details": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 1,
+              "pass": 0
+            },
+            "applicable_or_unknown": 1
+          },
+          "schema_agreement": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 1,
+              "pass": 0
+            },
+            "applicable_or_unknown": 1
+          }
+        },
+        "score": null
+      },
+      "support": {
+        "coverage": 0.0,
+        "checks": {
+          "accountability": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 1,
+              "pass": 0
+            },
+            "applicable_or_unknown": 1
+          },
+          "date_context": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 1,
+              "pass": 0
+            },
+            "applicable_or_unknown": 1
+          },
+          "source_attribution": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 1,
+              "pass": 0
+            },
+            "applicable_or_unknown": 1
+          }
+        },
+        "score": null
+      }
+    },
+    "reasons": [
+      "entry_not_verified",
+      "overall_coverage_below_80_percent",
+      "access_coverage_below_50_percent",
+      "clarity_coverage_below_50_percent",
+      "entity_coverage_below_50_percent",
+      "support_coverage_below_50_percent"
+    ],
+    "authority_verified": false,
+    "evidence_adapter_version": "geo_evidence_v1",
+    "observations": [
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "search_policy",
+        "state": "not_verified",
+        "evidence_ref": "",
+        "reason": "Required evidence or applicability not retained"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "indexability",
+        "state": "not_verified",
+        "evidence_ref": "",
+        "reason": "Required evidence or applicability not retained"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "discovery",
+        "state": "not_verified",
+        "evidence_ref": "",
+        "reason": "Required evidence or applicability not retained"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "main_text",
+        "state": "not_verified",
+        "evidence_ref": "",
+        "reason": "Required evidence or applicability not retained"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "page_identity",
+        "state": "not_verified",
+        "evidence_ref": "",
+        "reason": "Required evidence or applicability not retained"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "template_integrity",
+        "state": "not_verified",
+        "evidence_ref": "",
+        "reason": "Required evidence or applicability not retained"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "subject_identity",
+        "state": "not_verified",
+        "evidence_ref": "",
+        "reason": "Required evidence or applicability not retained"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "entity_details",
+        "state": "not_verified",
+        "evidence_ref": "",
+        "reason": "Required evidence or applicability not retained"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "schema_agreement",
+        "state": "not_verified",
+        "evidence_ref": "",
+        "reason": "Required evidence or applicability not retained"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "accountability",
+        "state": "not_verified",
+        "evidence_ref": "",
+        "reason": "Required evidence or applicability not retained"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "date_context",
+        "state": "not_verified",
+        "evidence_ref": "",
+        "reason": "Required evidence or applicability not retained"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "source_attribution",
+        "state": "not_verified",
+        "evidence_ref": "",
+        "reason": "Required evidence or applicability not retained"
+      }
+    ],
+    "findings": [],
+    "assessment_gates": {
+      "parent_authoritative": true,
+      "entry_verified": false,
+      "access_limited": false
+    }
+  },
+  "empty": {
+    "geo_readiness_version": "geo_readiness_v1_experimental",
+    "assessment_status": "insufficient_evidence",
+    "score": null,
+    "coverage": 0.0,
+    "score_bounds": {
+      "lower": 0.0,
+      "upper": 100.0
+    },
+    "bounds_kind": "unknown_outcome_range_not_statistical_confidence",
+    "sample_pages": 0,
+    "dimensions": {
+      "access": {
+        "coverage": 0.0,
+        "checks": {
+          "search_policy": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 0
+            },
+            "applicable_or_unknown": 0
+          },
+          "indexability": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 0
+            },
+            "applicable_or_unknown": 0
+          },
+          "discovery": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 0
+            },
+            "applicable_or_unknown": 0
+          }
+        },
+        "score": null
+      },
+      "clarity": {
+        "coverage": 0.0,
+        "checks": {
+          "main_text": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 0
+            },
+            "applicable_or_unknown": 0
+          },
+          "page_identity": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 0
+            },
+            "applicable_or_unknown": 0
+          },
+          "template_integrity": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 0
+            },
+            "applicable_or_unknown": 0
+          }
+        },
+        "score": null
+      },
+      "entity": {
+        "coverage": 0.0,
+        "checks": {
+          "subject_identity": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 0
+            },
+            "applicable_or_unknown": 0
+          },
+          "entity_details": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 0
+            },
+            "applicable_or_unknown": 0
+          },
+          "schema_agreement": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 0
+            },
+            "applicable_or_unknown": 0
+          }
+        },
+        "score": null
+      },
+      "support": {
+        "coverage": 0.0,
+        "checks": {
+          "accountability": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 0
+            },
+            "applicable_or_unknown": 0
+          },
+          "date_context": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 0
+            },
+            "applicable_or_unknown": 0
+          },
+          "source_attribution": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 0
+            },
+            "applicable_or_unknown": 0
+          }
+        },
+        "score": null
+      }
+    },
+    "reasons": [
+      "entry_not_verified",
+      "overall_coverage_below_80_percent",
+      "access_coverage_below_50_percent",
+      "clarity_coverage_below_50_percent",
+      "entity_coverage_below_50_percent",
+      "support_coverage_below_50_percent"
+    ],
+    "authority_verified": false,
+    "evidence_adapter_version": "geo_evidence_v1",
+    "observations": [],
+    "findings": [],
+    "assessment_gates": {
+      "parent_authoritative": true,
+      "entry_verified": false,
+      "access_limited": false
+    }
+  },
+  "failures": {
+    "geo_readiness_version": "geo_readiness_v1_experimental",
+    "assessment_status": "assessed",
+    "score": 83,
+    "coverage": 1.0,
+    "score_bounds": {
+      "lower": 83.333333,
+      "upper": 83.333333
+    },
+    "bounds_kind": "unknown_outcome_range_not_statistical_confidence",
+    "sample_pages": 1,
+    "dimensions": {
+      "access": {
+        "coverage": 1.0,
+        "checks": {
+          "search_policy": {
+            "counts": {
+              "fail": 1,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 0
+            },
+            "applicable_or_unknown": 1
+          },
+          "indexability": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          },
+          "discovery": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          }
+        },
+        "score": 66.666667
+      },
+      "clarity": {
+        "coverage": 1.0,
+        "checks": {
+          "main_text": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          },
+          "page_identity": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          },
+          "template_integrity": {
+            "counts": {
+              "fail": 1,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 0
+            },
+            "applicable_or_unknown": 1
+          }
+        },
+        "score": 66.666667
+      },
+      "entity": {
+        "coverage": 1.0,
+        "checks": {
+          "subject_identity": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          },
+          "entity_details": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          },
+          "schema_agreement": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          }
+        },
+        "score": 100.0
+      },
+      "support": {
+        "coverage": 1.0,
+        "checks": {
+          "accountability": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          },
+          "date_context": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          },
+          "source_attribution": {
+            "counts": {
+              "fail": 0,
+              "not_applicable": 0,
+              "not_verified": 0,
+              "pass": 1
+            },
+            "applicable_or_unknown": 1
+          }
+        },
+        "score": 100.0
+      }
+    },
+    "reasons": [],
+    "authority_verified": false,
+    "evidence_adapter_version": "geo_evidence_v1",
+    "observations": [
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "search_policy",
+        "state": "fail",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:search_policy:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Observed OAI-SearchBot directive; not proof of provider access"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "indexability",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:indexability:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "No noindex observed in retained search directives; indexing not guaranteed"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "discovery",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:discovery:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Observed incoming link in the sampled graph"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "main_text",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:main_text:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Extractable text in a main content landmark"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "page_identity",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:page_identity:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Nonempty page title and primary heading"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "template_integrity",
+        "state": "fail",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:template_integrity:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Template token syntax in ordinary text"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "subject_identity",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:subject_identity:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Explicitly labelled subject name"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "entity_details",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:entity_details:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Visible semantic contact address"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "schema_agreement",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:schema_agreement:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Page-linked structured name agrees with primary heading"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "accountability",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:accountability:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Article contains an identified author link"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "date_context",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:date_context:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Article contains a labelled machine-readable date"
+      },
+      {
+        "page_id": "p_0f115db062b7c0dd030b1687",
+        "check_id": "source_attribution",
+        "state": "pass",
+        "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:source_attribution:aaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "Article quotation links its declared source"
+      }
+    ],
+    "findings": [
+      {
+        "rule_id": "geo_search_policy",
+        "root_cause_id": "geo_search_policy",
+        "check_id": "search_policy",
+        "label": "OAI-SearchBot robots directive",
+        "affected_page_count": 1,
+        "page_ids": [
+          "p_0f115db062b7c0dd030b1687"
+        ],
+        "evidence_samples": [
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "search_policy",
+            "state": "fail",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:search_policy:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Observed OAI-SearchBot directive; not proof of provider access",
+            "page_url": "https://example.com/"
+          }
+        ],
+        "sample_truncated": false,
+        "suggested_action": "Review whether the OAI-SearchBot restriction matches intended search access.",
+        "verification_step": "Recheck the robots directive for the affected page after any intended change."
+      },
+      {
+        "rule_id": "geo_template_integrity",
+        "root_cause_id": "geo_template_integrity",
+        "check_id": "template_integrity",
+        "label": "Template token syntax in ordinary text",
+        "affected_page_count": 1,
+        "page_ids": [
+          "p_0f115db062b7c0dd030b1687"
+        ],
+        "evidence_samples": [
+          {
+            "page_id": "p_0f115db062b7c0dd030b1687",
+            "check_id": "template_integrity",
+            "state": "fail",
+            "evidence_ref": "geo_evidence_v1:raw_html:p_0f115db062b7c0dd030b1687:template_integrity:aaaaaaaaaaaaaaaaaaaaaaaa",
+            "reason": "Template token syntax in ordinary text",
+            "page_url": "https://example.com/"
+          }
+        ],
+        "sample_truncated": false,
+        "suggested_action": "Review the token syntax in ordinary page text and replace any unintended placeholder.",
+        "verification_step": "Confirm the published main text no longer contains the unintended token."
+      }
+    ],
+    "assessment_gates": {
+      "parent_authoritative": true,
+      "entry_verified": true,
+      "access_limited": false
+    }
+  },
+  "error": {
+    "geo_readiness_version": "geo_readiness_v1_experimental",
+    "evidence_adapter_version": "geo_evidence_v1",
+    "assessment_status": "evaluation_error",
+    "score": null,
+    "coverage": 0,
+    "score_bounds": null,
+    "bounds_kind": "unknown_outcome_range_not_statistical_confidence",
+    "sample_pages": 0,
+    "dimensions": {},
+    "reasons": [
+      "evaluation_error"
+    ],
+    "authority_verified": false,
+    "observations": [],
+    "findings": [],
+    "assessment_gates": {
+      "parent_authoritative": false,
+      "entry_verified": false,
+      "access_limited": false
+    }
+  },
+  "scan": {
+    "submitted_url": "https://example.com/",
+    "crawled_pages": [
+      {
+        "url": "https://example.com/",
+        "status_code": 200,
+        "page_evidence_class": "usable_html",
+        "canonical_status": "missing",
+        "robots_txt_rules_known": true,
+        "robots_txt_oai_searchbot_allowed": false,
+        "effective_search_robots_directives": [],
+        "source_pages": [
+          "https://example.com/about"
+        ],
+        "discovered_from": [
+          "internal_link"
+        ],
+        "geo_evidence": {
+          "version": "geo_evidence_v1",
+          "origin": "raw_html",
+          "accepted": true,
+          "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "signals": {
+            "main_text": true,
+            "page_identity": true,
+            "template_integrity": false,
+            "subject_identity": true,
+            "entity_details": true,
+            "schema_agreement": true,
+            "accountability": true,
+            "date_context": true,
+            "source_attribution": true
+          }
+        }
+      }
+    ]
+  }
+}

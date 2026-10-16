@@ -1,9 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Check, Copy, Download, ExternalLink, FileText } from "lucide-react";
+import { Check, ChevronDown, Copy, Download, ExternalLink, FileText } from "lucide-react";
 
 import { isRateLimitFinding, shouldUseLegacyRateLimitPresentation } from "@/lib/reviewContract";
-import { getScanRunWithFixList, listAccountScanRuns } from "@/lib/scanRuns";
+import { getScanRunWithFixList, getScanComparison, listAccountScanRuns } from "@/lib/scanRuns";
 import { customerRecoveryFailure } from "@/lib/scanRuns";
 import { ACTIVE_SCAN_RUN_STATUSES } from "@/lib/scanRunIdentity";
 import { UNLOCK_PRICE_LABEL } from "@/lib/access";
@@ -12,12 +12,15 @@ import { CUSTOMER_BOUNDARY_EVENT } from "@/lib/customerBrowserCache";
 import ScoreRing from "@/components/fixlist/ScoreRing";
 import RecentScanRow from "@/components/fixlist/RecentScanRow";
 import RepairWorkSurface from "@/components/fixlist/RepairWorkSurface";
+import CustomerRepairGuidance from "@/components/fixlist/CustomerRepairGuidance";
+import ScanComparisonPanel from "@/components/fixlist/ScanComparisonPanel";
 import ExplicitPassedChecks from "@/components/fixlist/ExplicitPassedChecks";
 import SuggestedFix from "@/components/fixlist/SuggestedFix";
+import GeoReadinessPanel from "@/components/fixlist/GeoReadinessPanel";
 import { deleteScanRun } from "@/lib/scanHistory";
 import { prepareCustomerFixes, priorityBucket } from "@/lib/fixRanking";
 import { buildRepairWorkSurfacePresentation } from "@/lib/repairWorkSurfacePresentation";
-import { applyCustomerVocabulary, customerHealthLabel, customerPriorityLabel, customerScopeRelationshipLabel } from "@/lib/fixVocabulary";
+import { applyCustomerVocabulary, customerPriorityLabel, customerScopeRelationshipLabel } from "@/lib/fixVocabulary";
 import { repairSuggestion } from "@/lib/repairSuggestions";
 import {
   buildRepairCards,
@@ -27,7 +30,8 @@ import {
   customerRedirectEvidenceRows,
   customerRepairObservationRows,
 } from "@/lib/repairCardModel";
-import { evidenceLink } from "@/lib/evidenceUrl";
+import { evidenceLink, evidenceIdentityOptions } from "@/lib/evidenceUrl";
+import { serializeAffectedUrlsCsv, serializeAffectedUrlsText } from "@/lib/affectedUrlExport";
 import { buildScanHandoff, scanHandoffFilename, serializeScanHandoff } from "@/lib/scanHandoff";
 import { buildCustomerRepairPlan } from "@/lib/customerRepairPlan";
 import { scanCoverageDisclosure } from "@/lib/scanCoverageDisclosure";
@@ -368,11 +372,7 @@ export default function FixList() {
     };
   }, [requestedScanId, historyReloadToken]);
 
-  const recommendations = useMemo(() => prepareCustomerFixes(
-    mergeMetaDescriptionRecommendations(
-      getRecommendations(scanRecord).map((item) => normalizeRecommendation(item, scanRecord)),
-    ).map(applyCustomerVocabulary),
-  ), [scanRecord]);
+  const recommendations = useMemo(() => prepareCustomerPageRecommendations(scanRecord), [scanRecord]);
   const pages = useMemo(() => getPages(scanRecord), [scanRecord]);
   const healthScore = getHealthScore(scanRecord);
   const scoreUnavailable = isHealthScoreUnavailable(scanRecord);
@@ -423,13 +423,11 @@ export default function FixList() {
   });
   const repairPresentation = repairWorkSurface.presentation;
   const rawCustomerRepairCards = useMemo(
-    // The hints are applied to the finished set, not per card: whether a title
-    // needs disambiguating is a fact about the whole FixList.
-    () => repairPresentation.canonical === true ? withRepeatedTitleScopeHints(buildRepairCards(active)) : [],
+    () => repairPresentation.canonical === true ? buildRepairCards(active) : [],
     [active, repairPresentation.canonical],
   );
   const customerRepairPlan = useMemo(
-    () => buildCustomerRepairPlan(rawCustomerRepairCards, { fallbackNextBestStep: storedNextBestStep }),
+    () => buildCustomerPageRepairPlan(rawCustomerRepairCards, storedNextBestStep),
     [rawCustomerRepairCards, storedNextBestStep],
   );
   const customerRepairCards = customerRepairPlan.cards;
@@ -483,6 +481,7 @@ export default function FixList() {
     && !String(scanRecord?.scope_type || "").trim()
     && !String(scanRecord?.path_prefix || scanRecord?.requested_path_prefix || "").trim()
   );
+  const fullResultLayout = Boolean(requestedScanId && hasUsefulScan && !locked && !previewComplete);
 
   function retryRequestedScan() {
     setRequestedScanFailure(null);
@@ -522,9 +521,9 @@ export default function FixList() {
 
 
   return (
-    <div className="min-h-screen bg-paper text-ink antialiased">
-      <div className="mx-auto max-w-[680px] px-6 pb-24">
-        <div className="flex items-center justify-between pt-7">
+    <div className={`min-h-screen text-ink antialiased ${fullResultLayout ? "bg-[#F6F4EF] [&_.text-ink-faint]:text-ink-muted" : "bg-paper"}`}>
+      <div className={`mx-auto px-5 pb-24 sm:px-6 ${fullResultLayout ? "max-w-[880px]" : "max-w-[680px]"}`}>
+        {!fullResultLayout ? <div className="flex items-center justify-between pt-7">
           <div className="text-[15px] font-medium tracking-tight text-ink-muted">{websiteHost || ""}</div>
           <button
             type="button"
@@ -533,7 +532,7 @@ export default function FixList() {
           >
             {previewComplete ? "Unlock full access" : hasUsefulScan ? "Scan again" : "Run a scan"}
           </button>
-        </div>
+        </div> : null}
 
         {requestedScanId && scanRecord && requestedScanFailure?.retryable === true ? (
           <CustomerRecoveryNotice failure={requestedScanFailure} onRetry={retryRequestedScan} />
@@ -578,162 +577,55 @@ export default function FixList() {
           />
         ) : hasUsefulScan ? (
           <>
-            <p className="mt-16 text-[13px] text-ink-faint tabular-nums">
-              Scanned {scanRecord?.created_at ? formatDate(scanRecord.created_at) : "recently"}
-              {pagesFound > 0 ? ` · ${formatCount(pagesFound)} pages found` : ""}
-              {pagesScanned > 0 ? ` · ${formatCount(pagesScanned)} checked` : ""}
-            </p>
-
-            <div className="mt-4 flex items-center gap-7">
-              <ScoreRing score={healthScore} unavailable={scoreUnavailable} />
-              <div>
-                <h1 className="text-[26px] font-semibold leading-tight tracking-tight">
-                  {customerHealthLabel(healthScore, { unavailable: scoreUnavailable, noHighConfidenceFindings })}
-                </h1>
-                <p className="mt-1.5 text-[15px] text-ink-muted tabular-nums">
-                  {getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount: displayedRepairCount })}
-                </p>
-              </div>
-            </div>
-
-            <ScoreExplanation explanation={healthScoreExplanation(scanRecord)} />
-
-            {summary ? (
-              <p className="mt-8 max-w-[56ch] text-[14px] leading-relaxed text-ink-muted">{summary}</p>
-            ) : null}
-
-            {scanRecord?.customer_access === "full" && repairPresentation.canonical === true && customerRepairCards.length > 0 ? (
-              <ScanExportControls
-                scanRecord={scanRecord}
-                cards={customerRepairCards}
-                issues={active}
-                businessName={scanRecord?.business_name || websiteHost || "Your website"}
-                healthScore={healthScore}
-                scoreUnavailable={scoreUnavailable}
-                pagesScanned={pagesScanned}
-                pagesFound={pagesFound}
-                summary={summary}
-                nextBestStep={nextBestStep}
-                limitations={handoffLimitations}
-              />
-            ) : null}
-
-            <ObservedScanCoverage coverage={observedScanCoverage} />
-
-            {sampleCoverage ? (
-              <details className="mt-5 max-w-[60ch] rounded-xl border border-hairline-soft bg-white/35 px-4 py-3">
-                <summary className="cursor-pointer text-[12.5px] font-medium text-ink-muted underline decoration-hairline underline-offset-4">
-                  How this scan chose what to look at
-                </summary>
-                <div className="mt-3 space-y-2 text-[12.5px] leading-relaxed text-ink-faint">
-                  <p>
-                    Route patterns: <span className="font-medium text-ink-muted">{sampleCoverage.routesSelected} of {sampleCoverage.routesDiscovered}</span> chosen for this scan
-                    {sampleCoverage.localeVariantsCollapsed > 0
-                      ? ` · ${formatCount(sampleCoverage.localeVariantsCollapsed)} translated duplicate${sampleCoverage.localeVariantsCollapsed === 1 ? "" : "s"} treated as one page`
-                      : ""}
-                  </p>
-                  {sampleCoverage.identityDiscovered > 0 ? (
-                    <p>
-                      Business-critical pages: <span className="font-medium text-ink-muted">{sampleCoverage.identitySelected} of {sampleCoverage.identityDiscovered}</span> chosen for this scan.
-                    </p>
-                  ) : null}
-                  {sampleCoverage.marketSummary ? <p>{sampleCoverage.marketSummary}</p> : null}
-                  {sampleCoverage.familySummary ? <p>{sampleCoverage.familySummary}</p> : null}
-                  {sampleCoverage.notChosenSummary ? (
-                    <p className="text-ink-muted">{sampleCoverage.notChosenSummary}</p>
-                  ) : null}
-                  <p>These are the pages this scan set out to check, up to its 150-page limit. The counts above the fix list say how many it reached.</p>
-                </div>
-              </details>
-            ) : null}
-
-            {showPageAccounting ? (
-              <section className="mt-6 max-w-[60ch] rounded-2xl border border-hairline-soft bg-white/45 px-5 py-5" aria-labelledby="pages-found-accounting">
-                <h2 id="pages-found-accounting" className="text-[17px] font-semibold tracking-tight text-ink">
-                  Pages found
-                </h2>
-                <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
-                  FixList found {formatCount(pageAccounting.total)} pages. The counts below add up to that total; pages without a clear folder are kept in the final row.
-                </p>
-                <dl className="mt-4 divide-y divide-hairline-soft">
-                  {pageAccounting.rows.map((row) => (
-                    <div key={row.key} className="flex items-baseline justify-between gap-4 py-2.5 first:pt-1">
-                      <dt className="min-w-0 text-[13px] text-ink-muted">
-                        <span className="font-medium text-ink">{row.label}</span>
-                        {row.path ? <span className="ml-2 break-all text-[12px] text-ink-faint">{displayPathPrefix(row.path)}</span> : null}
-                      </dt>
-                      <dd className="shrink-0 text-[13px] font-medium tabular-nums text-ink">{formatCount(row.count)}</dd>
-                    </div>
-                  ))}
-                  <div className="flex items-baseline justify-between gap-4 py-2.5">
-                    <dt className="text-[13px] font-semibold text-ink">Total pages found</dt>
-                    <dd className="text-[13px] font-semibold tabular-nums text-ink">{formatCount(pageAccounting.total)}</dd>
-                  </div>
-                </dl>
-                {pageAccounting.isPartial ? (
-                  <p className="mt-3 text-[11.5px] leading-relaxed text-ink-faint">
-                    The site only supplied a partial folder breakdown. The remaining pages are included above instead of being hidden from the total.
-                  </p>
+            <CustomerResultsSummary
+              scanRecord={scanRecord}
+              websiteHost={websiteHost}
+              healthScore={healthScore}
+              scoreUnavailable={scoreUnavailable}
+              pagesScanned={pagesScanned}
+              pagesFound={pagesFound}
+              repairCount={displayedRepairCount}
+            >
+              <div className="mt-5 flex flex-wrap items-start gap-2.5">
+                {scanRecord?.customer_access === "full" && repairPresentation.canonical === true && customerRepairCards.length > 0 ? (
+                  <ScanExportControls
+                    scanRecord={scanRecord}
+                    cards={customerRepairCards}
+                    issues={active}
+                    businessName={scanRecord?.business_name || websiteHost || "Your website"}
+                    healthScore={healthScore}
+                    scoreUnavailable={scoreUnavailable}
+                    pagesScanned={pagesScanned}
+                    pagesFound={pagesFound}
+                    summary={summary}
+                    nextBestStep={nextBestStep}
+                    limitations={handoffLimitations}
+                    geoReadiness={scanRecord?.geo_readiness}
+                  />
                 ) : null}
-              </section>
-            ) : null}
+                <button
+                  type="button"
+                  onClick={() => navigate(focusedRescanTarget || "/onboarding")}
+                  className="min-h-9 rounded-[10px] bg-ink px-4 py-2 text-[13.5px] font-medium text-white transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+                >
+                  Scan again
+                </button>
+              </div>
+              <ScoreExplanation explanation={healthScoreExplanation(scanRecord)} />
+            </CustomerResultsSummary>
 
-            {focusedSections.length > 0 ? (
-              <section className="mt-6 max-w-[60ch] rounded-2xl border border-hairline-soft bg-white/45 px-5 py-5" aria-labelledby="sections-to-scan-next">
-                <div className="flex items-baseline justify-between gap-4">
-                  <h2 id="sections-to-scan-next" className="text-[17px] font-semibold tracking-tight text-ink">
-                    Sections to scan next
-                  </h2>
-                  <span className="text-[11px] uppercase tracking-[0.08em] text-ink-faint">Optional</span>
-                </div>
-                <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
-                  These suggested folders received less coverage in this FixList. You can give one its own separate 150-page scan; this is a short priority list, not the complete page breakdown above.
-                </p>
-                <div className="mt-4 divide-y divide-hairline-soft">
-                  {focusedSections.map((section) => {
-                    // "sampled" and "represented" were both computed from the
-                    // URLs chosen before the crawl, so a section could read
-                    // "30 sampled · 60% represented" on a scan that checked
-                    // seven of its pages. A percentage is shown only where an
-                    // outcome was actually recorded; a record that only knows
-                    // what it intended says exactly that.
-                    const checkedCoveragePercent = section.checkedCoverage === null
-                      ? null
-                      : Math.round(section.checkedCoverage * 100);
-                    const target = focusedSectionOnboardingPath(scanRecord?.scan_id || scanRecord?.id, section);
-                    return (
-                      <div key={section.requested_path_prefix} className="flex flex-col gap-3 py-4 first:pt-1 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                            <span className="text-[13px] font-medium text-ink">{section.label}</span>
-                            <span className="break-all text-[12px] text-ink-faint">{displayPathPrefix(section.requested_path_prefix)}</span>
-                          </div>
-                          <p className="mt-1 text-[12px] leading-relaxed text-ink-faint">
-                            {section.coverageEvidence === "checked"
-                              ? `${formatCount(section.discovered)} found · ${formatCount(section.checked)} checked here · ${checkedCoveragePercent}% checked`
-                              : `${formatCount(section.discovered)} found · ${formatCount(section.selected)} chosen for this scan`}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => target && navigate(target)}
-                          disabled={!target}
-                          className="shrink-0 self-start rounded-full border border-hairline px-3.5 py-2 text-[12px] font-medium text-ink transition-colors hover:bg-ink/[0.035] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          Scan this section separately
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-                <p className="mt-3 text-[11.5px] leading-relaxed text-ink-faint">
-                  Focused scans stay on this exact website origin and inside the selected folder. Subdomain scanning is not enabled in this release.
-                </p>
-              </section>
+            {displayedRepairCount === 0 ? (
+              <p className="mt-6 max-w-[60ch] text-[14px] leading-relaxed text-ink-muted">
+                {getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount: displayedRepairCount })}
+              </p>
             ) : null}
 
             {limitationNote ? (
               <p className="mt-6 border-l-2 border-warnink/40 pl-3 text-[13.5px] leading-relaxed text-ink-muted">{limitationNote}</p>
+            ) : hasVerifiedLimitedScan ? (
+              <p className="mt-6 max-w-[60ch] border-l-2 border-warnink/40 pl-3 text-[13.5px] leading-relaxed text-ink-muted">
+                This scan has limited evidence. These findings describe the pages we could check and do not establish a complete site result.
+              </p>
             ) : null}
 
             {repairPresentation.unsupported ? (
@@ -744,7 +636,11 @@ export default function FixList() {
                 </p>
               </div>
             ) : repairPresentation.canonical === true ? (
-              <CustomerRepairList cards={customerRepairCards} websiteUrl={scanRecord?.website_url} />
+              <CustomerCanonicalRepairs
+                scanRecord={scanRecord}
+                requestedScanId={requestedScanId}
+                customerRepairCards={customerRepairCards}
+              />
             ) : (
               <RepairWorkSurface
                 {...repairWorkSurface}
@@ -804,7 +700,155 @@ export default function FixList() {
               </>
             ) : null}
 
+            <details className="group/report mt-12 rounded-[14px] border border-hairline-soft bg-white" aria-labelledby="report-details-heading">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-4 rounded-[14px] px-5 py-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink [&::-webkit-details-marker]:hidden">
+                <span>
+                  <span id="report-details-heading" className="block text-[16px] font-semibold tracking-tight text-ink">Report details</span>
+                  <span className="mt-1 block text-[12.5px] leading-relaxed text-ink-muted">What we checked, comparison with your last scan, and the experimental GEO assessment</span>
+                </span>
+                <ChevronDown aria-hidden="true" className="h-4 w-4 shrink-0 transition-transform group-open/report:rotate-180" />
+              </summary>
+              <div className="border-t border-hairline-soft px-5 pb-5 pt-5">
+                <h2 className="text-[14px] font-semibold text-ink">What we checked</h2>
+                <p className="mt-2 max-w-[65ch] text-[13px] leading-relaxed text-ink-muted">
+                  This scan checked {formatCount(pagesScanned)}{pagesFound > 0 ? ` of ${formatCount(pagesFound)} pages found` : " pages"}.
+                  {pagesFound > pagesScanned ? " Pages outside that sample were not checked, so findings and page counts describe the collected evidence." : " Findings describe the evidence collected in this scan."}
+                  {" "}Affected page groups can overlap and are not added into a site total.
+                </p>
+                {repairPresentation.canonical !== true && summary ? <p className="mt-3 text-[13px] leading-relaxed text-ink-muted">{summary}</p> : null}
+
+            <CustomerScanComparison scanRecord={scanRecord} requestedScanId={requestedScanId} />
+
             <ExplicitPassedChecks scan={scanRecord} />
+
+            <ObservedScanCoverage coverage={observedScanCoverage} />
+
+            {sampleCoverage ? (
+              <details className="mt-5 max-w-[60ch] rounded-xl border border-hairline-soft bg-white/35 px-4 py-3">
+                <summary className="cursor-pointer text-[12.5px] font-medium text-ink-muted underline decoration-hairline underline-offset-4">
+                  How this scan chose what to look at
+                </summary>
+                <div className="mt-3 space-y-2 text-[12.5px] leading-relaxed text-ink-faint">
+                  <p>
+                    Route patterns: <span className="font-medium text-ink-muted">{sampleCoverage.routesSelected} of {sampleCoverage.routesDiscovered}</span> chosen for this scan
+                    {sampleCoverage.localeVariantsCollapsed > 0
+                      ? ` · ${formatCount(sampleCoverage.localeVariantsCollapsed)} translated duplicate${sampleCoverage.localeVariantsCollapsed === 1 ? "" : "s"} treated as one page`
+                      : ""}
+                  </p>
+                  {sampleCoverage.identityDiscovered > 0 ? (
+                    <p>
+                      Business-critical pages: <span className="font-medium text-ink-muted">{sampleCoverage.identitySelected} of {sampleCoverage.identityDiscovered}</span> chosen for this scan.
+                    </p>
+                  ) : null}
+                  {sampleCoverage.marketSummary ? <p>{sampleCoverage.marketSummary}</p> : null}
+                  {sampleCoverage.familySummary ? <p>{sampleCoverage.familySummary}</p> : null}
+                  {sampleCoverage.notChosenSummary ? (
+                    <p className="text-ink-muted">{sampleCoverage.notChosenSummary}</p>
+                  ) : null}
+                  <p>These are the pages this scan set out to check, up to its 150-page limit. The counts above the fix list say how many it reached.</p>
+                </div>
+              </details>
+            ) : null}
+
+            {showPageAccounting ? (
+              <details className="mt-5 max-w-[60ch] rounded-xl border border-hairline-soft bg-white/35 px-4 py-3" aria-labelledby="pages-found-accounting">
+                <summary id="pages-found-accounting" className="cursor-pointer text-[13px] font-medium text-ink">
+                  Pages found
+                </summary>
+                <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
+                  FixList found {formatCount(pageAccounting.total)} pages. The counts below add up to that total; pages without a clear folder are kept in the final row.
+                </p>
+                <dl className="mt-4 divide-y divide-hairline-soft">
+                  {pageAccounting.rows.map((row) => (
+                    <div key={row.key} className="flex items-baseline justify-between gap-4 py-2.5 first:pt-1">
+                      <dt className="min-w-0 text-[13px] text-ink-muted">
+                        <span className="font-medium text-ink">{row.label}</span>
+                        {row.path ? <span className="ml-2 break-all text-[12px] text-ink-faint">{displayPathPrefix(row.path)}</span> : null}
+                      </dt>
+                      <dd className="shrink-0 text-[13px] font-medium tabular-nums text-ink">{formatCount(row.count)}</dd>
+                    </div>
+                  ))}
+                  <div className="flex items-baseline justify-between gap-4 py-2.5">
+                    <dt className="text-[13px] font-semibold text-ink">Total pages found</dt>
+                    <dd className="text-[13px] font-semibold tabular-nums text-ink">{formatCount(pageAccounting.total)}</dd>
+                  </div>
+                </dl>
+                {pageAccounting.isPartial ? (
+                  <p className="mt-3 text-[11.5px] leading-relaxed text-ink-faint">
+                    The site only supplied a partial folder breakdown. The remaining pages are included above instead of being hidden from the total.
+                  </p>
+                ) : null}
+              </details>
+            ) : null}
+
+            {focusedSections.length > 0 ? (
+              <details className="mt-5 max-w-[60ch] rounded-xl border border-hairline-soft bg-white/35 px-4 py-3" aria-labelledby="sections-to-scan-next">
+                <summary id="sections-to-scan-next" className="cursor-pointer text-[13px] font-medium text-ink">
+                  Sections to scan next
+                </summary>
+                <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
+                  Run a separate scan of up to 150 pages in one of these suggested folders.
+                </p>
+                <div className="mt-4 divide-y divide-hairline-soft">
+                  {focusedSections.map((section) => {
+                    // "sampled" and "represented" were both computed from the
+                    // URLs chosen before the crawl, so a section could read
+                    // "30 sampled · 60% represented" on a scan that checked
+                    // seven of its pages. A percentage is shown only where an
+                    // outcome was actually recorded; a record that only knows
+                    // what it intended says exactly that.
+                    const checkedCoveragePercent = section.checkedCoverage === null
+                      ? null
+                      : Math.round(section.checkedCoverage * 100);
+                    const target = focusedSectionOnboardingPath(scanRecord?.scan_id || scanRecord?.id, section);
+                    return (
+                      <div key={section.requested_path_prefix} className="flex flex-col gap-3 py-4 first:pt-1 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                            <span className="text-[13px] font-medium text-ink">{section.label}</span>
+                            <span className="break-all text-[12px] text-ink-faint">{displayPathPrefix(section.requested_path_prefix)}</span>
+                          </div>
+                          <p className="mt-1 text-[12px] leading-relaxed text-ink-faint">
+                            {section.coverageEvidence === "checked"
+                              ? `${formatCount(section.discovered)} found · ${formatCount(section.checked)} checked here · ${checkedCoveragePercent}% checked`
+                              : `${formatCount(section.discovered)} found · ${formatCount(section.selected)} chosen for this scan`}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => target && navigate(target)}
+                          disabled={!target}
+                          className="shrink-0 self-start rounded-full border border-hairline px-3.5 py-2 text-[12px] font-medium text-ink transition-colors hover:bg-ink/[0.035] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          Scan this section separately
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="mt-3 text-[11.5px] leading-relaxed text-ink-faint">
+                  Each scan stays within the selected folder on this website.
+                </p>
+              </details>
+            ) : null}
+
+            <GeoReadinessPanel
+              geoReadiness={scanRecord?.geo_readiness}
+              customerAccess={scanRecord?.customer_access}
+              cards={customerRepairCards}
+              siteOrigin={scanRecord?.website_url}
+              completedAt={scanRecord?.completed_at || scanRecord?.created_at}
+            />
+
+                <section className="mt-6 border-t border-hairline-soft pt-5">
+                  <h2 className="text-[14px] font-semibold text-ink">How to read this list</h2>
+                  <p className="mt-2 max-w-[65ch] text-[13px] leading-relaxed text-ink-muted">
+                    Confirmed problems are supported by observed evidence. Suggestions may need review because the current setup could be intentional. A later scan can confirm a change only when it checks comparable pages and collects the required evidence.
+                  </p>
+                </section>
+              </div>
+            </details>
+
 
             {active.length > 0 && repairPresentation.canonical !== true ? <CmsPicker selectedCms={selectedCms} onChange={setSelectedCms} /> : null}
           </>
@@ -822,23 +866,35 @@ export default function FixList() {
   );
 }
 
-const CUSTOMER_REPAIR_SECTIONS = Object.freeze([
-  { key: "fix_first", label: "Fix first", help: "Start here." },
-  { key: "important", label: "Important", help: "Significant repairs to tackle next." },
-  { key: "improve", label: "Improve next", help: "Useful improvements after the important work." },
-  { key: "review", label: "Worth checking", help: "Lower-priority items to review when ready." },
-]);
-
-function customerRepairSectionKey(card = {}) {
-  const key = priorityBucket(card);
-  return CUSTOMER_REPAIR_SECTIONS.some((section) => section.key === key) ? key : "review";
+export function CustomerResultsSummary({
+  scanRecord = {}, websiteHost = "", healthScore = null, scoreUnavailable = true,
+  pagesScanned = 0, pagesFound = 0, repairCount = 0, children,
+}) {
+  return (
+    <header className="pt-10 sm:pt-12">
+      {scanRecord.status === "limited" ? (
+        <p className="mb-4 inline-flex rounded-full bg-warnink/10 px-3 py-1 text-[12px] font-medium text-ink-muted">Limited scan</p>
+      ) : null}
+      <div className="flex items-center gap-4">
+        <ScoreRing score={healthScore} unavailable={scoreUnavailable} size={64} />
+        <div className="min-w-0">
+          <h1 className="break-words text-[27px] font-semibold leading-tight tracking-[-0.03em] sm:text-[30px]">{websiteHost || safeHostname(scanRecord.website_url) || "Website scan"}</h1>
+          <p className="mt-2 text-[13px] leading-relaxed text-ink-muted tabular-nums sm:text-[14px]">
+            Scanned {scanRecord.created_at ? formatDate(scanRecord.created_at) : "recently"}
+            {" · "}{formatCount(pagesScanned)}{pagesFound > 0 ? ` of ${formatCount(pagesFound)}` : ""} {(pagesFound > 0 ? pagesFound : pagesScanned) === 1 ? "page" : "pages"} checked
+            {" · "}{formatCount(repairCount)} {repairCount === 1 ? "recommendation" : "recommendations"}
+          </p>
+        </div>
+      </div>
+      {children}
+    </header>
+  );
 }
 
 function customerEvidenceClassLabel(value = "") {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "confirmed_problem") return "Confirmed problem";
-  if (normalized === "improvement") return "Improvement";
-  if (normalized === "recommendation") return "Recommendation";
+  if (normalized === "improvement" || normalized === "recommendation") return "Suggestion";
   return "";
 }
 
@@ -851,7 +907,7 @@ function customerEvidenceClassLabel(value = "") {
  * so a downloaded file can never describe a different scan than the one on the
  * page.
  */
-function ScanExportControls({
+export function ScanExportControls({
   scanRecord,
   cards = [],
   issues = [],
@@ -863,10 +919,28 @@ function ScanExportControls({
   summary = "",
   nextBestStep = "",
   limitations = [],
+  geoReadiness,
 }) {
   const [copied, setCopied] = useState(false);
   const [pdfPending, setPdfPending] = useState(false);
   const [failure, setFailure] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
+  const menuId = useId();
+
+  function closeMenu() {
+    setMenuOpen(false);
+    menuRef.current?.querySelector("summary")?.focus();
+  }
+
+  useEffect(() => {
+    if (!menuOpen || typeof document === "undefined") return undefined;
+    function closeOutside(event) {
+      if (!menuRef.current?.contains(event.target)) setMenuOpen(false);
+    }
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, [menuOpen]);
 
   const scanId = cleanString(scanRecord?.scan_id || scanRecord?.id);
 
@@ -881,6 +955,7 @@ function ScanExportControls({
       summary,
       nextBestStep,
       limitations,
+      geoReadiness,
     });
   }
 
@@ -892,30 +967,30 @@ function ScanExportControls({
 
   function handleDownloadJson() {
     setFailure("");
-    const handoff = buildHandoff();
     try {
+      const handoff = buildHandoff();
       downloadTextFile(serializeScanHandoff(handoff), scanHandoffFilename(scanRecord), "application/json;charset=utf-8");
+      recordExport("json", handoff.fix_count);
     } catch (error) {
       console.warn("Could not download the FixList export.", error);
       setFailure("That download could not start. Copying it to your clipboard still works.");
       return;
     }
-    recordExport("json", handoff.fix_count);
   }
 
   async function handleCopyJson() {
     setFailure("");
-    const handoff = buildHandoff();
     try {
+      const handoff = buildHandoff();
       await navigator.clipboard.writeText(serializeScanHandoff(handoff));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+      recordExport("json_clipboard", handoff.fix_count);
     } catch (error) {
       console.warn("Could not copy the FixList export.", error);
       setFailure("Your browser blocked the clipboard. Use the download instead.");
       return;
     }
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1800);
-    recordExport("json_clipboard", handoff.fix_count);
   }
 
   async function handleDownloadPdf() {
@@ -953,46 +1028,64 @@ function ScanExportControls({
   }
 
   return (
-    <section className="mt-8 max-w-[60ch] rounded-2xl border border-hairline-soft bg-white/45 px-5 py-5" aria-labelledby="take-this-list-with-you">
-      <h2 id="take-this-list-with-you" className="text-[17px] font-semibold tracking-tight text-ink">
-        Take this list with you
-      </h2>
-      <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
-        Download the file and upload it to ChatGPT or Claude, and it will walk you through the list one fix at a time. The PDF is the version to send to whoever looks after your website.
-      </p>
-
-      <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-3">
+    <div className="relative max-w-full">
+      <details
+        ref={menuRef}
+        open={menuOpen}
+        className="relative"
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && menuOpen) {
+            event.preventDefault();
+            closeMenu();
+          }
+        }}
+      >
+        <summary
+          aria-expanded={menuOpen}
+          aria-controls={menuId}
+          onClick={(event) => { event.preventDefault(); setMenuOpen((open) => !open); }}
+          className="flex min-h-9 w-fit cursor-pointer list-none items-center gap-2 rounded-[10px] border border-hairline bg-white px-3.5 py-2 text-[13.5px] font-medium text-ink hover:bg-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink [&::-webkit-details-marker]:hidden"
+        >
+          Export
+          <ChevronDown aria-hidden="true" className={`h-3.5 w-3.5 transition-transform ${menuOpen ? "rotate-180" : ""}`} />
+        </summary>
+        <div id={menuId} className="absolute left-0 top-full z-30 mt-2 w-64 max-w-[calc(100vw-2.5rem)] space-y-1 rounded-xl border border-hairline bg-white p-1.5 shadow-lg">
+          <p className="px-2.5 pb-1 pt-1.5 text-[11px] leading-relaxed text-ink-muted">Take this exact saved FixList with you.</p>
         <button
           type="button"
-          onClick={handleDownloadJson}
-          className="flex items-center gap-2 rounded-full border border-hairline px-4 py-2 text-[13px] font-medium text-ink transition-colors hover:bg-ink/[0.035] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+          onClick={() => { closeMenu(); handleDownloadJson(); }}
+          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2.5 text-left text-[13px] text-ink hover:bg-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-ink"
         >
           <Download className="h-3.5 w-3.5" />
           Download for ChatGPT or Claude
         </button>
         <button
           type="button"
-          onClick={handleCopyJson}
-          className="flex items-center gap-1.5 text-[12.5px] text-ink-muted transition-colors hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+          onClick={() => { closeMenu(); handleCopyJson(); }}
+          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2.5 text-left text-[13px] text-ink hover:bg-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-ink"
         >
           {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-          {copied ? "Copied" : "Copy instead"}
+          {copied ? "Copied" : "Copy for ChatGPT or Claude"}
         </button>
         <button
           type="button"
-          onClick={handleDownloadPdf}
+          onClick={() => { closeMenu(); handleDownloadPdf(); }}
           disabled={pdfPending}
-          className="flex items-center gap-1.5 text-[12.5px] text-ink-muted transition-colors hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2.5 text-left text-[13px] text-ink hover:bg-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-ink disabled:cursor-not-allowed disabled:opacity-50"
         >
           <FileText className="h-3.5 w-3.5" />
           {pdfPending ? "Preparing PDF…" : "Download PDF"}
         </button>
-      </div>
+        </div>
+      </details>
+
+      {copied ? <p role="status" className="mt-2 text-[12px] text-ink-muted">FixList copied.</p> : null}
+      {pdfPending ? <p role="status" className="mt-2 text-[12px] text-ink-muted">Preparing PDF…</p> : null}
 
       {failure ? (
-        <p role="status" className="mt-3 text-[12.5px] leading-relaxed text-warnink">{failure}</p>
+        <p role="status" className="mt-2 max-w-[32ch] text-[12.5px] leading-relaxed text-warnink">{failure}</p>
       ) : null}
-    </section>
+    </div>
   );
 }
 
@@ -1026,50 +1119,158 @@ function ObservedScanCoverage({ coverage = {} }) {
   );
 }
 
-function CustomerRepairList({ cards = [], websiteUrl = "" }) {
+export function prepareCustomerPageRecommendations(scanRecord) {
+  return prepareCustomerFixes(
+    mergeMetaDescriptionRecommendations(
+      getRecommendations(scanRecord).map((item) => normalizeRecommendation(item, scanRecord)),
+    ).map(applyCustomerVocabulary),
+  );
+}
+
+export function buildCustomerPageRepairPlan(cards, fallbackNextBestStep = "") {
+  // Planning needs the Stage-3 origin marker. Scope hints clone cards, so apply
+  // them afterward to the finished population without losing the source order.
+  const plan = buildCustomerRepairPlan(cards, { fallbackNextBestStep });
+  return { ...plan, cards: withRepeatedTitleScopeHints(plan.cards) };
+}
+
+function isFullAuthoritativeScan(scanRecord, requestedScanId) {
+  return Boolean(
+    typeof requestedScanId === "string"
+    && requestedScanId.trim() === requestedScanId
+    && requestedScanId
+    && scanRecord?.id === requestedScanId
+    && scanRecord?.scan_id === requestedScanId
+    && scanRecord?.customer_access === "full"
+    && scanRecord?.authority_verified === true
+    && scanRecord?.status === "complete"
+    && scanRecord?.release_gate_eligible === true
+    && scanRecord?.is_authoritative === true
+    && scanRecord?.score_is_provisional !== true
+    && scanRecord?.evidence_quality_blocking !== true
+  );
+}
+
+/** Comparison has its own authenticated read; current-result authority is not comparison proof. */
+export function CustomerScanComparison({ scanRecord, requestedScanId }) {
+  const [comparison, setComparison] = useState(null);
+  const eligible = isFullAuthoritativeScan(scanRecord, requestedScanId);
+  const readScanId = eligible ? requestedScanId : "";
+
+  useEffect(() => {
+    let cancelled = false;
+    setComparison(null);
+    if (!readScanId) return undefined;
+
+    function clearComparison() {
+      cancelled = true;
+      setComparison(null);
+    }
+    async function loadComparison() {
+      try {
+        const result = await getScanComparison(readScanId);
+        if (cancelled) return;
+        setComparison(result?.scan_id === readScanId ? result : {
+          scan_id: readScanId, comparison_status: "unavailable", comparison_verified: false,
+        });
+      } catch {
+        if (!cancelled) setComparison({
+          scan_id: readScanId, comparison_status: "unavailable", comparison_verified: false,
+        });
+      }
+    }
+    window.addEventListener(CUSTOMER_BOUNDARY_EVENT, clearComparison);
+    loadComparison();
+    return () => {
+      cancelled = true;
+      window.removeEventListener(CUSTOMER_BOUNDARY_EVENT, clearComparison);
+    };
+  }, [readScanId, scanRecord]);
+
+  if (!eligible || comparison?.scan_id !== readScanId || comparison?.comparison_status === "no_previous_scan") return null;
+  return (
+    <div className="mt-6">
+      <ScanComparisonPanel
+        presentation={comparison?.comparison || {}}
+        currentScanId={readScanId}
+        authorityVerified={comparison?.comparison_status === "ready" && comparison?.comparison_verified === true}
+        supportReference={comparison?.support_reference}
+      />
+    </div>
+  );
+}
+
+/** Keep planner inputs in the exact authenticated row population, before legacy display normalization. */
+export function CustomerCanonicalRepairs({ scanRecord, requestedScanId, customerRepairCards = [] }) {
+  const sourceItems = Array.isArray(scanRecord?.recommendations) ? scanRecord.recommendations : [];
+  const completePopulation = isFullAuthoritativeScan(scanRecord, requestedScanId)
+    && Number.isInteger(scanRecord?.total_fixes)
+    && scanRecord.total_fixes === sourceItems.length
+    && customerRepairCards.length === sourceItems.length;
+  if (!completePopulation) {
+    return <CustomerRepairList cards={customerRepairCards} websiteUrl={scanRecord?.website_url} />;
+  }
+  return (
+    <CustomerRepairGuidance
+      sourceItems={sourceItems}
+      cards={customerRepairCards}
+      trustedScanId={requestedScanId}
+      sourceScanId={scanRecord.scan_id}
+      cardsScanId={scanRecord.scan_id}
+      authorityVerified={completePopulation}
+      renderCards={(cards, { explanationForCard }) => (
+        <CustomerRepairList cards={cards} explanationForCard={explanationForCard} websiteUrl={scanRecord.website_url} />
+      )}
+    />
+  );
+}
+
+function CustomerRepairList({ cards = [], websiteUrl = "", explanationForCard }) {
   const list = Array.isArray(cards) ? cards.filter(Boolean) : [];
   if (list.length === 0) return null;
 
-  const sections = CUSTOMER_REPAIR_SECTIONS
-    .map((section) => ({
-      ...section,
-      cards: list.filter((card) => customerRepairSectionKey(card) === section.key),
-    }))
-    .filter((section) => section.cards.length > 0);
+  // These are reading groups only. Preserve the authenticated canonical array
+  // instead of regrouping or sorting repairs by their presentation labels.
+  const sections = [
+    { key: "start", label: "Start here", cards: list.slice(0, 1) },
+    { key: "then", label: "Then", cards: list.slice(1) },
+  ].filter((section) => section.cards.length > 0);
+  const evidenceLabels = unique(list.map((card) => customerEvidenceClassLabel(card.evidenceClass)).filter(Boolean));
 
   return (
     <div className="mt-10 sm:mt-12" aria-labelledby="customer-fixlist-heading">
-      <div className="mb-8">
-        <div className="flex items-baseline justify-between gap-4">
-          <h2 id="customer-fixlist-heading" className="text-[20px] font-semibold tracking-tight text-ink">
-            Your FixList
-          </h2>
-          <span className="shrink-0 text-[12px] tabular-nums text-ink-faint">
-            {list.length} remaining
-          </span>
-        </div>
-        <p className="mt-1.5 max-w-[52ch] text-[12px] leading-relaxed text-ink-faint">
-          Work through these actions in order. Open the evidence only when you need the affected URLs or technical detail.
+      <div className="mb-5 border-b border-hairline pb-4">
+        <h2 id="customer-fixlist-heading" className="text-[19px] font-semibold tracking-tight text-ink">
+          Your fixes, in order
+        </h2>
+        <p className="mt-1.5 max-w-[65ch] text-[13px] leading-relaxed text-ink-muted">
+          Page groups can overlap, so the counts below aren&rsquo;t added up.
         </p>
+        {evidenceLabels.length > 0 ? (
+          <ul aria-label="Finding types" className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2 text-[12px] text-ink-muted">
+            {evidenceLabels.map((label) => (
+              <li key={label} className="flex items-center gap-2">
+                <span aria-hidden="true" className={`h-2 w-2 rounded-full ${label === "Confirmed problem" ? "bg-[#A3410D]" : "border border-ink-muted"}`} />
+                {label}
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </div>
 
       {sections.map((section) => (
-        <section key={section.key} className="mt-10 first:mt-0 sm:mt-12" aria-labelledby={`customer-repair-section-${section.key}`}>
-          <div className="flex items-baseline justify-between gap-4">
-            <h3 id={`customer-repair-section-${section.key}`} className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">
-              {section.label}
-            </h3>
-            <span className="text-[11px] tabular-nums text-ink-faint">
-              {section.cards.length} {section.cards.length === 1 ? "repair" : "repairs"}
-            </span>
-          </div>
-          <p className="mt-1 text-[12px] leading-relaxed text-ink-faint">{section.help}</p>
-          <div className="mt-1.5">
+        <section key={section.key} className="mt-6 first:mt-0" aria-labelledby={`customer-repair-section-${section.key}`}>
+          <h3 id={`customer-repair-section-${section.key}`} className="text-[10.5px] font-medium uppercase tracking-[0.12em] text-ink-muted">
+            {section.label}
+          </h3>
+          <div className="mt-1">
             {section.cards.map((card, index) => (
               <CustomerRepairCard
                 key={card.evidence?.mergedFromFixIds?.join("|") || `${section.key}-${index}`}
                 card={card}
+                explanation={explanationForCard?.(card)}
                 websiteUrl={websiteUrl}
+                initiallyOpen={section.key === "start" && index === 0}
               />
             ))}
           </div>
@@ -1079,7 +1280,7 @@ function CustomerRepairList({ cards = [], websiteUrl = "" }) {
   );
 }
 
-function CustomerRepairCard({ card = {}, websiteUrl = "" }) {
+function CustomerRepairCard({ card = {}, websiteUrl = "", explanation, initiallyOpen = false }) {
   const pages = Array.isArray(card?.evidence?.affectedPages) ? card.evidence.affectedPages.filter(Boolean) : [];
   const reportedCount = Math.max(Number(card?.evidence?.pageCount || 0), pages.length);
   const evidenceLabel = customerEvidenceClassLabel(card.evidenceClass);
@@ -1088,10 +1289,12 @@ function CustomerRepairCard({ card = {}, websiteUrl = "" }) {
   const observationRows = customerRepairObservationRows(card, websiteUrl);
 
   return (
-    <article className="border-b border-hairline-soft py-6 first:pt-5">
-      <div className="flex flex-wrap items-start justify-between gap-x-5 gap-y-2">
+    <article className="border-b border-hairline-soft">
+      <details open={initiallyOpen} className="group/repair">
+      <summary className="grid cursor-pointer list-none grid-cols-[12px_minmax(0,1fr)_20px] items-start gap-4 rounded-lg py-[18px] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink [&::-webkit-details-marker]:hidden">
+        <span aria-hidden="true" className={`mt-2 h-2.5 w-2.5 rounded-full ${card.evidenceClass === "confirmed_problem" ? "bg-[#A3410D]" : "border border-ink-muted"}`} />
         <div className="min-w-0 flex-1">
-          <h4 className="text-[17px] font-medium leading-snug tracking-tight text-ink">{card.title}</h4>
+          <h4 className="text-[16px] font-medium leading-snug tracking-tight text-ink">{card.title}</h4>
           {/*
             The scope hint appears only on cards whose title is repeated in this
             FixList, which is where a customer otherwise has no way to tell two
@@ -1099,23 +1302,20 @@ function CustomerRepairCard({ card = {}, websiteUrl = "" }) {
             repair title: the title stays exactly as analytics and screen
             readers see it.
           */}
-          <p className="mt-1 text-[12px] font-medium text-ink-faint">
-            {card.customerCategory}
-            {evidenceLabel ? ` · ${evidenceLabel}` : ""}
+          <p className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[12px] leading-relaxed text-ink-muted">
+            <span>{evidenceLabel || card.customerCategory}</span>
             {card.scopeHint ? ` · ${card.scopeHint}` : ""}
+            {reportedCount > 0 ? <span>{reportedCount} {reportedCount === 1 ? "page" : "pages"}</span> : null}
           </p>
         </div>
-        {reportedCount > 0 ? (
-          <span className="shrink-0 text-[12px] tabular-nums text-ink-faint">
-            {reportedCount} {reportedCount === 1 ? "page" : "pages"}
-          </span>
-        ) : null}
-      </div>
+        <ChevronDown aria-hidden="true" className="mt-1 h-4 w-4 text-ink-muted transition-transform group-open/repair:rotate-180" />
+      </summary>
 
-      <dl className="mt-5 space-y-4">
+      <div className="pb-6 pl-7 sm:pr-9">
+      <dl className="space-y-4">
         <div>
-          <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Why it matters</dt>
-          <dd className="mt-1 max-w-[58ch] text-[14px] leading-relaxed text-ink-muted">{card.whyItMatters}</dd>
+          <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">{explanation?.explanationHeading || "Why it matters"}</dt>
+          <dd className="mt-1 max-w-[58ch] text-[14px] leading-relaxed text-ink-muted">{explanation?.explanation || card.whyItMatters}</dd>
         </div>
         {/*
           whereLine() returns "" for a card with no page count, and the row was
@@ -1248,7 +1448,7 @@ function CustomerRepairCard({ card = {}, websiteUrl = "" }) {
               */}
               <ul className="mt-2 max-h-64 space-y-1.5 overflow-y-auto pr-1 text-[12px] text-ink-muted">
                 {pages.map((page) => {
-                  const pageLink = evidenceLink(page, websiteUrl);
+                  const pageLink = evidenceLink(page, websiteUrl, evidenceIdentityOptions(card));
                   return (
                     <li key={page} className="break-all">
                       {pageLink.isLinkable ? (
@@ -1275,6 +1475,8 @@ function CustomerRepairCard({ card = {}, websiteUrl = "" }) {
             </p>
           )}
         </div>
+      </details>
+      </div>
       </details>
     </article>
   );
@@ -1577,6 +1779,13 @@ function PreviewResultState({ scanRecord = {} }) {
         </div>
       </div>
 
+      <GeoReadinessPanel
+        geoReadiness={scanRecord?.geo_readiness}
+        customerAccess="preview"
+        siteOrigin={scanRecord?.website_url}
+        completedAt={scanRecord?.completed_at || scanRecord?.created_at}
+      />
+
       {detailedItems.length > 0 ? (
         <section className="mt-10" aria-labelledby="preview-findings-heading">
           <div className="flex items-baseline justify-between gap-4">
@@ -1693,7 +1902,7 @@ function FixRow({ item, cms, embedded = false, suggestion: suppliedSuggestion })
 
   async function copyAffectedUrls() {
     try {
-      const text = item.affectedPages.map((page) => toAbsolutePageUrl(page, item.websiteUrl)).join("\n");
+      const text = serializeAffectedUrlsText(item);
       await navigator.clipboard.writeText(text);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
@@ -1703,17 +1912,7 @@ function FixRow({ item, cms, embedded = false, suggestion: suppliedSuggestion })
   }
 
   function downloadAffectedUrls() {
-    const rows = item.affectedPages.map((page) => [
-      toAbsolutePageUrl(page, item.websiteUrl),
-      item.title,
-      item.rule,
-      item.priority,
-      item.templateFamily,
-    ]);
-    const csv = [
-      ["affected_url", "finding", "rule", "priority", "template_family"],
-      ...rows,
-    ].map((row) => row.map(csvCell).join(",")).join("\n");
+    const csv = serializeAffectedUrlsCsv(item);
     const host = safeHostname(item.websiteUrl) || "website";
     const rule = String(item.rule || "finding").replace(/[^a-z0-9_-]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase();
     downloadTextFile(csv, `fixlist-${host}-${rule || "finding"}-urls.csv`, "text/csv;charset=utf-8");
@@ -1821,7 +2020,7 @@ function FixRow({ item, cms, embedded = false, suggestion: suppliedSuggestion })
               {shownPages.length > 0 ? (
                 <div className="mt-3 space-y-2">
                   {shownPages.map((page, index) => (
-                    <AffectedPage key={`${page}-${index}`} page={page} websiteUrl={item.websiteUrl} index={index} />
+                    <AffectedPage key={`${page}-${index}`} page={page} websiteUrl={item.websiteUrl} identityOptions={evidenceIdentityOptions(item)} index={index} />
                   ))}
                   {extraCount > 0 ? (
                     <button type="button" onClick={() => setShowAllPages(true)} className="mt-1 text-[13px] font-medium text-ink underline decoration-hairline underline-offset-4">
@@ -1880,10 +2079,10 @@ function NoScanState({ onScan }) {
   );
 }
 
-function AffectedPage({ page, websiteUrl, index }) {
+function AffectedPage({ page, websiteUrl, identityOptions, index }) {
   // One shared contract decides how a page reads and whether it may be a link,
   // so a card, a modal and an export cannot describe the same page differently.
-  const link = evidenceLink(page, websiteUrl);
+  const link = evidenceLink(page, websiteUrl, identityOptions);
   const host = formatPageLabel(link.href || page);
   const showHost = link.isLinkable && cleanString(host) !== cleanString(link.label);
 
@@ -1939,21 +2138,6 @@ function isUsableAffectedPageUrl(value) {
   return raw.startsWith("/") || /^https?:\/\//i.test(raw);
 }
 
-function toAbsolutePageUrl(page, websiteUrl) {
-  const raw = String(page || "").trim();
-  if (!raw) return "";
-  if (isFullUrl(raw)) return raw;
-  try {
-    return new URL(raw, websiteUrl || "https://fixlist.invalid").toString();
-  } catch {
-    return raw;
-  }
-}
-
-function csvCell(value) {
-  return `"${String(value ?? "").replace(/"/g, '""')}"`;
-}
-
 function downloadTextFile(content, filename, type) {
   const blob = new Blob([content], { type });
   const objectUrl = URL.createObjectURL(blob);
@@ -1975,12 +2159,12 @@ function getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount }) {
 }
 
 function getLimitationNote(record) {
-  if (isHealthScoreUnavailable(record)) return "We couldn't verify enough usable pages to calculate a reliable score. The access item below describes the scan limitation, not a confirmed on-page SEO defect.";
   // The scanner's own sentence carries the concrete numbers, so it is worth
   // showing -- but it is passed through rather than written here, so it goes
   // through the same gate as the limited-state copy.
   const limitation = customerSafeLimitationLine(record);
   if (limitation) return limitation;
+  if (isHealthScoreUnavailable(record)) return "We couldn't verify enough usable pages to calculate a reliable score. These findings describe the evidence collected, not a complete site assessment.";
   if (record?.score_is_provisional === true) return "Scan coverage was limited, so this score is provisional. Fix what's below, then scan again for a fuller picture.";
   return "";
 }
@@ -1991,7 +2175,7 @@ function websiteKeyOf(record) {
   return safeHostname(record?.website_url) || "";
 }
 
-function normalizeRecommendation(item = {}, scanRecord = {}) {
+export function normalizeRecommendation(item = {}, scanRecord = {}) {
   const legacyBlocked429 = shouldUseLegacyRateLimitPresentation(scanRecord, item);
   const evidence = legacyBlocked429 ? extractRecommendationEvidence(item, scanRecord) : {};
   const priority = legacyBlocked429 ? blockedPriority(item, evidence) : normalizePriority(item.priority);
@@ -2011,6 +2195,10 @@ function normalizeRecommendation(item = {}, scanRecord = {}) {
   return {
     id: item.id || item.fix_id || stableId(`${fallbackPage}|${category}|${title}`),
     original: item,
+    // Preserve the sealed Stage-3 presentation fields through this legacy
+    // wrapper. Their row-level validators still decide whether to display them.
+    stage3_priority_factors: item.stage3_priority_factors,
+    stage3_counts: item.stage3_counts,
     rule: cleanString(item.rule || item.issue_type),
     category,
     priority,
@@ -2471,7 +2659,7 @@ function formatMetadataStateBreakdown(value = {}) {
 
 // Converts a durable {run, fixList, fixItems} bundle into the flat record
 // shape this page reads from.
-function normalizeDurableScanBundle(bundle = {}) {
+export function normalizeDurableScanBundle(bundle = {}) {
   const run = bundle.run || {};
   const fixList = bundle.fixList || {};
   return {

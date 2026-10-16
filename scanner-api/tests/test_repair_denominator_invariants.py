@@ -65,6 +65,7 @@ def test_ordinary_classification_is_untouched(path, expected):
 # ----------------------------------------------------------- root cause B --
 
 from app.repair_priority import build_coverage_context  # noqa: E402
+from app.repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION, normalize_repair_scope  # noqa: E402
 
 
 def page(path, *, family="product_page", usable=True, status=200):
@@ -81,6 +82,59 @@ def page(path, *, family="product_page", usable=True, status=200):
         "page_template_family": family,
         "indexability_state": "indexable",
     }
+
+
+def test_published_scope_joins_stamps_by_exact_route_not_family_path():
+    pages = [page("/x", family="product_page"), page("/x/", family="guide_article"),
+             page("/X", family="location_landing")]
+    fix = {"affected_pages": ["/x", "https://ex.com/x", "/x/", "/X", "https://foreign.example/x"]}
+    normalized = normalize_repair_scope(fix, pages, scan_origin="https://ex.com",
+                                        identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
+    assert normalized["page_count"] == 4
+    assert normalized["family_breakdown"] == {
+        "product_page": 1, "guide_article": 1, "location_landing": 1, "unknown": 1,
+    }
+    assert normalized["affected_pages"] == ["/x", "/x/", "/X", "https://foreign.example/x"]
+
+
+def test_published_priority_joins_keep_indexability_and_origins_separate():
+    pages = [page("/x"), page("/x/")]
+    pages[0]["indexable"] = True
+    pages[1]["indexable"] = False
+    pages[1]["indexability_state"] = "non_indexable"
+    fix = {"page_template_family": "product_page", "affected_pages": ["/x", "https://foreign.example/x/"]}
+    context = build_coverage_context(fix, pages, scan_origin="https://ex.com",
+                                     identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
+    assert context.affected_reported == 2
+    assert context.affected_observed == 1
+    assert context.indexable_affected == 1
+    assert context.non_indexable_affected == 0
+    assert context.checked_eligible == 2
+
+
+def test_published_business_role_join_does_not_inherit_another_routes_role():
+    from app.repair_architecture_priority import role_counts_for_affected
+
+    pages = [page("/x", family="guide_article"), page("/x/", family="loan_program")]
+    counts = role_counts_for_affected({"affected_pages": ["/x"]}, pages, scan_origin="https://ex.com",
+                                     identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
+    assert counts.support == 1
+    assert counts.business_critical == 0
+
+
+def test_published_scope_does_not_silently_drop_unresolvable_affected_evidence():
+    with pytest.raises(ValueError, match="unresolvable affected evidence"):
+        normalize_repair_scope({"affected_pages": ["/x", "not-a-root-relative-url"]}, [page("/x")],
+                               scan_origin="https://ex.com", identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
+
+
+def test_published_invariant_rejects_invalid_evidence_even_when_count_matches_valid_subset():
+    from app.repair_coverage import first_failed_repair_invariant
+
+    fix = {"affected_pages": ["/x", "not-a-root-relative-url"], "page_count": 1,
+           "evidence_url_identity_version": PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION}
+    assert first_failed_repair_invariant(fix, scan_origin="https://ex.com",
+                                        identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION) == "unresolvable_affected_evidence"
 
 
 def test_wecandoo_shape_cannot_report_more_affected_than_eligible():
@@ -165,3 +219,63 @@ def test_the_invariants_hold_for_every_production_shape():
     if context.checked_eligible is not None:
         assert context.affected_eligible <= context.checked_eligible
     assert 0 <= context.indexable_affected <= context.affected_eligible
+
+
+
+def test_confirmed_versioned_probe_is_observed_but_not_assessed():
+    from app.coverage_probes import LINK_INTEGRITY_PROBE_VERSION
+
+    fix = {
+        "rule": "404_error",
+        "page_template_family": "unknown",
+        "affected_pages": ["/outside-sample"],
+        "observed_evidence_version": LINK_INTEGRITY_PROBE_VERSION,
+        "verified_observed_pages": ["/outside-sample"],
+        "verification_state": "verified",
+        "evidence_status": "confirmed",
+    }
+    context = build_coverage_context(
+        fix,
+        [page("/")],
+        scan_origin="https://ex.com",
+        identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION,
+    )
+
+    assert context.affected_reported == 1
+    assert context.affected_observed == 1
+    assert context.affected_eligible == 0
+    assert context.checked_eligible is None
+    assert context.checked_coverage is None
+
+
+@pytest.mark.parametrize(
+    ("version", "verification_state", "evidence_status"),
+    [
+        ("unknown_probe_version", "verified", "confirmed"),
+        ("link_integrity_probe_v1_unsampled_same_site", "not_verified", "confirmed"),
+        ("link_integrity_probe_v1_unsampled_same_site", "verified", "needs_verification"),
+    ],
+)
+def test_untrusted_or_unverified_probe_claim_does_not_inflate_observed_count(
+    version, verification_state, evidence_status
+):
+    fix = {
+        "rule": "404_error",
+        "page_template_family": "unknown",
+        "affected_pages": ["/outside-sample"],
+        "observed_evidence_version": version,
+        "verified_observed_pages": ["/outside-sample"],
+        "verification_state": verification_state,
+        "evidence_status": evidence_status,
+    }
+    context = build_coverage_context(
+        fix,
+        [page("/")],
+        scan_origin="https://ex.com",
+        identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION,
+    )
+
+    assert context.affected_reported == 1
+    assert context.affected_observed == 0
+    assert context.affected_eligible == 0
+    assert context.checked_coverage is None

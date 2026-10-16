@@ -32,7 +32,7 @@ export const REPAIR_SUGGESTION_VERSION = "repair_suggestion_v1_deterministic";
  * comparisons can say which wording a customer actually saw. Bump it whenever
  * the suggested-fix copy, scope, effort, or role guidance changes.
  */
-export const REPAIR_SUGGESTION_LIBRARY_VERSION = "v1";
+export const REPAIR_SUGGESTION_LIBRARY_VERSION = "v2_stage1_content_evidence";
 
 /**
  * Shown whenever the scanner reports a rule this library does not map yet.
@@ -55,6 +55,8 @@ export const REPAIR_TYPES = Object.freeze({
   NOINDEX_ISSUE: "noindex_issue",
   THIN_OR_DUPLICATE_TEMPLATE: "thin_or_duplicate_template",
   BROKEN_LOCATION_TEMPLATE_CONTENT: "broken_location_template_content",
+  VISIBLE_TEMPLATE_CONTENT: "visible_template_content",
+  IMAGE_ALT_REVIEW: "image_alt_review",
 });
 
 /** Where the repair is applied. Deliberately three values, not a taxonomy. */
@@ -154,6 +156,8 @@ const RULE_REPAIR_TYPES = Object.freeze({
   near_duplicate_content: REPAIR_TYPES.THIN_OR_DUPLICATE_TEMPLATE,
   template_duplicate_content: REPAIR_TYPES.THIN_OR_DUPLICATE_TEMPLATE,
   broken_location_template_content: REPAIR_TYPES.BROKEN_LOCATION_TEMPLATE_CONTENT,
+  visible_template_content: REPAIR_TYPES.VISIBLE_TEMPLATE_CONTENT,
+  image_alt_review: REPAIR_TYPES.IMAGE_ALT_REVIEW,
 });
 
 /**
@@ -444,6 +448,8 @@ const SUGGESTION_LIBRARY = Object.freeze({
    * so offering a page-level approach here would send the owner to do work that
    * does not hold.
    */
+  [REPAIR_TYPES.VISIBLE_TEMPLATE_CONTENT]: { label: 'Fix unfinished visible content', groupTitle: 'Fix unfinished visible content', single: { fixScope: 'template', suggestedFix: 'Correct the source field or template that produced the recorded output.', bestApproach: 'Check the shown placement and excerpts, correct the source, then verify the published page.', effort: "low", role: 'Developer' }, shared: { fixScope: 'template', suggestedFix: 'Correct the source field or template that produced the recorded output.', bestApproach: 'Check the shown placement and excerpts, correct the source, then verify the published page.', effort: "low", role: 'Developer' } },
+  [REPAIR_TYPES.IMAGE_ALT_REVIEW]: { label: 'Review image purpose', groupTitle: 'Review image purpose', single: { fixScope: 'page', suggestedFix: 'Review each image to determine whether it is informative, functional or decorative before changing its alt text.', bestApproach: 'Use the actual page context. Preserve intentionally empty alt attributes for decorative images.', effort: "low", role: 'Content team' }, shared: { fixScope: 'page', suggestedFix: 'Review each image to determine whether it is informative, functional or decorative before changing its alt text.', bestApproach: 'Use the actual page context. Preserve intentionally empty alt attributes for decorative images.', effort: "low", role: 'Content team' } },
   [REPAIR_TYPES.BROKEN_LOCATION_TEMPLATE_CONTENT]: {
     label: "Broken location page text",
     groupTitle: "Fix the location template printing the wrong text",

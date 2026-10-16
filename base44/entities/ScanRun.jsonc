@@ -182,6 +182,19 @@
       "additionalProperties": true,
       "default": {}
     },
+    "comparison_evidence": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "description": "Server-owned bounded rule/page evidence sealed with the authoritative scan for supported rescan comparisons.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
     "crawl_timing": {
       "type": "object",
       "additionalProperties": true,

@@ -15,9 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hashlib
-import hmac
-import json
 import multiprocessing as mp
 import os
 import re
@@ -28,11 +25,13 @@ from urllib.parse import urlparse
 
 import httpx
 
+from .authority_seal import canonicalize as canonicalize, create_authority_seal, stable_serialize
 from .acceptance_evidence import (
     build_classification_integrity,
     measure_worker_peak_memory_bytes,
 )
 from .observability import emit
+from .page_output_privacy import project_scan_result_for_external_boundary
 
 WORKER_VERSION = "scan_job_worker_v1_cloud_tasks"
 CONTROL_VERSION = "durable_standard150_control_v1"
@@ -135,30 +134,6 @@ REVIEW_PAGE_SAMPLE_LIMIT = 60
 REVIEW_FINDING_LIMIT = 100
 
 
-def canonicalize(value: Any) -> Any:
-    if value is None or isinstance(value, (str, bool)):
-        return value
-    if isinstance(value, float):
-        if value != value or value in (float("inf"), float("-inf")):
-            return None
-        return int(value) if value.is_integer() else value
-    if isinstance(value, int):
-        return value
-    if isinstance(value, list):
-        return [canonicalize(item) for item in value]
-    if isinstance(value, dict):
-        return {key: canonicalize(value[key]) for key in sorted(value)}
-    return None
-
-
-def stable_serialize(value: Any) -> str:
-    return json.dumps(canonicalize(value), separators=(",", ":"), ensure_ascii=False)
-
-
-def create_authority_seal(payload: Any, secret: str) -> str:
-    return hmac.new(secret.encode(), stable_serialize(payload).encode(), hashlib.sha256).hexdigest()
-
-
 def build_control_envelope(
     action: str,
     signing_key: str,
@@ -230,7 +205,7 @@ async def read_scan_run(client: httpx.AsyncClient, scan_id: str) -> dict[str, An
     if not signing_key or not clean_scan_id:
         return None
     envelope = build_control_envelope("read", signing_key, scan_id=clean_scan_id)
-    response = await invoke_function(client, "durableScanWorkerControlV5", envelope, timeout=20.0)
+    response = await invoke_function(client, "durableScanWorkerControlV8", envelope, timeout=20.0)
     if response["status_code"] != 200 or response["body"].get("success") is not True:
         return None
     scan = response["body"].get("scanRun")
@@ -244,7 +219,7 @@ async def mark_scan_started(client: httpx.AsyncClient, scan: dict[str, Any]) -> 
     if not signing_key or not all(identity.values()):
         raise RuntimeError("Durable scan start signing is not configured.")
     envelope = build_control_envelope("start", signing_key, identity=identity)
-    response = await invoke_function(client, "durableScanWorkerControlV5", envelope, timeout=20.0)
+    response = await invoke_function(client, "durableScanWorkerControlV8", envelope, timeout=20.0)
     if response["status_code"] >= 300 or response["body"].get("success") is not True:
         raise RuntimeError("The durable scan start state could not be verified.")
     persisted = response["body"].get("scanRun")
@@ -323,7 +298,7 @@ async def reconcile_stale_scans(client: httpx.AsyncClient) -> dict[str, Any]:
     if not signing_key:
         raise RuntimeError("Durable reconciliation signing is not configured.")
     envelope = build_control_envelope("sweep", signing_key)
-    response = await invoke_function(client, "durableScanWorkerControlV5", envelope, timeout=60.0)
+    response = await invoke_function(client, "durableScanWorkerControlV8", envelope, timeout=60.0)
     if response["status_code"] >= 300 or response["body"].get("success") is not True:
         # The sweep's first act is a coordinator call, made before a single scan
         # row is read, so a rejected signing root, a missing release identity and
@@ -386,7 +361,7 @@ async def write_terminal_failure(
         identity=identity,
         failure={"code": str(failure_code or "scan_failed"), "detail": str(detail or "")},
     )
-    response = await invoke_function(client, "durableScanWorkerControlV5", envelope, timeout=20.0)
+    response = await invoke_function(client, "durableScanWorkerControlV8", envelope, timeout=20.0)
     if response["status_code"] >= 300 or response["body"].get("success") is not True:
         raise RuntimeError("The durable failure state could not be verified.")
     return True
@@ -476,6 +451,7 @@ def build_authority_review_payload(result: dict[str, Any]) -> dict[str, Any]:
     pages_found carries the full discovery inventory; only the review page
     sample is bounded. The 150-page crawl cap never truncates discovery.
     """
+    result = project_scan_result_for_external_boundary(result)
     pages = _first_list(result, ("crawled_pages", "pages", "scanned_pages", "crawl_pages"))[:REVIEW_PAGE_SAMPLE_LIMIT]
     findings = _first_list(result, ("grouped_findings", "recommendations", "findings", "raw_findings", "fixes"))[:REVIEW_FINDING_LIMIT]
     technical = result.get("technical_audit_summary") if isinstance(result.get("technical_audit_summary"), dict) else {}
@@ -485,6 +461,7 @@ def build_authority_review_payload(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "success": True,
         "review_payload_version": SCAN_ATTESTATION_VERSION,
+        **({"geo_readiness": result["geo_readiness"]} if "geo_readiness" in result else {}),
         "scanner_version": result.get("scanner_version"),
         "scanner_build_revision": result.get("scanner_build_revision") or technical.get("scanner_build_revision"),
         "scanner_wrapper_version": result.get("scanner_wrapper_version"),
@@ -578,24 +555,67 @@ def limited_result_payload(review: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_COMPLETION_COVERAGE_ASSESSMENT_FIELDS = frozenset({
+    "coverage_authority_version",
+    "state",
+    "reasons",
+    "authoritative",
+    "score_is_provisional",
+    "release_gate_eligible",
+    "inventory",
+    "inventory_proof",
+    "thresholds",
+})
+
+
+def completion_review_payload(review: dict[str, Any]) -> dict[str, Any]:
+    """Project free-form coverage diagnostics out before completion HMAC signing.
+
+    B22's preview source already uses controller-owned coverage copy. The full
+    completion Review must be just as strict: arbitrary producer/debug prose or
+    future unknown coverage fields cannot hitchhike beside that source into the
+    signed authority envelope. Preserve the current scanner-owned structured
+    coverage decision fields and fail closed for every other assessment key.
+    """
+    if not isinstance(review, dict):
+        return {}
+    projected = dict(review)
+    fingerprint = review.get("site_fingerprint")
+    if not isinstance(fingerprint, dict):
+        return projected
+    projected_fingerprint = dict(fingerprint)
+    assessment = fingerprint.get("coverage_assessment")
+    if isinstance(assessment, dict):
+        projected_fingerprint["coverage_assessment"] = {
+            key: assessment[key]
+            for key in _COMPLETION_COVERAGE_ASSESSMENT_FIELDS
+            if key in assessment
+        }
+    elif "coverage_assessment" in fingerprint:
+        projected_fingerprint["coverage_assessment"] = {}
+    projected["site_fingerprint"] = projected_fingerprint
+    return projected
+
+
 def build_limited_envelope(
     scan: dict[str, Any],
     result: dict[str, Any],
     review: dict[str, Any],
     signing_key: str,
 ) -> dict[str, Any]:
+    external_result = project_scan_result_for_external_boundary(result)
     identity = {
         "owner_user_id": str(scan.get("owner_user_id") or ""),
         "scan_id": str(scan.get("id") or ""),
         "project_id": str(scan.get("project_id") or ""),
-        "request_id": str(scan.get("request_id") or result.get("request_id") or ""),
-        "normalized_domain": str(result.get("normalized_domain") or "").lower().removeprefix("www."),
+        "request_id": str(scan.get("request_id") or external_result.get("request_id") or ""),
+        "normalized_domain": str(external_result.get("normalized_domain") or "").lower().removeprefix("www."),
         "attempt_count": str(current_attempt(scan)),
     }
     signed = {
         "version": LIMITED_COMPLETION_VERSION,
         "identity": identity,
-        "scan": result,
+        "scan": external_result,
         "review": limited_result_payload(review),
     }
     return {**signed, "proof": create_authority_seal(signed, signing_key)}
@@ -607,20 +627,21 @@ def build_completion_envelope(
     review: dict[str, Any],
     signing_key: str,
 ) -> dict[str, Any]:
+    external_result = project_scan_result_for_external_boundary(result)
     identity = {
         "owner_user_id": str(scan.get("owner_user_id") or ""),
         "scan_id": str(scan.get("id") or ""),
         "project_id": str(scan.get("project_id") or ""),
-        "request_id": str(scan.get("request_id") or result.get("request_id") or ""),
-        "idempotency_key": str(scan.get("idempotency_key") or result.get("idempotency_key") or ""),
-        "normalized_domain": str(result.get("normalized_domain") or "").lower().removeprefix("www."),
+        "request_id": str(scan.get("request_id") or external_result.get("request_id") or ""),
+        "idempotency_key": str(scan.get("idempotency_key") or external_result.get("idempotency_key") or ""),
+        "normalized_domain": str(external_result.get("normalized_domain") or "").lower().removeprefix("www."),
         "attempt_count": str(current_attempt(scan)),
     }
     signed = {
         "version": COMPLETION_VERSION,
         "identity": identity,
-        "scan": result,
-        "review": review,
+        "scan": external_result,
+        "review": completion_review_payload(review),
     }
     return {**signed, "proof": create_authority_seal(signed, signing_key)}
 
@@ -640,13 +661,14 @@ def build_local_review(result: dict[str, Any]) -> dict[str, Any]:
     from .coverage_authority import attach_coverage_authority_evidence
     from .evidence_quality import apply_evidence_quality_gate
     from .repair_contract_v2 import apply_canonical_repair_contract
+    from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION, scan_evidence_origin
     from .review import run_review
     from .review_calibration import apply_review_evidence_calibration
     from .trust_discovery import apply_trust_discovery_gate
 
-    review = run_review(result)
+    review = run_review(result, identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
     review = apply_trust_discovery_gate(review, result)
-    review = apply_review_evidence_calibration(review, result)
+    review = apply_review_evidence_calibration(review, result, scan_origin=scan_evidence_origin(result), identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
     review = apply_evidence_quality_gate(review, result)
     review = attach_coverage_authority_evidence(review, result)
     review.update({
@@ -655,7 +677,13 @@ def build_local_review(result: dict[str, Any]) -> dict[str, Any]:
         "python_review_fallback_used": False,
         "beta_revision_fingerprint": live_revision()["fingerprint"],
     })
-    return apply_canonical_repair_contract(review, result)
+    from .geo_runtime import assess_review_geo
+    review["geo_readiness"] = assess_review_geo(
+        result, _first_list(result, ("crawled_pages", "pages", "scanned_pages", "crawl_pages")),
+        parent_authoritative=review.get("release_gate_eligible") is True,
+        access_limited=review.get("coverage_state") == "access_limited",
+    )
+    return apply_canonical_repair_contract(review, result, identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
 
 
 class LocalReviewProcessTimeout(RuntimeError):
@@ -744,6 +772,49 @@ def run_local_review_isolated(
             process.join(timeout=LOCAL_REVIEW_PROCESS_JOIN_GRACE_SECONDS)
 
 
+
+_ACCESS_VENDOR_LABELS = {
+    "cloudflare": "Cloudflare",
+    "siteground": "SiteGround",
+    "datadome": "DataDome",
+    "imperva": "Imperva",
+    "sucuri": "Sucuri",
+    "akamai": "Akamai",
+    "wordfence": "Wordfence",
+    "origin": "The site",
+}
+
+
+def _access_limitation_detail(pages: list[dict[str, Any]] | None) -> str:
+    stamped = [
+        page for page in (pages or [])
+        if isinstance(page, dict)
+        and str(page.get("access_block_kind") or "").strip().lower() in {"challenge", "block", "rate_limit"}
+    ]
+    if stamped:
+        first = stamped[0]
+        vendor_key = str(first.get("access_block_vendor") or "origin").strip().lower()
+        vendor = _ACCESS_VENDOR_LABELS.get(vendor_key, vendor_key.replace("_", " ").title() or "The site")
+        kind = str(first.get("access_block_kind") or "block").strip().lower()
+        if kind == "challenge":
+            return (
+                f"{vendor} returned a bot challenge to the scanner, so FixList could not collect enough verified HTML "
+                "to save an authoritative result. Waiting alone does not clear a bot challenge; the site must allow FixList first."
+            )
+        if kind == "rate_limit":
+            return (
+                f"{vendor} returned a rate limit to the scanner, so FixList could not collect enough verified HTML "
+                "to save an authoritative result. Rate limits can clear after traffic pressure drops."
+            )
+        return (
+            f"{vendor} returned an automated-access block to the scanner, so FixList could not collect enough verified HTML "
+            "to save an authoritative result. The site must allow FixList before a rescan can succeed."
+        )
+    return (
+        "The site limited or challenged the scanner, so FixList could not collect enough verified HTML "
+        "to save an authoritative result."
+    )
+
 def terminal_crawl_limitation(result: dict[str, Any]) -> dict[str, str] | None:
     """Short-circuit a definitively blocked crawl before full local review.
 
@@ -765,10 +836,7 @@ def terminal_crawl_limitation(result: dict[str, Any]) -> dict[str, str] | None:
     if blocked > 0 and usable == 0:
         return {
             "code": "scan_access_limited",
-            "detail": (
-                "The site rate-limited or challenged the scanner, so FixList could not collect enough verified HTML "
-                "to save an authoritative result. Please try again later."
-            ),
+            "detail": _access_limitation_detail(pages),
         }
     return None
 
@@ -791,8 +859,9 @@ def terminal_review_limitation(review: dict[str, Any]) -> dict[str, str] | None:
         return {
             "code": "scan_access_limited",
             "detail": (
-                "The site rate-limited or challenged the scanner, so FixList could not collect enough verified HTML "
-                "to save an authoritative result. Please try again later."
+                "The site returned a rate limit, bot challenge, or automated-access block to the scanner, so FixList "
+                "could not collect enough verified HTML to save an authoritative result. A bot challenge or block must "
+                "be cleared by the site; waiting only helps when the cause is a rate limit."
             ),
         }
     return None
@@ -819,7 +888,7 @@ async def persist_limited_result(
         elapsed_ms=int((time.monotonic() - phase_started) * 1000),
         coverage_state=coverage_state_of(review),
     )
-    persisted = await invoke_function(client, "persistLimitedScanResultV5", envelope)
+    persisted = await invoke_function(client, "persistLimitedScanResultV8", envelope)
     status_code = int(persisted.get("status_code") or 0)
     emit(
         "scan_job_completion_phase",
@@ -1029,7 +1098,7 @@ async def complete_authority(
         archetype_classifier_version=diagnostic_classifier_marker(reviewed),
         beta_revision_fingerprint=diagnostic_fingerprint_marker(reviewed),
     )
-    persisted = await invoke_function(client, "persistDurableScanAuthorityV5", envelope)
+    persisted = await invoke_function(client, "persistDurableScanAuthorityV8", envelope)
     emit(
         "scan_job_completion_phase",
         scan_id=scan_id,

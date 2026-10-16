@@ -18,6 +18,7 @@ on:
           - verify-iam
           - verify-admission-identity
           - verify-worker-routes
+          - diagnose-ironwood-access
           - deploy-dispatch-gateway
           - deploy-admission-coordinator
           - build-worker-candidate
@@ -123,7 +124,7 @@ env:
 
 jobs:
   operate:
-    if: github.event_name == 'workflow_dispatch' && github.actor == 'bright4862-design' && inputs.operation != 'verify-admission-identity'
+    if: github.event_name == 'workflow_dispatch' && github.actor == 'bright4862-design' && inputs.operation != 'verify-admission-identity' && inputs.operation != 'diagnose-ironwood-access'
     name: ${{ inputs.operation }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -155,9 +156,10 @@ jobs:
         run: |
           set -euo pipefail
           bash -n scripts/deploy_dispatch_gateway.sh
+          bash -n scripts/package_dispatch_gateway.sh
           node --check base44/functions/startStandardScanJob/cloudTasks.js
           python -m pip install -r dispatch-gateway/requirements.txt pytest
-          (cd dispatch-gateway && python -m unittest -v test_gateway.py)
+          python -m pytest -q dispatch-gateway/test_gateway.py
           python -m py_compile dispatch-gateway/main.py dispatch-gateway/test_gateway.py
           python -m py_compile scripts/verify_gateway_deployment.py
           python -m pytest -q tests/test_gateway_deployment_verifier.py
@@ -322,6 +324,498 @@ jobs:
           SOURCE_SHA: ${{ github.sha }}
         shell: bash
         run: ./scripts/deploy_admission_coordinator.sh
+
+  ironwood-access-diagnostic:
+    if: github.event_name == 'workflow_dispatch' && github.actor == 'bright4862-design' && inputs.operation == 'diagnose-ironwood-access'
+    name: Isolated Ironwood access comparison
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: fixlist-ironwood-access-diagnostic
+      cancel-in-progress: false
+    steps:
+      - name: Refuse non-main execution
+        env:
+          DISPATCH_REF: ${{ github.ref }}
+        run: test "$DISPATCH_REF" = refs/heads/main
+
+      - name: Checkout exact diagnostic source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify immutable clean main and explicit diagnostic confirmation
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          TARGET_REVISION: ${{ inputs.revision }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse origin/main)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          test "$CONFIRM" = "ironwood-diagnostic:$TARGET_REVISION:$SOURCE_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Verify diagnostic safety regressions before cloud access
+        run: |
+          python -m pip install pytest
+          python -m pytest -q tests/test_ironwood_diagnostic.py
+
+      - name: Authenticate existing cloud operator
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Run one isolated diagnostic job using the serving worker image
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          TARGET_REVISION: ${{ inputs.revision }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          python scripts/ironwood_diagnostic_job.py \
+            --revision "$TARGET_REVISION" --source "$SOURCE_SHA" --confirm "$CONFIRM" \
+            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --output "$RUNNER_TEMP/ironwood-evidence"
+
+      - name: Preserve sanitized diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ironwood-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/ironwood-evidence/profile.json
+            ${{ runner.temp }}/ironwood-evidence/observations.json
+            ${{ runner.temp }}/ironwood-evidence/result.json
+            ${{ runner.temp }}/ironwood-evidence/failure.json
+
+  provision-static-egress-canary-on-owner-comment:
+    if: >-
+      github.event_name == 'issue_comment'
+      && github.event.issue.pull_request
+      && github.event.comment.user.login == 'bright4862-design'
+      && startsWith(github.event.comment.body, '/provision-static-egress-canary ')
+    name: Re-verify one-IP static egress canary
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact default-branch SHA bound to the comment event
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate exact owner command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_USER: ${{ github.event.comment.user.login }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$COMMENT_USER" = "bright4862-design"
+          source_sha="$(git rev-parse HEAD)"
+          expected="/provision-static-egress-canary $source_sha"
+          test "$COMMENT_BODY" = "$expected"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$source_sha"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate cloud operator
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Validate egress infrastructure scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/provision-fixlist-static-egress-canary.sh
+          bash -n scripts/verify-fixlist-static-egress-canary.sh
+          bash -n scripts/verify-fixlist-static-egress-source-ip.sh
+
+      # The owner command is retained for compatibility. WIF only verifies
+      # infrastructure already provisioned by the authorized human bootstrap.
+      # Missing resources or failed reads must never enter a create path.
+      - name: Read-only verification of exact one-IP egress canary
+        shell: bash
+        run: bash scripts/verify-fixlist-static-egress-canary.sh
+
+  stage-static-egress-worker-on-owner-comment:
+    if: >-
+      github.event_name == 'issue_comment'
+      && github.event.issue.pull_request
+      && github.event.comment.user.login == 'bright4862-design'
+      && startsWith(github.event.comment.body, '/stage-static-egress-worker ')
+    name: Stage exact static-egress worker at 0%
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout exact default-branch SHA bound to the comment event
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate exact owner command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_USER: ${{ github.event.comment.user.login }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$COMMENT_USER" = "bright4862-design"
+          source_sha="$(git rev-parse HEAD)"
+          expected="/stage-static-egress-worker $source_sha"
+          test "$COMMENT_BODY" = "$expected"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$source_sha"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate cloud operator
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Verify static egress infrastructure
+        shell: bash
+        run: bash scripts/verify-fixlist-static-egress-canary.sh
+
+      - name: Validate static-egress worker build path
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/build-worker-candidate.sh
+          bash -n scripts/lib/release-source-guard.sh
+
+      - name: Build zero-traffic static-egress worker candidate
+        id: stage
+        env:
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+          CONFIRM: ${{ steps.command.outputs.source_sha }}
+          FIXLIST_EGRESS_MODE: static-canary
+          FIXLIST_EGRESS_NETWORK: fixlist-scanner-egress
+          FIXLIST_EGRESS_SUBNET: fixlist-scanner-egress-euw1
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/build-worker-candidate.sh | tee /tmp/fixlist-static-egress-stage.log
+          revision="$(sed -n 's/^WORKER_CANDIDATE_READY=//p' /tmp/fixlist-static-egress-stage.log | tail -1)"
+          mode="$(sed -n 's/^WORKER_CANDIDATE_EGRESS_MODE=//p' /tmp/fixlist-static-egress-stage.log | tail -1)"
+          test -n "$revision"
+          test "$mode" = "static-canary"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Publish static-egress candidate status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.command.outputs.source_sha }}
+          REVISION: ${{ steps.stage.outputs.revision }}
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -n "$TARGET_SHA" ] || exit 0
+          if [ "$JOB_STATUS" = "success" ] && [ -n "$REVISION" ]; then
+            state=success
+            description="0% static-egress worker ready: $REVISION"
+          else
+            state=failure
+            description="Static-egress worker staging failed"
+          fi
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${TARGET_SHA}"             -f state="$state"             -f context="fixlist/static-egress-candidate-stage"             -f description="$description"
+
+  verify-static-egress-source-ip-on-owner-comment:
+    if: >-
+      github.event_name == 'issue_comment'
+      && github.event.issue.pull_request
+      && github.event.comment.user.login == 'bright4862-design'
+      && startsWith(github.event.comment.body, '/verify-static-egress-source-ip ')
+    name: Verify exact static egress source IP
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact default-branch SHA bound to the comment event
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate exact owner command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_USER: ${{ github.event.comment.user.login }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$COMMENT_USER" = "bright4862-design"
+          source_sha="$(git rev-parse HEAD)"
+          expected="/verify-static-egress-source-ip $source_sha"
+          test "$COMMENT_BODY" = "$expected"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$source_sha"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate cloud operator
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Resolve exact zero-traffic static-egress candidate
+        id: candidate
+        env:
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run revisions list --service="$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > /tmp/revisions.json
+          gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > /tmp/service.json
+          revision="$(python3 - "$SOURCE_SHA" /tmp/revisions.json /tmp/service.json <<'PY'
+          import json, sys
+          source_sha, revisions_path, service_path = sys.argv[1:]
+          rows=json.load(open(revisions_path))
+          service=json.load(open(service_path))
+          traffic=service.get('status',{}).get('traffic',[]) or []
+          candidates=[]
+          for row in rows:
+              spec=row.get('spec',{}) or {}
+              container=(spec.get('containers') or [{}])[0]
+              env={item.get('name'):item.get('value','') for item in container.get('env',[])}
+              if env.get('FIXLIST_WORKER_SOURCE_SHA') != source_sha or env.get('FIXLIST_EGRESS_MODE') != 'static-canary':
+                  continue
+              name=row.get('metadata',{}).get('name','')
+              percent=sum(int(t.get('percent') or 0) for t in traffic if t.get('revisionName')==name)
+              if percent != 0:
+                  continue
+              candidates.append((row.get('metadata',{}).get('creationTimestamp',''), name))
+          candidates.sort()
+          print(candidates[-1][1] if candidates else '')
+          PY
+          )"
+          test -n "$revision"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Verify candidate source IP equals reserved NAT IP
+        env:
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+          TARGET_REVISION: ${{ steps.candidate.outputs.revision }}
+          CONFIRM: STATIC-EGRESS-PROBE:${{ steps.candidate.outputs.revision }}:${{ steps.command.outputs.source_sha }}
+        shell: bash
+        run: bash scripts/verify-fixlist-static-egress-source-ip.sh
+
+      - name: Publish source-IP verification status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.command.outputs.source_sha }}
+          REVISION: ${{ steps.candidate.outputs.revision }}
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -n "$TARGET_SHA" ] || exit 0
+          if [ "$JOB_STATUS" = "success" ] && [ -n "$REVISION" ]; then
+            state=success
+            description="Static egress IP verified: $REVISION"
+          else
+            state=failure
+            description="Static egress IP verification failed"
+          fi
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${TARGET_SHA}"             -f state="$state"             -f context="fixlist/static-egress-source-ip"             -f description="$description"
+
+  compare-static-egress-access-on-owner-comment:
+    if: >-
+      github.event_name == 'issue_comment'
+      && github.event.issue.pull_request
+      && github.event.comment.user.login == 'bright4862-design'
+      && startsWith(github.event.comment.body, '/compare-static-egress-access ')
+    name: Compare one fixed site over default and static egress
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact default-branch SHA bound to the comment event
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate exact owner comparison command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_USER: ${{ github.event.comment.user.login }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$COMMENT_USER" = "bright4862-design"
+          read -r command requested_sha target extra <<< "$COMMENT_BODY"
+          test "$command" = "/compare-static-egress-access"
+          [[ "$requested_sha" =~ ^[0-9a-f]{40}$ ]]
+          case "$target" in
+            winamax|ratp|viator|klook|fever|ironwood|funbooker) ;;
+            *) echo "Refusing: unknown fixed comparison target." >&2; exit 2 ;;
+          esac
+          test -z "$extra"
+          test "$COMMENT_BODY" = "/compare-static-egress-access $requested_sha $target"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$requested_sha"
+          # Refresh the explicit ref before authentication. A queued event for
+          # superseded main must fail instead of receiving cloud credentials.
+          git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main --quiet
+          source scripts/lib/release-source-guard.sh
+          fixlist_require_exact_main "$PWD" "$requested_sha" "$requested_sha"
+          printf 'source_sha=%s\ntarget=%s\n' "$requested_sha" "$target" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate cloud operator
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Resolve Ready zero-traffic candidate from this exact main
+        id: candidate
+        env:
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run revisions list --service="$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > /tmp/comparison-revisions.json
+          gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > /tmp/comparison-service.json
+          revision="$(python3 - "$SOURCE_SHA" "$CLOUD_RUN_SERVICE" /tmp/comparison-revisions.json /tmp/comparison-service.json <<'PY'
+          import json, re, sys
+          source_sha, worker, revisions_path, service_path = sys.argv[1:]
+          rows = json.load(open(revisions_path))
+          service = json.load(open(service_path))
+          if service.get('metadata', {}).get('name') != worker:
+              raise SystemExit('Refusing: worker service identity mismatch')
+          resolved = service.get('status', {}).get('traffic', []) or []
+          desired = service.get('spec', {}).get('traffic', []) or []
+          candidates = []
+          for row in rows:
+              metadata = row.get('metadata', {}) or {}
+              name = metadata.get('name', '')
+              if not re.fullmatch(re.escape(worker) + r'-[a-z0-9-]+', name):
+                  continue
+              if metadata.get('labels', {}).get('serving.knative.dev/service') != worker:
+                  continue
+              spec = row.get('spec', {}) or {}
+              containers = spec.get('containers', []) or []
+              if len(containers) != 1:
+                  continue
+              values = {item.get('name'): item.get('value', '') for item in containers[0].get('env', [])}
+              if values.get('FIXLIST_WORKER_SOURCE_SHA') != source_sha or values.get('FIXLIST_EGRESS_MODE') != 'static-canary':
+                  continue
+              if not any(item.get('type') == 'Ready' and item.get('status') == 'True'
+                         for item in row.get('status', {}).get('conditions', [])):
+                  continue
+              if any(int(item.get('percent') or 0) > 0 and
+                     (item.get('revisionName') == name or item.get('latestRevision') is True)
+                     for item in [*resolved, *desired]):
+                  continue
+              candidates.append((metadata.get('creationTimestamp', ''), name))
+          candidates.sort()
+          if not candidates:
+              raise SystemExit('Refusing: stage a Ready 0% static candidate from this exact main first')
+          print(candidates[-1][1])
+          PY
+          )"
+          test -n "$revision"
+          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Run isolated default versus static access comparison
+        env:
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+          TARGET: ${{ steps.command.outputs.target }}
+          REVISION: ${{ steps.candidate.outputs.revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/static_egress_comparison_job.py \
+            --revision "$REVISION" --source-sha "$SOURCE_SHA" --target "$TARGET" \
+            --confirm "STATIC-EGRESS-COMPARE:$TARGET:$REVISION:$SOURCE_SHA" \
+            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --output /tmp/fixlist-static-egress-comparison.json
+
+      - name: Preserve only sanitized pair evidence when present
+        if: always() && steps.command.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-egress-comparison-${{ steps.command.outputs.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: ignore
+          path: /tmp/fixlist-static-egress-comparison.json
+
+      - name: Publish per-target pair completion status
+        if: always() && steps.command.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.command.outputs.source_sha }}
+          TARGET: ${{ steps.command.outputs.target }}
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$TARGET" in
+            winamax|ratp|viator|klook|fever|ironwood|funbooker) ;;
+            *) exit 2 ;;
+          esac
+          if [ "$JOB_STATUS" = "success" ]; then
+            state=success
+            description="Pair diagnostic complete; access improvement unassessed"
+          else
+            state=failure
+            description="Pair diagnostic or required cleanup failed"
+          fi
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${TARGET_SHA}" \
+            -f state="$state" -f context="fixlist/static-egress-comparison-$TARGET" \
+            -f description="$description"
 
   verify-admission-identity:
     if: >-
@@ -912,6 +1406,14 @@ jobs:
             curl --silent --show-error --max-time 20 "$GATEWAY_URL/health" || true
             echo
           fi
+
+          # Comparison is read-only. Print bounded request metadata only: no
+          # request/response bodies, customer identities, headers or signatures.
+          echo '=== GATEWAY COMPARISON REQUEST METADATA (8H) ==='
+          gcloud logging read \
+            "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${GATEWAY_SERVICE}\" AND logName:\"run.googleapis.com%2Frequests\" AND httpRequest.requestMethod=\"POST\" AND httpRequest.requestUrl:\"/compare\"" \
+            --project="$GCP_PROJECT" --freshness=8h --limit=30 --order=desc \
+            --format='table(timestamp,resource.labels.revision_name,httpRequest.status,httpRequest.latency,httpRequest.requestSize,httpRequest.responseSize)' || true
 
           echo '=== CURRENT GETYOURGUIDE CANARY LOGS ==='
           gcloud logging read \

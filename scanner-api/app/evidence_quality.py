@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .health_score_explanation import apply_score_ceiling
+from .page_evidence_gate import page_evidence_class
 from .review import unwrap_scan_payload
 
 EVIDENCE_QUALITY_GATE_VERSION = "evidence_quality_gate_v2_shared_coverage_decision"
@@ -137,7 +138,18 @@ def _blocked_page_count(payload: dict[str, Any], pages: list[dict[str, Any]]) ->
     )
     if reported:
         return reported
-    return sum(1 for page in pages if _int(page.get("status_code")) in (401, 403, 429))
+    return sum(
+        1
+        for page in pages
+        if (
+            str(page.get("access_block_kind") or "").strip().lower() in {"challenge", "block", "rate_limit"}
+            or _int(page.get("status_code")) in (401, 403, 429)
+            or (
+                200 <= _int(page.get("status_code")) < 300
+                and page_evidence_class(page) == "failed_access"
+            )
+        )
+    )
 
 
 def evaluate_evidence_quality(payload: dict[str, Any]) -> dict[str, Any]:

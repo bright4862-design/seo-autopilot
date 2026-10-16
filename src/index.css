@@ -11,76 +11,77 @@
     --safe-area-right: env(safe-area-inset-right);
     --safe-area-bottom: env(safe-area-inset-bottom);
     --safe-area-left: env(safe-area-inset-left);
-    /* The shipped surfaces (Landing, DashboardLayout, AuthLayout, FixList,
-       Billing) all paint the warm `paper`/`ink` palette from tailwind.config.js.
+    /* The shipped surfaces all paint the warm palette from tailwind.config.js.
        The root tokens used to hold the cool blue-grey template defaults, so the
        document behind those surfaces was a different colour than the surfaces
        themselves — visible as a tint change on overscroll and as a flash on
        every authenticated load, while ProtectedRoute's fallback painted before
-       the app did. These are the same two colours as `paper` and `ink`. */
-    --background: 60 9% 98%;
+       the app did. The canvas is the approved Results cream (#F6F4EF, Tailwind
+       `paper`); text is `ink` (#1C1917). */
+    --background: 43 28% 95%;
     --foreground: 24 10% 10%;
-    /* Every shared token below resolves to the same warm paper/ink palette as
-       the results page: ink primaries with paper text, warm stone neutrals for
-       borders and quiet fills, and the semantic good/warn/crit colours from
-       tailwind.config.js. No generic token may fall back to template blue. */
+    /* Every shared token resolves to that palette: ink primaries with cream
+       text, warm neutrals mixed from ink over cream, and the semantic
+       good/warn/crit colours. No generic token may fall back to template blue. */
     --card: 0 0% 100%;
     --card-foreground: 24 10% 10%;
     --popover: 0 0% 100%;
     --popover-foreground: 24 10% 10%;
     --primary: 24 10% 10%;
-    --primary-foreground: 60 9% 98%;
-    --secondary: 60 5% 96%;
+    --primary-foreground: 43 28% 95%;
+    /* Quiet fill: ink at 4% over cream (#EDEBE6). */
+    --secondary: 42.9 16.3% 91.6%;
     --secondary-foreground: 24 10% 10%;
-    --muted: 60 5% 96%;
-    /* ink-muted, two points darker so it also clears 4.5:1 on the muted fill. */
-    --muted-foreground: 25 5% 43%;
-    --accent: 60 5% 96%;
+    --muted: 42.9 16.3% 91.6%;
+    /* Exactly Tailwind ink-muted (#5C5651): 6.6:1 on cream, 6.1:1 on the quiet fill. */
+    --muted-foreground: 27 6% 34%;
+    --accent: 42.9 16.3% 91.6%;
     --accent-foreground: 24 10% 10%;
-    --destructive: 0 74% 42%;
+    --destructive: 0 73.7% 41.8%;
     --destructive-foreground: 0 0% 100%;
-    --border: 20 6% 90%;
-    --input: 24 6% 83%;
+    /* The hairline (ink at 8%) over cream, and a firmer field outline. */
+    --border: 34.3 11.9% 88.4%;
+    --input: 40 7% 83%;
     --ring: 24 10% 10%;
     --chart-1: 24 10% 10%;
-    --chart-2: 142 72% 29%;
-    --chart-3: 26 90% 37%;
-    --chart-4: 0 74% 42%;
-    --chart-5: 25 5% 45%;
+    --chart-2: 142.4 71.8% 29.2%;
+    --chart-3: 26 90.5% 37.1%;
+    --chart-4: 0 73.7% 41.8%;
+    --chart-5: 27 6% 34%;
     --radius: 0.9rem;
     --font-heading: 'Inter', ui-sans-serif, system-ui, sans-serif;
     --font-body: 'Inter', ui-sans-serif, system-ui, sans-serif;
     --font-display: 'Inter', ui-sans-serif, system-ui, sans-serif;
     --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    --sidebar-background: 60 9% 98%;
+    --sidebar-background: 43 28% 95%;
     --sidebar-foreground: 24 10% 10%;
     --sidebar-primary: 24 10% 10%;
-    --sidebar-primary-foreground: 60 9% 98%;
-    --sidebar-accent: 60 5% 96%;
+    --sidebar-primary-foreground: 43 28% 95%;
+    --sidebar-accent: 42.9 16.3% 91.6%;
     --sidebar-accent-foreground: 24 10% 10%;
-    --sidebar-border: 20 6% 90%;
+    --sidebar-border: 34.3 11.9% 88.4%;
     --sidebar-ring: 24 10% 10%;
-    --success: 142 72% 29%;
-    --warning: 26 90% 37%;
+    --success: 142.4 71.8% 29.2%;
+    --warning: 26 90.5% 37.1%;
   }
 
   .dark {
-    /* Warm stone dark theme: paper-on-ink inverted, never cool slate. */
+    /* Warm stone dark theme: cream-on-ink inverted, never cool slate. */
     color-scheme: dark;
     --background: 20 14% 4%;
-    --foreground: 60 9% 98%;
+    --foreground: 43 28% 95%;
     --card: 24 10% 10%;
-    --card-foreground: 60 9% 98%;
+    --card-foreground: 43 28% 95%;
     --popover: 24 10% 10%;
-    --popover-foreground: 60 9% 98%;
-    --primary: 60 9% 98%;
+    --popover-foreground: 43 28% 95%;
+    --primary: 43 28% 95%;
     --primary-foreground: 24 10% 10%;
     --secondary: 12 6% 15%;
-    --secondary-foreground: 60 9% 98%;
+    --secondary-foreground: 43 28% 95%;
     --muted: 12 6% 15%;
     --muted-foreground: 24 5% 64%;
     --accent: 12 6% 15%;
-    --accent-foreground: 60 9% 98%;
+    --accent-foreground: 43 28% 95%;
     --destructive: 0 84% 60%;
     --destructive-foreground: 24 10% 10%;
     --border: 12 6% 15%;
@@ -92,11 +93,11 @@
     --chart-4: 0 84% 60%;
     --chart-5: 24 5% 64%;
     --sidebar-background: 20 14% 4%;
-    --sidebar-foreground: 60 9% 98%;
-    --sidebar-primary: 60 9% 98%;
+    --sidebar-foreground: 43 28% 95%;
+    --sidebar-primary: 43 28% 95%;
     --sidebar-primary-foreground: 24 10% 10%;
     --sidebar-accent: 12 6% 15%;
-    --sidebar-accent-foreground: 60 9% 98%;
+    --sidebar-accent-foreground: 43 28% 95%;
     --sidebar-border: 12 6% 15%;
     --sidebar-ring: 24 6% 83%;
     --success: 142 70% 45%;

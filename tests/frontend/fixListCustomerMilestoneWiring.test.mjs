@@ -75,7 +75,7 @@ test("actual canonical FixList renderer receives raw authenticated rows and chan
   assert.equal(mounted.props.sourceItems, input.scanRecord.recommendations);
   assert.deepEqual(mounted.props.sourceItems[0].root_cause_evidence, row.root_cause_evidence);
   const html = render(input);
-  assert.match(html, /Explain for/);
+  assert.doesNotMatch(html, /<select|Explain for|Role guidance is available/);
   assert.doesNotMatch(html, /Before you start|Implementation order/);
   assert.ok(html.includes(card.whatToChange), "the existing card remains the instruction surface");
   assert.ok(html.includes(escaped(repairRoleExplanation(card, "owner").explanation)));

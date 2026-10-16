@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Check, Copy, Download, ExternalLink, FileText } from "lucide-react";
+import { Check, ChevronDown, Copy, Download, ExternalLink, FileText } from "lucide-react";
 
 import { isRateLimitFinding, shouldUseLegacyRateLimitPresentation } from "@/lib/reviewContract";
 import { getScanRunWithFixList, getScanComparison, listAccountScanRuns } from "@/lib/scanRuns";
@@ -20,7 +20,7 @@ import GeoReadinessPanel from "@/components/fixlist/GeoReadinessPanel";
 import { deleteScanRun } from "@/lib/scanHistory";
 import { prepareCustomerFixes, priorityBucket } from "@/lib/fixRanking";
 import { buildRepairWorkSurfacePresentation } from "@/lib/repairWorkSurfacePresentation";
-import { applyCustomerVocabulary, customerHealthLabel, customerPriorityLabel, customerScopeRelationshipLabel } from "@/lib/fixVocabulary";
+import { applyCustomerVocabulary, customerPriorityLabel, customerScopeRelationshipLabel } from "@/lib/fixVocabulary";
 import { repairSuggestion } from "@/lib/repairSuggestions";
 import {
   buildRepairCards,
@@ -481,6 +481,7 @@ export default function FixList() {
     && !String(scanRecord?.scope_type || "").trim()
     && !String(scanRecord?.path_prefix || scanRecord?.requested_path_prefix || "").trim()
   );
+  const fullResultLayout = Boolean(requestedScanId && hasUsefulScan && !locked && !previewComplete);
 
   function retryRequestedScan() {
     setRequestedScanFailure(null);
@@ -520,9 +521,9 @@ export default function FixList() {
 
 
   return (
-    <div className="min-h-screen bg-paper text-ink antialiased">
-      <div className="mx-auto max-w-[680px] px-6 pb-24">
-        <div className="flex items-center justify-between pt-7">
+    <div className={`min-h-screen text-ink antialiased ${fullResultLayout ? "bg-[#F6F4EF] [&_.text-ink-faint]:text-ink-muted" : "bg-paper"}`}>
+      <div className={`mx-auto px-5 pb-24 sm:px-6 ${fullResultLayout ? "max-w-[880px]" : "max-w-[680px]"}`}>
+        {!fullResultLayout ? <div className="flex items-center justify-between pt-7">
           <div className="text-[15px] font-medium tracking-tight text-ink-muted">{websiteHost || ""}</div>
           <button
             type="button"
@@ -531,7 +532,7 @@ export default function FixList() {
           >
             {previewComplete ? "Unlock full access" : hasUsefulScan ? "Scan again" : "Run a scan"}
           </button>
-        </div>
+        </div> : null}
 
         {requestedScanId && scanRecord && requestedScanFailure?.retryable === true ? (
           <CustomerRecoveryNotice failure={requestedScanFailure} onRetry={retryRequestedScan} />
@@ -576,51 +577,55 @@ export default function FixList() {
           />
         ) : hasUsefulScan ? (
           <>
-            <p className="mt-16 text-[13px] text-ink-faint tabular-nums">
-              Scanned {scanRecord?.created_at ? formatDate(scanRecord.created_at) : "recently"}
-              {pagesFound > 0 ? ` · ${formatCount(pagesFound)} pages found` : ""}
-              {pagesScanned > 0 ? ` · ${formatCount(pagesScanned)} checked` : ""}
-            </p>
-
-            <div className="mt-4 flex items-center gap-7">
-              <ScoreRing score={healthScore} unavailable={scoreUnavailable} />
-              <div>
-                <h1 className="text-[26px] font-semibold leading-tight tracking-tight">
-                  {customerHealthLabel(healthScore, { unavailable: scoreUnavailable, noHighConfidenceFindings })}
-                </h1>
-                <p className="mt-1.5 text-[15px] text-ink-muted tabular-nums">
-                  {getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount: displayedRepairCount })}
-                </p>
+            <CustomerResultsSummary
+              scanRecord={scanRecord}
+              websiteHost={websiteHost}
+              healthScore={healthScore}
+              scoreUnavailable={scoreUnavailable}
+              pagesScanned={pagesScanned}
+              pagesFound={pagesFound}
+              repairCount={displayedRepairCount}
+            >
+              <div className="mt-5 flex flex-wrap items-start gap-2.5">
+                {scanRecord?.customer_access === "full" && repairPresentation.canonical === true && customerRepairCards.length > 0 ? (
+                  <ScanExportControls
+                    scanRecord={scanRecord}
+                    cards={customerRepairCards}
+                    issues={active}
+                    businessName={scanRecord?.business_name || websiteHost || "Your website"}
+                    healthScore={healthScore}
+                    scoreUnavailable={scoreUnavailable}
+                    pagesScanned={pagesScanned}
+                    pagesFound={pagesFound}
+                    summary={summary}
+                    nextBestStep={nextBestStep}
+                    limitations={handoffLimitations}
+                    geoReadiness={scanRecord?.geo_readiness}
+                  />
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => navigate(focusedRescanTarget || "/onboarding")}
+                  className="min-h-9 rounded-[10px] bg-ink px-4 py-2 text-[13.5px] font-medium text-white transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+                >
+                  Scan again
+                </button>
               </div>
-            </div>
+              <ScoreExplanation explanation={healthScoreExplanation(scanRecord)} />
+            </CustomerResultsSummary>
 
-            <ScoreExplanation explanation={healthScoreExplanation(scanRecord)} />
-
-            <CustomerScanComparison scanRecord={scanRecord} requestedScanId={requestedScanId} />
-
-            {summary ? (
-              <p className="mt-8 max-w-[56ch] text-[14px] leading-relaxed text-ink-muted">{summary}</p>
-            ) : null}
-
-            {scanRecord?.customer_access === "full" && repairPresentation.canonical === true && customerRepairCards.length > 0 ? (
-              <ScanExportControls
-                scanRecord={scanRecord}
-                cards={customerRepairCards}
-                issues={active}
-                businessName={scanRecord?.business_name || websiteHost || "Your website"}
-                healthScore={healthScore}
-                scoreUnavailable={scoreUnavailable}
-                pagesScanned={pagesScanned}
-                pagesFound={pagesFound}
-                summary={summary}
-                nextBestStep={nextBestStep}
-                limitations={handoffLimitations}
-                geoReadiness={scanRecord?.geo_readiness}
-              />
+            {displayedRepairCount === 0 ? (
+              <p className="mt-6 max-w-[60ch] text-[14px] leading-relaxed text-ink-muted">
+                {getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount: displayedRepairCount })}
+              </p>
             ) : null}
 
             {limitationNote ? (
               <p className="mt-6 border-l-2 border-warnink/40 pl-3 text-[13.5px] leading-relaxed text-ink-muted">{limitationNote}</p>
+            ) : hasVerifiedLimitedScan ? (
+              <p className="mt-6 max-w-[60ch] border-l-2 border-warnink/40 pl-3 text-[13.5px] leading-relaxed text-ink-muted">
+                This scan has limited evidence. These findings describe the pages we could check and do not establish a complete site result.
+              </p>
             ) : null}
 
             {repairPresentation.unsupported ? (
@@ -694,6 +699,25 @@ export default function FixList() {
                 </div>
               </>
             ) : null}
+
+            <details className="group/report mt-12 rounded-[14px] border border-hairline-soft bg-white" aria-labelledby="report-details-heading">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-4 rounded-[14px] px-5 py-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink [&::-webkit-details-marker]:hidden">
+                <span>
+                  <span id="report-details-heading" className="block text-[16px] font-semibold tracking-tight text-ink">Report details</span>
+                  <span className="mt-1 block text-[12.5px] leading-relaxed text-ink-muted">What we checked, comparison with your last scan, and the experimental GEO assessment</span>
+                </span>
+                <ChevronDown aria-hidden="true" className="h-4 w-4 shrink-0 transition-transform group-open/report:rotate-180" />
+              </summary>
+              <div className="border-t border-hairline-soft px-5 pb-5 pt-5">
+                <h2 className="text-[14px] font-semibold text-ink">What we checked</h2>
+                <p className="mt-2 max-w-[65ch] text-[13px] leading-relaxed text-ink-muted">
+                  This scan checked {formatCount(pagesScanned)}{pagesFound > 0 ? ` of ${formatCount(pagesFound)} pages found` : " pages"}.
+                  {pagesFound > pagesScanned ? " Pages outside that sample were not checked, so findings and page counts describe the collected evidence." : " Findings describe the evidence collected in this scan."}
+                  {" "}Affected page groups can overlap and are not added into a site total.
+                </p>
+                {repairPresentation.canonical !== true && summary ? <p className="mt-3 text-[13px] leading-relaxed text-ink-muted">{summary}</p> : null}
+
+            <CustomerScanComparison scanRecord={scanRecord} requestedScanId={requestedScanId} />
 
             <ExplicitPassedChecks scan={scanRecord} />
 
@@ -816,6 +840,15 @@ export default function FixList() {
               completedAt={scanRecord?.completed_at || scanRecord?.created_at}
             />
 
+                <section className="mt-6 border-t border-hairline-soft pt-5">
+                  <h2 className="text-[14px] font-semibold text-ink">How to read this list</h2>
+                  <p className="mt-2 max-w-[65ch] text-[13px] leading-relaxed text-ink-muted">
+                    Confirmed problems are supported by observed evidence. Suggestions may need review because the current setup could be intentional. A later scan can confirm a change only when it checks comparable pages and collects the required evidence.
+                  </p>
+                </section>
+              </div>
+            </details>
+
 
             {active.length > 0 && repairPresentation.canonical !== true ? <CmsPicker selectedCms={selectedCms} onChange={setSelectedCms} /> : null}
           </>
@@ -833,23 +866,35 @@ export default function FixList() {
   );
 }
 
-const CUSTOMER_REPAIR_SECTIONS = Object.freeze([
-  { key: "fix_first", label: "Fix first", help: "Start here." },
-  { key: "important", label: "Important", help: "Significant repairs to tackle next." },
-  { key: "improve", label: "Improve next", help: "Useful improvements after the important work." },
-  { key: "review", label: "Worth checking", help: "Lower-priority items to review when ready." },
-]);
-
-function customerRepairSectionKey(card = {}) {
-  const key = priorityBucket(card);
-  return CUSTOMER_REPAIR_SECTIONS.some((section) => section.key === key) ? key : "review";
+export function CustomerResultsSummary({
+  scanRecord = {}, websiteHost = "", healthScore = null, scoreUnavailable = true,
+  pagesScanned = 0, pagesFound = 0, repairCount = 0, children,
+}) {
+  return (
+    <header className="pt-10 sm:pt-12">
+      {scanRecord.status === "limited" ? (
+        <p className="mb-4 inline-flex rounded-full bg-warnink/10 px-3 py-1 text-[12px] font-medium text-ink-muted">Limited scan</p>
+      ) : null}
+      <div className="flex items-center gap-4">
+        <ScoreRing score={healthScore} unavailable={scoreUnavailable} size={64} />
+        <div className="min-w-0">
+          <h1 className="break-words text-[27px] font-semibold leading-tight tracking-[-0.03em] sm:text-[30px]">{websiteHost || safeHostname(scanRecord.website_url) || "Website scan"}</h1>
+          <p className="mt-2 text-[13px] leading-relaxed text-ink-muted tabular-nums sm:text-[14px]">
+            Scanned {scanRecord.created_at ? formatDate(scanRecord.created_at) : "recently"}
+            {" · "}{formatCount(pagesScanned)}{pagesFound > 0 ? ` of ${formatCount(pagesFound)}` : ""} {(pagesFound > 0 ? pagesFound : pagesScanned) === 1 ? "page" : "pages"} checked
+            {" · "}{formatCount(repairCount)} {repairCount === 1 ? "recommendation" : "recommendations"}
+          </p>
+        </div>
+      </div>
+      {children}
+    </header>
+  );
 }
 
 function customerEvidenceClassLabel(value = "") {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "confirmed_problem") return "Confirmed problem";
-  if (normalized === "improvement") return "Improvement";
-  if (normalized === "recommendation") return "Recommendation";
+  if (normalized === "improvement" || normalized === "recommendation") return "Suggestion";
   return "";
 }
 
@@ -862,7 +907,7 @@ function customerEvidenceClassLabel(value = "") {
  * so a downloaded file can never describe a different scan than the one on the
  * page.
  */
-function ScanExportControls({
+export function ScanExportControls({
   scanRecord,
   cards = [],
   issues = [],
@@ -879,6 +924,23 @@ function ScanExportControls({
   const [copied, setCopied] = useState(false);
   const [pdfPending, setPdfPending] = useState(false);
   const [failure, setFailure] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
+  const menuId = useId();
+
+  function closeMenu() {
+    setMenuOpen(false);
+    menuRef.current?.querySelector("summary")?.focus();
+  }
+
+  useEffect(() => {
+    if (!menuOpen || typeof document === "undefined") return undefined;
+    function closeOutside(event) {
+      if (!menuRef.current?.contains(event.target)) setMenuOpen(false);
+    }
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, [menuOpen]);
 
   const scanId = cleanString(scanRecord?.scan_id || scanRecord?.id);
 
@@ -966,46 +1028,64 @@ function ScanExportControls({
   }
 
   return (
-    <section className="mt-8 max-w-[60ch] rounded-2xl border border-hairline-soft bg-white/45 px-5 py-5" aria-labelledby="take-this-list-with-you">
-      <h2 id="take-this-list-with-you" className="text-[17px] font-semibold tracking-tight text-ink">
-        Take this list with you
-      </h2>
-      <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
-        Download the file and upload it to ChatGPT or Claude, and it will walk you through the list one fix at a time. The PDF is the version to send to whoever looks after your website.
-      </p>
-
-      <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-3">
+    <div className="relative max-w-full">
+      <details
+        ref={menuRef}
+        open={menuOpen}
+        className="relative"
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && menuOpen) {
+            event.preventDefault();
+            closeMenu();
+          }
+        }}
+      >
+        <summary
+          aria-expanded={menuOpen}
+          aria-controls={menuId}
+          onClick={(event) => { event.preventDefault(); setMenuOpen((open) => !open); }}
+          className="flex min-h-9 w-fit cursor-pointer list-none items-center gap-2 rounded-[10px] border border-hairline bg-white px-3.5 py-2 text-[13.5px] font-medium text-ink hover:bg-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink [&::-webkit-details-marker]:hidden"
+        >
+          Export
+          <ChevronDown aria-hidden="true" className={`h-3.5 w-3.5 transition-transform ${menuOpen ? "rotate-180" : ""}`} />
+        </summary>
+        <div id={menuId} className="absolute left-0 top-full z-30 mt-2 w-64 max-w-[calc(100vw-2.5rem)] space-y-1 rounded-xl border border-hairline bg-white p-1.5 shadow-lg">
+          <p className="px-2.5 pb-1 pt-1.5 text-[11px] leading-relaxed text-ink-muted">Take this exact saved FixList with you.</p>
         <button
           type="button"
-          onClick={handleDownloadJson}
-          className="flex items-center gap-2 rounded-full border border-hairline px-4 py-2 text-[13px] font-medium text-ink transition-colors hover:bg-ink/[0.035] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+          onClick={() => { closeMenu(); handleDownloadJson(); }}
+          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2.5 text-left text-[13px] text-ink hover:bg-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-ink"
         >
           <Download className="h-3.5 w-3.5" />
           Download for ChatGPT or Claude
         </button>
         <button
           type="button"
-          onClick={handleCopyJson}
-          className="flex items-center gap-1.5 text-[12.5px] text-ink-muted transition-colors hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+          onClick={() => { closeMenu(); handleCopyJson(); }}
+          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2.5 text-left text-[13px] text-ink hover:bg-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-ink"
         >
           {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-          {copied ? "Copied" : "Copy instead"}
+          {copied ? "Copied" : "Copy for ChatGPT or Claude"}
         </button>
         <button
           type="button"
-          onClick={handleDownloadPdf}
+          onClick={() => { closeMenu(); handleDownloadPdf(); }}
           disabled={pdfPending}
-          className="flex items-center gap-1.5 text-[12.5px] text-ink-muted transition-colors hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2.5 text-left text-[13px] text-ink hover:bg-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-ink disabled:cursor-not-allowed disabled:opacity-50"
         >
           <FileText className="h-3.5 w-3.5" />
           {pdfPending ? "Preparing PDF…" : "Download PDF"}
         </button>
-      </div>
+        </div>
+      </details>
+
+      {copied ? <p role="status" className="mt-2 text-[12px] text-ink-muted">FixList copied.</p> : null}
+      {pdfPending ? <p role="status" className="mt-2 text-[12px] text-ink-muted">Preparing PDF…</p> : null}
 
       {failure ? (
-        <p role="status" className="mt-3 text-[12.5px] leading-relaxed text-warnink">{failure}</p>
+        <p role="status" className="mt-2 max-w-[32ch] text-[12.5px] leading-relaxed text-warnink">{failure}</p>
       ) : null}
-    </section>
+    </div>
   );
 }
 
@@ -1149,47 +1229,48 @@ function CustomerRepairList({ cards = [], websiteUrl = "", explanationForCard })
   const list = Array.isArray(cards) ? cards.filter(Boolean) : [];
   if (list.length === 0) return null;
 
-  const sections = CUSTOMER_REPAIR_SECTIONS
-    .map((section) => ({
-      ...section,
-      cards: list.filter((card) => customerRepairSectionKey(card) === section.key),
-    }))
-    .filter((section) => section.cards.length > 0);
+  // These are reading groups only. Preserve the authenticated canonical array
+  // instead of regrouping or sorting repairs by their presentation labels.
+  const sections = [
+    { key: "start", label: "Start here", cards: list.slice(0, 1) },
+    { key: "then", label: "Then", cards: list.slice(1) },
+  ].filter((section) => section.cards.length > 0);
+  const evidenceLabels = unique(list.map((card) => customerEvidenceClassLabel(card.evidenceClass)).filter(Boolean));
 
   return (
     <div className="mt-10 sm:mt-12" aria-labelledby="customer-fixlist-heading">
-      <div className="mb-8">
-        <div className="flex items-baseline justify-between gap-4">
-          <h2 id="customer-fixlist-heading" className="text-[20px] font-semibold tracking-tight text-ink">
-            Your FixList
-          </h2>
-          <span className="shrink-0 text-[12px] tabular-nums text-ink-faint">
-            {list.length} remaining
-          </span>
-        </div>
-        <p className="mt-1.5 max-w-[52ch] text-[12px] leading-relaxed text-ink-faint">
-          Work through these actions in order. Open the evidence only when you need the affected URLs or technical detail.
+      <div className="mb-5 border-b border-hairline pb-4">
+        <h2 id="customer-fixlist-heading" className="text-[19px] font-semibold tracking-tight text-ink">
+          Your fixes, in order
+        </h2>
+        <p className="mt-1.5 max-w-[65ch] text-[13px] leading-relaxed text-ink-muted">
+          Page groups can overlap, so the counts below aren&rsquo;t added up.
         </p>
+        {evidenceLabels.length > 0 ? (
+          <ul aria-label="Finding types" className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2 text-[12px] text-ink-muted">
+            {evidenceLabels.map((label) => (
+              <li key={label} className="flex items-center gap-2">
+                <span aria-hidden="true" className={`h-2 w-2 rounded-full ${label === "Confirmed problem" ? "bg-[#A3410D]" : "border border-ink-muted"}`} />
+                {label}
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </div>
 
       {sections.map((section) => (
-        <section key={section.key} className="mt-10 first:mt-0 sm:mt-12" aria-labelledby={`customer-repair-section-${section.key}`}>
-          <div className="flex items-baseline justify-between gap-4">
-            <h3 id={`customer-repair-section-${section.key}`} className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">
-              {section.label}
-            </h3>
-            <span className="text-[11px] tabular-nums text-ink-faint">
-              {section.cards.length} {section.cards.length === 1 ? "repair" : "repairs"}
-            </span>
-          </div>
-          <p className="mt-1 text-[12px] leading-relaxed text-ink-faint">{section.help}</p>
-          <div className="mt-1.5">
+        <section key={section.key} className="mt-6 first:mt-0" aria-labelledby={`customer-repair-section-${section.key}`}>
+          <h3 id={`customer-repair-section-${section.key}`} className="text-[10.5px] font-medium uppercase tracking-[0.12em] text-ink-muted">
+            {section.label}
+          </h3>
+          <div className="mt-1">
             {section.cards.map((card, index) => (
               <CustomerRepairCard
                 key={card.evidence?.mergedFromFixIds?.join("|") || `${section.key}-${index}`}
                 card={card}
                 explanation={explanationForCard?.(card)}
                 websiteUrl={websiteUrl}
+                initiallyOpen={section.key === "start" && index === 0}
               />
             ))}
           </div>
@@ -1199,7 +1280,7 @@ function CustomerRepairList({ cards = [], websiteUrl = "", explanationForCard })
   );
 }
 
-function CustomerRepairCard({ card = {}, websiteUrl = "", explanation }) {
+function CustomerRepairCard({ card = {}, websiteUrl = "", explanation, initiallyOpen = false }) {
   const pages = Array.isArray(card?.evidence?.affectedPages) ? card.evidence.affectedPages.filter(Boolean) : [];
   const reportedCount = Math.max(Number(card?.evidence?.pageCount || 0), pages.length);
   const evidenceLabel = customerEvidenceClassLabel(card.evidenceClass);
@@ -1208,10 +1289,12 @@ function CustomerRepairCard({ card = {}, websiteUrl = "", explanation }) {
   const observationRows = customerRepairObservationRows(card, websiteUrl);
 
   return (
-    <article className="border-b border-hairline-soft py-6 first:pt-5">
-      <div className="flex flex-wrap items-start justify-between gap-x-5 gap-y-2">
+    <article className="border-b border-hairline-soft">
+      <details open={initiallyOpen} className="group/repair">
+      <summary className="grid cursor-pointer list-none grid-cols-[12px_minmax(0,1fr)_20px] items-start gap-4 rounded-lg py-[18px] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink [&::-webkit-details-marker]:hidden">
+        <span aria-hidden="true" className={`mt-2 h-2.5 w-2.5 rounded-full ${card.evidenceClass === "confirmed_problem" ? "bg-[#A3410D]" : "border border-ink-muted"}`} />
         <div className="min-w-0 flex-1">
-          <h4 className="text-[17px] font-medium leading-snug tracking-tight text-ink">{card.title}</h4>
+          <h4 className="text-[16px] font-medium leading-snug tracking-tight text-ink">{card.title}</h4>
           {/*
             The scope hint appears only on cards whose title is repeated in this
             FixList, which is where a customer otherwise has no way to tell two
@@ -1219,22 +1302,19 @@ function CustomerRepairCard({ card = {}, websiteUrl = "", explanation }) {
             repair title: the title stays exactly as analytics and screen
             readers see it.
           */}
-          <p className="mt-1 text-[12px] font-medium text-ink-faint">
-            {card.customerCategory}
-            {evidenceLabel ? ` · ${evidenceLabel}` : ""}
+          <p className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[12px] leading-relaxed text-ink-muted">
+            <span>{evidenceLabel || card.customerCategory}</span>
             {card.scopeHint ? ` · ${card.scopeHint}` : ""}
+            {reportedCount > 0 ? <span>{reportedCount} {reportedCount === 1 ? "page" : "pages"}</span> : null}
           </p>
         </div>
-        {reportedCount > 0 ? (
-          <span className="shrink-0 text-[12px] tabular-nums text-ink-faint">
-            {reportedCount} {reportedCount === 1 ? "page" : "pages"}
-          </span>
-        ) : null}
-      </div>
+        <ChevronDown aria-hidden="true" className="mt-1 h-4 w-4 text-ink-muted transition-transform group-open/repair:rotate-180" />
+      </summary>
 
-      <dl className="mt-5 space-y-4">
+      <div className="pb-6 pl-7 sm:pr-9">
+      <dl className="space-y-4">
         <div>
-          <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">{explanation?.explanationHeading || "Why it matters"}</dt>
+          <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">{explanation?.explanationHeading || "Why it matters"}</dt>
           <dd className="mt-1 max-w-[58ch] text-[14px] leading-relaxed text-ink-muted">{explanation?.explanation || card.whyItMatters}</dd>
         </div>
         {/*
@@ -1395,6 +1475,8 @@ function CustomerRepairCard({ card = {}, websiteUrl = "", explanation }) {
             </p>
           )}
         </div>
+      </details>
+      </div>
       </details>
     </article>
   );
@@ -2077,12 +2159,12 @@ function getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount }) {
 }
 
 function getLimitationNote(record) {
-  if (isHealthScoreUnavailable(record)) return "We couldn't verify enough usable pages to calculate a reliable score. The access item below describes the scan limitation, not a confirmed on-page SEO defect.";
   // The scanner's own sentence carries the concrete numbers, so it is worth
   // showing -- but it is passed through rather than written here, so it goes
   // through the same gate as the limited-state copy.
   const limitation = customerSafeLimitationLine(record);
   if (limitation) return limitation;
+  if (isHealthScoreUnavailable(record)) return "We couldn't verify enough usable pages to calculate a reliable score. These findings describe the evidence collected, not a complete site assessment.";
   if (record?.score_is_provisional === true) return "Scan coverage was limited, so this score is provisional. Fix what's below, then scan again for a fuller picture.";
   return "";
 }

@@ -32,7 +32,9 @@ test("inputs are bordered and expose a visible focus ring", () => {
 test("dashboard shell stays lightweight, sticky, and keyboard-aware", () => {
   assert.match(layout, /sticky top-0/);
   assert.match(layout, /backdrop-blur-xl/);
-  assert.match(layout, /max-w-\[680px\]/);
+  // The header aligns with the redesigned results column, not the 680px scan form.
+  assert.match(layout, /max-w-\[880px\]/);
+  assert.doesNotMatch(layout, /overflow-x-auto/);
   assert.match(layout, /aria-current=/);
   assert.match(layout, /Dashboard/);
   assert.match(layout, /New scan/);

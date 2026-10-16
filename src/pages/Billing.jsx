@@ -221,7 +221,7 @@ export default function Billing() {
     if (plan.id === "standard_150") {
       if (access?.fullAccess) return <span className="text-[13px] text-good">Active</span>;
       if (checkoutSuppressed) {
-        return <span className="text-[13px] text-ink-faint">{activationPending ? "Activating…" : "Activation pending"}</span>;
+        return <span className="text-[13px] text-ink-faint">{activationPending ? "Checking access…" : "Access not confirmed"}</span>;
       }
       return accessLoaded
         ? <span className="text-[13px] text-ink-faint">Available above</span>
@@ -259,7 +259,7 @@ export default function Billing() {
                 {access?.fullAccess
                   ? "Standard 150"
                   : checkoutSuppressed
-                    ? "Standard 150 activation pending"
+                    ? "Standard 150 access pending"
                     : accessLoaded
                       ? "No active access"
                       : "Checking access…"}
@@ -272,7 +272,7 @@ export default function Billing() {
                 <PillButton solid onClick={() => navigate("/onboarding")}>Run a new scan</PillButton>
               )
             ) : checkoutSuppressed ? (
-              <span className="text-[13px] text-ink-faint">{activationPending ? "Activating access…" : "Awaiting confirmation"}</span>
+              <span className="text-[13px] text-ink-faint">{activationPending ? "Checking access…" : "Awaiting confirmation"}</span>
             ) : accessLoaded ? (
               <span className="text-[13px] text-ink-faint">Unlock below</span>
             ) : (
@@ -292,10 +292,10 @@ export default function Billing() {
           ) : checkoutSuppressed ? (
             activationPending ? (
               <>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Payment complete</p>
-                <h2 className="mt-2 text-[18px] font-semibold tracking-tight">Activating your access</h2>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Access verification pending</p>
+                <h2 className="mt-2 text-[18px] font-semibold tracking-tight">Checking your access</h2>
                 <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted" role="status" aria-live="polite">
-                  Stripe has returned you to the app. We&rsquo;re confirming your payment and will unlock Standard 150 automatically.
+                  We&rsquo;re checking whether full access is active for your account. If your payment is confirmed, Standard 150 will unlock automatically.
                 </p>
                 <div className="mt-5 h-1.5 w-full max-w-[240px] overflow-hidden rounded-full bg-hairline-soft" aria-hidden="true">
                   <div className="h-full w-2/3 animate-pulse rounded-full bg-ink/60" />
@@ -303,13 +303,13 @@ export default function Billing() {
               </>
             ) : (
               <>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Payment confirmation delayed</p>
-                <h2 className="mt-2 text-[18px] font-semibold tracking-tight">Access is taking longer than expected</h2>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Access not confirmed</p>
+                <h2 className="mt-2 text-[18px] font-semibold tracking-tight">We haven&rsquo;t confirmed full access yet</h2>
                 <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted" role="alert">
-                  We haven&rsquo;t confirmed your access yet. Retry only checks your existing payment; it never starts another checkout.
+                  Check again to refresh your access status. This won&rsquo;t start another checkout.
                 </p>
                 <div className="mt-5">
-                  <PillButton solid onClick={retryActivation}>Retry activation</PillButton>
+                  <PillButton solid onClick={retryActivation}>Check again</PillButton>
                 </div>
               </>
             )

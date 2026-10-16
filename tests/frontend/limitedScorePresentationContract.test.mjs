@@ -69,5 +69,5 @@ test("FixList browser consumes backend score status instead of treating every re
   assert.ok(unavailable, "isHealthScoreUnavailable is missing");
   assert.match(unavailable, /health_score_status/);
   assert.match(unavailable, /status === "insufficient_evidence"/);
-  assert.match(source, /<ScoreRing score=\{healthScore\} unavailable=\{scoreUnavailable\} \/>/);
+  assert.match(source, /<ScoreRing score=\{healthScore\} unavailable=\{scoreUnavailable\}(?: size=\{\d+\})? \/>/);
 });

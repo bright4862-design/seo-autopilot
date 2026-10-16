@@ -18,7 +18,7 @@ const faqs = [
   },
   {
     q: "Can I try FixList before paying?",
-    a: "Yes. Create an account and run one free Standard 150 test scan. You can view your real score and up to two of the highest-priority findings before paying. Copy, download, export, complete affected-page lists, the remaining findings, and future scans require full access.",
+    a: "Yes. Create an account and run one free Standard 150 test scan. You can view up to two of the highest-priority findings before paying, with a score when the scan collects enough verified evidence. Copy, download, export, complete affected-page lists, the remaining findings, and future scans require full access.",
   },
   {
     q: "How much is full access?",
@@ -30,7 +30,7 @@ const faqs = [
   },
   {
     q: "What happens after I run my scan?",
-    a: "You get a real FixList preview with your website health score and up to two of the highest-priority findings. Full access reveals the remaining findings, complete affected-page evidence, and enables copy, download, export, and future scans.",
+    a: "Your FixList preview shows up to two of the highest-priority findings. Your website health score appears when the scan collects enough verified evidence. Full access reveals the remaining findings, complete affected-page evidence, and enables copy, download, export, and future scans.",
   },
 ];
 

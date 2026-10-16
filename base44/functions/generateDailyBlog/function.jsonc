@@ -8,8 +8,8 @@
       "schedule_mode": "recurring",
       "schedule_type": "cron",
       "cron_expression": "0 12 * * *",
-      "description": "Publish one guarded evergreen FixList article every day at 12:00 UTC.",
-      "is_active": true,
+      "description": "Legacy Base44 blog publisher disabled; daily publishing is handled by the 10:00 Europe/Paris SEO research workflow.",
+      "is_active": false,
       "ends_type": "never"
     }
   ]

@@ -14,19 +14,10 @@ async function loadJsx(relativePath, replacements = {}) {
   return `data:text/javascript;base64,${Buffer.from(compiled.code).toString("base64")}`;
 }
 const library = (file) => new URL(`../../src/lib/${file}`, import.meta.url).href;
-const roleUrl = await loadJsx("../../src/components/fixlist/RepairRoleView.jsx", {
-  "../../lib/repairRoleExplanations.js": library("repairRoleExplanations.js"),
-  "../../lib/repairRolePresentation.js": library("repairRolePresentation.js"),
-});
-// The existing role component relies on the JSX runtime rather than importing
-// React. Supply it when compiling with the same classic SSR harness as its tests.
-const roleCode = Buffer.from(roleUrl.split(",")[1], "base64").toString("utf8");
-const completeRoleUrl = `data:text/javascript;base64,${Buffer.from(`import React from ${JSON.stringify(import.meta.resolve("react"))};\n${roleCode}`).toString("base64")}`;
 const componentUrl = await loadJsx("../../src/components/fixlist/CustomerRepairGuidance.jsx", {
   "../../lib/implementationPlan.js": library("implementationPlan.js"),
   "../../lib/repairRoleExplanations.js": library("repairRoleExplanations.js"),
   "../../lib/repairSuggestions.js": library("repairSuggestions.js"),
-  "./RepairRoleView.jsx": completeRoleUrl,
 });
 const { default: CustomerRepairGuidance, CustomerRepairGuidanceView } = await import(componentUrl);
 
@@ -43,35 +34,18 @@ function renderCard(item, guidance) {
     React.createElement("p", { className: "evidence" }, JSON.stringify(item.evidence)));
 }
 const props = () => ({ sourceItems: [structuredClone(source)], cards: [structuredClone(card)], trustedScanId: scanId, sourceScanId: scanId, cardsScanId: scanId, authorityVerified: true, role: "owner", onRoleChange() {}, renderCard });
-function findElement(element, predicate) {
-  if (!React.isValidElement(element)) return null;
-  if (predicate(element)) return element;
-  for (const child of React.Children.toArray(element.props.children)) {
-    const found = findElement(child, predicate);
-    if (found) return found;
-  }
-  return null;
-}
 const escaped = (value) => renderToStaticMarkup(React.createElement(React.Fragment, null, value));
 
-test("selecting a role changes visible guidance and preserves exact instructions, evidence and inputs", () => {
+test("controlled role explanations preserve exact instructions, evidence and inputs without a chooser", () => {
   const input = props();
   const before = structuredClone({ sourceItems: input.sourceItems, cards: input.cards });
-  let role = "owner";
-  const viewProps = () => ({ ...input, role, onRoleChange: (next) => { role = next; } });
-  const ownerHtml = render(viewProps());
-  const tree = CustomerRepairGuidanceView(viewProps());
-  const selector = findElement(tree, (node) => node.type.name === "RepairRoleSelector");
-  assert.ok(selector, "a supported repair exposes a role selector");
-  const select = findElement(selector.type(selector.props), (node) => node.type === "select");
-  select.props.onChange({ target: { value: "developer" } });
-  const developerHtml = render(viewProps());
-  assert.equal(role, "developer");
+  const ownerHtml = render({ ...input, role: "owner" });
+  const developerHtml = render({ ...input, role: "developer" });
   assert.ok(ownerHtml.includes(escaped(repairRoleExplanation(card, "owner").explanation)));
   assert.ok(developerHtml.includes(escaped(repairRoleExplanation(card, "developer").explanation)));
   assert.notEqual(ownerHtml, developerHtml);
-  assert.match(developerHtml, /value="developer" selected=""/);
   for (const html of [ownerHtml, developerHtml]) {
+    assert.doesNotMatch(html, /<select|Explain for|Role guidance is available/);
     assert.ok(html.includes(card.whatToChange));
     assert.ok(html.includes(escaped(JSON.stringify(card.evidence))));
   }
@@ -117,7 +91,7 @@ test("Funbooker repair population explains the first card and all four previousl
     const html = render({ ...input, role });
     const articles = [...html.matchAll(/<article>([\s\S]*?)<\/article>/g)].map((match) => match[1]);
     assert.equal(articles.length, 7);
-    assert.match(html, /Owner \/ CEO/);
+    assert.doesNotMatch(html, /<select|Explain for|Role guidance is available/);
     copyByRole[role] = articles.map((article) => {
       assert.ok(article.includes(`<h5>${expectedHeadings[role]}</h5>`));
       assert.ok(article.includes(card.whatToChange));
@@ -142,16 +116,18 @@ test("Funbooker repair population explains the first card and all four previousl
   assert.deepEqual({ sourceItems: input.sourceItems, cards: input.cards }, before);
 });
 
-test("partial role coverage is stated beside the selector", () => {
+test("partial coverage retains mapped and original guidance without a selector or helper count", () => {
   const input = props();
   input.cards.push({ ...card, rule: "unmapped_rule" });
   const html = render(input);
-  assert.match(html, /Role guidance is available for 1 of 2 repairs/);
+  assert.doesNotMatch(html, /<select|Explain for|Role guidance is available/);
+  assert.ok(html.includes(escaped(repairRoleExplanation(card, "owner").explanation)));
+  assert.ok(html.includes(card.whyItMatters));
 });
 
-test("a fully covered list keeps the role control compact and avoids a duplicate plan", () => {
+test("a fully covered list has no role control and avoids a duplicate plan", () => {
   const html = render(props());
-  assert.match(html, /Explain for/);
+  assert.doesNotMatch(html, /<select|Explain for|Role guidance is available/);
   assert.doesNotMatch(html, /view\.|Findings and recommended changes|Before you start|Implementation order|Related work:/);
   assert.equal((html.match(/class="instruction"/g) || []).length, 1);
 });
@@ -184,7 +160,8 @@ test("V8 recommendation rows without local scan IDs use the exact authenticated 
   const row = { fix_id: "repair:v8", rule: "missing_h1", title: "Check the main heading", simple_next_step: "Use the existing heading field.", action_priority: "important" };
   const input = { ...props(), sourceItems: [row] };
   const html = render(input);
-  assert.match(html, /<select/);
+  assert.doesNotMatch(html, /<select|Explain for/);
+  assert.ok(html.includes(escaped(repairRoleExplanation(card, "owner").explanation)));
   assert.doesNotMatch(html, /Before you start/);
   assert.ok(html.includes(card.whatToChange));
   assert.deepEqual(row, { fix_id: "repair:v8", rule: "missing_h1", title: "Check the main heading", simple_next_step: "Use the existing heading field.", action_priority: "important" });
@@ -220,7 +197,8 @@ for (const [label, items] of [
   test(`${label} hide the implementation plan without losing cards or role copy`, () => {
     const html = render({ ...props(), sourceItems: items });
     assert.doesNotMatch(html, /Before you start/);
-    assert.match(html, /<select/);
+    assert.doesNotMatch(html, /<select|Explain for/);
+    assert.ok(html.includes(escaped(repairRoleExplanation(card, "owner").explanation)));
     assert.ok(html.includes(card.whatToChange));
   });
 }
@@ -255,11 +233,13 @@ test("verified explicit dependency changes execution sequence with a reason whil
   assert.deepEqual(items, original);
 });
 
-test("the default stateful wrapper starts with the owner explanation and escapes source instructions", () => {
+test("the production wrapper uses owner guidance without a chooser and escapes source instructions", () => {
   const input = props();
+  input.role = "developer";
   input.cards[0].whatToChange = "<script>unsafe()</script>";
   const html = render(input, CustomerRepairGuidance);
   assert.ok(html.includes(escaped(repairRoleExplanation(card, "owner").explanation)));
+  assert.ok(!html.includes(escaped(repairRoleExplanation(card, "developer").explanation)));
   assert.match(html, /&lt;script&gt;unsafe\(\)&lt;\/script&gt;/);
-  assert.doesNotMatch(html, /<script>/);
+  assert.doesNotMatch(html, /<script>|<select|Explain for|Role guidance is available/);
 });

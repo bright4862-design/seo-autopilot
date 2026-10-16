@@ -20,32 +20,30 @@ import {
 } from "../../base44/functions/getCustomerScanResult/limitedResultIntegrity.js";
 import { RELEASE_FINGERPRINT } from "../../base44/functions/getCustomerScanResult/generatedReleaseContract.js";
 import { isReadableAuthorityReleaseFingerprint } from "../../base44/functions/getCustomerScanResult/releaseCompatibility.js";
+import { FUNCTION_BUILD_ID } from "../../base44/functions/getCustomerScanResult/generatedBuildId.js";
+import * as activeProjection from "../../base44/functions/getCustomerScanResultV8/projection.js";
+import * as activeLimited from "../../base44/functions/getCustomerScanResultV8/limitedResultIntegrity.js";
+import * as activePreview from "../../base44/functions/getCustomerScanResultV8/customerPreviewSeal.js";
+import * as activeCompatibility from "../../base44/functions/getCustomerScanResultV8/releaseCompatibility.js";
+import { FUNCTION_BUILD_ID as ACTIVE_FUNCTION_BUILD_ID } from "../../base44/functions/getCustomerScanResultV8/generatedBuildId.js";
 
 const entrySource = readFileSync("base44/functions/getCustomerScanResult/entry.ts", "utf8");
+const activeEntrySource = readFileSync("base44/functions/getCustomerScanResultV8/entry.ts", "utf8");
 const SECRET = "historical-reader-test-secret-never-deployed";
 const STALE_PROCESS_SECRET = "stale-process-signing-key-never-deployed";
 const HISTORICAL_FINGERPRINT = "5d94e93c54a9efb6";
+// The revision recorded on main immediately before commercial-hub sampling.
+// Keep this fixture fixed: deriving it from the new candidate would miss a
+// release advance that accidentally makes intact customer history unreadable.
+const PREVIOUS_CURRENT_FINGERPRINT = "01ebe8e90df1e6bd";
 const UNKNOWN_FINGERPRINT = "aaaaaaaaaaaaaaaa";
 let handlerInvocationSequence = 0;
 
-async function importHandler(harnessName) {
-  const javascript = ts.transpileModule(entrySource, {
+async function importHandler(harnessName, active = false) {
+  const javascript = ts.transpileModule(active ? activeEntrySource : entrySource, {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
   }).outputText.replace(/^import[\s\S]*?;\s*$/gm, "");
-  const prelude = `const {
-    createClientFromRequest,
-    secrets,
-    buildLimitedResultSnapshot,
-    verifyLimitedResultProof,
-    authoritySnapshotFromRows,
-    buildCustomerProjection,
-    buildScanHistoryProjection,
-    evaluatePaidAccess,
-    recordOwnedByUser,
-    verifyAuthoritySeal,
-    RELEASE_FINGERPRINT,
-    isReadableAuthorityReleaseFingerprint,
-  } = globalThis.${harnessName};`;
+  const prelude = `const { ${Object.keys(globalThis[harnessName]).join(",")} } = globalThis.${harnessName};`;
   await import(`data:text/javascript;base64,${Buffer.from(`${prelude}\n${javascript}\n// harness:${harnessName}`).toString("base64")}`);
 }
 
@@ -124,7 +122,12 @@ async function sealedRows(fingerprint) {
       },
       classification_verdict: "complete",
       worker_peak_memory_bytes: 1024,
-      recommendations: [],
+      recommendations: [{
+        fix_id: "fix_hist", rule: "missing_h1", issue_title: "Review this page heading",
+        priority: "medium", page_url: "https://www.funbooker.com/fr/ville/paris",
+        affected_pages: ["https://www.funbooker.com/fr/ville/paris"],
+        recommended_value: "Keep the verified saved instruction.",
+      }],
     },
     identity: {
       scan_id: "scan_hist",
@@ -152,10 +155,13 @@ function matches(record, query) {
   return Object.entries(query || {}).every(([key, value]) => record?.[key] === value);
 }
 
-async function invokeWithFingerprint(fingerprint) {
+async function invokeWithFingerprint(fingerprint, {
+  active = false, mutateRows = () => {}, callerUserId = "user_hist", signingKey = SECRET,
+} = {}) {
   const invocationId = ++handlerInvocationSequence;
   const harnessName = `__customerHistoricalReaderHarness_${invocationId}`;
   const rows = await sealedRows(fingerprint);
+  mutateRows(rows);
   const access = {
     id: "access_hist",
     owner_user_id: "user_hist",
@@ -168,7 +174,7 @@ async function invokeWithFingerprint(fingerprint) {
     granted_at: "2026-08-31T09:00:00.000Z",
   };
   const base44 = {
-    auth: { me: async () => ({ id: "user_hist", email: "paid@example.com" }) },
+    auth: { me: async () => ({ id: callerUserId, email: "paid@example.com" }) },
     asServiceRole: {
       entities: {
         ScanRun: { get: async (id) => id === rows.run.id ? structuredClone(rows.run) : null },
@@ -199,7 +205,7 @@ async function invokeWithFingerprint(fingerprint) {
   };
   globalThis[harnessName] = {
     createClientFromRequest: () => base44,
-    secrets: { get: (name) => name === "SCAN_EVIDENCE_SIGNING_KEY" ? SECRET : "" },
+    secrets: { get: (name) => name === "SCAN_EVIDENCE_SIGNING_KEY" ? signingKey : "" },
     buildLimitedResultSnapshot,
     verifyLimitedResultProof,
     authoritySnapshotFromRows,
@@ -210,10 +216,15 @@ async function invokeWithFingerprint(fingerprint) {
     verifyAuthoritySeal,
     RELEASE_FINGERPRINT,
     isReadableAuthorityReleaseFingerprint,
+    FUNCTION_BUILD_ID,
+    ...(active ? {
+      ...activeProjection, ...activeLimited, ...activePreview, ...activeCompatibility,
+      FUNCTION_BUILD_ID: ACTIVE_FUNCTION_BUILD_ID,
+    } : {}),
   };
 
   try {
-    await importHandler(harnessName);
+    await importHandler(harnessName, active);
     assert.equal(typeof handler, "function");
     return await handler(new Request("https://function.example", {
       method: "POST",
@@ -246,3 +257,42 @@ test("the actual customer reader rejects an unknown release before treating it a
   assert.equal(body.success, false);
   assert.equal(body.error_code, "result_release_mismatch");
 });
+
+for (const active of [false, true]) {
+  const route = active ? "active V8" : "canonical";
+  test(`${route} reader preserves sealed prior-current results after the candidate advances`, async () => {
+    assert.notEqual(RELEASE_FINGERPRINT, PREVIOUS_CURRENT_FINGERPRINT);
+    const response = await invokeWithFingerprint(PREVIOUS_CURRENT_FINGERPRINT, { active });
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(body.success, true);
+    assert.equal(body.authority_verified, true);
+    assert.equal(body.run.beta_revision_fingerprint, PREVIOUS_CURRENT_FINGERPRINT);
+    assert.equal(body.release_contract_current, false);
+    assert.equal(body.fixItems.length, 1);
+    assert.equal(body.fixItems[0].recommended_value, "Keep the verified saved instruction.");
+  });
+
+  for (const [label, options, status, code] of [
+    ["unknown release", {}, 503, "result_release_mismatch"],
+    ["another owner", { callerUserId: "other_user" }, 404, "scan_not_found"],
+    ["missing signing key", { signingKey: "" }, 503, "result_authority_unavailable"],
+    ["wrong signing key", { signingKey: "incorrect-test-key" }, 409, "result_authority_invalid"],
+    ["changed signed score", { mutateRows: (rows) => { rows.run.health_score = 99; } }, 409, "result_authority_invalid"],
+    ["changed FixList identity", { mutateRows: (rows) => { rows.fixList.project_id = "other_project"; } }, 409, "fix_list_mismatch"],
+    ["changed FixItem identity", { mutateRows: (rows) => { rows.fixItems[0].scan_run_id = "other_scan"; } }, 409, "fix_items_mismatch"],
+    ["missing FixItem", { mutateRows: (rows) => { rows.fixItems = []; } }, 409, "fix_items_incomplete"],
+    ["changed saved instruction", { mutateRows: (rows) => { rows.fixItems[0].recommended_value = "Unsigned replacement"; } }, 409, "result_authority_invalid"],
+  ]) {
+    test(`${route} historical read still rejects ${label}`, async () => {
+      const fingerprint = label === "unknown release" ? UNKNOWN_FINGERPRINT : PREVIOUS_CURRENT_FINGERPRINT;
+      const response = await invokeWithFingerprint(fingerprint, { active, ...options });
+      const body = await response.json();
+      assert.equal(response.status, status);
+      assert.equal(body.success, false);
+      assert.equal(body.error_code, code);
+      assert.equal(body.authority_verified, undefined);
+      assert.equal(body.fixItems, undefined, "rejected reads must not expose saved findings");
+    });
+  }
+}

@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `01ebe8e90df1e6bd` |
+| Candidate fingerprint | `e0eca935c350e590` |
 | Classifier | `archetype_classifier_v12_locale_normalized_structural_routes` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,12 +15,14 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `01ebe8e90df1e6bd` with classifier
+fingerprint `e0eca935c350e590` with classifier
 `archetype_classifier_v12_locale_normalized_structural_routes`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v7_content_applicability`.
 
-The current `01ebe8e90df1e6bd` local candidate preserves published route identity through review, grouped repair evidence, signed counts, persistence and customer readers. It adds the internal `standard_review_snapshot_hmac_identity_v1` seal while retaining public V6 routes, GEO capability and the Standard 150 cap. Historical authority and preview proofs retain their original serialization. Local implementation and regression checks are recorded in `docs/full-blueprint-progress.md`; full-blueprint acceptance, exact-SHA CI, deployment verification and live acceptance remain pending.
+The current `e0eca935c350e590` local candidate prioritizes commercial category, city/location and service hubs within the Standard 150 page cap, while retaining representative detail pages and diagnostic coverage. Sitemap traversal interleaves business structures before repeated language and numbered siblings. Offline evidence and limitations are recorded in `docs/standard150-commercial-sampling-acceptance.md`; this is not a live acceptance report. Exact-SHA CI, coordinated scanner/Base44 deployment verification and live acceptance remain pending.
+
+The preceding `01ebe8e90df1e6bd` candidate preserves published route identity through review, grouped repair evidence, signed counts, persistence and customer readers. It adds the internal `standard_review_snapshot_hmac_identity_v1` seal while retaining public V6 routes, GEO capability and the Standard 150 cap. Historical authority and preview proofs retain their original serialization. Local implementation and regression checks are recorded in `docs/full-blueprint-progress.md`; full-blueprint acceptance remains pending.
 
 Stage-one sequencing is authorized by the user: deploy after complete stage-one acceptance. The identity-only source-sharing checkpoint `5fb87bf7869c51c2` is superseded and was not deployed. The current candidate also adds image applicability, general visible-template evidence, search-metadata relevance and the labelled 14-case synthetic corpus. These do not satisfy the later genuine 30-site or full-blueprint gate.
 

@@ -7,9 +7,10 @@ from collections import defaultdict
 from typing import Any, Callable, Iterable
 from urllib.parse import urlparse
 
-from .extract import is_legal_page_path
+from .extract import is_legal_page_path, is_route_boundary
+from .market_scope import strip_market_locale_prefix
 
-SAMPLING_VERSION = "balanced_sitemap_buckets_v6_selected_and_checked_split"
+SAMPLING_VERSION = "balanced_sitemap_buckets_v7_commercial_hubs_before_repeated_leaves"
 TRUST_PREFIXES = (
     "/about", "/contact", "/privacy", "/terms", "/legal", "/mentions-legales",
     "/cgv", "/security", "/impressum", "/conditions", "/a-propos",
@@ -29,6 +30,12 @@ MIN_PER_MATERIAL_FAMILY = 3
 MATERIAL_THRESHOLD = 2
 TRUST_RESERVE = 5
 MONEY_WEIGHT = 1.5
+HUB_WEIGHT = 4.0
+HUB_ROLES = {
+    "category_or_collection", "city_or_location", "service", "pricing",
+    "contact", "comparison", "calculator",
+}
+LEAF_ROLES = MONEY_FAMILIES - {"collection_page", "location_landing", "calculator", "comparison_page"}
 SMALL_BUDGET = 25
 # Slots held for the routes that prove what the business actually does. The
 # 35-site production audit reported IKEA as a publisher because its sample was
@@ -39,12 +46,9 @@ IDENTITY_RESERVE = 24
 
 
 def strip_locale_prefix(path: str) -> str:
-    """Drop a leading locale or market segment: /de-at/team -> /team."""
+    """Drop one/two leading market segments for sampling, never URL identity."""
     clean = str(path or "/").split("?", 1)[0].split("#", 1)[0]
-    segments = [segment for segment in clean.split("/") if segment]
-    if segments and LOCALE_SEGMENT_RE.match(segments[0]):
-        segments = segments[1:]
-    return "/" + "/".join(segments)
+    return strip_market_locale_prefix(clean)
 
 
 def route_signature(path: str) -> str:
@@ -79,11 +83,34 @@ def is_trust_path(path: str) -> bool:
     return bool(segments and segments[0] in TRUST_ROUTE_SEGMENTS)
 
 
+def selection_role(path: str, family: str) -> str:
+    """Scheduling hints only: no indexability, template or revenue authority."""
+    clean = strip_locale_prefix(path).lower()
+    first = clean.strip("/").split("/", 1)[0]
+    if family == "route_boundary" or is_route_boundary(path) or is_legal_page_path(clean):
+        return "diagnostic"
+    if first in {"pricing", "price", "prices", "plans", "tarif", "tarifs", "tarification"}:
+        return "pricing"
+    if first in {"service", "services", "our-service", "our-services", "notre-service", "nos-services", "prestations"}:
+        return "service"
+    if family == "collection_page" or first in {"category", "categories", "categorie", "catégorie", "collection", "collections"}:
+        return "category_or_collection"
+    if family == "location_landing" or first in {"city", "cities", "ville", "villes", "location", "locations"}:
+        return "city_or_location"
+    if family == "contact" or first in {"contact", "contact-us", "nous-contacter", "contactez-nous"}:
+        return "contact"
+    if family in {"comparison_page", "calculator"}:
+        return "comparison" if family == "comparison_page" else "calculator"
+    return family if family in MONEY_FAMILIES else "diagnostic"
+
+
 def select_balanced_urls(
     urls: Iterable[str],
     family_of: Callable[[str], str],
     path_of: Callable[[str], str],
     budget: int,
+    *,
+    preferred_market: str = "",
 ) -> list[str]:
     urls = list(urls)
     if budget <= 0:
@@ -91,9 +118,27 @@ def select_balanced_urls(
     if len(urls) <= budget:
         return urls
 
+    # This is a scheduling key, separate from exact request/evidence identities.
+    # Only a verified/explicit leading locale hint may affect market preference.
+    market_parts = str(preferred_market or "").strip("/").split("/")
+    market_parts = market_parts if 1 <= len(market_parts) <= 2 and all(LOCALE_SEGMENT_RE.fullmatch(part) for part in market_parts) else []
+    market_prefix = "/" + "/".join(part.lower() for part in market_parts) if market_parts else ""
+    paths = {url: path_of(url) for url in urls}
+    families = {url: family_of(url) for url in urls}
+    roles = {url: selection_role(paths[url], families[url]) for url in urls}
+    signatures = {url: route_signature(paths[url]) for url in urls}
+
+    def rank(url: str) -> tuple:
+        path = str(paths[url]).lower().split("?", 1)[0].split("#", 1)[0]
+        preferred = bool(market_prefix) and (path == market_prefix or path.startswith(market_prefix + "/"))
+        return (not preferred, signatures[url], url)
+
+    urls = sorted(set(urls), key=rank)
     buckets: dict[str, list[str]] = defaultdict(list)
+    role_buckets: dict[str, list[str]] = defaultdict(list)
     for url in urls:
-        buckets[family_of(url)].append(url)
+        buckets[families[url]].append(url)
+        role_buckets[roles[url]].append(url)
 
     selected: list[str] = []
     chosen: set[str] = set()
@@ -103,43 +148,54 @@ def select_balanced_urls(
         if url in chosen or len(selected) >= budget:
             return False
         chosen.add(url)
-        seen_signatures.add(route_signature(path_of(url)))
+        seen_signatures.add(signatures[url])
         selected.append(url)
         return True
 
-    def fresh_first(candidates: Iterable[str]) -> list[str]:
-        """Unseen route signatures first, original order preserved within each.
-
-        Proportional fill used to walk a family in sitemap order, so a route
-        published in twelve markets could consume twelve slots before a
-        different route was reached.
-        """
-        fresh, repeats = [], []
+    def fresh(candidates: Iterable[str]) -> list[str]:
+        """One exact URL per new sampling route; repeats can fill unused space."""
+        result = []
         pending: set[str] = set()
         for url in candidates:
-            signature = route_signature(path_of(url))
-            if signature in seen_signatures or signature in pending:
-                repeats.append(url)
-            else:
+            signature = signatures[url]
+            if url not in chosen and signature not in seen_signatures and signature not in pending:
                 pending.add(signature)
-                fresh.append(url)
-        return fresh + repeats
+                result.append(url)
+        return result
 
-    for url in fresh_first(u for u in urls if is_trust_path(path_of(u)))[:TRUST_RESERVE]:
-        take(url)
+    def interleave(groups: dict[str, list[str]]) -> Iterable[str]:
+        pending = {key: iter(values) for key, values in sorted(groups.items()) if values}
+        while pending:
+            for key in list(pending):
+                try:
+                    yield next(pending[key])
+                except StopIteration:
+                    del pending[key]
 
-    # Identity and commercial routes are reserved before proportional fill, so
-    # a large multi-market site cannot spend its whole budget on whichever
-    # surface happens to publish the most URLs.
-    identity_candidates = [url for url in urls if family_of(url) in MONEY_FAMILIES]
-    for url in fresh_first(identity_candidates)[:IDENTITY_RESERVE]:
+    trust_candidates = [url for url in urls if is_trust_path(paths[url])]
+    trust_fresh = fresh(trust_candidates)
+    trust_fresh_set = set(trust_fresh)
+    trust_order = trust_fresh + [url for url in trust_candidates if url not in trust_fresh_set]
+    for url in trust_order[:TRUST_RESERVE]:
         take(url)
+    reserved_trust = list(selected)
+
+    # Hubs lead to many commercial pages. Reserve half the sample for distinct
+    # available hubs before a large activity/product inventory takes the fill.
+    # Keep a separate bounded leaf reserve so we still review actual inventory.
+    for allowed_roles, limit in ((HUB_ROLES, budget // 2), (LEAF_ROLES, min(IDENTITY_RESERVE, max(1, budget // 4)))):
+        added = 0
+        for url in interleave({role: fresh(values) for role, values in role_buckets.items() if role in allowed_roles}):
+            if added >= limit or len(selected) >= budget:
+                break
+            if signatures[url] not in seen_signatures and take(url):
+                added += 1
 
     min_per_family = 1 if budget < SMALL_BUDGET else MIN_PER_MATERIAL_FAMILY
     for family in sorted(f for f, values in buckets.items() if len(values) >= MATERIAL_THRESHOLD):
-        want = min(min_per_family, len(buckets[family]))
-        have = sum(1 for url in selected if family_of(url) == family)
-        for url in fresh_first(buckets[family]):
+        want = min(min_per_family, len({signatures[url] for url in buckets[family]}))
+        have = len({signatures[url] for url in selected if families[url] == family})
+        for url in fresh(buckets[family]):
             if have >= want or len(selected) >= budget:
                 break
             if take(url):
@@ -151,24 +207,40 @@ def select_balanced_urls(
 
     remaining = budget - len(selected)
     if remaining > 0:
-        pool = {family: [url for url in values if url not in chosen] for family, values in buckets.items()}
+        pool = {role: fresh(values) for role, values in role_buckets.items()}
         weights = {
-            family: len(values) * (MONEY_WEIGHT if family in MONEY_FAMILIES else 1.0)
-            for family, values in pool.items() if values
+            role: len(values) * (HUB_WEIGHT if role in HUB_ROLES else MONEY_WEIGHT if role in MONEY_FAMILIES else 1.0)
+            for role, values in pool.items() if values
         }
         total = sum(weights.values())
         if total > 0:
-            quotas = {family: int(remaining * weight / total) for family, weight in weights.items()}
-            for family in sorted(quotas, key=lambda value: (-quotas[value], value)):
-                for url in fresh_first(pool[family])[:quotas[family]]:
-                    if not take(url):
-                        break
+            quotas = {role: int(remaining * weight / total) for role, weight in weights.items()}
+            for url in interleave({role: pool[role][:quota] for role, quota in quotas.items()}):
+                if signatures[url] not in seen_signatures:
+                    take(url)
 
-    for url in fresh_first(urls):
+    # Use fresh paths across every role before any remaining language/query
+    # variants. This changes selection, never the exact URLs we fetch or seal.
+    for url in fresh(urls) + urls:
         if len(selected) >= budget:
             break
         take(url)
-    return selected[:budget]
+
+    # Membership and fetch order answer different questions. Two hub rounds
+    # followed by one leaf/diagnostic round gives deadlines a diverse prefix,
+    # instead of fetching all pages from the largest XML family first.
+    pending_hubs = {role: iter([url for url in selected if url not in reserved_trust and roles[url] == role]) for role in sorted(HUB_ROLES)}
+    pending_leaves = {role: iter([url for url in selected if url not in reserved_trust and roles[url] == role]) for role in sorted(LEAF_ROLES)}
+    pending_diagnostics = {family: iter([url for url in selected if url not in reserved_trust and roles[url] == "diagnostic" and families[url] == family]) for family in sorted(buckets)}
+    ordered = list(reserved_trust)
+    while pending_hubs or pending_leaves or pending_diagnostics:
+        for groups in (pending_hubs, pending_hubs, pending_leaves, pending_diagnostics):
+            for key in list(groups):
+                try:
+                    ordered.append(next(groups[key]))
+                except StopIteration:
+                    del groups[key]
+    return ordered
 
 
 def sampling_report(

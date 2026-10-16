@@ -58,7 +58,7 @@
     "review_version": "python_review_v2_structural_marketplace",
     "route_boundary_classifier_version": "route_boundary_classifier_v2_wordpress_author_archives",
     "sampling_disclosure_version": "sampling_disclosure_v5_selection_language",
-    "sampling_version": "balanced_sitemap_buckets_v6_selected_and_checked_split",
+    "sampling_version": "balanced_sitemap_buckets_v7_commercial_hubs_before_repeated_leaves",
     "scan_history_delete_version": "scan_history_delete_v2_drain_children",
     "scan_history_version": "scan_history_v3_focused_parent_children",
     "scanner_build_revision": "authenticated_health_probe_v1",
@@ -72,10 +72,10 @@
     "visible_template_evidence_version": "visible_template_evidence_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "01ebe8e90df1e6bd",
+  "fingerprint": "e0eca935c350e590",
   "git_commit": "",
-  "note": "Stage-one evidence candidate after independent review corrections; synthetic verification is not live or full-blueprint acceptance.",
-  "recorded_at": "2026-09-19T14:03:44.600077+00:00",
+  "note": "Commercial-hub sampling candidate; offline regression and independent source review only. Live acceptance and release authorization remain pending.",
+  "recorded_at": "2026-10-16T13:52:45.058678+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"
 }

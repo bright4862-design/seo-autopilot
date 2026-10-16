@@ -65,20 +65,15 @@ async function importActivationHelpers() {
     /export const ACTIVATION_POLL_MAX_ATTEMPTS[\s\S]*?(?=export default function Billing)/,
   )?.[0];
   assert.ok(helperBlock, "Billing must expose its activation polling helper block");
-  const moduleSource = helperBlock.replace(/^export /gm, "");
+  // Keep the browser timer alias local to the extracted helpers. Shared window
+  // cleanup can race with polling when Node 20 resumes this awaited import.
+  const moduleSource = `const window = globalThis;\n${helperBlock.replace(/^export /gm, "")}`;
   return import(
     `data:text/javascript;base64,${Buffer.from(`${moduleSource}\nexport { pollForActivatedAccess };`).toString("base64")}`
   );
 }
 
-const originalWindow = globalThis.window;
-globalThis.window = globalThis;
 const { pollForActivatedAccess } = await importActivationHelpers();
-
-test.after(() => {
-  if (originalWindow === undefined) delete globalThis.window;
-  else globalThis.window = originalWindow;
-});
 
 test("activation polling succeeds after Stripe entitlement becomes visible", async () => {
   let calls = 0;
@@ -147,7 +142,7 @@ test("aborting activation clears the pending wait and returns without another re
     maxDurationMs: 10_000,
     requestTimeoutMs: 100,
   });
-  window.setTimeout(() => controller.abort(), 5);
+  globalThis.setTimeout(() => controller.abort(), 5);
 
   const result = await polling;
   assert.equal(result.status, "cancelled");

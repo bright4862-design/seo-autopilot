@@ -3,6 +3,7 @@ import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { sanitizeReportRawFindingEvidence, sanitizeScanCoverage } from "./repairEvidence.js";
 import { PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION } from "./evidenceUrlIdentity.js";
 import { PUBLISHED_REVIEW_ATTESTATION_VERSION, publishedIdentityContext, publishedRepairEvidenceFields, publishedPriorityContext } from "./publishedRepairEvidence.js";
+import { sanitizeComparisonEvidence } from "./comparisonEvidence.js";
 const ENCODER = new TextEncoder();
 
 export const ACCESS_APP_ID = "6a498732ec779dfaaeab0e53";
@@ -422,6 +423,7 @@ export function authoritySnapshotFromRows({ run, fixList, fixItems, userId }) {
     && fixList?.repair_priority_model_version === REPAIR_PRIORITY_MODEL_V2;
   const version = text(run?.authority_seal_version, 160);
   const publishedContext = { ...publishedIdentityContext(run, version === PUBLISHED_REVIEW_ATTESTATION_VERSION ? PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION : ""), persisted: true };
+  const comparisonEvidence = sanitizeComparisonEvidence(run?.comparison_evidence, publishedContext);
   const recommendations = (fixItems || []).map((item) => authorityFixFromRow(item, { canonical, version, publishedContext }));
   if (canonical) {
     recommendations.sort((left, right) => number(left.canonical_action_rank) - number(right.canonical_action_rank));
@@ -472,6 +474,7 @@ export function authoritySnapshotFromRows({ run, fixList, fixItems, userId }) {
       ...coverageSnapshotFields(run),
       ...acceptanceEvidenceSnapshotFields(run),
       ...reportEvidenceSnapshotFields(run),
+      ...(comparisonEvidence.version ? { comparison_evidence: comparisonEvidence } : {}),
       health_score: number(run?.health_score),
       health_grade: text(run?.health_grade, 80),
       ...scoreExplanationSnapshotFields(run),

@@ -4,6 +4,7 @@ import { firstFailedRepairInvariant } from "./repairInvariants.js";
 import { sanitizeReportRawFindingEvidence, sanitizeScanCoverage } from "./repairEvidence.js";
 import { PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION, publishedEvidenceUrlKey } from "./evidenceUrlIdentity.js";
 import { PUBLISHED_REVIEW_ATTESTATION_VERSION, publishedIdentityContext, publishedRepairEvidenceFields, publishedPriorityContext } from "./publishedRepairEvidence.js";
+import { sanitizeComparisonEvidence } from "./comparisonEvidence.js";
 // Bumped when the snapshot gained coverage/inventory fields. The authority
 // proof is an HMAC over the whole snapshot, so adding a field changes the
 // payload for every row -- including rows sealed before it existed. Version
@@ -170,6 +171,7 @@ export function buildAuthoritySnapshot({ scan, review, identity, userId, now = n
   const healthScore = number(review?.health_score ?? review?.website_health_report?.health_score ?? scan?.health_score);
   const healthGrade = text(review?.health_grade || review?.website_health_report?.health_grade, 80);
   const fingerprint = text(review?.beta_revision_fingerprint || scan?.beta_revision_fingerprint, 160);
+  const comparisonEvidence = sanitizeComparisonEvidence(review?.comparison_evidence, context);
 
   return {
     version: identityVersion ? PUBLISHED_REVIEW_ATTESTATION_VERSION : REVIEW_ATTESTATION_VERSION,
@@ -226,6 +228,7 @@ export function buildAuthoritySnapshot({ scan, review, identity, userId, now = n
       evidence_quality_gate_version: text(review?.evidence_quality_gate_version, 160),
       crawl_timing: plainObject(scan?.crawl_timing ?? scan?.technical_audit_summary?.crawl_timing),
       sampling_evidence: plainObject(scan?.sampling_evidence),
+      ...(comparisonEvidence.version ? { comparison_evidence: comparisonEvidence } : {}),
       ...coverageAuthorityFields(review?.coverage_authority_evidence),
       ...acceptanceEvidenceFields(scan, review),
       health_score: healthScore,

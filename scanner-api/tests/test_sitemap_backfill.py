@@ -247,6 +247,7 @@ async def test_alias_exhaustion_stops_at_shared_claim_budget(
     assert result["crawl_timing"]["final_url_duplicates_deduped"] == request_cap - 1
     assert result["crawl_timing"]["sitemap_backfill_enqueued"] == request_cap - 3
     assert result["crawl_timing"]["crawl_request_cap_reached"] is True
+    assert result["crawl_timing"]["sitemap_backfill_reserve_truncated"] is True
     assert result["crawl_timing"]["sitemap_backfill_reserve_remaining"] > 0
     assert result["crawl_timing"]["queue_exhausted"] is False
 
@@ -275,3 +276,29 @@ async def test_backfill_preserves_requested_path_scope(
     assert requested
     assert all(url.startswith(f"{ORIGIN}/products/") for url in requested)
     assert all(page["url"].startswith(f"{ORIGIN}/products/") for page in result["pages"])
+
+
+@pytest.mark.asyncio
+async def test_truncated_unusable_reserve_is_not_full_inventory_proof(
+    monkeypatch, backfill_fixture,
+):
+    requested, selected, collapse = backfill_fixture
+    # The sitemap fixture deliberately returns disallowed-scope URLs.
+    # This checks the independent enqueue boundary even if an upstream
+    # sitemap discovery implementation changes its scope filtering.
+    async def sitemap(*args, **kwargs):
+        return [f"{ORIGIN}/outside/item-{i}" for i in range(70)]
+
+    monkeypatch.setattr(scanner, "load_sitemap_urls", sitemap)
+    monkeypatch.setattr(scanner, "ENABLE_STANDARD150_SITEMAP_BACKFILL", True)
+    result = await scanner.run_scan(
+        f"{ORIGIN}/products/", path_prefix="/products/",
+        scan_mode="advanced", job_mode=True, concurrency=8,
+    )
+
+    assert requested == [f"{ORIGIN}/products/"]
+    assert result["pages_crawled"] == 1
+    assert result["crawl_timing"]["sitemap_backfill_reserve_truncated"] is True
+    assert result["crawl_timing"]["sitemap_backfill_reserve_remaining"] == 0
+    # Exhaustion of a bounded reserve must never be marketed as inventory proof.
+    assert result["crawl_timing"]["queue_exhausted"] is False

@@ -12,7 +12,13 @@ import pytest
 from app import scanner
 from app.extract import extract_page
 from app.main import SCAN_RESPONSE_PAGE_LIMITS, enforce_scan_response_page_budget
-from app.stage2_coverage_evidence import _bounded_pages
+from app.stage2_coverage_evidence import (
+    _bounded_pages,
+    near_duplicate_main_content,
+    money_page_reachability,
+    MAIN_TEXT_EVIDENCE_VERSION,
+)
+from app.stage2_reachability_provenance import REACHABILITY_PROVENANCE_VERSION
 from app.stage2_reachability_provenance import (
     EXTENDED_REACHABILITY_SCOPE,
     REACHABILITY_SCOPE,
@@ -155,3 +161,81 @@ def test_reachability_is_150_by_default_and_500_only_with_explicit_opt_in():
 
     default_single_page = enrich_pages_from_retained_link_evidence([page(0)])
     assert default_single_page[0]["reachability_scope"] == REACHABILITY_SCOPE
+
+
+
+def test_stage2_500_page_evidence_functions_preserve_default_150_limit():
+    def money_page(index: int, *, scope: str = EXTENDED_REACHABILITY_SCOPE):
+        return {
+            "url": f"{ORIGIN}/product/{index}",
+            "page_template_family": "product_page",
+            "money_page": True,
+            "reachability_provenance_version": REACHABILITY_PROVENANCE_VERSION,
+            "reachability_scope": scope,
+            "reachability_evidence_state": "observed_sample",
+            "sitewide_orphan_claim": False,
+            "observed_internal_inlink_count": 1,
+            "internal_source_pages": [f"{ORIGIN}/"],
+            "internal_source_pages_truncated": False,
+            "crawl_depth": 251 if index == 499 else 1,
+            "navigation_presence": True,
+        }
+
+    pages = [money_page(i) for i in range(500)]
+
+    # The private opt-in is necessary, never inferred merely because the
+    # caller passes an oversized list.
+    with pytest.raises(ValueError, match="at most 150 page objects"):
+        money_page_reachability(pages)
+    with pytest.raises(ValueError, match="at most 150 page objects"):
+        near_duplicate_main_content(pages)
+
+    result = money_page_reachability(pages, max_assessed_pages=500)
+    assert result["money_pages_observed"] == 500
+    assert len(result["pages"]) == 500
+    assert result["scope"] == EXTENDED_REACHABILITY_SCOPE
+    assert result["sitewide_orphan_claim"] is False
+    assert result["unverified_routes"] == 0
+    assert result["pages"][-1]["observed_depth"] == 251
+    assert result["pages"][-1]["reason"] == "weak_route_in_observed_sample"
+
+    # A Standard-150 producer envelope is not accepted as 500 evidence;
+    # versioned scope must match the explicit capacity.
+    mixed = [money_page(0, scope=REACHABILITY_SCOPE), money_page(1)]
+    mismatched = money_page_reachability(mixed, max_assessed_pages=500)
+    assert mismatched["pages"][0]["state"] == "not_verified"
+    assert mismatched["pages"][0]["reason"] == "reachability_provenance_unavailable"
+    assert mismatched["sitewide_orphan_claim"] is False
+
+    with pytest.raises(ValueError, match="at most 500 page objects"):
+        money_page_reachability([money_page(i) for i in range(501)], max_assessed_pages=500)
+    for invalid in (0, 151, 499, 501, True, None, "500"):
+        with pytest.raises(ValueError, match="Unsupported assessed-page capacity"):
+            money_page_reachability(pages[:1], max_assessed_pages=invalid)
+
+
+def test_stage2_near_duplicate_500_is_bounded_without_inventing_full_site_evidence():
+    text = "verified " * 55
+
+    def eligible(index: int, *, with_main: bool):
+        return {
+            "url": f"{ORIGIN}/product/{index}",
+            "status_code": 200,
+            "page_evidence_class": "usable_html",
+            "main_text_evidence_version": MAIN_TEXT_EVIDENCE_VERSION,
+            "main_text_verified": with_main,
+            "main_text": text if with_main else "",
+            "page_template_family": "product_page",
+        }
+
+    pages = [eligible(i, with_main=i < 2) for i in range(500)]
+    evidence = near_duplicate_main_content(pages, max_assessed_pages=500)
+    assert evidence["eligible_pages"] == 2
+    assert evidence["state"] == "fail"
+    assert len(evidence["clusters"]) == 1
+    assert evidence["clusters"][0]["page_count"] == 2
+    assert len(evidence["pair_samples"]) <= 10
+    assert len(evidence["clusters"][0]["affected_pages"]) <= 10
+
+    with pytest.raises(ValueError, match="at most 500 page objects"):
+        near_duplicate_main_content(pages + [eligible(500, with_main=True)], max_assessed_pages=500)

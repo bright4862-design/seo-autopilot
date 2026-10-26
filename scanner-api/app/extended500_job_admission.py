@@ -133,7 +133,10 @@ def evaluate_extended500_preflight(
         ("owner_attested_robots_override", "owner_attested_robots_override"),
     )
     for gkey, tkey in mappings:
-        if signed_grant.get(gkey) != task.get(tkey):
+        # In Python, True == 1. A signed boolean must not impersonate the
+        # numeric attempt, nor may numeric flags impersonate frozen bools.
+        if (type(signed_grant.get(gkey)) is not type(task.get(tkey))
+                or signed_grant.get(gkey) != task.get(tkey)):
             return "grant_identity_mismatch"
     issued, expires = _timestamp(signed_grant.get("issued_at")), _timestamp(signed_grant.get("expires_at"))
     instant = now if isinstance(now, datetime) else datetime.now(timezone.utc)

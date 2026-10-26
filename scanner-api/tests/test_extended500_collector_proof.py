@@ -12,6 +12,11 @@ import pytest
 from app import scanner
 from app.extract import extract_page
 from app.main import SCAN_RESPONSE_PAGE_LIMITS, enforce_scan_response_page_budget
+from app.scan_job import (
+    build_authority_review_payload,
+    build_completion_envelope,
+    build_limited_envelope,
+)
 from app.stage2_coverage_evidence import (
     _bounded_pages,
     near_duplicate_main_content,
@@ -239,3 +244,56 @@ def test_stage2_near_duplicate_500_is_bounded_without_inventing_full_site_eviden
 
     with pytest.raises(ValueError, match="at most 500 page objects"):
         near_duplicate_main_content(pages + [eligible(500, with_main=True)], max_assessed_pages=500)
+
+
+
+def test_standard_150_authority_signing_refuses_oversized_extended_scan():
+    pages = [{"url": f"{ORIGIN}/catalog/p-{index}"} for index in range(500)]
+    scan = {
+        "id": "synthetic-test-scan",
+        "project_id": "synthetic-test-project",
+        "owner_user_id": "synthetic-test-owner",
+        "request_id": "synthetic-test-request",
+        "idempotency_key": "synthetic-test-request",
+        "attempt_count": 1,
+    }
+    data = {
+        "pages": pages, "crawled_pages": pages,
+        "pages_crawled": 500, "pages_found": 510,
+        "scan_mode": "advanced",
+        "normalized_domain": "example.com",
+    }
+    for build in (
+        lambda r: build_authority_review_payload(r),
+        lambda r: build_completion_envelope(scan, r, {}, "test-only-secret"),
+        lambda r: build_limited_envelope(scan, r, {}, "test-only-secret"),
+    ):
+        with pytest.raises(ValueError, match="more than 150 assessed pages"):
+            build(data)
+
+    # A forged reduced headline is not enough. Even one oversized page alias
+    # must prevent the Standard-150 envelope from being signed.
+    forged = {**data, "pages_crawled": 150}
+    with pytest.raises(ValueError, match="more than 150 assessed pages"):
+        build_completion_envelope(scan, forged, {}, "test-only-secret")
+
+    # Valid Standard 150 still communicates broad discovery truthfully,
+    # while the separate review sample remains bounded at 60.
+    standard = {
+        **data, "pages": pages[:150], "crawled_pages": pages[:150],
+        "pages_crawled": 150,
+    }
+    review = build_authority_review_payload(standard)
+    assert review["scan_mode"] == review["canonical_mode"] == "standard_150"
+    assert review["pages_found"] == 510
+    assert review["pages_crawled"] == 150
+    assert len(review["crawled_pages"]) == 60
+    signed = build_completion_envelope(scan, standard, {}, "test-only-secret")
+    assert signed["scan"]["pages_crawled"] == 150
+    assert len(signed["scan"]["crawled_pages"]) == 150
+    assert len(signed["proof"]) == 64
+
+    for invalid_count in (151, 500, -1, "500", "not-a-number"):
+        invalid = {**standard, "pages_crawled": invalid_count}
+        with pytest.raises(ValueError):
+            build_completion_envelope(scan, invalid, {}, "test-only-secret")

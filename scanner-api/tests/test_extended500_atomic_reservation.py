@@ -99,9 +99,13 @@ def test_release_requires_verified_exact_terminal_and_durable_tombstone():
     next_reservation = reserve(next_grant, outcome["slot_write"])
     assert next_reservation["outcome"] == "reserved"
     assert next_reservation["task_name"] != original["task_name"]
-    with pytest.raises(core.AdmissionRefused, match="owner_slot_mismatch"):
-        core.decide_release(next_reservation["slot_write"], outcome["receipt_write"], request,
-                            terminal_status="complete", verified_terminal=True, released_at=4000)
+    # An old, already-released receipt may replay, but it is a strict no-op:
+    # the active newer slot cannot be cleared or mutated by that replay.
+    late = core.decide_release(next_reservation["slot_write"], outcome["receipt_write"], request,
+                               terminal_status="complete", verified_terminal=True, released_at=4000)
+    assert late == {"outcome": "already_released"}
+    assert next_reservation["slot_write"]["state"] == "reserved"
+    assert next_reservation["slot_write"]["receipt_id"] != outcome["receipt_write"]["receipt_id"]
 
 
 @pytest.mark.parametrize("field,value,expected", [

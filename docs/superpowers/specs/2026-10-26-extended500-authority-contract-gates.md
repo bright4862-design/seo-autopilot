@@ -13,6 +13,43 @@ Paired Standard 150 backfill: PR #376; independent implementation and rollout.
 - The 150-page review/HMAC builders now explicitly refuse an oversized result or reported count before signing; a forged 150 count cannot conceal a 500-object page array. 500-page private page projection uses the positive external allowlist and strips internal main-text, raw links and unknown future fields.
 - The above are fixture assertions and repository CI. They do not measure live site speed, Cloud Run peak RSS, result storage sizing, review wall time or actual customer correctness.
 
+## R3 development slice: signed, unreviewed evidence handoff (2026-10-26)
+
+The branch adds `scanner-api/app/extended500_evidence_handoff.py` and the
+pure `src/lib/extended500EvidenceHandoff.js` validator. This is **not** wired
+into a customer API or any of the release-sensitive Base44 function packages.
+
+- Frozen ScanRun must explicitly name `extended_500` with owner, project,
+  scan, request, idempotency and attempt identifiers. The result must carry
+  matching `scan_mode` and `canonical_mode`.
+- Review status is always `not_reviewed`, `pages_reviewed=0`, and
+  `release_gate_eligible=false`. A signed collection is not a published fix list.
+- 1–500 retained page objects, exact mirrored page arrays, unique retained
+  destination identity, truthful `pages_crawled`, `pages_found` and typed
+  `scan_coverage` counts. No implied guarantee that 500 pages are available.
+- Project pages through the existing positive external allowlist; raw main text,
+  raw link cache and arbitrary new producer fields are not signed.
+- The evidence envelope uses a distinct `extended500_evidence_handoff_v1_unreviewed`
+  version and the existing canonical HMAC-SHA256 implementation. Python-generated
+  full 500-page data is verified with JavaScript in a cross-runtime integration test.
+- Source SHA (40 hex) and beta fingerprint (16 hex) are signed, but their actual
+  match against the deployed worker requires separate operator/runtime verification.
+- An explicit 8 MiB signing budget is a **development safety bound**, not a
+  benchmarked production payload limit. Exceeding it fails rather than truncating.
+- The older Standard 150 signing path also now rejects `extended_500` mode
+  even when a legitimate short 500-tier crawl retains fewer than 150 pages.
+- An initial attempt placed the verifier inside
+  `base44/functions/persistDurableScanAuthority`, which triggered the generated
+  package-build-ID gate. It was moved to `src/lib` so the production Standard 150
+  Base44 package and its generated build ID remain unchanged.
+
+**Next stage, still unimplemented:** explicit authenticated Extended 500 durable
+admission/dispatch and a new *reviewed* authority persistence protocol. This
+must read the fresh server-owned ScanRun, verify entitlement and source identity,
+preserve CAS/attempt fencing, and bind evidence count vs review coverage before
+allowing any completion or customer billing. Do not reuse the unreviewed handoff
+as a `complete` envelope.
+
 ## Known remaining hard contract blockers
 
 | Surface | Observed source behavior | Required change before enabling 500 |

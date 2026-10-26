@@ -455,6 +455,15 @@ def require_standard150_authority_capacity(result: dict[str, Any]) -> None:
     """
     if not isinstance(result, dict):
         raise ValueError("Expected Standard 150 result")
+    # A legitimate Extended 500 may end at fewer than 150 pages because of
+    # robots, host pressure or deadline. Count guards alone cannot stop it
+    # being mislabelled and signed as a Standard 150 result.
+    requested_mode = result.get("scan_mode")
+    if requested_mode is not None and requested_mode not in ("advanced", "standard_150"):
+        raise ValueError("Standard 150 authority rejects foreign scan mode")
+    canonical_mode = result.get("canonical_mode")
+    if canonical_mode is not None and canonical_mode != "standard_150":
+        raise ValueError("Standard 150 authority rejects foreign canonical mode")
     for key in ("pages", "crawled_pages", "scanned_pages", "crawl_pages"):
         pages = result.get(key)
         if isinstance(pages, list) and len(pages) > 150:

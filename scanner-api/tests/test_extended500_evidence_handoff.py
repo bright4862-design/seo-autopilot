@@ -146,3 +146,24 @@ process.stdout.write(JSON.stringify({accepted, wrongAttempt, tampered}));
     assert status["wrongAttempt"]["valid"] is False
     assert status["wrongAttempt"]["reason"] == "attempt_mismatch"
     assert status["tampered"]["valid"] is False
+
+
+
+def test_even_short_extended_500_crawl_cannot_be_signed_as_standard150():
+    scan, result = _scan(), _result(90)
+    # The legacy Standard 150 signer cannot rely only on >150 page checks:
+    # a legitimate Extended 500 may stop at 90 due to a deadline or robots.
+    with pytest.raises(ValueError, match="foreign scan mode"):
+        build_completion_envelope(scan, result, {}, KEY)
+
+    disguised = {**result, "scan_mode": "advanced"}
+    with pytest.raises(ValueError, match="foreign canonical mode"):
+        build_completion_envelope(scan, disguised, {}, KEY)
+
+    # The private 500 handoff may convey a short, truthful sample, but never
+    # assigns review authority or falsely advertises all 500 pages checked.
+    result["scan_coverage"]["urls_attempted"] = 95
+    result["scan_coverage"]["usable_html_pages"] = 90
+    handoff = build_extended500_evidence_handoff(scan, result, KEY)
+    assert handoff["scan"]["pages_crawled"] == 90
+    assert handoff["review"]["review_status"] == "not_reviewed"

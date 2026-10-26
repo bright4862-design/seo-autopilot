@@ -135,8 +135,11 @@ def test_cached_or_other_mode_scan_cannot_authorize_claim(field, value, denial):
     ({"scan_id": "other"}, "grant_identity_mismatch"),
     ({"project_id": "other"}, "grant_identity_mismatch"),
     ({"attempt_count": 2}, "grant_identity_mismatch"),
+    ({"attempt_count": True}, "grant_identity_mismatch"),
     ({"website_url": "https://example.com/other"}, "grant_identity_mismatch"),
     ({"respect_robots_txt": False}, "grant_identity_mismatch"),
+    ({"respect_robots_txt": 1}, "grant_identity_mismatch"),
+    ({"owner_attested_robots_override": 0}, "grant_identity_mismatch"),
 ])
 def test_even_validly_signed_other_identity_or_purpose_grant_is_denied(value, denial):
     assert evaluate_extended500_preflight(

@@ -467,6 +467,7 @@ async def run_scan(
     concurrency: int = 8,
     timeout_seconds: float | None = None,
     job_mode: bool = False,
+    durable_standard150_job: bool = False,
     **kwargs,
 ) -> dict:
     budget = resolve_scan_budget(scan_mode, timeout_seconds, job_mode=job_mode)
@@ -696,6 +697,7 @@ async def run_scan(
         # Reserving a candidate never makes a network request or bypasses enqueue.
         backfill_enabled = bool(
             job_mode
+            and durable_standard150_job
             and str(scan_mode or "").lower() == "advanced"
             and ENABLE_STANDARD150_SITEMAP_BACKFILL
         )

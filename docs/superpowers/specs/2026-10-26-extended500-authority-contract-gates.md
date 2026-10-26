@@ -50,6 +50,54 @@ preserve CAS/attempt fencing, and bind evidence count vs review coverage before
 allowing any completion or customer billing. Do not reuse the unreviewed handoff
 as a `complete` envelope.
 
+## R3 continuation: isolated 500 job preflight (2026-10-26)
+
+The worker branch adds `scanner-api/app/extended500_job_admission.py`
+and a **default-disabled, read-only**
+`POST /scan-job-extended500-preflight` route. It is **not**
+`/scan-job`, does not accept `standard_150`, and contains no
+`run_scan`, `mark_scan_started`, queue, customer write, entitlement
+charge or completion call. Even a fully verified request returns
+`admitted: false, execution_enabled: false`.
+
+- The route first uses `require_cloud_tasks_oidc()`, whose trust model
+  relies on private Cloud Run IAM doing actual signature/audience checks.
+  Deployment of this endpoint to a public Cloud Run service is prohibited:
+  the application-level JWT check alone is forgeable.
+- A separate `FIXLIST_EXTENDED500_PREFLIGHT_ENABLED=true` is required to
+  read the persisted ScanRun at all. The Standard 150 deployment contract
+  documents that this flag and the separate
+  `EXTENDED500_ADMISSION_SIGNING_KEY` are **not supplied** to production.
+- Policy compares the fresh stored `ScanRun` to every required task claim:
+  explicit `extended_500` mode, queued state, owner, project, scan,
+  request and idempotency IDs, exact 1-based integer attempt, website and
+  path scope, and immutable robots policy. It never uses the legacy
+  Standard-150 helper's compatibility behavior where some blank
+  identities may match.
+- Separately signed HMAC grant with exact `extended500_preflight_grant_v1`
+  version, audience `fixlist_extended500_worker`, same task identity,
+  and a maximum 300-second validity interval. Signature is checked with
+  `hmac.compare_digest`; the grant key is distinct from the Standard
+  150 evidence signing key.
+- No grant issuer exists in production. A browser-supplied grant is not
+  trusted without independently verified signing and the fresh ScanRun
+  match. A valid grant plus read-only preflight is NOT an atomic claim and
+  cannot prevent duplicate worker execution.
+- The existing route authentication inventory and deployment variable
+  registry explicitly cover the new route and both feature-off variables.
+  Synthetic adversarial tests exercise expired, future, mismatched, forged,
+  replayed, wrong-mode and malformed grants; both disabled and enabled
+  preflight paths are tested with mocked durable reads, asserting **no
+  crawl or persistence call**.
+
+Remaining prerequisites for **actual** execution, in required order:
+(1) independent server-side Extended 500 entitlement issuer with grants
+bound to the owner and plan; (2) atomic CAS claim/queue isolation plus
+idempotency and attempt fencing; (3) resource-bounded real 500 collector
+adapter with measured runtime; (4) new reviewed signed persisted-authority
+protocol with Base44 validator and release fingerprints; (5) measured staging
+canaries, operator rollback and explicit customer authorization.
+
 ## Known remaining hard contract blockers
 
 | Surface | Observed source behavior | Required change before enabling 500 |

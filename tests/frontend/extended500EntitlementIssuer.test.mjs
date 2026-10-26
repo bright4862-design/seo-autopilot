@@ -62,6 +62,11 @@ test('independent 500 plan rejects Standard 150, pending, fake owner, manual/pre
   for (const accessRows of cases) {
     assert.equal(evaluateExtended500Entitlement({ user, accessRows, scan }).ok, false);
   }
+  // Purchasing Standard 150 separately must not void a valid 500 plan.
+  assert.equal(evaluateExtended500Entitlement({
+    user, scan,
+    accessRows: [access, { ...access, id: 'access-standard', plan_id: 'standard150_lifetime' }],
+  }).ok, true);
   for (const changed of [
     { ...scan, scan_mode: 'standard_150' }, { ...scan, attempt_count: 0 },
     { ...scan, owner_user_id: 'someone-else' }, { ...scan, status: 'complete' },

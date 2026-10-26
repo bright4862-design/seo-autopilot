@@ -34,7 +34,10 @@ function paidAccessRecord(record, user) {
 export function evaluateExtended500Entitlement({ user, accessRows, scan }) {
   // No owner_test, manual_grant, checkout_pending, or Standard 150 preview.
   // Duplicated or conflicting access records fail closed, not first-match.
-  const rows = Array.isArray(accessRows) ? accessRows : [];
+  // Other paid products may coexist. Only the independently issued 500-plan
+  // rows count toward uniqueness, and any duplicate 500 grant is a conflict.
+  const rows = (Array.isArray(accessRows) ? accessRows : [])
+    .filter((row) => row?.plan_id === EXTENDED500_ACCESS_PLAN_ID);
   if (!user || !scan || !id(user.id) || !id(scan.id) || scan.owner_user_id !== user.id
       || scan.scan_mode !== "extended_500" || scan.status !== "queued"
       || !id(scan.project_id) || !id(scan.request_id) || !id(scan.idempotency_key)

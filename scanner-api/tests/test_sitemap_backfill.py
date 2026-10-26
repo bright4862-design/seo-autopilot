@@ -3,6 +3,7 @@
 The small injected budget makes the same mechanics observable without a live
 network or expensive 150-page review. No customer/production path is invoked.
 """
+import asyncio
 from urllib.parse import urlparse
 
 import pytest
@@ -155,3 +156,122 @@ async def test_synchronous_scan_stays_unmodified_even_when_flag_is_on(
     assert result["pages_crawled"] == 1
     assert len(requested) == 3
     assert "sitemap_backfill_version" not in result["crawl_timing"]
+
+
+@pytest.mark.asyncio
+async def test_parallel_workers_refill_without_duplicate_claims_or_overcap(
+    monkeypatch, backfill_fixture,
+):
+    requested, selected, collapse = backfill_fixture
+    original_fetch = scanner.fetch_and_extract
+
+    async def yield_to_other_workers(*args, **kwargs):
+        await asyncio.sleep(0)
+        return await original_fetch(*args, **kwargs)
+
+    monkeypatch.setattr(scanner, "fetch_and_extract", yield_to_other_workers)
+    monkeypatch.setattr(scanner, "ENABLE_STANDARD150_SITEMAP_BACKFILL", True)
+
+    result = await scanner.run_scan(
+        f"{ORIGIN}/", scan_mode="advanced", job_mode=True, concurrency=8,
+    )
+
+    assert result["pages_crawled"] == 3
+    assert result["scan_coverage"]["unique_retained_destinations"] == 3
+    assert result["scan_coverage"]["urls_attempted"] == 5
+    assert len(requested) == len(set(requested)) == 5
+    assert set(requested[:3]) == {f"{ORIGIN}/", *selected}
+    assert result["crawl_timing"]["sitemap_backfill_enqueued"] == 2
+    assert result["crawl_timing"]["sitemap_backfill_skipped"] == 0
+    assert result["pages_crawled"] <= scanner.SCAN_BUDGETS["advanced"]["max_pages"]
+
+
+@pytest.mark.asyncio
+async def test_backfill_obeys_robots_and_never_fetches_disallowed_reserve(
+    monkeypatch, backfill_fixture,
+):
+    requested, selected, collapse = backfill_fixture
+
+    class DenyReserve(_Policy):
+        def allowed(self, user_agent, url):
+            return url == f"{ORIGIN}/" or url in selected
+
+    async def robots(client, origin):
+        return DenyReserve()
+
+    monkeypatch.setattr(scanner, "load_robots_policy", robots)
+    monkeypatch.setattr(scanner, "ENABLE_STANDARD150_SITEMAP_BACKFILL", True)
+
+    result = await scanner.run_scan(
+        f"{ORIGIN}/", scan_mode="advanced", job_mode=True, concurrency=2,
+    )
+
+    assert len(requested) == 3
+    assert set(requested) == {f"{ORIGIN}/", *selected}
+    assert result["pages_crawled"] == 3
+    denied = [page for page in result["pages"] if page.get("fetch_error") == "blocked_by_robots_txt"]
+    assert len(denied) == 2
+    assert result["scan_coverage"]["access_unverified_pages"] >= 2
+    assert result["crawl_timing"]["sitemap_backfill_enqueued"] == 2
+
+
+@pytest.mark.asyncio
+async def test_alias_exhaustion_stops_at_shared_claim_budget(
+    monkeypatch, backfill_fixture,
+):
+    requested, selected, collapse = backfill_fixture
+    large_sitemap = [f"{ORIGIN}/products/alias-{i}" for i in range(70)]
+
+    async def sitemap(*args, **kwargs):
+        return list(large_sitemap)
+
+    async def all_redirect_to_seed(client, url, discovery, robots_policy=None):
+        requested.append(url)
+        html = "<html><head><title>Home</title></head><body><h1>Home</h1></body></html>"
+        return extract_page(
+            html, url, f"{ORIGIN}/", 200, "text/html", discovery, include_links=True,
+        )
+
+    monkeypatch.setattr(scanner, "load_sitemap_urls", sitemap)
+    monkeypatch.setattr(scanner, "fetch_and_extract", all_redirect_to_seed)
+    monkeypatch.setattr(scanner, "ENABLE_STANDARD150_SITEMAP_BACKFILL", True)
+
+    result = await scanner.run_scan(
+        f"{ORIGIN}/", scan_mode="advanced", job_mode=True, concurrency=8,
+    )
+
+    request_cap = scanner.SCAN_BUDGETS["advanced"]["max_pages"] * 8
+    assert len(requested) == len(set(requested)) == request_cap
+    assert result["scan_coverage"]["urls_attempted"] == request_cap
+    assert result["pages_crawled"] == result["scan_coverage"]["unique_retained_destinations"] == 1
+    assert result["crawl_timing"]["final_url_duplicates_deduped"] == request_cap - 1
+    assert result["crawl_timing"]["sitemap_backfill_enqueued"] == request_cap - 3
+    assert result["crawl_timing"]["crawl_request_cap_reached"] is True
+    assert result["crawl_timing"]["sitemap_backfill_reserve_remaining"] > 0
+    assert result["crawl_timing"]["queue_exhausted"] is False
+
+
+@pytest.mark.asyncio
+async def test_backfill_preserves_requested_path_scope(
+    monkeypatch, backfill_fixture,
+):
+    requested, selected, collapse = backfill_fixture
+    sitemap_urls = [
+        *(f"{ORIGIN}/products/item-{i}" for i in range(10)),
+        *(f"{ORIGIN}/private/item-{i}" for i in range(10)),
+    ]
+
+    async def sitemap(*args, **kwargs):
+        return list(sitemap_urls)
+
+    monkeypatch.setattr(scanner, "load_sitemap_urls", sitemap)
+    monkeypatch.setattr(scanner, "ENABLE_STANDARD150_SITEMAP_BACKFILL", True)
+    result = await scanner.run_scan(
+        f"{ORIGIN}/products/", path_prefix="/products/",
+        scan_mode="advanced", job_mode=True, concurrency=4,
+    )
+
+    assert result["pages_crawled"] <= 3
+    assert requested
+    assert all(url.startswith(f"{ORIGIN}/products/") for url in requested)
+    assert all(page["url"].startswith(f"{ORIGIN}/products/") for page in result["pages"])

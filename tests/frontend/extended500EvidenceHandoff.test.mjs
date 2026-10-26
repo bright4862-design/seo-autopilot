@@ -4,7 +4,7 @@ import { createAuthoritySeal } from '../../base44/functions/persistDurableScanAu
 import {
   EXTENDED500_HANDOFF_VERSION,
   verifyExtended500EvidenceHandoff,
-} from '../../base44/functions/persistDurableScanAuthority/extended500EvidenceHandoff.js';
+} from '../../src/lib/extended500EvidenceHandoff.js';
 
 const secret = 'fixture-secret-not-for-production';
 const frozenScan = {

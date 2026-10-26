@@ -96,12 +96,12 @@ async def test_idle_frontier_fills_unique_slots_only_when_explicitly_enabled(
 ):
     requested, selected, collapse = backfill_fixture
     monkeypatch.setattr(scanner, "ENABLE_STANDARD150_SITEMAP_BACKFILL", False)
-    off = await scanner.run_scan(f"{ORIGIN}/", scan_mode="advanced", job_mode=True, concurrency=1)
+    off = await scanner.run_scan(f"{ORIGIN}/", scan_mode="advanced", job_mode=True, durable_standard150_job=True, concurrency=1)
     off_requests = list(requested)
     requested.clear()
 
     monkeypatch.setattr(scanner, "ENABLE_STANDARD150_SITEMAP_BACKFILL", True)
-    on = await scanner.run_scan(f"{ORIGIN}/", scan_mode="advanced", job_mode=True, concurrency=1)
+    on = await scanner.run_scan(f"{ORIGIN}/", scan_mode="advanced", job_mode=True, durable_standard150_job=True, concurrency=1)
     on_requests = list(requested)
 
     assert off["pages_crawled"] == 1
@@ -131,12 +131,12 @@ async def test_at_cap_keeps_original_fetch_prefix_unchanged(
     requested, selected, collapse = backfill_fixture
     collapse[0] = False
     monkeypatch.setattr(scanner, "ENABLE_STANDARD150_SITEMAP_BACKFILL", False)
-    off = await scanner.run_scan(f"{ORIGIN}/", scan_mode="advanced", job_mode=True, concurrency=1)
+    off = await scanner.run_scan(f"{ORIGIN}/", scan_mode="advanced", job_mode=True, durable_standard150_job=True, concurrency=1)
     old_requests = list(requested)
     requested.clear()
 
     monkeypatch.setattr(scanner, "ENABLE_STANDARD150_SITEMAP_BACKFILL", True)
-    on = await scanner.run_scan(f"{ORIGIN}/", scan_mode="advanced", job_mode=True, concurrency=1)
+    on = await scanner.run_scan(f"{ORIGIN}/", scan_mode="advanced", job_mode=True, durable_standard150_job=True, concurrency=1)
 
     assert off["pages_crawled"] == on["pages_crawled"] == 3
     assert requested == old_requests
@@ -173,7 +173,7 @@ async def test_parallel_workers_refill_without_duplicate_claims_or_overcap(
     monkeypatch.setattr(scanner, "ENABLE_STANDARD150_SITEMAP_BACKFILL", True)
 
     result = await scanner.run_scan(
-        f"{ORIGIN}/", scan_mode="advanced", job_mode=True, concurrency=8,
+        f"{ORIGIN}/", scan_mode="advanced", job_mode=True, durable_standard150_job=True, concurrency=8,
     )
 
     assert result["pages_crawled"] == 3
@@ -203,7 +203,7 @@ async def test_backfill_obeys_robots_and_never_fetches_disallowed_reserve(
     monkeypatch.setattr(scanner, "ENABLE_STANDARD150_SITEMAP_BACKFILL", True)
 
     result = await scanner.run_scan(
-        f"{ORIGIN}/", scan_mode="advanced", job_mode=True, concurrency=2,
+        f"{ORIGIN}/", scan_mode="advanced", job_mode=True, durable_standard150_job=True, concurrency=2,
     )
 
     assert len(requested) == 3
@@ -237,7 +237,7 @@ async def test_alias_exhaustion_stops_at_shared_claim_budget(
     monkeypatch.setattr(scanner, "ENABLE_STANDARD150_SITEMAP_BACKFILL", True)
 
     result = await scanner.run_scan(
-        f"{ORIGIN}/", scan_mode="advanced", job_mode=True, concurrency=8,
+        f"{ORIGIN}/", scan_mode="advanced", job_mode=True, durable_standard150_job=True, concurrency=8,
     )
 
     request_cap = scanner.SCAN_BUDGETS["advanced"]["max_pages"] * 8
@@ -269,7 +269,7 @@ async def test_backfill_preserves_requested_path_scope(
     monkeypatch.setattr(scanner, "ENABLE_STANDARD150_SITEMAP_BACKFILL", True)
     result = await scanner.run_scan(
         f"{ORIGIN}/products/", path_prefix="/products/",
-        scan_mode="advanced", job_mode=True, concurrency=4,
+        scan_mode="advanced", job_mode=True, durable_standard150_job=True, concurrency=4,
     )
 
     assert result["pages_crawled"] <= 3
@@ -293,7 +293,7 @@ async def test_truncated_unusable_reserve_is_not_full_inventory_proof(
     monkeypatch.setattr(scanner, "ENABLE_STANDARD150_SITEMAP_BACKFILL", True)
     result = await scanner.run_scan(
         f"{ORIGIN}/products/", path_prefix="/products/",
-        scan_mode="advanced", job_mode=True, concurrency=8,
+        scan_mode="advanced", job_mode=True, durable_standard150_job=True, concurrency=8,
     )
 
     assert requested == [f"{ORIGIN}/products/"]
@@ -322,14 +322,14 @@ async def test_full_standard_150_budget_is_unchanged_with_flag_enabled(
     })
     monkeypatch.setattr(scanner, "ENABLE_STANDARD150_SITEMAP_BACKFILL", False)
     baseline = await scanner.run_scan(
-        f"{ORIGIN}/", scan_mode="advanced", job_mode=True, concurrency=8,
+        f"{ORIGIN}/", scan_mode="advanced", job_mode=True, durable_standard150_job=True, concurrency=8,
     )
     baseline_requests = list(requested)
     requested.clear()
 
     monkeypatch.setattr(scanner, "ENABLE_STANDARD150_SITEMAP_BACKFILL", True)
     enabled = await scanner.run_scan(
-        f"{ORIGIN}/", scan_mode="advanced", job_mode=True, concurrency=8,
+        f"{ORIGIN}/", scan_mode="advanced", job_mode=True, durable_standard150_job=True, concurrency=8,
     )
 
     assert baseline["pages_crawled"] == enabled["pages_crawled"] == 150
@@ -338,3 +338,22 @@ async def test_full_standard_150_budget_is_unchanged_with_flag_enabled(
     assert len(set(requested)) == 150
     assert enabled["crawl_timing"]["sitemap_backfill_enqueued"] == 0
     assert baseline["sampling_evidence"]["sampling_version"] == enabled["sampling_evidence"]["sampling_version"]
+
+
+@pytest.mark.asyncio
+async def test_client_async_job_flag_cannot_authorize_durable_backfill(
+    monkeypatch, backfill_fixture,
+):
+    requested, selected, collapse = backfill_fixture
+    monkeypatch.setattr(scanner, "ENABLE_STANDARD150_SITEMAP_BACKFILL", True)
+
+    # Mirrors /scan accepting async_job=True without the durable /scan-job
+    # entrypoint. It must retain exact prior Standard 150 behavior.
+    result = await scanner.run_scan(
+        f"{ORIGIN}/", scan_mode="advanced", job_mode=True, concurrency=8,
+    )
+
+    assert result["pages_crawled"] == 1
+    assert len(requested) == 3
+    assert set(requested) == {f"{ORIGIN}/", *selected}
+    assert "sitemap_backfill_version" not in result["crawl_timing"]

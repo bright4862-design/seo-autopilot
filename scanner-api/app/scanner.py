@@ -700,6 +700,7 @@ async def run_scan(
             and ENABLE_STANDARD150_SITEMAP_BACKFILL
         )
         backfill_candidates: list[str] = []
+        backfill_reserve_truncated = False
         if backfill_enabled:
             selected_sitemap_urls = set(sampled_sitemap_urls)
             unselected = [url for url in sitemap_urls if url not in selected_sitemap_urls]
@@ -708,6 +709,9 @@ async def run_scan(
                     unselected, family_of, path_of, min(len(unselected), max_pages * 8),
                     preferred_market=primary_market_hint,
                 )
+                # Queue exhaustion is NOT proof of inventory exhaustion when
+                # the ranked reserve omitted other discovered sitemap URLs.
+                backfill_reserve_truncated = len(unselected) > len(backfill_candidates)
         scope_evidence["effective_path_prefix"] = prefix
         sampling_evidence["crawl_scope"] = dict(scope_evidence)
         for url in sampled_sitemap_urls:
@@ -1091,7 +1095,10 @@ async def run_scan(
         "queue_exhausted": (
             final_queue_size == 0 and len(pages) < max_pages
             and not crawl_deadline_reached
-            and (not backfill_enabled or crawl_state["sitemap_backfill_cursor"] >= len(backfill_candidates))
+            and (not backfill_enabled or (
+                not backfill_reserve_truncated
+                and crawl_state["sitemap_backfill_cursor"] >= len(backfill_candidates)
+            ))
         ),
         "failed_fetch_count": failed_fetch_count,
         "failure_reason_buckets": failure_reason_buckets,
@@ -1117,6 +1124,7 @@ async def run_scan(
         crawl_timing.update({
             "sitemap_backfill_version": SITEMAP_BACKFILL_VERSION,
             "sitemap_backfill_reserve_candidates": len(backfill_candidates),
+            "sitemap_backfill_reserve_truncated": backfill_reserve_truncated,
             "sitemap_backfill_enqueued": crawl_state["sitemap_backfill_enqueued"],
             "sitemap_backfill_skipped": crawl_state["sitemap_backfill_skipped"],
             "sitemap_backfill_reserve_remaining": (

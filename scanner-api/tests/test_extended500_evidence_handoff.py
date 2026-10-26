@@ -126,7 +126,7 @@ def test_python_hmac_verifies_in_javascript_without_widening_legacy_authority():
                "frozenScan": _scan(), "secret": KEY}
     script = """
 import { readFileSync } from 'node:fs';
-import { verifyExtended500EvidenceHandoff } from './base44/functions/persistDurableScanAuthority/extended500EvidenceHandoff.js';
+import { verifyExtended500EvidenceHandoff } from './src/lib/extended500EvidenceHandoff.js';
 const { envelope, frozenScan, secret } = JSON.parse(readFileSync(0, 'utf8'));
 const accepted = await verifyExtended500EvidenceHandoff(envelope, frozenScan, secret);
 const wrongAttempt = await verifyExtended500EvidenceHandoff(envelope, {...frozenScan, attempt_count: 3}, secret);

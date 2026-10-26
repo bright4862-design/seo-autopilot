@@ -302,3 +302,39 @@ async def test_truncated_unusable_reserve_is_not_full_inventory_proof(
     assert result["crawl_timing"]["sitemap_backfill_reserve_remaining"] == 0
     # Exhaustion of a bounded reserve must never be marketed as inventory proof.
     assert result["crawl_timing"]["queue_exhausted"] is False
+
+
+@pytest.mark.asyncio
+async def test_full_standard_150_budget_is_unchanged_with_flag_enabled(
+    monkeypatch, backfill_fixture,
+):
+    requested, selected, collapse = backfill_fixture
+    collapse[0] = False
+    large_sitemap = [f"{ORIGIN}/products/real-{i}" for i in range(800)]
+
+    async def sitemap(*args, **kwargs):
+        return list(large_sitemap)
+
+    monkeypatch.setattr(scanner, "load_sitemap_urls", sitemap)
+    monkeypatch.setitem(scanner.SCAN_BUDGETS, "advanced", {
+        "max_pages": 150, "timeout": 75, "fetch_timeout": 10,
+        "max_sitemap_fetches": 40,
+    })
+    monkeypatch.setattr(scanner, "ENABLE_STANDARD150_SITEMAP_BACKFILL", False)
+    baseline = await scanner.run_scan(
+        f"{ORIGIN}/", scan_mode="advanced", job_mode=True, concurrency=8,
+    )
+    baseline_requests = list(requested)
+    requested.clear()
+
+    monkeypatch.setattr(scanner, "ENABLE_STANDARD150_SITEMAP_BACKFILL", True)
+    enabled = await scanner.run_scan(
+        f"{ORIGIN}/", scan_mode="advanced", job_mode=True, concurrency=8,
+    )
+
+    assert baseline["pages_crawled"] == enabled["pages_crawled"] == 150
+    assert len(requested) == len(baseline_requests) == 150
+    assert requested == baseline_requests
+    assert len(set(requested)) == 150
+    assert enabled["crawl_timing"]["sitemap_backfill_enqueued"] == 0
+    assert baseline["sampling_evidence"]["sampling_version"] == enabled["sampling_evidence"]["sampling_version"]

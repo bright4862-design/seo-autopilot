@@ -12,6 +12,7 @@ import pytest
 from app import scanner
 from app.extract import extract_page
 from app.main import SCAN_RESPONSE_PAGE_LIMITS, enforce_scan_response_page_budget
+from app.page_output_privacy import project_scan_result_for_external_boundary
 from app.scan_job import (
     build_authority_review_payload,
     build_completion_envelope,
@@ -297,3 +298,40 @@ def test_standard_150_authority_signing_refuses_oversized_extended_scan():
         invalid = {**standard, "pages_crawled": invalid_count}
         with pytest.raises(ValueError):
             build_completion_envelope(scan, invalid, {}, "test-only-secret")
+
+
+
+def test_private_500_page_projection_remains_positive_allowlisted():
+    pages = [
+        {
+            "url": f"{ORIGIN}/item-{i}",
+            "status_code": 200,
+            "reachability_scope": EXTENDED_REACHABILITY_SCOPE,
+            "main_text": "not approved for external output",
+            "_reachability_links": [{"href": f"{ORIGIN}/private"}],
+            "future_internal_debug_field": "must not escape",
+        }
+        for i in range(500)
+    ]
+    result = {
+        "pages": pages,
+        "crawled_pages": pages,
+        "pages_crawled": 500,
+        "pages_found": 510,
+    }
+    projected = project_scan_result_for_external_boundary(result)
+
+    assert len(projected["pages"]) == len(projected["crawled_pages"]) == 500
+    assert projected["pages_crawled"] == 500
+    assert projected["pages_found"] == 510
+    assert all(
+        row["reachability_scope"] == EXTENDED_REACHABILITY_SCOPE
+        and row["status_code"] == 200
+        and "main_text" not in row
+        and "_reachability_links" not in row
+        and "future_internal_debug_field" not in row
+        for row in projected["pages"]
+    )
+    # Projection must not mutate the internal review's source evidence.
+    assert pages[0]["main_text"] == "not approved for external output"
+    assert "_reachability_links" in pages[0]

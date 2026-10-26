@@ -4,6 +4,7 @@ No Google Cloud access. These prove requested transaction shapes, not real
 Firestore serializability, IAM, or exactly-once Cloud Tasks delivery.
 """
 import functools
+from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
 import os
@@ -137,8 +138,8 @@ def _evidence(service):
         "project_id": "project_500", "request_id": "request_500",
         "idempotency_key": "idem_500", "access_id": "access_500",
         "attempt_count": 1,
-        "issued_at": "2026-10-26T21:00:00.000Z",
-        "expires_at": "2026-10-26T21:02:00.000Z",
+        "issued_at": (datetime.now(timezone.utc) - timedelta(seconds=15)).isoformat().replace("+00:00", "Z"),
+        "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=120)).isoformat().replace("+00:00", "Z"),
     }
     grant = {
         "version": "extended500_preflight_grant_v1", "audience": "fixlist_extended500_worker",
@@ -162,7 +163,7 @@ def test_isolated_firestore_transactions_reserve_replay_and_preserve_tombstones(
     entitlement, grant = _evidence(service)
     service.verify_assertions(
         entitlement, grant,
-        now=service.parse_time("2026-10-26T21:01:00.000Z"),
+        now=datetime.now(timezone.utc),
     )
     first = service.reserve(entitlement, grant)
     assert first["outcome"] == "reserved"
@@ -193,7 +194,7 @@ def test_paid_proofs_reject_foreign_purpose_and_identity_without_firestore_write
     STORE.clear()
     service = _load(monkeypatch)
     entitlement, grant = _evidence(service)
-    moment = service.parse_time("2026-10-26T21:01:00.000Z")
+    moment = datetime.now(timezone.utc)
     foreign = {**entitlement, "plan_id": "standard150_lifetime"}
     foreign["proof"] = service.seal({k: v for k, v in foreign.items() if k != "proof"}, service.ENTITLEMENT_KEY)
     with pytest.raises(service.core.AdmissionRefused, match="wrong_entitlement_plan"):
@@ -273,7 +274,7 @@ process.stdout.write(JSON.stringify(evidence));
     assert payload["ok"] is True, payload
     request = service.verify_assertions(
         payload["entitlement"], payload["preflight_grant"],
-        now=service.parse_time("2026-10-26T21:01:00.000Z"),
+        now=datetime.now(timezone.utc),
     )
     assert request["owner_user_id"] == "owner_500"
     assert request["attempt_count"] == 1

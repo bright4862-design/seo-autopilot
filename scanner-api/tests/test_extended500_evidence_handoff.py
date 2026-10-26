@@ -82,9 +82,13 @@ def test_private_500_handoff_preserves_counts_identity_and_projection():
     assert "future_internal_field" not in envelope["scan"]["pages"][0]
     assert result["pages"][0]["main_text"] == "secret internal text"
 
-    # The deployed legacy builder MUST continue to refuse the same 500 pages.
-    with pytest.raises(ValueError, match="more than 150"):
+    # The deployed legacy builder MUST refuse the foreign mode before page
+    # accounting; it also rejects oversized data if the mode is disguised.
+    with pytest.raises(ValueError, match="foreign scan mode"):
         build_completion_envelope(scan, result, {}, KEY)
+    disguised = {**result, "scan_mode": "advanced", "canonical_mode": "standard_150"}
+    with pytest.raises(ValueError, match="more than 150"):
+        build_completion_envelope(scan, disguised, {}, KEY)
 
 
 @pytest.mark.parametrize("tamper", [

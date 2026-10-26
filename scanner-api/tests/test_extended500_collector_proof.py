@@ -13,6 +13,11 @@ from app import scanner
 from app.extract import extract_page
 from app.main import SCAN_RESPONSE_PAGE_LIMITS, enforce_scan_response_page_budget
 from app.stage2_coverage_evidence import _bounded_pages
+from app.stage2_reachability_provenance import (
+    EXTENDED_REACHABILITY_SCOPE,
+    REACHABILITY_SCOPE,
+    enrich_pages_from_retained_link_evidence,
+)
 
 
 ORIGIN = "https://example.com"
@@ -114,3 +119,39 @@ def test_public_budget_is_still_150_and_not_implicitly_extended():
     assert scanner.resolve_scan_budget("advanced")["max_pages"] == 150
     assert scanner.resolve_scan_budget("extended_500")["max_pages"] == 150
     assert SCAN_RESPONSE_PAGE_LIMITS["advanced"] == 150
+
+
+def test_reachability_is_150_by_default_and_500_only_with_explicit_opt_in():
+    def page(i):
+        return {
+            "url": f"{ORIGIN}/page-{i}", "final_url": f"{ORIGIN}/page-{i}",
+            "status_code": 200, "page_evidence_class": "usable_html",
+            "discovered_from": ["seed"] if i == 0 else ["sitemap"],
+            "_reachability_links": [],
+        }
+
+    first_151 = [page(i) for i in range(151)]
+    with pytest.raises(ValueError, match="at most 150"):
+        enrich_pages_from_retained_link_evidence(first_151)
+    assert all("_reachability_links" in p for p in first_151)
+
+    eligible_500 = [page(i) for i in range(500)]
+    outcome = enrich_pages_from_retained_link_evidence(
+        eligible_500, max_assessed_pages=500,
+    )
+    assert len(outcome) == 500
+    assert all(p["reachability_scope"] == EXTENDED_REACHABILITY_SCOPE for p in outcome)
+    assert all(p["sitewide_orphan_claim"] is False for p in outcome)
+    assert all("_reachability_links" not in p for p in outcome)
+
+    with pytest.raises(ValueError, match="at most 500"):
+        enrich_pages_from_retained_link_evidence(
+            [page(i) for i in range(501)], max_assessed_pages=500,
+        )
+    with pytest.raises(ValueError, match="Unsupported"):
+        enrich_pages_from_retained_link_evidence(
+            [page(0)], max_assessed_pages=501,
+        )
+
+    default_single_page = enrich_pages_from_retained_link_evidence([page(0)])
+    assert default_single_page[0]["reachability_scope"] == REACHABILITY_SCOPE

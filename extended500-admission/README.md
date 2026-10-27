@@ -6,13 +6,22 @@ Do not merge/deploy/activate as a product without independent acceptance.
 
 ## Distinct trust boundaries
 
-- **Entitlement issuer library**: `src/lib/extended500EntitlementIssuer.js` only,
-  not a deployed Base44 endpoint. Future backend must authenticate the customer,
-  server-read exactly one owner-matched `Access` record and frozen `ScanRun`,
-  and sign only an active Stripe-paid `extended500_lifetime` entitlement.
-  Standard150, preview, pending, owner test, manual grants, duplicate records
-  are rejected. Grant root `EXTENDED500_ENTITLEMENT_SIGNING_KEY` differs from
-  the worker preflight root `EXTENDED500_ADMISSION_SIGNING_KEY`.
+- **Base44 entitlement issuer candidate**:
+  `base44/functions/issueExtended500AdmissionV1/entry.ts` with a portable,
+  package-local `handler.js`, `issuer.js`, and `authoritySeal.js`.
+  It is **not deployed, published, or listed in the Standard 150 release
+  manifest**. Only `scan_id` is read from a customer request. The handler
+  authenticates through `base44.auth.me()` and uses service-role
+  `ScanRun.get`, `BusinessProject.get`, and `Access.filter` for exact
+  owner/URL/mode/attempt and active Stripe-paid `extended500_lifetime` access.
+  Standard150, preview, pending, owner test, manual grants, and duplicate
+  Extended 500 records are rejected. A separate Standard 150 paid record may
+  coexist without issuing 500 authority. Entitlement and worker-preflight
+  proofs are signed with distinct roots; the browser sees only a redacted
+  coordinator result, never the proofs or signing secrets. The issuer
+  remains **OFF** without `EXTENDED500_ISSUER_ENABLED=true`.
+  The corresponding portable source policy is
+  `src/lib/extended500EntitlementIssuer.js` for independent testing.
 - **Coordinator**: separate Flask Cloud Run service under `extended500-admission`,
   **not** `admission-coordinator` or `dispatch-gateway`.
   Authenticates Base44 request HMAC (derived label
@@ -60,8 +69,27 @@ Do not merge/deploy/activate as a product without independent acceptance.
 | `EXTENDED500_RECEIPT_COLLECTION` | default `extended500_request_receipts` |
 | `EXTENDED500_ATOMIC_ADMISSION_ENABLED` | **OFF unless exact `true`** |
 | `EXTENDED500_QUEUE_DISPATCH_ENABLED` | **OFF unless exact `true`** |
+| `EXTENDED500_WORKER_READY` | **OFF**; coordinator refuses any new Firestore owner-slot reservation until it and queue dispatch are explicitly enabled. Setting the flag alone is not proof the worker exists. |
+| `EXTENDED500_ISSUER_ENABLED` | **OFF**; Base44 issuer cannot mint proofs or call the coordinator unless exact `true` |
+| `EXTENDED500_COORDINATOR_URL` | HTTPS origin consumed only by the independent Base44 issuer |
 
 These keys should not be set in Standard150's production worker/dispatcher.
+
+**Verified schema blocker (2026-10-27):** `base44/entities/ScanRun.jsonc`
+currently allows only `standard_150`, `basic`, `quick`, `deep`,
+`advanced` in `scan_mode`. The issuer refuses all those values, correctly.
+A future, separately reviewed Base44 schema migration is required before
+a service-owned Extended 500 ScanRun can be persisted. The current
+`createAccessCheckout`/Stripe webhook supports the Standard 150 plan, not
+a verified Extended 500 purchase flow; this implementation does not
+create its own paid entitlement record.
+
+**Operational limitation:** Cloud Run IAM and service-role source controls must
+be verified on staging; local mocked tests alone do not prove Base44 functions
+are mounted under the intended route or private secrets are correctly scoped.
+A short-lived grant can expire during queue wait; a future worker must
+re-verify fresh authorization at pickup instead of treating its timestamped
+task body as durable authorization.
 
 ## Replay/failure behavior
 
@@ -77,7 +105,10 @@ slot+receipt. An old receipt remains `released` forever.
 `scanner-api/tests/test_extended500_atomic_reservation.py` tests pure
 decisions; `tests/frontend/extended500EntitlementIssuer.test.mjs` tests
 the paid-only policy and JS signatures. HTTP/Firestore adapter and Cloud Tasks
-integration need additional contract and staging tests; passing mocked tests
+integration need real staging tests; `tests/frontend/extended500Base44Issuer.test.mjs`
+now also proves authenticated server-owned reads, client-claim rejection,
+isolated derived HMAC transport, signer privacy, missing-worker reservation
+refusal and wrong paid-plan rejection. Passing mocked tests
 **does not establish Firestore deployment or production exactly-once delivery**.
 
 Gate: keep PR #377 draft. Before dispatch: deploy distinct service privately,

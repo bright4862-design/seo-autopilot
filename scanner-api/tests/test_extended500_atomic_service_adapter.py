@@ -278,3 +278,38 @@ process.stdout.write(JSON.stringify(evidence));
     )
     assert request["owner_user_id"] == "owner_500"
     assert request["attempt_count"] == 1
+
+
+@pytest.mark.parametrize(("queue_ready", "worker_ready"), [
+    (False, False),
+    (False, True),
+    (True, False),
+])
+def test_reserved_owner_slot_cannot_be_created_before_queue_and_worker_ready(
+    monkeypatch, queue_ready, worker_ready,
+):
+    """Even with a correctly signed claim, inactive worker cannot wedge owner."""
+    STORE.clear()
+    service = _load(monkeypatch)
+    entitlement, grant = _evidence(service)
+    monkeypatch.setattr(service, "QUEUE_ENABLED", queue_ready)
+    monkeypatch.setattr(service, "WORKER_READY", worker_ready)
+    monkeypatch.setattr(
+        service, "authenticate",
+        lambda: ({"entitlement": entitlement, "preflight_grant": grant}, None),
+    )
+    def forbidden_reserve(*_args):
+        raise AssertionError("No Firestore reservation before both gates")
+    monkeypatch.setattr(service, "reserve", forbidden_reserve)
+    reply, status = service.reservation_route()
+    assert status == 503
+    assert reply["error"] == "extended500_dispatch_not_ready"
+    assert STORE == {}
+
+
+def test_release_route_stays_independent_from_dispatch_gate(monkeypatch):
+    """A future terminal issuer must still be able to clean up after intake off."""
+    service = _load(monkeypatch)
+    assert service.WORKER_READY is False
+    assert service.ENABLED is True
+    assert service.QUEUE_ENABLED is False

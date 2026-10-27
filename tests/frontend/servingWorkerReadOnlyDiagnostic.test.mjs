@@ -18,7 +18,7 @@ function step(name) {
 test("release investigation is an explicit owner-only read-only workflow operation", () => {
   assert.match(workflow, /^\s+- verify-serving-worker-release\s*$/m);
   assert.match(workflow, /github\.actor == 'bright4862-design'/);
-  assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
+  assert.match(workflow, /test "\$\{\{ github\.ref \}\}" = "refs\/heads\/main"/);
   const generic = step("Run allowlisted worker operation");
   assert.match(generic, /inputs\.operation != 'verify-serving-worker-release'/);
   assert.match(operator, /verify-worker-runtime-revision\)/);

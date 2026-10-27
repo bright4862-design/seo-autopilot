@@ -46,6 +46,10 @@ WORKER_ORIGIN = os.environ["EXTENDED500_WORKER_ORIGIN"].rstrip("/")
 INVOKER_SA = os.environ["EXTENDED500_INVOKER_SERVICE_ACCOUNT"].strip()
 ENABLED = os.getenv("EXTENDED500_ATOMIC_ADMISSION_ENABLED", "").lower() == "true"
 QUEUE_ENABLED = os.getenv("EXTENDED500_QUEUE_DISPATCH_ENABLED", "").lower() == "true"
+# A queue can exist before any real /scan-job-extended500 worker. Until a
+# dedicated worker and durable completion exist, refusing reservations is
+# safer than wedging paid owners in non-expiring Firestore slots.
+WORKER_READY = os.getenv("EXTENDED500_WORKER_READY", "").lower() == "true"
 MAX_SKEW = 300
 MODE = core.MODE
 DOMAIN = b"fixlist-extended500-atomic-admission-v1"
@@ -242,7 +246,7 @@ def update_dispatch_state(claim: dict, state: str) -> None:
 
 def enqueue(claim: dict, grant: dict, task_name: str) -> str:
     """Return enqueued or dispatch_unknown. Never assume network timeout = absent."""
-    if not QUEUE_ENABLED:
+    if not QUEUE_ENABLED or not WORKER_READY:
         return "dispatch_disabled"
     payload = {
         "scan_mode": MODE,
@@ -290,6 +294,7 @@ def health():
         "ok": True, "service": "fixlist-extended500-admission",
         "atomic_admission_enabled": ENABLED,
         "queue_dispatch_enabled": QUEUE_ENABLED,
+        "worker_readiness_operator_flag": WORKER_READY,
         "worker_completion_enabled": False,
     })
 
@@ -301,6 +306,10 @@ def reservation_route():
         return failure
     if not ENABLED:
         return error("extended500_admission_disabled", 503)
+    # No Firestore write may precede both independent readiness gates. A
+    # 500 worker endpoint is not present in this branch; leave gates OFF.
+    if not QUEUE_ENABLED or not WORKER_READY:
+        return error("extended500_dispatch_not_ready", 503)
     if set(body) != {"entitlement", "preflight_grant"}:
         return error("invalid_reservation_shape", 400)
     try:

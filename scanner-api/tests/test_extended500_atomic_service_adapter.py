@@ -4,6 +4,7 @@ No Google Cloud access. These prove requested transaction shapes, not real
 Firestore serializability, IAM, or exactly-once Cloud Tasks delivery.
 """
 import functools
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
@@ -313,3 +314,52 @@ def test_release_route_stays_independent_from_dispatch_gate(monkeypatch):
     assert service.WORKER_READY is False
     assert service.ENABLED is True
     assert service.QUEUE_ENABLED is False
+
+
+def test_contending_owner_requests_have_one_atomic_winner_and_stable_replay(monkeypatch):
+    """A locked fake transaction checks CAS state flow, not live Firestore isolation."""
+    STORE.clear()
+    service = _load(monkeypatch)
+    candidates = []
+    for number in range(12):
+        entitlement, preflight = _evidence(service)
+        entitlement.update({
+            "scan_id": f"scan_candidate_{number}",
+            "request_id": f"request_candidate_{number}",
+            "idempotency_key": f"idem_candidate_{number}",
+        })
+        preflight.update({
+            "scan_id": f"scan_candidate_{number}",
+            "request_id": f"request_candidate_{number}",
+            "idempotency_key": f"idem_candidate_{number}",
+        })
+        for doc, key in (
+            (entitlement, service.ENTITLEMENT_KEY),
+            (preflight, service.PREFLIGHT_KEY),
+        ):
+            doc["proof"] = service.seal(
+                {field: value for field, value in doc.items() if field != "proof"}, key,
+            )
+        candidates.append((entitlement, preflight))
+
+    def try_reserve(candidate):
+        try:
+            result = service.reserve(*candidate)
+            return ("ok", result["outcome"], result["task_name"])
+        except service.core.AdmissionRefused as exc:
+            return ("refused", exc.code, "")
+
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        decisions = list(executor.map(try_reserve, candidates))
+    won = [v for v in decisions if v[0] == "ok"]
+    denied = [v for v in decisions if v[0] == "refused"]
+    assert len(won) == 1, decisions
+    assert won[0][1] == "reserved"
+    assert len(denied) == 11
+    assert all(v[1] == "owner_slot_busy" for v in denied)
+    assert len(STORE) == 2
+    winning_index = decisions.index(won[0])
+    replay = service.reserve(*candidates[winning_index])
+    assert replay["outcome"] == "replayed"
+    assert replay["task_name"] == won[0][2]
+    assert len(STORE) == 2

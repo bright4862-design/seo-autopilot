@@ -98,6 +98,54 @@ adapter with measured runtime; (4) new reviewed signed persisted-authority
 protocol with Base44 validator and release fingerprints; (5) measured staging
 canaries, operator rollback and explicit customer authorization.
 
+## 2026-10-27 Base44 server-authenticated issuance and CAS isolation slice
+
+Implemented in **draft branch PR #377, not published or deployed**:
+
+- Standalone Base44 package
+  `base44/functions/issueExtended500AdmissionV1/{entry.ts,handler.js,issuer.js,authoritySeal.js}`.
+  It is **not** part of the Standard 150 release manifest. Uses the signed-in
+  `base44.auth.me()` identity and service-role reads of `ScanRun`,
+  `BusinessProject` and `Access`. The only browser input is exact
+  `scan_id`; rejects browser-supplied owner, plan, grant, mode, URL or attempt.
+  Owner/project/host/frozen mode/attempt must match before considering access.
+- Paid-only Extended 500 entitlement policy: exactly one own, active,
+  Stripe-checkout `extended500_lifetime` Access record. Existing Standard 150
+  paid Access rows may coexist but cannot authorize the 500 path; pending,
+  manual, owner_test and conflicting records are rejected.
+- Base44 issues two independent signed assertions with a 120-second bounded
+  lifetime, then directly HMAC-signs the complete reservation request
+  using the **distinct** `fixlist-extended500-atomic-admission-v1` domain
+  and calls the private Cloud Run coordinator. No grant or signing root is
+  returned to the caller. HTTP timeout is explicitly `outcome_unknown`.
+- `tests/frontend/extended500Base44Issuer.test.mjs` mocks Base44 and validates
+  owner/project/entitlement rejection paths, disallows client assertions,
+  checks signatures against an independent Node HMAC implementation and
+  checks refusal when the coordinator falsely claims execution is active.
+  Existing Python-to-JavaScript proof verification remains covered.
+- The isolated coordinator now **refuses a new Firestore owner-slot reserve**
+  unless BOTH `EXTENDED500_QUEUE_DISPATCH_ENABLED` and
+  `EXTENDED500_WORKER_READY` are exactly true, in addition to the
+  independent atomic-admission gate. Both default OFF. The queue is not
+  provisioned and the worker target is not yet implemented. Tests assert
+  blocked dispatch cannot create a durable owner slot.
+- **Schema blocker verified from source**:
+  `base44/entities/ScanRun.jsonc` `scan_mode` enum does **not** include
+  `extended_500`. Therefore none of this authorizes creating an actual
+  Extended 500 ScanRun today. A separately reviewed schema migration and
+  a service-owned job creation path are prerequisites. No change to the live
+  Standard 150 schema has been made.
+- `base44/entities/Access.jsonc` RLS restricts create/update/delete to
+  administrators; customer reads are owner-scoped. This does not establish
+  an Extended 500 Stripe SKU or paid webhook, which still needs separate
+  design and verification.
+
+**Not yet proven:** deployed Base44 package identity, private service IAM,
+Firestore cross-instance serializability under contention, Cloud Tasks
+delivery/replay during unknown outcomes, dedicated worker pickup-time recheck,
+reviewed 500 result storage, release gates or real-site performance. A green
+mocked CI suite only verifies the exercised source paths.
+
 ## Known remaining hard contract blockers
 
 | Surface | Observed source behavior | Required change before enabling 500 |

@@ -259,7 +259,7 @@ const access = { id:'access_500',owner_user_id:'owner_500',user_email:'owner@exa
  access_status:'active',has_full_access:true,grant_source:'stripe_checkout',
  stripe_checkout_session_id:'cs_test_fixture',paid_at:'2026-10-26T20:00:00Z' };
 const evidence = await mintExtended500AdmissionEvidence({
- user, scan,accessRows:[access],nowMs:Date.parse('2026-10-26T21:00:00Z'),
+ user, scan,accessRows:[access],nowMs:Date.now(),
  entitlementSigningKey: process.env.EXTENDED500_ENTITLEMENT_SIGNING_KEY,
  grantSigningKey: process.env.EXTENDED500_ADMISSION_SIGNING_KEY,
 });

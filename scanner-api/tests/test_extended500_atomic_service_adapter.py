@@ -231,6 +231,7 @@ def test_enqueue_is_separately_disabled_and_409_does_not_establish_success(monke
         return Response()
     monkeypatch.setattr(service.requests, "post", fake_post)
     monkeypatch.setattr(service, "QUEUE_ENABLED", True)
+    monkeypatch.setattr(service, "WORKER_READY", True)
     assert service.enqueue(claim, grant, task) == "dispatch_unknown"
     assert len(captured) == 1
     name, http = captured[0][1]["name"], captured[0][1]["httpRequest"]

@@ -604,8 +604,10 @@ test("the coordinator operator token is minted by the workflow, not by gcloud", 
   const consumed = cloudOperator.match(/token="\$\{([A-Z0-9_]+):-\}"/);
   assert.ok(consumed, "the operator request no longer reads its token from a named environment variable");
 
+  // Another private worker diagnostic also mints an ID token. Select the
+  // coordinator operator's named output, not the first token in the file.
   const produced = workflow.match(
-    /([A-Z0-9_]+): \$\{\{ steps\.[A-Za-z0-9_-]+\.outputs\.id_token \}\}/,
+    /(FIXLIST_OPERATOR_ID_TOKEN): \$\{\{ steps\.[A-Za-z0-9_-]+\.outputs\.id_token \}\}/,
   );
   assert.ok(produced, "the workflow never hands an id_token to the operator step");
   assert.equal(

@@ -626,7 +626,13 @@ test("the worker invoker token is minted by the workflow, not by gcloud", () => 
   assert.doesNotMatch(operator, /print-identity-token/);
   const consumed = operator.match(/token="\$(FIXLIST_WORKER_ID_TOKEN)"/);
   assert.ok(consumed, "the guard no longer reads its token from a named environment variable");
-  const produced = workflow.match(
+  // A read-only diagnostic now mints a separate worker token. The promotion
+  // gate must still be bound to the CANDIDATE token and candidate audience.
+  const candidateGateStart = workflow.indexOf("- name: Verify candidate runtime release identity before promotion");
+  assert.notEqual(candidateGateStart, -1);
+  const candidateGateEnd = workflow.indexOf("\n      - name:", candidateGateStart + 1);
+  const candidateGate = workflow.slice(candidateGateStart, candidateGateEnd < 0 ? undefined : candidateGateEnd);
+  const produced = candidateGate.match(
     /(FIXLIST_WORKER_ID_TOKEN): \$\{\{ steps\.([A-Za-z0-9_-]+)\.outputs\.id_token \}\}/,
   );
   assert.ok(produced, "the workflow never hands a worker id_token to the promotion step");
@@ -636,9 +642,9 @@ test("the worker invoker token is minted by the workflow, not by gcloud", () => 
   // The audience must be the canonical Cloud Run service URL. A traffic-tag
   // probe is a separate destination, so the workflow must not bind the token
   // audience to the tag URL.
-  const gate = workflow.indexOf("- name: Verify candidate runtime release identity before promotion", mint);
+  const gate = workflow.indexOf("- name: Verify candidate runtime release identity before promotion", mint.index);
   assert.notEqual(gate, -1, "candidate runtime gate is missing after token mint");
-  const audienceStep = workflow.slice(mint, gate).match(/id_token_audience: \$\{\{ steps\.([A-Za-z0-9_-]+)\.outputs\.([a-z_]+) \}\}/);
+  const audienceStep = workflow.slice(mint.index, gate).match(/id_token_audience: \$\{\{ steps\.([A-Za-z0-9_-]+)\.outputs\.([a-z_]+) \}\}/);
   assert.ok(audienceStep, "the worker token is not bound to the canonical service URL");
   assert.equal(audienceStep[1], "candidate-service-url");
   assert.match(

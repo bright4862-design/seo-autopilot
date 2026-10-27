@@ -18,6 +18,7 @@ on:
           - verify-iam
           - verify-admission-identity
           - verify-worker-routes
+          - verify-serving-worker-release
           - diagnose-ironwood-access
           - deploy-dispatch-gateway
           - deploy-admission-coordinator
@@ -277,8 +278,50 @@ jobs:
           bash -n scripts/build-worker-candidate.sh
           bash -n scripts/lib/release-source-guard.sh
 
+      # Incident diagnostic: authenticate to the PRIVATE serving revision
+      # and compare its live marker set against exact-main's frozen contract.
+      # Read only: no traffic tags, queue mutations, deployment, or release.
+      # Resolve the actual 100%-serving revision at probe time; the workflow's
+      # prefilled `revision` input is intentionally not used.
+      - name: Resolve serving worker token audience (read only)
+        if: inputs.operation == 'verify-serving-worker-release'
+        id: serving-worker-url
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
+            --project="$GCP_PROJECT" --region="$GCP_REGION" --format='value(status.url)')"
+          [[ "$url" == https://* ]] || { echo 'No canonical HTTPS worker URL' >&2; exit 1; }
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Mint serving worker invoker identity token (read only)
+        if: inputs.operation == 'verify-serving-worker-release'
+        id: serving-worker-token
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.serving-worker-url.outputs.url }}
+          id_token_include_email: true
+          create_credentials_file: false
+
+      - name: Verify 100%-serving worker release identity (read only)
+        if: inputs.operation == 'verify-serving-worker-release'
+        shell: bash
+        env:
+          OPERATION: verify-worker-runtime-revision
+          TARGET_REVISION: ""
+          SOURCE_SHA: ${{ github.sha }}
+          FIXLIST_WORKER_ID_TOKEN: ${{ steps.serving-worker-token.outputs.id_token }}
+          FIXLIST_WORKER_TOKEN_AUDIENCE: ${{ steps.serving-worker-url.outputs.url }}
+        run: |
+          set -euo pipefail
+          bash ./scripts/fixlist-cloud-operator.sh
+
       - name: Run allowlisted worker operation
-        if: inputs.operation != 'deploy-dispatch-gateway' && inputs.operation != 'deploy-admission-coordinator' && inputs.operation != 'build-worker-candidate' && inputs.operation != 'sync-base44-signing-key'
+        if: inputs.operation != 'deploy-dispatch-gateway' && inputs.operation != 'deploy-admission-coordinator' && inputs.operation != 'build-worker-candidate' && inputs.operation != 'sync-base44-signing-key' && inputs.operation != 'verify-serving-worker-release'
         env:
           OPERATION: ${{ inputs.operation }}
           CONFIRM: ${{ inputs.confirm }}

@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@base44/sdk':
-        specifier: ^0.8.53
-        version: 0.8.53(debug@4.4.3(supports-color@7.2.0))(supports-color@7.2.0)
+        specifier: ^0.8.57
+        version: 0.8.57(debug@4.4.3(supports-color@7.2.0))(supports-color@7.2.0)
       '@base44/vite-plugin':
         specifier: ^1.0.44
         version: 1.0.44(supports-color@7.2.0)
@@ -349,8 +349,8 @@ packages:
     resolution: {integrity: sha512-Vj1jF3cPfxg7OAfoI7QnVKLoILlm2JF9pnVHrX8qx7AHMiYWT+NDAA7jChlNgRS4WTLc/fD1lXLmPixluj+3Gg==}
     engines: {node: '>=6.9.0'}
 
-  '@base44/sdk@0.8.53':
-    resolution: {integrity: sha512-05+/i6LvLG5nQJ46iknaf0pVnWOnX+cMwsQORZwSxMPuonsKYEA9/+b1WoXd+fYdCiIi41mNwJjlj+c0ou0qfg==}
+  '@base44/sdk@0.8.57':
+    resolution: {integrity: sha512-/uBkC/zQa3C7nNWRyPUPT5Gxh4gE0nV3NjWMP2GMJjivY2Jm4sh3GA7cST3rMVRlsWxLyQhzAfEN3eWw8XqYKg==}
 
   '@base44/vite-plugin@1.0.44':
     resolution: {integrity: sha512-jvXzPsIZqhfuWDpEGU2vvQ+xemQ9LL2Ql5l2qZLtliZls7DwCYHYacoxFkUgd7m8qKEzx9hwDbFZSv2DTO+HNw==}
@@ -3542,7 +3542,7 @@ snapshots:
       '@babel/helper-string-parser': 7.29.7
       '@babel/helper-validator-identifier': 7.29.7
 
-  '@base44/sdk@0.8.53(debug@4.4.3(supports-color@7.2.0))(supports-color@7.2.0)':
+  '@base44/sdk@0.8.57(debug@4.4.3(supports-color@7.2.0))(supports-color@7.2.0)':
     dependencies:
       axios: 1.20.0(debug@4.4.3(supports-color@7.2.0))(supports-color@7.2.0)
       partysocket: 0.0.23

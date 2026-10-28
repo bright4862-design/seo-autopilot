@@ -1016,7 +1016,10 @@ async def run_scan(
 
     finding_identity = {"scan_origin": scope_evidence["requested_origin"],
                         "identity_version": PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION}
-    findings = build_findings(pages, **finding_identity)
+    findings = build_findings(
+        pages, **finding_identity,
+        max_assessed_pages=500 if job_mode and max_pages == 500 else 150,
+    )
     findings.extend(link_probe_findings)
     findings.extend(duplicate_title_findings(pages, **finding_identity))
     findings.extend(duplicate_casing_findings(pages))
@@ -1311,7 +1314,7 @@ def _redirect_destination_content_view(page: dict, *, identity_version: str = ""
     return view
 
 
-def build_findings(pages: list[dict], *, scan_origin: str = "", identity_version: str = "") -> list[dict]:
+def build_findings(pages: list[dict], *, scan_origin: str = "", identity_version: str = "", max_assessed_pages: int = 150) -> list[dict]:
     findings: list[dict] = []
     identity = {"scan_origin": scan_origin, "identity_version": identity_version}
     for page in pages:
@@ -1454,7 +1457,7 @@ def build_findings(pages: list[dict], *, scan_origin: str = "", identity_version
         missing_alt = int(page.get("image_missing_alt_count") or 0)
         if missing_alt > 0 and not page.get("image_alt_applicability"):
             findings.append(create_finding("image_alt_text", "image_alt_text", "medium" if missing_alt >= 10 else "low", "Add useful image descriptions", path, current_value=f"{missing_alt} images missing alt text", explanation="Some meaningful images may not have text descriptions.", recommendation="Add short, specific alt text to meaningful images."))
-    findings.extend(content_evidence_findings(pages))
+    findings.extend(content_evidence_findings(pages, max_assessed_pages=max_assessed_pages))
     return filter_search_findings(findings, pages)
 
 

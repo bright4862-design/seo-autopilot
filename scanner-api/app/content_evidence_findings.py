@@ -34,14 +34,14 @@ def _fix(page, rule, category, title, explanation, recommendation, observations,
     }
 
 
-def content_evidence_findings(pages):
+def content_evidence_findings(pages, *, max_assessed_pages: int = 150):
     # ``run_scan`` invokes this only after the final assessed-page cap. Use that
     # stable page set to project the temporary raw-link cache into B11 sample-
     # scoped reachability evidence, then discard the private cache before result
     # persistence/customer projection. Review can call this function again later;
     # already-enriched pages have no private cache and are left unchanged.
     if any(isinstance(page, dict) and '_reachability_links' in page for page in pages):
-        enrich_pages_from_retained_link_evidence(pages)
+        enrich_pages_from_retained_link_evidence(pages, max_assessed_pages=max_assessed_pages)
 
     # B15 is evidence-only here. It consumes already-extracted accepted page
     # fields after the retained Standard-150 set is fixed, performs no fetches,

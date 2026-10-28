@@ -1571,9 +1571,13 @@ jobs:
           FIXLIST_WORKER_ID_TOKEN: ${{ steps.worker-token.outputs.id_token }}
           FIXLIST_WORKER_TOKEN_AUDIENCE: ${{ steps.canonical-url.outputs.url }}
         run: |
-          set -uo pipefail
+          # GitHub invokes bash with -e by default: explicitly disable it
+          # around the verifier so an expected fingerprint mismatch can be
+          # captured, reported to incident #378, and then failed closed.
+          set +e
           bash ./scripts/fixlist-cloud-operator.sh > "$RUNNER_TEMP/incident378-probe.log" 2>&1
           rc=$?
+          set -euo pipefail
           cat "$RUNNER_TEMP/incident378-probe.log"
           echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
           # A mismatch is an observed diagnostic outcome, not a workflow

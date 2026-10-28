@@ -31,20 +31,24 @@ function paidAccessRecord(record, user) {
   return true;
 }
 
-export function evaluateExtended500Entitlement({ user, accessRows, scan }) {
-  // No owner_test, manual_grant, checkout_pending, or Standard 150 preview.
-  // Duplicated or conflicting access records fail closed, not first-match.
-  // Other paid products may coexist. Only the independently issued 500-plan
-  // rows count toward uniqueness, and any duplicate 500 grant is a conflict.
+export function evaluateExtended500PaidAccess({ user, accessRows }) {
+  // No preview, owner_test, manual grants, checkout_pending or Standard 150.
+  // Other paid products may coexist but two Extended 500 grants conflict.
   const rows = (Array.isArray(accessRows) ? accessRows : [])
     .filter((row) => row?.plan_id === EXTENDED500_ACCESS_PLAN_ID);
+  if (!user || !id(user.id) || typeof user.email !== "string" || !user.email.trim()
+      || rows.length !== 1 || !paidAccessRecord(rows[0], user))
+    return fail("extended500_paid_access_required");
+  return { ok: true, access: rows[0] };
+}
+
+export function evaluateExtended500Entitlement({ user, accessRows, scan }) {
   if (!user || !scan || !id(user.id) || !id(scan.id) || scan.owner_user_id !== user.id
       || scan.scan_mode !== "extended_500" || scan.status !== "queued"
       || !id(scan.project_id) || !id(scan.request_id) || !id(scan.idempotency_key)
       || !Number.isSafeInteger(scan.attempt_count) || scan.attempt_count < 1
       || !domain(scan.website_url)) return fail("scan_identity_invalid");
-  if (rows.length !== 1 || !paidAccessRecord(rows[0], user)) return fail("extended500_paid_access_required");
-  return { ok: true, access: rows[0] };
+  return evaluateExtended500PaidAccess({ user, accessRows });
 }
 
 export async function mintExtended500AdmissionEvidence(

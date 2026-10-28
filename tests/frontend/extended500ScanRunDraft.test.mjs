@@ -159,10 +159,11 @@ test("the public scanner identity builder, form and Standard150 job route remain
   const form = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
   const worker = readFileSync("scanner-api/app/main.py", "utf8");
   const issuer = readFileSync("base44/functions/issueExtended500AdmissionV1/entry.ts", "utf8");
+  const issuerPolicy = readFileSync("base44/functions/issueExtended500AdmissionV1/handler.js", "utf8");
   assert.match(identity, /if \(normalizedMode !== STANDARD_SCAN_MODE\)/);
   assert.match(form, /standard_150/);
   assert.match(worker, /Only the Standard 150 scan is available/);
-  assert.match(issuer, /EXTENDED500_ISSUER_ENABLED/);
+  assert.match(issuerPolicy, /EXTENDED500_ISSUER_ENABLED/);
   assert.doesNotMatch(issuer, /Extended500QueuedScanDraft|ScanRun\.create\(/);
   assert.equal(seed().record.release_gate_eligible, false);
 });

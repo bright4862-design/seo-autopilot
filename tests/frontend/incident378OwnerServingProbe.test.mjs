@@ -61,3 +61,20 @@ test("no scanner, queue, barrier, persistence, source release or traffic writes 
   assert.doesNotMatch(job, /echo .*FIXLIST_WORKER_ID_TOKEN/);
   assert.doesNotMatch(job, /(?:\$\{\{ steps\.worker-token\.outputs\.id_token \}\}).*(?:issue comment|report)/);
 });
+
+test("nonzero authenticated revision comparison is captured before a final fail-closed verdict", () => {
+  const job = jobBlock();
+  const probe = job.slice(
+    job.indexOf("- name: Read live fingerprint, marker set and worker revision without mutation"),
+    job.indexOf("- name: Record sanitized read-only findings on incident 378"),
+  );
+  assert.match(
+    probe,
+    /set \+e[\s\S]*?bash \.\/scripts\/fixlist-cloud-operator\.sh[^\n]*?\n\s+rc=\$\?[\s\S]*?set -euo pipefail/,
+    "GitHub runners inherit errexit: a failed comparator must not prevent the diagnostic report",
+  );
+  assert.match(probe, /echo "exit_code=\$rc" >> "\$GITHUB_OUTPUT"/);
+  assert.match(job, /if: always\(\) && steps\.probe\.outputs\.exit_code != ''/);
+  assert.match(job, /gh issue comment 378/);
+  assert.match(job, /test "\$EXIT_CODE" = "0"/);
+});

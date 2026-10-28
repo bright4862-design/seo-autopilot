@@ -1490,6 +1490,128 @@ jobs:
 
           echo 'READONLY_DIAGNOSTIC_COMPLETE'
 
+  incident378-serving-revision-readonly:
+    if: >-
+      github.event_name == 'issue_comment'
+      && github.event.issue.number == 378
+      && github.event.issue.pull_request == null
+      && github.event.comment.user.login == 'bright4862-design'
+      && startsWith(github.event.comment.body, '/fixlist-readonly-incident-378 ')
+    name: Inspect production serving revision for incident 378 (read only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+    steps:
+      - name: Checkout exact main commit for owner diagnostic
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate exact owner issue command and immutable main SHA
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = "issue_comment"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$COMMENT_AUTHOR" = "bright4862-design"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$COMMENT_BODY" = "/fixlist-readonly-incident-378 $GITHUB_SHA"
+
+      - name: Authenticate owner diagnostic with keyless Cloud Run operator identity
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Install gcloud for read-only inspection
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Read canonical private serving-worker audience
+        id: canonical-url
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
+            --project="$GCP_PROJECT" --region="$GCP_REGION" \
+            --format='value(status.url)')"
+          [[ "$url" == https://* ]] || { echo "Missing canonical worker URL" >&2; exit 1; }
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Mint private worker identity token for canonical service audience
+        id: worker-token
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.canonical-url.outputs.url }}
+          id_token_include_email: true
+          create_credentials_file: false
+
+      - name: Read live fingerprint, marker set and worker revision without mutation
+        id: probe
+        shell: bash
+        env:
+          OPERATION: verify-worker-runtime-revision
+          TARGET_REVISION: ""
+          SOURCE_SHA: ${{ github.sha }}
+          FIXLIST_WORKER_ID_TOKEN: ${{ steps.worker-token.outputs.id_token }}
+          FIXLIST_WORKER_TOKEN_AUDIENCE: ${{ steps.canonical-url.outputs.url }}
+        run: |
+          set -uo pipefail
+          bash ./scripts/fixlist-cloud-operator.sh > "$RUNNER_TEMP/incident378-probe.log" 2>&1
+          rc=$?
+          cat "$RUNNER_TEMP/incident378-probe.log"
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          # A mismatch is an observed diagnostic outcome, not a workflow
+          # error until after the incident gets its evidence comment.
+          exit 0
+
+      - name: Record sanitized read-only findings on incident 378
+        if: always() && steps.probe.outputs.exit_code != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXIT_CODE: ${{ steps.probe.outputs.exit_code }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/incident378-report.md"
+          {
+            printf '### Private serving worker /revision (read-only)\n\n'
+            printf 'Workflow: https://github.com/%s/actions/runs/%s\n\n' "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+            printf 'Exact main SHA: `%s`\n\n' "$GITHUB_SHA"
+            printf 'Probe exit status: `%s`\n\n' "$EXIT_CODE"
+            printf '```text\n'
+            # Only public release marker values and named diagnostic verdicts.
+            # No auth headers, tokens, service credentials, or raw responses.
+            grep -E '^(revision under test:|runtime fingerprint:|recorded fingerprint:|runtime source_sha:|PASS:|FAIL:|INDETERMINATE:|divergent markers|  [a-zA-Z0-9_]+:)' \
+              "$RUNNER_TEMP/incident378-probe.log" | head -65 || true
+            printf '```\n\n'
+            printf 'No traffic, queue, admission or deployment state was changed by this diagnostic.\n'
+          } > "$report"
+          gh issue comment 378 --repo "$GITHUB_REPOSITORY" --body-file "$report"
+
+      - name: Fail workflow on divergent or indeterminate serving-worker identity
+        if: always() && steps.probe.outputs.exit_code != ''
+        env:
+          EXIT_CODE: ${{ steps.probe.outputs.exit_code }}
+        shell: bash
+        run: |
+          test "$EXIT_CODE" = "0"
+
   sync-base44-signing-key:
     if: >-
       github.event_name == 'workflow_dispatch'

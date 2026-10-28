@@ -75,14 +75,26 @@ Do not merge/deploy/activate as a product without independent acceptance.
 
 These keys should not be set in Standard150's production worker/dispatcher.
 
-**Verified schema blocker (2026-10-27):** `base44/entities/ScanRun.jsonc`
-currently allows only `standard_150`, `basic`, `quick`, `deep`,
-`advanced` in `scan_mode`. The issuer refuses all those values, correctly.
-A future, separately reviewed Base44 schema migration is required before
-a service-owned Extended 500 ScanRun can be persisted. The current
-`createAccessCheckout`/Stripe webhook supports the Standard 150 plan, not
-a verified Extended 500 purchase flow; this implementation does not
-create its own paid entitlement record.
+**R4 schema candidate (2026-10-28, draft PR #377 only):**
+`base44/entities/ScanRun.jsonc` now accepts `extended_500` alongside
+all legacy modes, with the public `standard_150` default and admin-only
+ScanRun writes **unchanged**. This has NOT been merged, synchronized or
+published to Base44 production. `src/lib/extended500ScanRunDraft.js`
+prepares a bounded, server-only, root-domain, robots-respecting candidate
+with explicit owner/project/paid Access provenance and a request fingerprint.
+It never writes a record. Its replay classifier cannot establish atomic
+uniqueness: `requires_atomic_create` is explicitly NOT permission to call
+`ScanRun.create()` without a serialized exact-owner request receipt.
+`tests/frontend/extended500ScanRunDraft.test.mjs` proves mode isolation,
+schema field compatibility, paid-only entitlement, unsafe-target denial,
+replay identity/terminal fences, and unchanged Standard 150 customer path.
+
+**Still blocked:** no production `extended500_lifetime` Stripe purchase
+and webhook, no isolated CAS-safe ScanRun seed service, no entitlement
+revalidation at worker pickup, no Extended 500 worker and no reviewed
+signed persistence. Before an issuer can mint against a frozen 500 ScanRun,
+a future server-side creation flow must atomically bind owner+request to
+exactly one generated scan ID, not merely query then create.
 
 **Operational limitation:** Cloud Run IAM and service-role source controls must
 be verified on staging; local mocked tests alone do not prove Base44 functions

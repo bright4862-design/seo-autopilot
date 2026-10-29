@@ -2,7 +2,7 @@ name: FixList CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, integration/ext500-lifecycle-ci-v4-20261029]
   pull_request:
     branches: [main]
 
@@ -112,3 +112,19 @@ jobs:
 
       - name: Build production scanner image
         run: docker build --tag fixlist-scanner:ci .
+
+  extended500-coordinator-compile:
+    name: Extended 500 private coordinator image contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify immutable checkout
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Build disabled 500 coordinator
+        run: docker build -f extended500-admission/Dockerfile -t fixlist-extended500-coordinator:ci extended500-admission
+      - name: Compile bundled bridge and admission service
+        run: docker run --rm --entrypoint python fixlist-extended500-coordinator:ci -m py_compile core.py scanrun_seed.py seed_admission_bridge.py service.py

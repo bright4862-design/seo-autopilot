@@ -193,3 +193,63 @@ def test_live_reservation_route_calls_seed_fenced_path_only(monkeypatch):
     assert response["state"] == "enqueued"
     assert response["admitted"] is False
     assert response["worker_execution_enabled"] is False
+
+
+def test_real_seed_seeder_receipt_can_be_admitted_without_manual_seed_forgery(monkeypatch):
+    """Connect the ACTUAL A seeder output to the ACTUAL coordinator transaction."""
+    from test_extended500_scanrun_seed import make_draft, make_access, make_seeder
+    STORE.clear()
+    service = _load(monkeypatch)
+    draft = make_draft(owner="owner_500", project="project_500", request="request_500",
+                       access_id="access_500", site="https://example.com/")
+    access = make_access(owner="owner_500", access_id="access_500")
+    seeder, seedstore, base44 = make_seeder()
+    created = seeder.submit(draft, access)
+    assert created["outcome"] == "seeded"
+    assert base44.create_calls == 1
+    ent, grant = signed_candidate(service)
+    ent["scan_id"] = grant["scan_id"] = created["scan_id"]
+    for document, key in ((ent, service.ENTITLEMENT_KEY), (grant, service.PREFLIGHT_KEY)):
+        document["proof"] = service.seal(
+            {k: v for k, v in document.items() if k != "proof"}, key,
+        )
+    for (collection, doc_id), doc in seedstore.all_docs().items():
+        STORE[f"{collection}/{doc_id}"] = doc
+    accepted = service.reserve_seeded(ent, grant)
+    assert accepted["outcome"] == "reserved"
+    assert service.reserve_seeded(ent, grant)["outcome"] == "replayed"
+    assert base44.create_calls == 1
+
+
+def test_lost_base44_create_response_blocks_admission_until_exact_reconciliation(monkeypatch):
+    """Never let an uncertain initial create become an authorized crawl."""
+    from test_extended500_scanrun_seed import make_draft, make_access, make_seeder
+    STORE.clear()
+    service = _load(monkeypatch)
+    draft = make_draft(owner="owner_500", project="project_500", request="request_500",
+                       access_id="access_500", site="https://example.com/")
+    access = make_access(owner="owner_500", access_id="access_500")
+    seeder, seedstore, base44 = make_seeder()
+    base44.mode = "lose_response"
+    pending = seeder.submit(draft, access)
+    assert pending["state"] == "create_uncertain"
+    assert base44.create_calls == 1
+    ent, grant = signed_candidate(service)
+    ent["scan_id"] = grant["scan_id"] = "scanrun_1"
+    for document, key in ((ent, service.ENTITLEMENT_KEY), (grant, service.PREFLIGHT_KEY)):
+        document["proof"] = service.seal(
+            {k: v for k, v in document.items() if k != "proof"}, key,
+        )
+    for (collection, doc_id), doc in seedstore.all_docs().items():
+        STORE[f"{collection}/{doc_id}"] = doc
+    with pytest.raises(service.core.AdmissionRefused, match="seed_not_reconciled"):
+        service.reserve_seeded(ent, grant)
+    assert not any(k.startswith("extended500_request_receipts/") for k in STORE)
+    recovered = seeder.reconcile(draft, access)
+    assert recovered["outcome"] == "reconciled"
+    assert recovered["scan_id"] == "scanrun_1"
+    assert base44.create_calls == 1, "lost create response must NEVER create twice"
+    for (collection, doc_id), doc in seedstore.all_docs().items():
+        STORE[f"{collection}/{doc_id}"] = doc
+    assert service.reserve_seeded(ent, grant)["outcome"] == "reserved"
+    assert base44.create_calls == 1

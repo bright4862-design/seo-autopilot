@@ -11,7 +11,7 @@ release fingerprint, Base44 deployment and Stripe live settings are untouched.
 | --- | --- | --- |
 | Paid Access -> draft | #388 disabled $49 checkout/webhook; `extended500ScanRunDraft.js` + strict paid issuer | New live price intentionally INACTIVE; no paid sandbox end-to-end |
 | Draft -> ScanRun | #389 `Extended500ScanRunSeeder`: one Firestore claim then exact Base44 proof; lost-response tombstone | Real Base44 create/query and cross-instance Firestore tests missing |
-| SEEDED -> RESERVED | **NEW** `seed_admission_bridge.py` + `service.reserve_seeded` | Must read exact reconciled seed receipt AND active seed-owner slot inside SAME Firestore transaction before reservation; 12-way simulated contention tests |
+| SEEDED -> RESERVED | **NEW** `seed_admission_bridge.py` + `service.reserve_seeded` | Requires reconciled receipt + active seed slot inside SAME Firestore transaction; actual seeder output tested through coordinator, including lost-create recovery and 12-way contention |
 | RESERVED -> ENQUEUED | Coordinator deterministic task + immutable receipt | Dedicated queue, worker and IAM not activated; dispatch remains disabled |
 | ENQUEUED -> PICKUP CLAIMED | #391 fresh paid access/tenant reads; **NEW** `extended500_pickup_claim.py` CAS for one immutable claim | CAS only accepts `enqueued` (not `dispatch_unknown`), 12 simultaneous tasks produce one claim; **execution_allowed=false** |
 | Pickup -> 500 collected | #390 isolated spawned 500 crawler; actual scanner logic in mocked 510-URL sample | No authenticated worker route or real site/runtime benchmark |

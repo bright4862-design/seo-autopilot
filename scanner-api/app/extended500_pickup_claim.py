@@ -146,3 +146,44 @@ def claim_extended500_pickup(
         code=code, receipt_id=rid, task_name=name,
         claimed=code == "claimed_execution_disabled",
     )
+
+
+class FirestorePickupClaimStore:
+    """Injectable Cloud Firestore transactional port, NOT exercised live.
+
+    The operator must inject a correctly scoped google.cloud.firestore.Client
+    and firestore.transactional decorator. This adapter has NO account
+    credentials in source, no endpoint and never launches a crawler.
+    """
+
+    def __init__(self, client: Any, transactional: Callable[..., Any]):
+        if client is None or not callable(transactional):
+            raise ValueError("Firestore client and transaction decorator required")
+        self.client = client
+        self.transactional = transactional
+
+    def run_in_transaction(self, callback: Callable[[PickupTransaction], T]) -> T:
+        @self.transactional
+        def run(transaction):
+            return callback(_FirestorePickupView(self.client, transaction))
+        return run(self.client.transaction())
+
+
+class _FirestorePickupView:
+    def __init__(self, client: Any, transaction: Any):
+        self.client = client
+        self.transaction = transaction
+
+    def _ref(self, collection: str, doc_id: str):
+        if collection not in (PICKUP_COLLECTION, SLOT_COLLECTION, RECEIPT_COLLECTION):
+            raise ValueError("foreign extended500 collection")
+        if not isinstance(doc_id, str) or not doc_id:
+            raise ValueError("invalid Firestore document identity")
+        return self.client.collection(collection).document(doc_id)
+
+    def get(self, collection: str, doc_id: str) -> dict[str, Any] | None:
+        snap = self._ref(collection, doc_id).get(transaction=self.transaction)
+        return snap.to_dict() if snap.exists else None
+
+    def create(self, collection: str, doc_id: str, value: dict[str, Any]) -> None:
+        self.transaction.create(self._ref(collection, doc_id), value)

@@ -3,5 +3,5 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /service
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
-COPY core.py service.py ./
+COPY core.py scanrun_seed.py seed_admission_bridge.py service.py ./
 CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "--threads", "4", "--timeout", "60", "service:app"]

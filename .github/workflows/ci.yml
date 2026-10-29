@@ -2,7 +2,7 @@ name: FixList CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, integration/ext500-lifecycle-ci-v3-20261029]
   pull_request:
     branches: [main]
 

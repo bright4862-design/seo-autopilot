@@ -91,6 +91,10 @@ def validate_extended500_collection_result(scan: dict, raw_result: Any) -> dict:
         raise Extended500CollectionRefused("collection_failed_or_unverified")
     if raw_result.get("scan_mode") != EXTENDED500_MODE:
         raise Extended500CollectionRefused("foreign_collection_mode")
+    if raw_result.get("release_gate_eligible") is True or raw_result.get("review_status") in {
+        "reviewed", "complete", "passed",
+    }:
+        raise Extended500CollectionRefused("collector_must_not_assert_review_authority")
     pages = raw_result.get("pages")
     mirrored = raw_result.get("crawled_pages")
     if not isinstance(pages, list) or not isinstance(mirrored, list) or pages != mirrored:

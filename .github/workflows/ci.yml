@@ -2,7 +2,7 @@ name: FixList CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, agent/ext500-a-ci-validation-20261029]
   pull_request:
     branches: [main]
 

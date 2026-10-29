@@ -29,6 +29,8 @@ from google.auth.transport.requests import Request as GoogleAuthRequest
 import requests
 
 import core
+import scanrun_seed
+from seed_admission_bridge import require_seeded_scanrun
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 128 * 1024
@@ -203,17 +205,45 @@ def authenticate():
 
 
 def reserve(entitlement: dict, grant: dict) -> dict:
+    """Compatibility alias: the previously unseeded reservation is forbidden.
+
+    Both internal callers and the HTTP route require the exact reconciled
+    ScanRun seed receipt inside the SAME Firestore transaction as admission.
+    """
+    return reserve_seeded(entitlement, grant)
+
+
+def reserve_seeded(entitlement: dict, grant: dict) -> dict:
+    """Only callable reservation path from the live /reserve route.
+
+    Read the exact seed receipt, active seed-owner slot, admission slot and
+    immutable receipt in ONE Firestore transaction before any writes. Never
+    reserve based solely on a signed grant whose Base44 create may have failed.
+    """
     claim = verify_assertions(entitlement, grant)
     client = store()
-    slot_ref = client.collection(COLLECTION_SLOTS).document(claim["owner_user_id"])
+    owner = claim["owner_user_id"]
+    seed_id = scanrun_seed.seed_receipt_id(owner, claim["request_id"])
+    seed_ref = client.collection(scanrun_seed.DEFAULT_COLLECTIONS["receipt"]).document(seed_id)
+    seed_slot_ref = client.collection(scanrun_seed.DEFAULT_COLLECTIONS["slot"]).document(owner)
+    slot_ref = client.collection(COLLECTION_SLOTS).document(owner)
     rid = core.receipt_id(claim)
     receipt_ref = client.collection(COLLECTION_RECEIPTS).document(rid)
 
     @firestore.transactional
     def apply(transaction):
-        # Read both before any writes (Firestore transaction discipline).
+        # Firestore discipline: ALL reads precede ANY writes. A changed seed
+        # receipt conflicts with this reservation transaction, not a stale
+        # standalone read performed outside it.
+        seed_doc = seed_ref.get(transaction=transaction)
+        seed_slot_doc = seed_slot_ref.get(transaction=transaction)
         slot_doc = slot_ref.get(transaction=transaction)
         receipt_doc = receipt_ref.get(transaction=transaction)
+        require_seeded_scanrun(
+            seed_doc.to_dict() if seed_doc.exists else None,
+            seed_slot_doc.to_dict() if seed_slot_doc.exists else None,
+            claim, grant,
+        )
         decision = core.decide_reservation(
             slot_doc.to_dict() if slot_doc.exists else None,
             receipt_doc.to_dict() if receipt_doc.exists else None,
@@ -225,7 +255,6 @@ def reserve(entitlement: dict, grant: dict) -> dict:
         return decision
 
     return apply(client.transaction())
-
 
 def update_dispatch_state(claim: dict, state: str) -> None:
     client = store()
@@ -315,7 +344,7 @@ def reservation_route():
     try:
         entitlement, grant = body["entitlement"], body["preflight_grant"]
         claim = verify_assertions(entitlement, grant)
-        decision = reserve(entitlement, grant)
+        decision = reserve_seeded(entitlement, grant)
         if decision["outcome"] == "terminal_replay":
             return jsonify({"success": False, "state": "terminal_replay", "admitted": False}), 409
         dispatch_state = enqueue(claim, grant, decision["task_name"])

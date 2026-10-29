@@ -158,21 +158,72 @@ def _evidence(service):
     )
 
 
+
+def _register_seed_for_coordinator(service, entitlement, grant):
+    """Use the real seed receipt/slot field contract, not an unsigned paid flag."""
+    claim = service.core.canonical_request(entitlement)
+    seedlib = service.scanrun_seed
+    rid = seedlib.seed_receipt_id(claim["owner_user_id"], claim["request_id"])
+    receipt = {
+        "schema": seedlib.RECEIPT_SCHEMA,
+        "receipt_id": rid, "state": seedlib.SEEDED,
+        "owner_user_id": claim["owner_user_id"],
+        "project_id": claim["project_id"],
+        "request_id": claim["request_id"],
+        "idempotency_ref": seedlib.idempotency_ref(
+            claim["owner_user_id"], claim["idempotency_key"],
+        ),
+        "attempt_count": claim["attempt_count"],
+        "access_id": claim["access_id"],
+        "scan_id": claim["scan_id"],
+        "website_url": grant["website_url"],
+        "normalized_domain": "example.com",
+        "request_fingerprint": (
+            f"extended_500|{grant['website_url']}|root|respect_robots_txt"
+        ),
+        "scan_mode": "extended_500",
+        "scan_source": seedlib.SCAN_SOURCE,
+    }
+    slot = {
+        "schema": seedlib.SLOT_SCHEMA,
+        "state": seedlib.SLOT_ACTIVE,
+        "owner_user_id": claim["owner_user_id"],
+        "request_id": claim["request_id"],
+        "receipt_id": rid,
+    }
+    STORE[f"{seedlib.DEFAULT_COLLECTIONS['receipt']}/{rid}"] = receipt
+    STORE[f"{seedlib.DEFAULT_COLLECTIONS['slot']}/{claim['owner_user_id']}"] = slot
+
+
+def _seeded_evidence(service):
+    entitlement, grant = _evidence(service)
+    entitlement["idempotency_key"] = entitlement["request_id"]
+    grant["idempotency_key"] = grant["request_id"]
+    for doc, key in (
+        (entitlement, service.ENTITLEMENT_KEY), (grant, service.PREFLIGHT_KEY),
+    ):
+        doc["proof"] = service.seal(
+            {k: v for k, v in doc.items() if k != "proof"}, key,
+        )
+    _register_seed_for_coordinator(service, entitlement, grant)
+    return entitlement, grant
+
+
 def test_isolated_firestore_transactions_reserve_replay_and_preserve_tombstones(monkeypatch):
     STORE.clear()
     service = _load(monkeypatch)
-    entitlement, grant = _evidence(service)
+    entitlement, grant = _seeded_evidence(service)
     service.verify_assertions(
         entitlement, grant,
         now=datetime.now(timezone.utc),
     )
     first = service.reserve(entitlement, grant)
     assert first["outcome"] == "reserved"
-    assert len(STORE) == 2
+    assert len(STORE) == 4
     again = service.reserve(entitlement, grant)
     assert again["outcome"] == "replayed"
     assert again["task_name"] == first["task_name"]
-    assert len(STORE) == 2
+    assert len(STORE) == 4
     request_claim = service.core.canonical_request(entitlement)
     service.update_dispatch_state(request_claim, "dispatch_unknown")
     assert service.reserve(entitlement, grant)["task_name"] == first["task_name"]
@@ -327,12 +378,12 @@ def test_contending_owner_requests_have_one_atomic_winner_and_stable_replay(monk
         entitlement.update({
             "scan_id": f"scan_candidate_{number}",
             "request_id": f"request_candidate_{number}",
-            "idempotency_key": f"idem_candidate_{number}",
+            "idempotency_key": f"request_candidate_{number}",
         })
         preflight.update({
             "scan_id": f"scan_candidate_{number}",
             "request_id": f"request_candidate_{number}",
-            "idempotency_key": f"idem_candidate_{number}",
+            "idempotency_key": f"request_candidate_{number}",
         })
         for doc, key in (
             (entitlement, service.ENTITLEMENT_KEY),
@@ -342,6 +393,10 @@ def test_contending_owner_requests_have_one_atomic_winner_and_stable_replay(monk
                 {field: value for field, value in doc.items() if field != "proof"}, key,
             )
         candidates.append((entitlement, preflight))
+
+    # Only the first candidate has an independently reconciled Base44
+    # seed receipt. Other candidates must fail BEFORE admission slot writes.
+    _register_seed_for_coordinator(service, *candidates[0])
 
     def try_reserve(candidate):
         try:
@@ -357,10 +412,10 @@ def test_contending_owner_requests_have_one_atomic_winner_and_stable_replay(monk
     assert len(won) == 1, decisions
     assert won[0][1] == "reserved"
     assert len(denied) == 11
-    assert all(v[1] == "owner_slot_busy" for v in denied)
-    assert len(STORE) == 2
+    assert all(v[1] == "seed_receipt_unavailable" for v in denied)
+    assert len(STORE) == 4
     winning_index = decisions.index(won[0])
     replay = service.reserve(*candidates[winning_index])
     assert replay["outcome"] == "replayed"
     assert replay["task_name"] == won[0][2]
-    assert len(STORE) == 2
+    assert len(STORE) == 4

@@ -158,3 +158,36 @@ def test_disabled_pickup_never_contacts_durable_sources():
     assert result.code == "pickup_disabled"
     assert reader.calls == []
     assert store.commits == 0
+
+
+def test_firestore_adapter_binds_same_transaction_reads_and_single_create():
+    from app.extended500_pickup_claim import FirestorePickupClaimStore
+    from test_extended500_atomic_service_adapter import Client, transactional, STORE
+    task, reader, name = fixture()
+    fake = FakeStore(task, reader)
+    STORE.clear()
+    try:
+        STORE.update(deepcopy(fake.items))
+        adapter = FirestorePickupClaimStore(Client(), transactional)
+        first = run(task, reader, name, adapter)
+        assert first.code == "claimed_execution_disabled"
+        assert first.claimed and not first.execution_allowed
+        second = run(task, reader, name, adapter)
+        assert second.code == "pickup_already_claimed"
+        assert not second.claimed and not second.execution_allowed
+        saved = STORE[f"{PICKUP_COLLECTION}/{reader.receipt['receipt_id']}"]
+        assert saved["state"] == "claimed_execution_disabled"
+    finally:
+        STORE.clear()
+
+
+def test_firestore_adapter_cannot_read_or_write_standard150_collections():
+    from app.extended500_pickup_claim import FirestorePickupClaimStore
+    from test_extended500_atomic_service_adapter import Client, transactional, STORE
+    STORE.clear()
+    adapter = FirestorePickupClaimStore(Client(), transactional)
+    with pytest.raises(ValueError, match="foreign extended500 collection"):
+        adapter.run_in_transaction(
+            lambda tx: tx.create("standard150_owner_slots", "attacker", {"state": "active"})
+        )
+    assert STORE == {}

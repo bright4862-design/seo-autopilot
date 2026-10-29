@@ -205,29 +205,12 @@ def authenticate():
 
 
 def reserve(entitlement: dict, grant: dict) -> dict:
-    claim = verify_assertions(entitlement, grant)
-    client = store()
-    slot_ref = client.collection(COLLECTION_SLOTS).document(claim["owner_user_id"])
-    rid = core.receipt_id(claim)
-    receipt_ref = client.collection(COLLECTION_RECEIPTS).document(rid)
+    """Compatibility alias: the previously unseeded reservation is forbidden.
 
-    @firestore.transactional
-    def apply(transaction):
-        # Read both before any writes (Firestore transaction discipline).
-        slot_doc = slot_ref.get(transaction=transaction)
-        receipt_doc = receipt_ref.get(transaction=transaction)
-        decision = core.decide_reservation(
-            slot_doc.to_dict() if slot_doc.exists else None,
-            receipt_doc.to_dict() if receipt_doc.exists else None,
-            entitlement, QUEUE_PATH, issued_at=int(time.time()),
-        )
-        if decision["outcome"] == "reserved":
-            transaction.create(receipt_ref, decision["receipt_write"])
-            transaction.set(slot_ref, decision["slot_write"])
-        return decision
-
-    return apply(client.transaction())
-
+    Both internal callers and the HTTP route require the exact reconciled
+    ScanRun seed receipt inside the SAME Firestore transaction as admission.
+    """
+    return reserve_seeded(entitlement, grant)
 
 
 def reserve_seeded(entitlement: dict, grant: dict) -> dict:

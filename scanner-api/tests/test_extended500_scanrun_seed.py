@@ -758,6 +758,14 @@ def test_module_has_no_live_imports_or_routes():
     for forbidden in ("google.cloud", "import requests", "flask", "urllib.request", "http.client",
                       "base44.asServiceRole", "@app."):
         assert forbidden not in source
+    # The integrator now wires the previously isolated seed into the private
+    # coordinator. The customer-facing route must REQUIRE the same-transaction
+    # reconciled seed proof before reserving any admission slot.
     service = (SERVICE_DIR / "service.py").read_text()
-    assert "scanrun_seed" not in service, "seed must stay unwired from the coordinator"
-    assert "scanrun_seed.py" not in (SERVICE_DIR / "Dockerfile").read_text()
+    assert "from seed_admission_bridge import require_seeded_scanrun" in service
+    assert "decision = reserve_seeded(entitlement, grant)" in service
+    assert "require_seeded_scanrun(" in service
+    assert "seed_doc = seed_ref.get(transaction=transaction)" in service
+    assert "seed_slot_doc = seed_slot_ref.get(transaction=transaction)" in service
+    assert "seed_admission_bridge.py" in (SERVICE_DIR / "Dockerfile").read_text()
+    assert "scanrun_seed.py" in (SERVICE_DIR / "Dockerfile").read_text()

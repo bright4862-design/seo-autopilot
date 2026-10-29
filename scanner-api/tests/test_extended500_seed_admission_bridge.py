@@ -205,7 +205,8 @@ def test_real_seed_seeder_receipt_can_be_admitted_without_manual_seed_forgery(mo
     access = make_access(owner="owner_500", access_id="access_500")
     seeder, seedstore, base44 = make_seeder()
     created = seeder.submit(draft, access)
-    assert created["outcome"] == "seeded"
+    assert created["outcome"] == "created"
+    assert created["state"] == "seeded"
     assert base44.create_calls == 1
     ent, grant = signed_candidate(service)
     ent["scan_id"] = grant["scan_id"] = created["scan_id"]

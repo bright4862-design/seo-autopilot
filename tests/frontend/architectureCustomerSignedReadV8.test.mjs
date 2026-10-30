@@ -196,10 +196,20 @@ for (const [label, options, status, code] of [
   });
 }
 
-test("unpaid owner cannot read signed full canonical repairs", async () => {
+test("unpaid owner sees only the bounded two-fix preview, never signed full repair details", async () => {
   const { status, body } = await invokeV8(fixture, { paid: false });
   assert.equal(status, 200, JSON.stringify(body));
-  assert.deepEqual(body.fixItems, []);
+  assert.ok(body.fixItems.length <= 2);
+  assert.ok(body.fixItems.length > 0);
+  for (const item of body.fixItems) {
+    assert.equal(item.action_priority_score, undefined);
+    assert.equal(item.priority_reason, undefined);
+    assert.equal(item.affected_pages, undefined);
+    assert.equal(item.priority_context, undefined);
+    assert.equal(item.canonical_action_rank, undefined);
+    assert.equal(item.repair_fingerprint, undefined);
+    assert.equal(item.repair_identity_version, undefined);
+  }
 });
 
 test("existing signed contract drops unsanctioned architecture evidence instead of publishing it", async () => {

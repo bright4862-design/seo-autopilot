@@ -38,8 +38,14 @@ LEAF_FAMILIES = frozenset({
 DIRECTORY_FAMILIES = frozenset({"seller_directory", "provider_directory"})
 
 
-def provenance_decision(page: dict[str, Any]) -> tuple[str, str | None]:
-    """Return (state, trusted role override); conflicts and gaps fail closed."""
+def provenance_decision(page: dict[str, Any], *, authenticated_producer: bool = False) -> tuple[str, str | None]:
+    """Return (state, trusted role override); fail closed without authenticated source.
+
+    authenticated_producer is a caller-side authority decision, never a field
+    on the page, website payload, source claim, or persisted customer record.
+    Production deliberately does not pass this override until a trusted
+    scanner-side producer is implemented and end-to-end tested.
+    """
     evidence = page.get("architecture_role_evidence")
     if evidence is None:
         return "template_only", None
@@ -49,6 +55,13 @@ def provenance_decision(page: dict[str, Any]) -> tuple[str, str | None]:
         return "insufficient_evidence", None
     claims = evidence.get("claims")
     if not isinstance(claims, list) or not claims:
+        return "insufficient_evidence", None
+
+    # The producer/source/verified fields are merely self-reported JSON. Until
+    # a trusted scanner-side producer/verification boundary explicitly supplies
+    # authenticated_producer=True, no claim may influence customer ranking.
+    # In particular, a remote site can never self-attest this boolean.
+    if authenticated_producer is not True:
         return "insufficient_evidence", None
 
     roles: set[str] = set()

@@ -62,29 +62,41 @@ def test_conflicting_verified_claims_fail_closed():
     e = evidence("structural", "verified_taxonomy")
     e["claims"].append(evidence("support", "verified_promotional_surface")["claims"][0])
     p["architecture_role_evidence"] = e
-    assert provenance_decision(p) == ("conflicted", None)
+    assert provenance_decision(p, authenticated_producer=True) == ("conflicted", None)
+    assert page_role(p) == "structural"
+
+
+def test_forced_claim_fails_closed_even_when_field_says_authenticated():
+    p = page("/promo", architecture_role_evidence=evidence("support", "verified_promotional_surface"),
+             authenticated_producer=True, scanner_authoritative=True)
+    assert provenance_decision(p) == ("insufficient_evidence", None)
     assert page_role(p) == "structural"
 
 
 def test_verified_promo_demotes_pseudo_hub():
     p = page("/sale/flash", architecture_role_evidence=evidence("support", "verified_promotional_surface"))
-    assert provenance_decision(p) == ("promotional_or_transient", "support")
-    assert page_role(p) == "support"
+    assert provenance_decision(p, authenticated_producer=True) == ("promotional_or_transient", "support")
+    # No scanner-side authenticated producer exists yet: customer route fails
+    # closed, no page-controlled self-attestation can demote a hub.
+    assert provenance_decision(p) == ("insufficient_evidence", None)
+    assert page_role(p) == "structural"
 
 
 def test_verified_directory_structural_without_template_guessing():
     p = page("/sellers", "seller_directory",
              architecture_role_evidence=evidence("structural", "verified_directory"))
-    assert provenance_decision(p) == ("proven_structural", "structural")
-    assert page_role(p) == "structural"
+    assert provenance_decision(p, authenticated_producer=True) == ("proven_structural", "structural")
+    assert provenance_decision(p) == ("insufficient_evidence", None)
+    assert page_role(p) == "other"
     assert page_role(page("/sellers", "seller_directory")) == "other"
 
 
 def test_verified_business_journey_in_unknown_family():
     p = page("/checkout", "standard",
              architecture_role_evidence=evidence("business_critical", "verified_customer_journey"))
-    assert provenance_decision(p) == ("proven_business_critical", "business_critical")
-    assert page_role(p) == "business_critical"
+    assert provenance_decision(p, authenticated_producer=True) == ("proven_business_critical", "business_critical")
+    assert provenance_decision(p) == ("insufficient_evidence", None)
+    assert page_role(p) == "support"
 
 
 def test_seller_profile_not_promoted_by_collection_template():

@@ -1,4 +1,5 @@
 name: Architecture Standard-150 isolated real-site acceptance
+# Rerun after correcting exact-150 test-harness false rejection.
 
 on:
   push:

@@ -1,5 +1,5 @@
 name: Architecture Standard-150 isolated real-site acceptance
-# Rerun after correcting exact-150 test-harness false rejection.
+# Re-verify role-first bounded scoring and fail-closed provenance on the final shadow candidate.
 
 on:
   push:

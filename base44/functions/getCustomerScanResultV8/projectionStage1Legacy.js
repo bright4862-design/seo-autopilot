@@ -4,6 +4,10 @@ import { sanitizeReportRawFindingEvidence, sanitizeScanCoverage } from "./repair
 import { PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION } from "./evidenceUrlIdentity.js";
 import { PUBLISHED_REVIEW_ATTESTATION_VERSION, publishedIdentityContext, publishedRepairEvidenceFields, publishedPriorityContext } from "./publishedRepairEvidence.js";
 import { sanitizeComparisonEvidence } from "./comparisonEvidence.js";
+import {
+  SIGNED_ARCHITECTURE_CONTEXT_VERSION,
+  signedArchitecturePriorityContext,
+} from "./signedArchitectureContext.js";
 const ENCODER = new TextEncoder();
 
 export const ACCESS_APP_ID = "6a498732ec779dfaaeab0e53";
@@ -166,6 +170,7 @@ const FIX_LIST_FIELDS = [
   "repair_snapshot_contract_version",
   "repair_snapshot_contract_complete",
   "repair_priority_model_version",
+  "repair_architecture_context_version",
   "canonical_action_fix_ids",
   "generated_at",
   "created_date",
@@ -392,7 +397,10 @@ export function buildCustomerProjection({ run, fixList, fixItems, fullAccess, pr
   const publishedContext = canReadResult && authorityVerified === true && run?.authority_seal_version === PUBLISHED_REVIEW_ATTESTATION_VERSION
     ? { ...publishedIdentityContext(run, PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION), persisted: true } : {};
   const customerFixItems = canReadResult
-    ? (fixItems || []).map((item) => sanitizeFixItem(item, { reportEvidence, publishedContext }))
+    ? (fixItems || []).map((item) => sanitizeFixItem(item, {
+        reportEvidence, publishedContext,
+        canonical, architectureContextVersion: canonical ? fixList?.repair_architecture_context_version || "" : "",
+      }))
     : previewVerified ? previewFixItems(fixItems) : [];
   if (canonical) {
     customerFixItems.sort((left, right) => number(left.canonical_action_rank) - number(right.canonical_action_rank));
@@ -424,7 +432,13 @@ export function authoritySnapshotFromRows({ run, fixList, fixItems, userId }) {
   const version = text(run?.authority_seal_version, 160);
   const publishedContext = { ...publishedIdentityContext(run, version === PUBLISHED_REVIEW_ATTESTATION_VERSION ? PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION : ""), persisted: true };
   const comparisonEvidence = sanitizeComparisonEvidence(run?.comparison_evidence, publishedContext);
-  const recommendations = (fixItems || []).map((item) => authorityFixFromRow(item, { canonical, version, publishedContext }));
+  const architectureContextVersion = canonical ? fixList?.repair_architecture_context_version || "" : "";
+  if (architectureContextVersion && architectureContextVersion !== SIGNED_ARCHITECTURE_CONTEXT_VERSION) {
+    throw new Error("Persisted architecture context version unsupported");
+  }
+  const recommendations = (fixItems || []).map((item) => authorityFixFromRow(item, {
+    canonical, version, publishedContext, architectureContextVersion,
+  }));
   if (canonical) {
     recommendations.sort((left, right) => number(left.canonical_action_rank) - number(right.canonical_action_rank));
   } else {
@@ -505,6 +519,9 @@ export function authoritySnapshotFromRows({ run, fixList, fixItems, userId }) {
         repair_snapshot_contract_version: REPAIR_CONTRACT_V2,
         repair_snapshot_contract_complete: true,
         repair_priority_model_version: REPAIR_PRIORITY_MODEL_V2,
+        ...(architectureContextVersion === SIGNED_ARCHITECTURE_CONTEXT_VERSION
+          ? { repair_architecture_context_version: SIGNED_ARCHITECTURE_CONTEXT_VERSION }
+          : {}),
         canonical_action_fix_ids: textArray(fixList?.canonical_action_fix_ids, 100, 160),
       } : {}),
       generated_at: text(fixList?.generated_at, 80),
@@ -543,7 +560,9 @@ export function stableSerialize(value) {
   return JSON.stringify(canonicalize(value));
 }
 
-function authorityFixFromRow(item, { canonical = false, version = "", publishedContext = {} } = {}) {
+function authorityFixFromRow(item, {
+  canonical = false, version = "", publishedContext = {}, architectureContextVersion = "",
+} = {}) {
   const published = publishedRepairEvidenceFields(item, publishedContext);
   const raw = item?.raw_finding && typeof item.raw_finding === "object" ? item.raw_finding : {};
   const reportEvidence = [REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION, PUBLISHED_REVIEW_ATTESTATION_VERSION].includes(version)
@@ -612,7 +631,9 @@ function authorityFixFromRow(item, { canonical = false, version = "", publishedC
     repair_surface: text(item?.repair_surface, 160),
     remediation_family: text(item?.remediation_family, 200),
     shared_repair_confirmed: item?.shared_repair_confirmed === true,
-    priority_context: canonicalPriorityContext(item?.priority_context, publishedContext.identityVersion),
+    priority_context: canonicalPriorityContext(
+      item?.priority_context, publishedContext.identityVersion, architectureContextVersion,
+    ),
     ...(text(item?.repair_verification_state, 120) ? { repair_verification_state: text(item?.repair_verification_state, 120) } : {}),
     ...(text(item?.rule_definition_version, 160) ? { rule_definition_version: text(item?.rule_definition_version, 160) } : {}),
     ...(text(item?.comparison_profile_version, 160) ? { comparison_profile_version: text(item?.comparison_profile_version, 160) } : {}),
@@ -645,7 +666,7 @@ function canonicalRepairEvidenceGroups(value) {
   }));
 }
 
-function canonicalPriorityContext(value, identityVersion = "") {
+function canonicalPriorityContext(value, identityVersion = "", architectureContextVersion = "") {
   const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   return {
     ...publishedPriorityContext(source, identityVersion),
@@ -668,6 +689,7 @@ function canonicalPriorityContext(value, identityVersion = "") {
     important_affected: number(source.important_affected),
     shared_repair_confirmed: source.shared_repair_confirmed === true,
     coverage_scope: text(source.coverage_scope, 80),
+    ...signedArchitecturePriorityContext(source, architectureContextVersion),
   };
 }
 
@@ -826,11 +848,21 @@ function applyCoverageValidity(result) {
   return result;
 }
 
-function sanitizeFixItem(item, { reportEvidence = false, publishedContext = {} } = {}) {
+function sanitizeFixItem(item, {
+  reportEvidence = false, publishedContext = {}, canonical = false, architectureContextVersion = "",
+} = {}) {
   const result = pickFields(item, FIX_ITEM_FIELDS);
   const published = publishedRepairEvidenceFields(item, publishedContext);
   Object.assign(result, published.fields, published.evidence);
-  if (publishedContext.identityVersion && item?.priority_context) result.priority_context = canonicalPriorityContext(item.priority_context, publishedContext.identityVersion);
+  if (canonical && item?.priority_context) {
+    // Never expose extra unsigned fields injected into a historical v2 row.
+    // Only fields selected by the verified parent's signed version are public.
+    result.priority_context = canonicalPriorityContext(
+      item.priority_context, publishedContext.identityVersion, architectureContextVersion,
+    );
+  } else if (publishedContext.identityVersion && item?.priority_context) {
+    result.priority_context = canonicalPriorityContext(item.priority_context, publishedContext.identityVersion);
+  }
   const raw = item?.raw_finding && typeof item.raw_finding === "object" ? item.raw_finding : {};
   const evidenceGroups = canonicalRepairEvidenceGroups(raw.repair_evidence_groups);
   result.raw_finding = {

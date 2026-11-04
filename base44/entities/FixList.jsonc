@@ -109,6 +109,10 @@
     "repair_priority_model_version": {
       "type": "string"
     },
+    "repair_architecture_context_version": {
+      "type": "string",
+      "description": "Optional signed architecture-priority sub-contract. Absent on historical v2 snapshots."
+    },
     "canonical_action_fix_ids": {
       "type": "array",
       "items": {

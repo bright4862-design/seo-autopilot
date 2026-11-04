@@ -6,6 +6,9 @@ import { createAuthoritySeal, verifyAuthoritySeal } from "./authoritySeal.js";
 import { authorityRowsFromSnapshot } from "./authorityRows.js";
 import { AUTHORITY_CONTRACT, buildAuthoritySnapshot, buildPersistedAuthoritySnapshot, firstFailedAuthorityPredicate, hasCompleteAcceptanceEvidence } from "./authoritySnapshot.js";
 import { PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION } from "./evidenceUrlIdentity.js";
+import {
+  SIGNED_ARCHITECTURE_CONTEXT_VERSION, signedArchitecturePriorityContext,
+} from "./signedArchitectureContext.js";
 import { releaseAdmission as releaseAdmissionClient } from "./admissionClient.js";
 import { persistExactAdmissionRelease } from "./admissionRelease.js";
 import {
@@ -589,7 +592,13 @@ function canonicalRepairRowsPersisted(snapshot, fixList, items) {
     || fixList?.repair_snapshot_contract_version !== expectedList.repair_snapshot_contract_version
     || fixList?.repair_snapshot_contract_complete !== true
     || fixList?.repair_priority_model_version !== expectedList.repair_priority_model_version
+    || String(fixList?.repair_architecture_context_version || "")
+      !== String(expectedList.repair_architecture_context_version || "")
   ) return false;
+  const architectureContract = String(expectedList.repair_architecture_context_version || "");
+  if (architectureContract && architectureContract !== SIGNED_ARCHITECTURE_CONTEXT_VERSION) {
+    return false;
+  }
 
   const expectedOrder = Array.isArray(expectedList.canonical_action_fix_ids)
     ? expectedList.canonical_action_fix_ids.map((value) => String(value || ""))
@@ -616,6 +625,10 @@ function canonicalRepairRowsPersisted(snapshot, fixList, items) {
       && Number(row.canonical_action_rank || 0) === index + 1
       && String(row.repair_identity_version || "") === String(expected.repair_identity_version || "")
       && String(row.repair_fingerprint || "") === String(expected.repair_fingerprint || "")
+      && (!architectureContract || (
+        JSON.stringify(signedArchitecturePriorityContext(row.priority_context, architectureContract))
+          === JSON.stringify(signedArchitecturePriorityContext(expected.priority_context, architectureContract))
+      ))
     );
   });
 }

@@ -5,6 +5,10 @@ import { sanitizeReportRawFindingEvidence, sanitizeScanCoverage } from "./repair
 import { PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION, publishedEvidenceUrlKey } from "./evidenceUrlIdentity.js";
 import { PUBLISHED_REVIEW_ATTESTATION_VERSION, publishedIdentityContext, publishedRepairEvidenceFields, publishedPriorityContext } from "./publishedRepairEvidence.js";
 import { sanitizeComparisonEvidence } from "./comparisonEvidence.js";
+import {
+  SIGNED_ARCHITECTURE_CONTEXT_VERSION,
+  signedArchitecturePriorityContext,
+} from "./signedArchitectureContext.js";
 // Bumped when the snapshot gained coverage/inventory fields. The authority
 // proof is an HMAC over the whole snapshot, so adding a field changes the
 // payload for every row -- including rows sealed before it existed. Version
@@ -45,8 +49,12 @@ export const AUTHORITATIVE_COVERAGE_STATE = "sufficient";
 
 export function firstFailedAuthorityPredicate(scan, review, { identityVersion = "" } = {}) {
   let context;
-  try { context = publishedIdentityContext(scan, identityVersion); }
-  catch { return "published_identity_context"; }
+  try {
+    context = {
+      ...publishedIdentityContext(scan, identityVersion),
+      architectureContextVersion: review?.repair_architecture_context_version || "",
+    };
+  } catch { return "published_identity_context"; }
   const firstPage = firstArray([scan?.crawled_pages, scan?.pages, scan?.scanned_pages])[0] || {};
   const predicates = [
     ["scanner_version", scan?.scanner_version === AUTHORITY_CONTRACT.scanner_version],
@@ -128,7 +136,11 @@ export function isAuthorityEligible(scan, review, context = {}) {
 }
 
 export function buildAuthoritySnapshot({ scan, review, identity, userId, now = new Date().toISOString(), identityVersion = "", persistedEvidence = false }) {
-  const context = { ...publishedIdentityContext(scan, identityVersion), persisted: persistedEvidence };
+  const context = {
+    ...publishedIdentityContext(scan, identityVersion),
+    persisted: persistedEvidence,
+    architectureContextVersion: review?.repair_architecture_context_version || "",
+  };
   const firstPage = firstArray([scan?.crawled_pages, scan?.pages, scan?.scanned_pages])[0] || {};
   if (!canonicalReviewIsAbsentOrValid(review, context)) {
     throw new Error("canonical repair contract is invalid");
@@ -264,6 +276,9 @@ export function buildAuthoritySnapshot({ scan, review, identity, userId, now = n
         repair_snapshot_contract_version: REPAIR_CONTRACT_V2,
         repair_snapshot_contract_complete: true,
         repair_priority_model_version: REPAIR_PRIORITY_MODEL_V2,
+        ...(context.architectureContextVersion === SIGNED_ARCHITECTURE_CONTEXT_VERSION
+          ? { repair_architecture_context_version: SIGNED_ARCHITECTURE_CONTEXT_VERSION }
+          : {}),
         canonical_action_fix_ids: fixes.map((fix) => fix.fix_id),
       } : {}),
       generated_at: String(now),
@@ -309,6 +324,9 @@ export function buildPersistedAuthoritySnapshot({ run, fixList, fixItems, userId
         repair_snapshot_contract_version: REPAIR_CONTRACT_V2,
         repair_snapshot_contract_complete: true,
         repair_priority_model_version: REPAIR_PRIORITY_MODEL_V2,
+        ...(persistedFixList?.repair_architecture_context_version
+          ? { repair_architecture_context_version: persistedFixList.repair_architecture_context_version }
+          : {}),
         canonical_repairs: persistedFixItems,
       } : {}),
     },
@@ -445,7 +463,9 @@ function toAuthorityFix(fix, index, context = {}) {
       shared_repair_confirmed: fix?.shared_repair_confirmed === true
         || fix?.repair_leverage_confirmed === true
         || fix?.priority_context?.shared_repair_confirmed === true,
-      priority_context: canonicalPriorityContext(fix?.priority_context, context.identityVersion),
+      priority_context: canonicalPriorityContext(
+        fix?.priority_context, context.identityVersion, context.architectureContextVersion,
+      ),
       ...(text(fix?.repair_verification_state, 120) ? { repair_verification_state: text(fix?.repair_verification_state, 120) } : {}),
       ...(text(fix?.rule_definition_version, 160) ? { rule_definition_version: text(fix?.rule_definition_version, 160) } : {}),
       ...(text(fix?.comparison_profile_version, 160) ? { comparison_profile_version: text(fix?.comparison_profile_version, 160) } : {}),
@@ -514,6 +534,8 @@ function canonicalReviewRequested(review) {
     && review?.repair_snapshot_contract_version === REPAIR_CONTRACT_V2
     && review?.repair_snapshot_contract_complete === true
     && review?.repair_priority_model_version === REPAIR_PRIORITY_MODEL_V2
+    && (review?.repair_architecture_context_version === undefined
+      || review?.repair_architecture_context_version === SIGNED_ARCHITECTURE_CONTEXT_VERSION)
     && Array.isArray(review?.canonical_repairs),
   );
 }
@@ -524,6 +546,7 @@ function canonicalReviewAttempted(review) {
     || review?.repair_snapshot_contract_version !== undefined
     || review?.repair_snapshot_contract_complete !== undefined
     || review?.repair_priority_model_version !== undefined
+    || review?.repair_architecture_context_version !== undefined
     || review?.canonical_repairs !== undefined
   );
 }
@@ -533,7 +556,9 @@ function canonicalReviewIsAbsentOrValid(review, context = {}) {
   if (!canonicalReviewRequested(review)) return false;
   try {
     const mapped = suppressAggregateCoveredPageFixes(
-      review.canonical_repairs.slice(0, MAX_AUTHORITY_FIXES).map((fix, index) => toAuthorityFix(fix, index, context)), context,
+      review.canonical_repairs.slice(0, MAX_AUTHORITY_FIXES).map((fix, index) => toAuthorityFix(
+        fix, index, { ...context, architectureContextVersion: review.repair_architecture_context_version || "" },
+      )), context,
     );
     return canonicalAuthorityFixesValid(mapped);
   } catch (error) {
@@ -570,7 +595,7 @@ function canonicalAuthorityFixesValid(fixes) {
   return true;
 }
 
-function canonicalPriorityContext(value, identityVersion = "") {
+function canonicalPriorityContext(value, identityVersion = "", architectureContextVersion = "") {
   const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   return {
     ...publishedPriorityContext(source, identityVersion),
@@ -593,6 +618,7 @@ function canonicalPriorityContext(value, identityVersion = "") {
     important_affected: number(source.important_affected),
     shared_repair_confirmed: source.shared_repair_confirmed === true,
     coverage_scope: text(source.coverage_scope, 80),
+    ...signedArchitecturePriorityContext(source, architectureContextVersion),
   };
 }
 

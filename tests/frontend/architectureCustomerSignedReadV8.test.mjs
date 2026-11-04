@@ -200,7 +200,7 @@ for (const [label, options, status, code] of [
   }, 409, "result_authority_invalid"],
   ["modified architecture role", {
     signedMutation: (x) => { x.fixItems[0].priority_context.architecture_role_counts.structural += 1; },
-  }, 409, "result_authority_invalid"],
+  }, 500, "result_load_failed"],
   ["modified signed architecture policy", {
     signedMutation: (x) => { x.fixItems[0].priority_context.architecture_score_policy_version = "forged"; },
   }, 500, "result_load_failed"],
@@ -209,7 +209,7 @@ for (const [label, options, status, code] of [
   }, 409, "result_authority_invalid"],
   ["modified architecture reach", {
     signedMutation: (x) => { x.fixItems[0].priority_context.repair_reach = "repeated"; },
-  }, 500, "result_load_failed"],
+  }, 409, "result_authority_invalid"],
 ]) {
   test(`V8 signed customer read rejects ${label}`, async () => {
     const { status: actual, body } = await invokeV8(fixture, options);

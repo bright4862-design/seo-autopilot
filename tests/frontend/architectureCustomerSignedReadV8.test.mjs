@@ -34,9 +34,10 @@ function recordMatches(record, query = {}) {
   return Object.entries(query).every(([key, value]) => record?.[key] === value);
 }
 
-async function signedRows(fixture) {
+async function signedRows(fixture, { legacyContext = false } = {}) {
   const review = {
     ...fixture.review,
+    ...(legacyContext ? { repair_architecture_context_version: undefined } : {}),
     archetype_classifier_version: "archetype_classifier_v10_structural_finance_member_retail",
     review_version: "python_review_v2_structural_marketplace",
     review_evidence_calibration_version: "review_evidence_calibration_v6_health_score_v2",
@@ -84,9 +85,9 @@ async function signedRows(fixture) {
 let invocation = 0;
 async function invokeV8(fixture, {
   signedMutation = () => {}, signedIn = true, caller = OWNER,
-  paid = true, key = SECRET,
+  paid = true, key = SECRET, legacyContext = false,
 } = {}) {
-  const state = await signedRows(fixture);
+  const state = await signedRows(fixture, { legacyContext });
   signedMutation(state);
   const paidAccess = {
     id: "test_access", owner_user_id: OWNER,
@@ -161,6 +162,17 @@ test("actual V8 reader authenticates owner, verifies persisted HMAC and preserve
   assert.deepEqual(body.fixItems.map((item) => item.fix_id), fixture.expected_ids);
   assert.deepEqual(body.fixItems.map((item) => item.action_priority_score), fixture.expected_scores);
   assert.deepEqual(body.fixItems.map((item) => item.canonical_action_rank), [1, 2]);
+  assert.equal(body.fixList?.repair_architecture_context_version, "repair_architecture_signed_context_v1_role_first");
+  for (const item of body.fixItems) {
+    const original = fixture.review.canonical_repairs.find((candidate) => candidate.fix_id === item.fix_id);
+    assert.ok(original, "customer repair must retain source identity");
+    for (const key of [
+      "architecture_priority_version", "architecture_score_policy_version",
+      "architecture_role_counts", "architecture_role_bonus", "repair_reach",
+    ]) {
+      assert.deepEqual(item.priority_context[key], original.priority_context[key], `signed ${key}`);
+    }
+  }
   assert.equal(body.fixList?.repair_snapshot_contract_complete, true);
   assert.deepEqual(state.fixList.canonical_action_fix_ids, fixture.expected_ids);
   const reconstructed = reader.authoritySnapshotFromRows({
@@ -186,6 +198,18 @@ for (const [label, options, status, code] of [
   ["modified FixList ordering", {
     signedMutation: (x) => { x.fixList.canonical_action_fix_ids.reverse(); },
   }, 409, "result_authority_invalid"],
+  ["modified architecture role", {
+    signedMutation: (x) => { x.fixItems[0].priority_context.architecture_role_counts.structural += 1; },
+  }, 409, "result_authority_invalid"],
+  ["modified signed architecture policy", {
+    signedMutation: (x) => { x.fixItems[0].priority_context.architecture_score_policy_version = "forged"; },
+  }, 500, "result_load_failed"],
+  ["removed architecture contract marker", {
+    signedMutation: (x) => { delete x.fixList.repair_architecture_context_version; },
+  }, 409, "result_authority_invalid"],
+  ["modified architecture reach", {
+    signedMutation: (x) => { x.fixItems[0].priority_context.repair_reach = "repeated"; },
+  }, 500, "result_load_failed"],
 ]) {
   test(`V8 signed customer read rejects ${label}`, async () => {
     const { status: actual, body } = await invokeV8(fixture, options);
@@ -212,12 +236,36 @@ test("unpaid owner sees only the bounded two-fix preview, never signed full repa
   }
 });
 
-test("existing signed contract drops unsanctioned architecture evidence instead of publishing it", async () => {
-  const { state, body, status } = await invokeV8(fixture);
-  assert.equal(status, 200);
-  assert.ok(fixture.review.canonical_repairs[0].priority_context.architecture_role_counts);
-  assert.equal(state.fixItems[0].priority_context.architecture_role_counts, undefined);
-  assert.equal(body.fixItems[0].priority_context?.architecture_role_counts, undefined);
-  // Follow-up: only a new versioned, writer/reader-paired signed contract may
-  // expose these fields. Their absence is a blocked release gate, not a pass.
+test("historical v2 canonical HMAC omits new fields and remains readable", async () => {
+  const { status, body, state } = await invokeV8(fixture, { legacyContext: true });
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(body.authority_verified, true);
+  assert.deepEqual(body.fixItems.map((item) => item.fix_id), fixture.expected_ids);
+  assert.equal(body.fixList.repair_architecture_context_version, undefined);
+  assert.equal(state.snapshot.fix_list.repair_architecture_context_version, undefined);
+  assert.equal(state.snapshot.recommendations[0].priority_context.architecture_role_counts, undefined);
+  assert.equal(body.fixItems[0].priority_context.architecture_role_counts, undefined);
 });
+
+test("unsigned architecture injection into historical v2 rows cannot reach customer projection", async () => {
+  const { status, body } = await invokeV8(fixture, {
+    legacyContext: true,
+    signedMutation: (state) => {
+      state.fixItems[0].priority_context.architecture_role_counts = { structural: 150 };
+      state.fixItems[0].priority_context.architecture_score_policy_version = "forged";
+    },
+  });
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(body.authority_verified, true);
+  assert.equal(body.fixItems[0].priority_context.architecture_role_counts, undefined);
+  assert.equal(body.fixItems[0].priority_context.architecture_score_policy_version, undefined);
+});
+
+test("unrecognized signed architecture version fails closed", async () => {
+  const { status, body } = await invokeV8(fixture, {
+    signedMutation: (state) => { state.fixList.repair_architecture_context_version = "unknown"; },
+  });
+  assert.notEqual(status, 200);
+  assert.equal(body.fixItems, undefined);
+});
+

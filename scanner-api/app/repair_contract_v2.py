@@ -851,12 +851,26 @@ def apply_canonical_repair_contract(
         identity = item.get("repair_identity") if isinstance(item.get("repair_identity"), dict) else {}
         item["repair_identity_version"] = str(identity.get("version") or item.get("repair_identity_version") or "").strip()
 
+    # This is an independently versioned, additive sub-contract. Old v2
+    # snapshots do not acquire the marker when read and re-sealed. Only a
+    # complete scanner-produced role-aware set opts into signed explanations.
+    architecture_context_complete = bool(canonical_items) and all(
+        isinstance(item.get("priority_context"), dict)
+        and item["priority_context"].get("architecture_priority_version")
+            == "repair_architecture_priority_v2_provenance_shadow"
+        and item["priority_context"].get("architecture_score_policy_version")
+            == "architecture_score_policy_v2_role_first"
+        for item in canonical_items
+    )
     canonical_ids = [str(item.get("fix_id") or "").strip() for item in canonical_items]
     parent = {
         "repair_contract_version": REPAIR_CONTRACT_VERSION,
         "repair_snapshot_contract_version": REPAIR_CONTRACT_VERSION,
         "repair_snapshot_contract_complete": True,
         "repair_priority_model_version": REPAIR_PRIORITY_MODEL_VERSION,
+        **({
+            "repair_architecture_context_version": "repair_architecture_signed_context_v1_role_first",
+        } if architecture_context_complete else {}),
         "total_fixes": len(canonical_items),
         "canonical_action_fix_ids": canonical_ids,
     }

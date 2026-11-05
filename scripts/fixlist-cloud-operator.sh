@@ -778,6 +778,11 @@ PY
 
 promote_revision() {
   refuse_unaccepted_direct_vpc_promotion "$TARGET_REVISION"
+  # Staging remains 0%-traffic and rollback remains available. New promotions
+  # cannot send customers to a source that is still explicitly a candidate.
+  if [[ "$OPERATION" == "promote-worker" ]]; then
+    python3 "$REPO_ROOT/scripts/assert_standard150_promotion_record.py" --source-sha "$SOURCE_SHA"
+  fi
   gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
     --region="$GCP_REGION" \
     --project="$GCP_PROJECT" \

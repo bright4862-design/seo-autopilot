@@ -512,7 +512,7 @@ import json, sys
 
 service = json.load(open(sys.argv[1], encoding="utf-8"))
 revision = sys.argv[2]
-audience = sys.argv[3]
+requested_url = sys.argv[3]
 status = service.get("status") or {}
 addressable = []
 for entry in status.get("traffic") or []:
@@ -520,21 +520,37 @@ for entry in status.get("traffic") or []:
         continue
     # A revision tag resolves to one revision no matter how traffic is split,
     # so it is the only URL that can address a candidate before promotion.
-    if entry.get("url"):
+    if entry.get("tag") and entry.get("url"):
         addressable.append(str(entry["url"]))
     if int(entry.get("percent") or 0) == 100 and status.get("url"):
         addressable.append(str(status["url"]))
-# A token minted for one audience is rejected by every other URL, so when the
-# caller declares one, that URL is the only usable probe -- and only if it
-# addresses the revision under test.
-if audience:
-    print(audience if audience in addressable else "")
+# Cloud Run tag requests use the tag URL as their HTTP destination but the
+# canonical service URL as their ID-token audience. The caller-provided
+# target must exactly equal a URL in the trusted service traffic description.
+# Never send an ID token to any other caller-controlled endpoint.
+from urllib.parse import urlsplit
+def safe_run_url(url):
+    parts = urlsplit(url)
+    canonical = urlsplit(str(status.get("url") or ""))
+    return (parts.scheme == "https" and bool(parts.hostname)
+            and parts.hostname.endswith(".run.app")
+            and canonical.scheme == "https" and bool(canonical.hostname)
+            and canonical.hostname.endswith(".run.app")
+            and parts.username is None and parts.password is None
+            and parts.port is None and not parts.path and not parts.query
+            and not parts.fragment)
+addressable = [url for url in addressable if safe_run_url(url)]
+if requested_url:
+    print(requested_url if requested_url in addressable else "")
 else:
-    print(addressable[0] if addressable else "")
+    # A 0% candidate requires the explicit, verified tagged destination.
+    # Never infer one or fall through to the serving service URL.
+    service_url = str(status.get("url") or "")
+    print(service_url if service_url in addressable else "")
 PY
 )"
   if [ -z "$probe_url" ]; then
-    echo "INDETERMINATE: no URL both addresses $revision and matches the audience"
+    echo "INDETERMINATE: no exact service URL or verified tag URL addresses $revision."
     echo "the supplied token was minted for (${FIXLIST_WORKER_TOKEN_AUDIENCE:-none declared})."
     echo "The revision needs a tag, or 100% of traffic, on that exact URL. To tag it:"
     echo "  gcloud run services update-traffic $CLOUD_RUN_SERVICE \\"

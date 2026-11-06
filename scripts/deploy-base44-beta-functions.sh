@@ -36,6 +36,9 @@ source "$REPO_ROOT/scripts/lib/release-source-guard.sh"
 source "$REPO_ROOT/scripts/lib/base44-pinned-cli.sh"
 fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$CONFIRM"
 SOURCE_SHA="$FIXLIST_EXACT_SOURCE_SHA"
+# Never publish new production scanner authority for an unaccepted candidate.
+# This source gate complements, but does not replace, runtime and signed-canary checks.
+python3 "$REPO_ROOT/scripts/assert_standard150_promotion_record.py" --source-sha "$SOURCE_SHA"
 
 node "$REPO_ROOT/scripts/base44_release_manifest.mjs" verify
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT

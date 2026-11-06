@@ -113,13 +113,16 @@ def test_all_production_publish_paths_enforce_accepted_release_metadata_first():
     targets = [
         ("scripts/deploy-base44-beta-functions.sh", 'fixlist_install_base44_cli "$TMP"'),
         ("scripts/deploy-base44-beta-site.sh", 'fixlist_install_base44_cli "$TMP"'),
-        ("scripts/fixlist-cloud-operator.sh", 'gcloud run services update-traffic "$CLOUD_RUN_SERVICE"'),
     ]
+    guard = 'assert_standard150_promotion_record.py" --source-sha "$SOURCE_SHA"'
     for path, mutation in targets:
         source = (root / path).read_text()
-        guard = 'assert_standard150_promotion_record.py" --source-sha "$SOURCE_SHA"'
         assert guard in source, path
         assert source.index(guard) < source.index(mutation), path
+
     operator = (root / "scripts/fixlist-cloud-operator.sh").read_text()
+    promote = operator.split("promote_revision() {", 1)[1].split("\n}", 1)[0]
+    assert guard in promote
+    assert promote.index(guard) < promote.index('gcloud run services update-traffic "$CLOUD_RUN_SERVICE"')
     # Existing incidents must still be able to use the explicit rollback path.
-    assert 'if [[ "$OPERATION" == "promote-worker" ]]; then' in operator
+    assert 'if [[ "$OPERATION" == "promote-worker" ]]; then' in promote

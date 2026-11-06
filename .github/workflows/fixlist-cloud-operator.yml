@@ -90,6 +90,14 @@ on:
         description: "Bounded claims per allowlisted owner"
         required: false
         type: string
+      gateway_canary:
+        description: "deploy-dispatch-gateway only: owner-canary routes the allowlisted acceptance owners to the exact tagged 0% revision above"
+        required: false
+        default: "off"
+        type: choice
+        options:
+          - "off"
+          - owner-canary
   issue_comment:
     types: [created]
   push:
@@ -413,6 +421,10 @@ jobs:
         env:
           CONFIRM: ${{ inputs.confirm }}
           SOURCE_SHA: ${{ github.sha }}
+          # Empty unless owner-canary is chosen explicitly; a plain deploy
+          # clears any previous canary route.
+          GATEWAY_CANARY_REVISION: ${{ inputs.gateway_canary == 'owner-canary' && inputs.revision || '' }}
+          GATEWAY_CANARY_OWNER_USER_IDS: ${{ inputs.gateway_canary == 'owner-canary' && inputs.acceptance_owner_user_ids || '' }}
         shell: bash
         run: ./scripts/deploy_dispatch_gateway.sh
 

@@ -376,3 +376,35 @@ def test_cli_exits_non_zero_when_traffic_never_moved(tmp_path):
         "--expected-source-sha", SOURCE_SHA,
     ])
     assert code == 2
+
+
+# --- owner-only canary route ---------------------------------------------------
+
+CANARY_ORIGIN = "https://candidate---fixlist-standard150-worker-tpucgyfewa-ew.a.run.app"
+
+
+def check_canary(payload, origin, count):
+    return verifier.verify_runtime_health(
+        payload, NEW_REVISION, SOURCE_SHA, CONTRACT_VERSION, QUEUE, DRAIN_QUEUE, WORKER_ORIGIN,
+        canary_worker_origin=origin, canary_owner_count=count,
+    )
+
+
+def test_a_plain_deploy_requires_the_canary_route_to_be_off():
+    check_canary(health(canary_worker_origin=None, canary_owner_count=0), "", 0)
+    with pytest.raises(verifier.VerificationError, match="canary_worker_origin"):
+        check_canary(health(canary_worker_origin=CANARY_ORIGIN, canary_owner_count=1), "", 0)
+    with pytest.raises(verifier.VerificationError, match="canary_worker_origin"):
+        check_canary(health(), "", 0)
+
+
+def test_a_canary_deploy_requires_the_exact_origin_and_owner_count():
+    check_canary(health(canary_worker_origin=CANARY_ORIGIN, canary_owner_count=1), CANARY_ORIGIN, 1)
+    with pytest.raises(verifier.VerificationError, match="canary_owner_count"):
+        check_canary(health(canary_worker_origin=CANARY_ORIGIN, canary_owner_count=2), CANARY_ORIGIN, 1)
+    with pytest.raises(verifier.VerificationError, match="canary_worker_origin"):
+        check_canary(health(canary_worker_origin=None, canary_owner_count=0), CANARY_ORIGIN, 1)
+
+
+def test_callers_that_do_not_ask_about_the_canary_are_unchanged():
+    check_health(health())

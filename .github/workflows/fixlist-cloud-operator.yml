@@ -363,8 +363,16 @@ jobs:
           gcloud run services describe "$CLOUD_RUN_SERVICE" \
             --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json \
             > "$RUNNER_TEMP/staged-service.json"
-          python3 scripts/assert_tagged_zero_traffic_worker.py \
-            --revision "$TARGET_REVISION" < "$RUNNER_TEMP/staged-service.json"
+          candidate_check="$(python3 scripts/assert_tagged_zero_traffic_worker.py \
+            --revision "$TARGET_REVISION" < "$RUNNER_TEMP/staged-service.json")"
+          printf '%s\n' "$candidate_check"
+          # The preflight and runtime resolver independently bind this
+          # destination to the exact revision's canonical Cloud Run tag.
+          case "$candidate_check" in
+            "TAGGED_ZERO_TRAFFIC_CANDIDATE_OK revision=$TARGET_REVISION tag_url=https://"*) ;;
+            *) echo "Candidate tag preflight did not return a usable tag URL" >&2; exit 2 ;;
+          esac
+          export FIXLIST_WORKER_PROBE_URL="${candidate_check##* tag_url=}"
           OPERATION=verify-worker-routes bash ./scripts/fixlist-cloud-operator.sh
           OPERATION=verify-worker-runtime-revision bash ./scripts/fixlist-cloud-operator.sh
 

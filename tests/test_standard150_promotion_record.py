@@ -106,3 +106,20 @@ def test_promotion_guard_scoped_to_new_promotion_not_rollback():
     assert 'assert_standard150_promotion_record.py" --source-sha "$SOURCE_SHA"' in operator
     assert "rollback-worker)" in operator
     assert "promote_revision()" in operator
+
+
+def test_all_production_publish_paths_enforce_accepted_release_metadata_first():
+    root = ROOT
+    targets = [
+        ("scripts/deploy-base44-beta-functions.sh", 'fixlist_install_base44_cli "$TMP"'),
+        ("scripts/deploy-base44-beta-site.sh", 'fixlist_install_base44_cli "$TMP"'),
+        ("scripts/fixlist-cloud-operator.sh", 'gcloud run services update-traffic "$CLOUD_RUN_SERVICE"'),
+    ]
+    for path, mutation in targets:
+        source = (root / path).read_text()
+        guard = 'assert_standard150_promotion_record.py" --source-sha "$SOURCE_SHA"'
+        assert guard in source, path
+        assert source.index(guard) < source.index(mutation), path
+    operator = (root / "scripts/fixlist-cloud-operator.sh").read_text()
+    # Existing incidents must still be able to use the explicit rollback path.
+    assert 'if [[ "$OPERATION" == "promote-worker" ]]; then' in operator

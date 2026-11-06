@@ -1,14 +1,18 @@
 """Zero-traffic candidate attribution and the separate owner-only probe path."""
 from pathlib import Path
+import sys
 
 import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from scripts.assert_tagged_zero_traffic_worker import (
     CandidateNotIsolated,
     verify_tagged_zero_traffic,
 )
 
-ROOT = Path(__file__).resolve().parents[1]
 REVISION = "fixlist-standard150-worker-00101-zh2"
 SERVING = "fixlist-standard150-worker-00097-lvl"
 TAG_URL = "https://candidate---fixlist-standard150-worker.example.a.run.app"

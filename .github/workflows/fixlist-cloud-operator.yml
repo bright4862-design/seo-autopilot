@@ -19,6 +19,8 @@ on:
           - verify-admission-identity
           - verify-worker-routes
           - verify-serving-worker-release
+          - tag-worker-candidate
+          - verify-staged-worker-release
           - diagnose-ironwood-access
           - deploy-dispatch-gateway
           - deploy-admission-coordinator
@@ -320,8 +322,62 @@ jobs:
           set -euo pipefail
           bash ./scripts/fixlist-cloud-operator.sh
 
+      # A v7 candidate must prove its exact live fingerprint, full marker set,
+      # source SHA, routes and timeout without taking any production traffic.
+      # Tagging is a SEPARATE exact-revision confirmed action, never part of
+      # this read-only diagnosis. Do not infer identity from the serving URL.
+      - name: Resolve staged worker token audience (read only)
+        if: inputs.operation == 'verify-staged-worker-release'
+        id: staged-worker-url
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
+            --project="$GCP_PROJECT" --region="$GCP_REGION" --format='value(status.url)')"
+          [[ "$url" == https://* ]] || { echo 'No canonical HTTPS worker URL' >&2; exit 1; }
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Mint staged worker invoker identity token (read only)
+        if: inputs.operation == 'verify-staged-worker-release'
+        id: staged-worker-token
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.staged-worker-url.outputs.url }}
+          id_token_include_email: true
+          create_credentials_file: false
+
+      - name: Verify exact tagged zero-traffic worker identity (read only)
+        if: inputs.operation == 'verify-staged-worker-release'
+        shell: bash
+        env:
+          TARGET_REVISION: ${{ inputs.revision }}
+          SOURCE_SHA: ${{ github.sha }}
+          FIXLIST_WORKER_ID_TOKEN: ${{ steps.staged-worker-token.outputs.id_token }}
+          FIXLIST_WORKER_TOKEN_AUDIENCE: ${{ steps.staged-worker-url.outputs.url }}
+        run: |
+          set -euo pipefail
+          gcloud run services describe "$CLOUD_RUN_SERVICE" \
+            --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json \
+            > "$RUNNER_TEMP/staged-service.json"
+          candidate_check="$(python3 scripts/assert_tagged_zero_traffic_worker.py \
+            --revision "$TARGET_REVISION" < "$RUNNER_TEMP/staged-service.json")"
+          printf '%s\n' "$candidate_check"
+          # The preflight and runtime resolver independently bind this
+          # destination to the exact revision's canonical Cloud Run tag.
+          case "$candidate_check" in
+            "TAGGED_ZERO_TRAFFIC_CANDIDATE_OK revision=$TARGET_REVISION tag_url=https://"*) ;;
+            *) echo "Candidate tag preflight did not return a usable tag URL" >&2; exit 2 ;;
+          esac
+          export FIXLIST_WORKER_PROBE_URL="${candidate_check##* tag_url=}"
+          OPERATION=verify-worker-routes bash ./scripts/fixlist-cloud-operator.sh
+          OPERATION=verify-worker-runtime-revision bash ./scripts/fixlist-cloud-operator.sh
+
       - name: Run allowlisted worker operation
-        if: inputs.operation != 'deploy-dispatch-gateway' && inputs.operation != 'deploy-admission-coordinator' && inputs.operation != 'build-worker-candidate' && inputs.operation != 'sync-base44-signing-key' && inputs.operation != 'verify-serving-worker-release'
+        if: inputs.operation != 'deploy-dispatch-gateway' && inputs.operation != 'deploy-admission-coordinator' && inputs.operation != 'build-worker-candidate' && inputs.operation != 'sync-base44-signing-key' && inputs.operation != 'verify-serving-worker-release' && inputs.operation != 'verify-staged-worker-release'
         env:
           OPERATION: ${{ inputs.operation }}
           CONFIRM: ${{ inputs.confirm }}

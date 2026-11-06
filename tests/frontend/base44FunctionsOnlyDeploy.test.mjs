@@ -22,6 +22,13 @@ function fixture({ verifierExit = 0 } = {}) {
   mkdirSync(join(root, "bin"));
   cpSync(script, join(root, script));
   writeFileSync(join(root, "scripts", "base44_release_manifest.mjs"), "");
+  // The production release guard is tested against accepted/candidate records in
+  // Python tests; this isolated shell fixture stubs only its successful exit.
+  writeFileSync(join(root, "scripts", "assert_standard150_promotion_record.py"), `import os
+with open(os.environ["TEST_MUTATIONS"], "a") as out:
+    out.write("release-guard-ran\\n")
+`);
+
   writeFileSync(join(root, "scripts", "lib", "release-source-guard.sh"), `
 fixlist_require_exact_main() { FIXLIST_EXACT_SOURCE_SHA="$2"; }
 `);
@@ -75,6 +82,8 @@ test("scanner-functions deploys and attests exactly the six V8 scanner routes", 
     assert.equal(deploy.trim().split(/\s+/).slice(-scannerFunctions.length).join(" "), scannerFunctions.join(" "));
     for (const forbidden of ["createAccessCheckout", "stripeWebhook", "ownerScanDebugControl", "site", "entities"])
       assert.doesNotMatch(contents(f.calls), new RegExp(forbidden));
+    assert.match(contents(f.mutations), /release-guard-ran/);
+    assert.ok(contents(f.mutations).indexOf("release-guard-ran") < contents(f.mutations).indexOf("set-release-source"));
     assert.match(contents(f.mutations), /verifier-ran/);
     assert.match(result.stdout, /BASE44_RELEASE_FUNCTIONS_DEPLOYED/);
     assert.match(result.stdout, /function_count=6/);

@@ -214,9 +214,9 @@ test("the release markers must match exactly, not merely hash to the same value"
   assert.match(absent.stdout, /returned no release markers/);
 });
 
-function resolveProbeUrl(service, revision, audience = "") {
+function resolveProbeUrl(service, revision, requestedTagUrl = "") {
   return withFixtures({ service }, (paths) =>
-    runPython(PROBE_URL, [paths.service, revision, audience]),
+    runPython(PROBE_URL, [paths.service, revision, requestedTagUrl]),
   ).stdout.trim();
 }
 
@@ -240,7 +240,8 @@ test("a tagged revision is probed on its own URL even at zero traffic", () => {
       ],
     },
   };
-  assert.equal(resolveProbeUrl(service, "worker-00054-trs"), TAG_URL);
+  assert.equal(resolveProbeUrl(service, "worker-00054-trs", TAG_URL), TAG_URL);
+  assert.equal(resolveProbeUrl(service, "worker-00054-trs"), "", "untagged service URL must never substitute for a zero-traffic candidate");
 });
 
 test("an untagged revision that does not hold all traffic yields no probe URL", () => {
@@ -446,23 +447,22 @@ test("end to end: the status decides, not whatever the body happens to contain",
   }
 });
 
-test("a declared audience decides the probe URL, because no other URL accepts the token", () => {
-  // The token is minted before the URL is known and is valid for exactly one
-  // audience. Probing a different URL with it earns a 403 that reads like a
-  // broken worker, so the audience is honoured -- but only where it genuinely
-  // addresses the revision under test.
+test("the declared destination is distinct from the canonical token audience", () => {
   const both = {
     status: {
       url: SERVICE_URL,
       traffic: [{ revisionName: "worker-00054-trs", percent: 100, tag: "candidate", url: TAG_URL }],
     },
   };
+  // The default serving-worker probe uses the service URL.
+  assert.equal(resolveProbeUrl(both, "worker-00054-trs"), SERVICE_URL);
   assert.equal(resolveProbeUrl(both, "worker-00054-trs", SERVICE_URL), SERVICE_URL);
+  // A separately verified tag URL addresses the exact revision, even if
+  // the token is minted for the service URL as required by Cloud Run IAM.
   assert.equal(resolveProbeUrl(both, "worker-00054-trs", TAG_URL), TAG_URL);
-  assert.equal(resolveProbeUrl(both, "worker-00054-trs"), TAG_URL, "with no audience the tag is the precise address");
-
-  // An audience that cannot address this revision yields no probe at all.
   assert.equal(resolveProbeUrl(both, "worker-00054-trs", "https://elsewhere.example"), "");
+  assert.equal(resolveProbeUrl(both, "worker-00054-trs", "http://candidate---worker.run.app"), "");
+
   const zero = {
     status: {
       url: SERVICE_URL,
@@ -472,12 +472,29 @@ test("a declared audience decides the probe URL, because no other URL accepts th
       ],
     },
   };
-  assert.equal(
-    resolveProbeUrl(zero, "worker-00054-trs", SERVICE_URL),
-    "",
-    "the service URL does not address a zero-traffic candidate, whatever the token says",
-  );
+  assert.equal(resolveProbeUrl(zero, "worker-00054-trs"), "");
+  assert.equal(resolveProbeUrl(zero, "worker-00054-trs", SERVICE_URL), "");
   assert.equal(resolveProbeUrl(zero, "worker-00054-trs", TAG_URL), TAG_URL);
+  assert.equal(resolveProbeUrl(zero, "worker-00054-trs", "https://wrong.run.app"), "");
+});
+
+test("end to end: zero-traffic candidate cannot be probed without an exact tag destination", () => {
+  const zero = {
+    status: {
+      url: SERVICE_URL,
+      traffic: [
+        { revisionName: "worker-00053-abc", percent: 100 },
+        { revisionName: "worker-00054-trs", percent: 0, tag: "candidate", url: TAG_URL },
+      ],
+    },
+  };
+  const refused = runGuard({ service: zero, revision: "worker-00054-trs", body: LIVE_MATCHING });
+  assert.notEqual(refused.status, 0);
+  assert.equal(refused.curl, "", "fail before spending a token on the wrong worker");
+  const verified = runGuard({ service: zero, revision: "worker-00054-trs", body: LIVE_MATCHING, probeUrl: TAG_URL, audience: SERVICE_URL });
+  assert.equal(verified.status, 0, verified.stdout);
+  assert.ok(verified.curl.includes(TAG_URL + "/revision"));
+  assert.ok(!verified.curl.includes(SERVICE_URL + "/revision"));
 });
 
 test("end to end: the promotion path probes the URL its token was minted for", () => {

@@ -28,6 +28,9 @@ source "$REPO_ROOT/scripts/lib/base44-pinned-cli.sh"
 
 fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$CONFIRM"
 SOURCE_SHA="$FIXLIST_EXACT_SOURCE_SHA"
+# A site publish reconciles live Base44 scanner functions: it must not move
+# customer authority onto a release that is still explicitly a candidate.
+python3 "$REPO_ROOT/scripts/assert_standard150_promotion_record.py" --source-sha "$SOURCE_SHA"
 node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --check
 node "$REPO_ROOT/scripts/base44_release_manifest.mjs" verify
 

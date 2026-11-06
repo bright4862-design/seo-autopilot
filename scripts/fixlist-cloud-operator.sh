@@ -550,11 +550,10 @@ else:
 PY
 )"
   if [ -z "$probe_url" ]; then
-    echo "INDETERMINATE: no exact service URL or verified tag URL addresses $revision."
-    echo "the supplied token was minted for (${FIXLIST_WORKER_TOKEN_AUDIENCE:-none declared})."
-    echo "The revision needs a tag, or 100% of traffic, on that exact URL. To tag it:"
-    echo "  gcloud run services update-traffic $CLOUD_RUN_SERVICE \\"
-    echo "    --region=$GCP_REGION --project=$GCP_PROJECT --set-tags=candidate=$revision"
+    echo "INDETERMINATE: no verified URL addresses revision $revision."
+    echo "The Cloud Run ID-token audience must be the canonical service URL."
+    echo "For a 0%-traffic candidate, FIXLIST_WORKER_PROBE_URL must equal the"
+    echo "exact tagged URL in the authenticated service traffic metadata."
     return 1
   fi
   echo "probe URL:           $probe_url"

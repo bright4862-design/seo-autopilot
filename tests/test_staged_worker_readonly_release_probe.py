@@ -76,6 +76,8 @@ def test_workflow_separates_tag_mutation_from_read_only_candidate_probe():
     assert "OPERATION=verify-worker-runtime-revision" in probe
     assert "SOURCE_SHA: ${{ github.sha }}" in probe
     assert "FIXLIST_WORKER_ID_TOKEN" in probe
+    assert 'export FIXLIST_WORKER_PROBE_URL="${candidate_check##* tag_url=}"' in probe
+    assert "candidate_check=" in probe
     for forbidden in ["update-traffic", "--update-tags", "promote-worker", "queues pause", "queues resume"]:
         assert forbidden not in probe
     assert "inputs.operation != 'verify-staged-worker-release'" in workflow

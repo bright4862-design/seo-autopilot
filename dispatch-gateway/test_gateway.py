@@ -216,6 +216,126 @@ class ValidateDispatchTests(unittest.TestCase):
         self.assertRejected(value, "missing_drain_after")
 
 
+CANARY_ORIGIN = "https://candidate---fixlist-standard150-worker-tpucgyfewa-ew.a.run.app"
+CANARY_OWNER = "owner_canary_01"
+
+
+def owned_task(owner, **kwargs):
+    value = task(**kwargs)
+    job = json.loads(base64.b64decode(value["httpRequest"]["body"]))
+    job["owner_user_id"] = owner
+    value["httpRequest"]["body"] = encoded(job)
+    return value
+
+
+class OwnerCanaryRoutingTests(unittest.TestCase):
+    def validate(self, value):
+        queue = main.DRAIN_QUEUE_PATH if "standard150-drain-" in value["name"] else main.QUEUE_PATH
+        return main.validate_dispatch({"queue_path": queue, "task": value})
+
+    def canary(self):
+        return patch.multiple(
+            main,
+            CANARY_WORKER_ORIGIN=CANARY_ORIGIN,
+            CANARY_OWNER_USER_IDS=frozenset({CANARY_OWNER}),
+        )
+
+    def test_default_configuration_routes_nothing_to_a_canary(self):
+        self.assertEqual(main.CANARY_WORKER_ORIGIN, "")
+        self.assertEqual(main.CANARY_OWNER_USER_IDS, frozenset())
+        value = owned_task(CANARY_OWNER)
+        accepted, error = self.validate(value)
+        self.assertIsNone(error)
+        self.assertEqual(accepted, value)
+
+    def test_allowlisted_owner_scan_and_drain_target_the_tagged_revision(self):
+        with self.canary():
+            for drain, path in ((False, "/scan-job"), (True, "/scan-job-drain")):
+                with self.subTest(drain=drain):
+                    value = owned_task(CANARY_OWNER, drain=drain)
+                    accepted, error = self.validate(value)
+                    self.assertIsNone(error)
+                    self.assertEqual(accepted["httpRequest"]["url"], CANARY_ORIGIN + path)
+                    # Audience, invoker, name and body stay exactly as signed.
+                    self.assertEqual(accepted["httpRequest"]["oidcToken"], value["httpRequest"]["oidcToken"])
+                    self.assertEqual(accepted["httpRequest"]["body"], value["httpRequest"]["body"])
+                    self.assertEqual(accepted["name"], value["name"])
+                    # The caller's task object is never mutated.
+                    self.assertEqual(value["httpRequest"]["url"], main.DRAIN_URL if drain else main.WORKER_URL)
+
+    def test_other_owners_and_ownerless_jobs_keep_the_serving_worker(self):
+        with self.canary():
+            for value in (owned_task("someone_else_9"), owned_task(""), task(), owned_task(CANARY_OWNER.upper())):
+                accepted, error = self.validate(value)
+                self.assertIsNone(error)
+                self.assertEqual(accepted["httpRequest"]["url"], value["httpRequest"]["url"])
+
+    def test_routing_never_relaxes_validation(self):
+        with self.canary():
+            direct = owned_task(CANARY_OWNER)
+            direct["httpRequest"]["url"] = CANARY_ORIGIN + "/scan-job"
+            self.assertEqual(self.validate(direct), (None, "invalid_worker_target"))
+            audience = owned_task(CANARY_OWNER)
+            audience["httpRequest"]["oidcToken"]["audience"] = CANARY_ORIGIN
+            self.assertEqual(self.validate(audience), (None, "invalid_audience"))
+            mode = owned_task(CANARY_OWNER)
+            job = json.loads(base64.b64decode(mode["httpRequest"]["body"]))
+            job["scan_mode"] = "extended_500"
+            mode["httpRequest"]["body"] = encoded(job)
+            self.assertEqual(self.validate(mode), (None, "invalid_scan_mode"))
+
+    def test_signed_dispatch_forwards_the_rerouted_task_only_for_the_owner(self):
+        credentials = Mock(valid=True, token="unit-test-token")
+        upstream = Mock(status_code=200, ok=True)
+        upstream.json.return_value = {}
+        with self.canary():
+            for owner, expected in ((CANARY_OWNER, CANARY_ORIGIN + "/scan-job"), ("someone_else_9", main.WORKER_URL)):
+                value = owned_task(owner)
+                raw = json.dumps({"queue_path": main.QUEUE_PATH, "task": value}).encode("utf-8")
+                timestamp = str(int(time.time()))
+                with patch.object(main.google.auth, "default", return_value=(credentials, None)), \
+                        patch.object(main.requests, "post", return_value=upstream) as enqueue:
+                    response = main.app.test_client().post("/dispatch", data=raw, headers={
+                        "x-fixlist-timestamp": timestamp,
+                        "x-fixlist-signature": main._expected_signature(timestamp, raw),
+                    })
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(enqueue.call_args.kwargs["json"]["task"]["httpRequest"]["url"], expected)
+
+    def test_health_reports_canary_configuration_without_owner_ids(self):
+        payload = main.app.test_client().get("/health").get_json()
+        self.assertIsNone(payload["canary_worker_origin"])
+        self.assertEqual(payload["canary_owner_count"], 0)
+        with self.canary():
+            payload = main.app.test_client().get("/health").get_json()
+        self.assertEqual(payload["canary_worker_origin"], CANARY_ORIGIN)
+        self.assertEqual(payload["canary_owner_count"], 1)
+        self.assertNotIn(CANARY_OWNER, json.dumps(payload))
+
+    def test_configuration_fails_closed(self):
+        owners = frozenset({CANARY_OWNER})
+        main._validate_canary_config("", frozenset())
+        main._validate_canary_config(CANARY_ORIGIN, owners)
+        host = main.worker_parts.hostname
+        for origin, allow in (
+            (CANARY_ORIGIN, frozenset()),
+            ("", owners),
+            (f"http://candidate---{host}", owners),
+            (f"https://candidate---{host}/scan-job", owners),
+            (f"https://candidate---{host}:8443", owners),
+            (f"https://user@candidate---{host}", owners),
+            (f"https://{host}", owners),
+            ("https://candidate---other-service-tpucgyfewa-ew.a.run.app", owners),
+            (f"https://Bad_Tag---{host}", owners),
+            (CANARY_ORIGIN, frozenset({"short"})),
+            (CANARY_ORIGIN, frozenset({"has space x"})),
+            (CANARY_ORIGIN, frozenset(f"owner_{i:04d}" for i in range(6))),
+        ):
+            with self.subTest(origin=origin, owners=sorted(allow)):
+                with self.assertRaises(RuntimeError):
+                    main._validate_canary_config(origin, allow)
+
+
 class SignatureTests(unittest.TestCase):
     def test_signature_is_bound_to_timestamp_and_body(self):
         timestamp = str(int(time.time()))

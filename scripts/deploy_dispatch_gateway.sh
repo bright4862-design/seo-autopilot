@@ -110,11 +110,45 @@ if [[ "$QUEUE_PATH" == "$DRAIN_QUEUE_PATH" ]]; then
 fi
 WORKER_URL="${WORKER_ORIGIN}/scan-job"
 
+# Optional owner-only release canary. Off unless BOTH an exact zero-traffic
+# tagged worker revision and an owner allowlist are supplied. The canary origin
+# is never taken from input: it is the revision-tag URL Cloud Run reports for
+# that exact revision, verified at 0% traffic. Every normal deploy omits these
+# inputs, and --set-env-vars replaces the whole environment, so a plain deploy
+# removes any previous canary route.
+GATEWAY_CANARY_REVISION="${GATEWAY_CANARY_REVISION:-}"
+GATEWAY_CANARY_OWNER_USER_IDS="${GATEWAY_CANARY_OWNER_USER_IDS:-}"
+CANARY_WORKER_ORIGIN=""
+CANARY_OWNER_COUNT=0
+if [[ -n "$GATEWAY_CANARY_REVISION" || -n "$GATEWAY_CANARY_OWNER_USER_IDS" ]]; then
+  if [[ -z "$GATEWAY_CANARY_REVISION" || -z "$GATEWAY_CANARY_OWNER_USER_IDS" ]]; then
+    echo "Refusing gateway deployment: canary revision and owner allowlist must be set together." >&2
+    exit 2
+  fi
+  if ! printf '%s' "$GATEWAY_CANARY_OWNER_USER_IDS" | grep -Eq '^[A-Za-z0-9_-]{6,64}(,[A-Za-z0-9_-]{6,64}){0,4}$'; then
+    echo "Refusing gateway deployment: canary owner allowlist must be 1-5 exact comma-separated user IDs." >&2
+    exit 2
+  fi
+  canary_check="$(python3 "$REPO_ROOT/scripts/assert_tagged_zero_traffic_worker.py" \
+    --revision "$GATEWAY_CANARY_REVISION" < "$WORKER_JSON")"
+  case "$canary_check" in
+    "TAGGED_ZERO_TRAFFIC_CANDIDATE_OK revision=$GATEWAY_CANARY_REVISION tag_url=https://"*) ;;
+    *) echo "Refusing gateway deployment: canary revision is not an exact tagged 0% candidate." >&2; exit 2 ;;
+  esac
+  CANARY_WORKER_ORIGIN="${canary_check##* tag_url=}"
+  CANARY_OWNER_COUNT="$(printf '%s' "$GATEWAY_CANARY_OWNER_USER_IDS" | tr ',' '\n' | sort -u | grep -c .)"
+fi
+ENV_VARS="^|^SCAN_TASKS_QUEUE_PATH=$QUEUE_PATH|SCAN_DRAIN_QUEUE_PATH=$DRAIN_QUEUE_PATH|SCAN_WORKER_URL=$WORKER_URL|TASKS_INVOKER_SERVICE_ACCOUNT=$INVOKER_SA|DISPATCH_MAX_CLOCK_SKEW_SECONDS=300|DISPATCH_MAX_BODY_BYTES=262144|FIXLIST_GATEWAY_SOURCE_SHA=$SOURCE_SHA"
+if [[ -n "$CANARY_WORKER_ORIGIN" ]]; then
+  ENV_VARS="${ENV_VARS}|SCAN_CANARY_WORKER_ORIGIN=$CANARY_WORKER_ORIGIN|SCAN_CANARY_OWNER_USER_IDS=$GATEWAY_CANARY_OWNER_USER_IDS"
+fi
+
 echo "worker_origin=$WORKER_ORIGIN"
 echo "queue_path=$QUEUE_PATH"
 echo "drain_queue_path=$DRAIN_QUEUE_PATH"
 echo "signing_secret_ref=${SIGNING_SECRET}:${SIGNING_VERSION} (value not read)"
 echo "source_sha=$SOURCE_SHA"
+echo "canary_worker_origin=${CANARY_WORKER_ORIGIN:-<off>} canary_owner_count=$CANARY_OWNER_COUNT"
 
 # Creating a public Cloud Run service requires run.services.setIamPolicy. The
 # authenticated owner bootstrap performs that one-time creation. After the
@@ -177,7 +211,7 @@ gcloud run deploy "$GATEWAY" \
   --min-instances=0 \
   --max-instances=2 \
   --timeout=60 \
-  --set-env-vars="SCAN_TASKS_QUEUE_PATH=$QUEUE_PATH,SCAN_DRAIN_QUEUE_PATH=$DRAIN_QUEUE_PATH,SCAN_WORKER_URL=$WORKER_URL,TASKS_INVOKER_SERVICE_ACCOUNT=$INVOKER_SA,DISPATCH_MAX_CLOCK_SKEW_SECONDS=300,DISPATCH_MAX_BODY_BYTES=262144,FIXLIST_GATEWAY_SOURCE_SHA=$SOURCE_SHA" \
+  --set-env-vars="$ENV_VARS" \
   --set-secrets="SCAN_EVIDENCE_SIGNING_KEY=${SIGNING_SECRET}:${SIGNING_VERSION}" \
   --quiet
 
@@ -219,9 +253,10 @@ gcloud run revisions describe "$NEW_REVISION" \
   --region="$REGION" \
   --format=json > "$REVISION_JSON"
 
-GATEWAY_URL="$(python3 - "$GATEWAY_JSON" "$DISPATCHER_SA" "$QUEUE_PATH" "$DRAIN_QUEUE_PATH" "$WORKER_URL" "$INVOKER_SA" "$SOURCE_SHA" "$SIGNING_SECRET" "$SIGNING_VERSION" <<'PY'
+GATEWAY_URL="$(python3 - "$GATEWAY_JSON" "$DISPATCHER_SA" "$QUEUE_PATH" "$DRAIN_QUEUE_PATH" "$WORKER_URL" "$INVOKER_SA" "$SOURCE_SHA" "$SIGNING_SECRET" "$SIGNING_VERSION" "$CANARY_WORKER_ORIGIN" "$GATEWAY_CANARY_OWNER_USER_IDS" <<'PY'
 import json, sys
-(path, expected_sa, queue_path, drain_queue_path, worker_url, invoker_sa, source_sha, secret_name, secret_version) = sys.argv[1:]
+(path, expected_sa, queue_path, drain_queue_path, worker_url, invoker_sa, source_sha, secret_name, secret_version,
+ canary_origin, canary_owners) = sys.argv[1:]
 with open(path, encoding='utf-8') as handle:
     service = json.load(handle)
 url = str(service.get('status', {}).get('url') or '').strip()
@@ -243,6 +278,13 @@ expected_values = {
     'DISPATCH_MAX_BODY_BYTES': '262144',
     'FIXLIST_GATEWAY_SOURCE_SHA': source_sha,
 }
+if canary_origin:
+    expected_values['SCAN_CANARY_WORKER_ORIGIN'] = canary_origin
+    expected_values['SCAN_CANARY_OWNER_USER_IDS'] = canary_owners
+else:
+    for name in ('SCAN_CANARY_WORKER_ORIGIN', 'SCAN_CANARY_OWNER_USER_IDS'):
+        if name in env:
+            raise SystemExit(f'Gateway environment unexpectedly carries {name}')
 for name, value in expected_values.items():
     if str(env.get(name, {}).get('value') or '') != value:
         raise SystemExit(f'Gateway environment mismatch: {name}')
@@ -297,7 +339,9 @@ while :; do
       --expected-contract-version "$EXPECTED_CONTRACT_VERSION" \
       --queue-path "$QUEUE_PATH" \
       --drain-queue-path "$DRAIN_QUEUE_PATH" \
-      --worker-origin "$WORKER_ORIGIN" 2>/dev/null)"; then
+      --worker-origin "$WORKER_ORIGIN" \
+      --canary-worker-origin "$CANARY_WORKER_ORIGIN" \
+      --canary-owner-count "$CANARY_OWNER_COUNT" 2>/dev/null)"; then
       break
     fi
   fi
@@ -313,7 +357,9 @@ while :; do
       --expected-contract-version "$EXPECTED_CONTRACT_VERSION" \
       --queue-path "$QUEUE_PATH" \
       --drain-queue-path "$DRAIN_QUEUE_PATH" \
-      --worker-origin "$WORKER_ORIGIN" >&2 || true
+      --worker-origin "$WORKER_ORIGIN" \
+      --canary-worker-origin "$CANARY_WORKER_ORIGIN" \
+      --canary-owner-count "$CANARY_OWNER_COUNT" >&2 || true
     exit 2
   fi
   sleep 3
@@ -336,3 +382,4 @@ echo "GATEWAY_CONTRACT_VERSION=$EXPECTED_CONTRACT_VERSION"
 # Both read back from the live /health response, never echoed from the input.
 echo "GATEWAY_RUNTIME_REVISION=$RUNTIME_REVISION"
 echo "GATEWAY_SOURCE_SHA=$RUNTIME_SOURCE_SHA"
+echo "GATEWAY_CANARY_WORKER_ORIGIN=${CANARY_WORKER_ORIGIN:-<off>}"

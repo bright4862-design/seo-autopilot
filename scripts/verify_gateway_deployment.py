@@ -186,6 +186,8 @@ def verify_runtime_health(
     queue_path: str,
     drain_queue_path: str,
     worker_origin: str,
+    canary_worker_origin: str | None = None,
+    canary_owner_count: int | None = None,
 ) -> dict[str, str]:
     def require(name: str, actual: Any, expected: Any) -> None:
         if actual != expected:
@@ -198,6 +200,14 @@ def verify_runtime_health(
     require("queue", health.get("queue"), queue_path)
     require("drain_queue", health.get("drain_queue"), drain_queue_path)
     require("worker_origin", health.get("worker_origin"), worker_origin)
+    # The owner-only canary route is part of the deployed contract: a canary
+    # that was not asked for, or one aimed at a different revision, refuses.
+    if canary_worker_origin is not None:
+        if "canary_worker_origin" not in health or "canary_owner_count" not in health:
+            raise VerificationError("Gateway /health does not report its canary_worker_origin route")
+        require("canary_worker_origin", health.get("canary_worker_origin"), canary_worker_origin or None)
+        require("canary_owner_count", health.get("canary_owner_count"),
+                int(canary_owner_count or 0) if canary_worker_origin else 0)
     require("contract_version", health.get("contract_version"), expected_contract_version)
     require("source_sha", health.get("source_sha"), expected_source_sha)
     # The one field that distinguishes two revisions built from the same commit.
@@ -229,6 +239,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--queue-path", default="")
     parser.add_argument("--drain-queue-path", default="")
     parser.add_argument("--worker-origin", default="")
+    parser.add_argument("--canary-worker-origin", default=None)
+    parser.add_argument("--canary-owner-count", type=int, default=None)
     args = parser.parse_args(argv)
 
     if not args.plan_revision:
@@ -252,6 +264,8 @@ def main(argv: list[str] | None = None) -> int:
                 args.queue_path,
                 args.drain_queue_path,
                 args.worker_origin,
+                args.canary_worker_origin,
+                args.canary_owner_count,
             )
         elif args.created_revision_json:
             proven = verify_created_revision(

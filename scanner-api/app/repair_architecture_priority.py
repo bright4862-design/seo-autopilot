@@ -6,8 +6,15 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .repair_coverage import repair_evidence_key_function
+from .repair_architecture_provenance import (
+    DIRECTORY_FAMILIES,
+    architectural_evidence_key,
+    is_repeated_entity_leaf,
+    provenance_decision,
+    strip_acquisition_utm,
+)
 
-REPAIR_ARCHITECTURE_PRIORITY_VERSION = "repair_architecture_priority_v1_role_coverage"
+REPAIR_ARCHITECTURE_PRIORITY_VERSION = "repair_architecture_priority_v2_provenance_shadow"
 
 STRUCTURAL_FAMILIES = {
     "homepage",
@@ -116,9 +123,9 @@ def _affected_paths(fix: dict[str, Any], *, scan_origin: str = "", identity_vers
 
     output: list[str] = []
     seen: set[str] = set()
-    key_for = repair_evidence_key_function(legacy_key=_path, scan_origin=scan_origin, identity_version=identity_version)
+    key_for = repair_evidence_key_function(legacy_key=architectural_evidence_key, scan_origin=scan_origin, identity_version=identity_version)
     for raw in values:
-        key = key_for(raw)
+        key = key_for(strip_acquisition_utm(raw))
         if key and key not in seen:
             seen.add(key)
             output.append(key)
@@ -128,6 +135,15 @@ def _affected_paths(fix: dict[str, Any], *, scan_origin: str = "", identity_vers
 def page_role(page: dict[str, Any]) -> str:
     family = _template_family(page)
     path = _path(_page_url(page))
+    # Entity offers/profiles are repeated leaves even when a broad template
+    # classifier calls them a collection; only a verified directory can be a hub.
+    if is_repeated_entity_leaf(page):
+        return "commercial_leaf"
+    _, trusted_role = provenance_decision(page)
+    if trusted_role:
+        return trusted_role
+    if family in DIRECTORY_FAMILIES:
+        return "other"
 
     if path in {"/", "/index.html"} or family == "homepage":
         return "structural"
@@ -148,7 +164,8 @@ def role_counts_for_affected(
     *, scan_origin: str = "", identity_version: str = "",
 ) -> RoleCounts:
     identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
-    key_for = repair_evidence_key_function(legacy_key=_path, **identity_context)
+    base_key_for = repair_evidence_key_function(legacy_key=architectural_evidence_key, **identity_context)
+    key_for = lambda value: base_key_for(strip_acquisition_utm(value))
     page_lookup = {
         key_for(_page_url(page)): page
         for page in pages or []
@@ -163,11 +180,20 @@ def role_counts_for_affected(
         "other": 0,
     }
 
+    seen_products: set[str] = set()
     for key in _affected_paths(fix, **identity_context):
         page = page_lookup.get(key)
         if page is None:
             page = {"path": key, "page_template_family": fix_family}
-        counts[page_role(page)] += 1
+        role = page_role(page)
+        # Seller-specific offers for the same explicitly identified product
+        # count as one product unit, not many independent architecture surfaces.
+        entity_id = page.get("product_entity_id") if role == "commercial_leaf" else None
+        if isinstance(entity_id, str) and entity_id.strip():
+            if entity_id.strip() in seen_products:
+                continue
+            seen_products.add(entity_id.strip())
+        counts[role] += 1
 
     return RoleCounts(**counts)
 
@@ -222,10 +248,23 @@ def architecture_context(
     identity_version: str = "",
 ) -> dict[str, Any]:
     counts = role_counts_for_affected(fix, pages, scan_origin=scan_origin, identity_version=identity_version)
-    affected_checked = len(_affected_paths(fix, scan_origin=scan_origin, identity_version=identity_version))
+    affected = _affected_paths(fix, scan_origin=scan_origin, identity_version=identity_version)
+    affected_checked = len(affected)
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
+    base_key_for = repair_evidence_key_function(legacy_key=architectural_evidence_key, **identity_context)
+    key_for = lambda value: base_key_for(strip_acquisition_utm(value))
+    lookup = {
+        key_for(_page_url(page)): page for page in pages or []
+        if isinstance(page, dict) and key_for(_page_url(page))
+    }
+    evidence_states: dict[str, int] = {}
+    for key in affected:
+        state, _ = provenance_decision(lookup.get(key, {}))
+        evidence_states[state] = evidence_states.get(state, 0) + 1
     return {
         "version": REPAIR_ARCHITECTURE_PRIORITY_VERSION,
         "role_counts": counts.as_dict(),
+        "evidence_states": evidence_states,
         "role_bonus": bounded_role_bonus(counts),
         "repair_reach": repair_reach(
             affected_checked=affected_checked,

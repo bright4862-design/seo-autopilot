@@ -1,0 +1,35 @@
+name: Architecture Standard-150 isolated real-site acceptance
+# Re-verify role-first bounded scoring and fail-closed provenance on the final shadow candidate.
+
+on:
+  push:
+    branches:
+      - integration/architecture-role-provenance-shadow-20261030
+    paths:
+      - .github/workflows/architecture-150-acceptance.yml
+
+permissions:
+  contents: read
+
+jobs:
+  real-standard150:
+    name: Real 150-page shadow scan (no deployment)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install scanner dependencies
+        run: pip install -r scanner-api/requirements.txt
+      - name: Real robots-aware Standard-150 scan and shadow ranking
+        working-directory: scanner-api
+        run: PYTHONPATH=. python scripts/architecture_real_standard150_acceptance.py
+      - name: Upload sanitized acceptance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: architecture-standard150-report
+          if-no-files-found: warn
+          path: scanner-api/reports/architecture-standard150-real.json

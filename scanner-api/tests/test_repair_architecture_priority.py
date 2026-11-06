@@ -221,6 +221,6 @@ def test_architecture_context_is_versioned_and_sample_scoped():
     result = annotate_calibrated_repair_priority(hub_fix, [hub])
     context = result["priority_context"]
 
-    assert context["architecture_priority_version"] == "repair_architecture_priority_v1_role_coverage"
+    assert context["architecture_priority_version"] == "repair_architecture_priority_v2_provenance_shadow"
     assert context["repair_reach"] == "structural"
     assert context["coverage_scope"] == "checked_sample"

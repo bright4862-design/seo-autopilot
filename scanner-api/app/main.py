@@ -6,9 +6,10 @@ from typing import Any
 
 import httpx
 from fastapi import Body, FastAPI, Header, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
 
 from .beta_revision import SCANNER_BUILD_REVISION, live_revision
+from .extended500_job_admission import evaluate_extended500_preflight
 from .coverage_authority import attach_coverage_authority_evidence
 from .evidence_quality import EVIDENCE_QUALITY_GATE_VERSION, apply_evidence_quality_gate
 from .grok_chat import (
@@ -402,6 +403,27 @@ class ScanJobRequest(BaseModel):
     owner_attested_robots_override: bool = False
 
 
+class Extended500PreflightRequest(BaseModel):
+    """Distinct authenticated read-only preflight, not an Extended 500 job."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    scan_id: StrictStr
+    request_id: StrictStr
+    idempotency_key: StrictStr
+    project_id: StrictStr
+    owner_user_id: StrictStr
+    attempt_count: StrictInt
+    website_url: StrictStr
+    path_prefix: StrictStr | None = None
+    scan_mode: StrictStr
+    respect_robots_txt: StrictBool
+    owner_attested_robots_override: StrictBool
+    # This must be independently minted by an authenticated entitlement
+    # issuer. No such issuer is enabled yet; the route is disabled by default.
+    signed_grant: dict[str, Any]
+
+
 class ScanDrainRequest(BaseModel):
     """Delayed watchdog payload for one scan attempt."""
 
@@ -569,6 +591,45 @@ async def persist_terminal_failure_bounded(
     if already_terminal(persisted):
         return {"state": "terminal_won_race", "scan": persisted}
     raise HTTPException(status_code=503, detail="The scan terminal state was not persisted.")
+
+
+@app.post("/scan-job-extended500-preflight")
+async def extended500_job_preflight(
+    payload: Extended500PreflightRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Read-only OIDC-gated policy evaluation; NEVER starts/persists a crawl.
+
+    Cloud Run IAM validation is load-bearing for require_cloud_tasks_oidc.
+    This route must remain isolated from Standard 150 admission, signing and
+    billing. Enabling preflight is NOT enabling Extended 500 execution.
+    """
+    require_cloud_tasks_oidc(authorization)
+    if os.getenv("FIXLIST_EXTENDED500_PREFLIGHT_ENABLED", "").strip().lower() != "true":
+        raise HTTPException(status_code=503, detail="Extended 500 preflight is disabled.")
+    key = str(os.getenv("EXTENDED500_ADMISSION_SIGNING_KEY") or "")
+    if len(key) < 32:
+        raise HTTPException(status_code=503, detail="Extended 500 admission signing is unavailable.")
+
+    async with httpx.AsyncClient() as client:
+        frozen = await read_scan_run(client, payload.scan_id)
+    if not isinstance(frozen, dict):
+        raise HTTPException(status_code=503, detail="Extended 500 ScanRun is unavailable.")
+
+    job = payload.model_dump(exclude={"signed_grant"})
+    reason = evaluate_extended500_preflight(
+        job, frozen, payload.signed_grant, key,
+    )
+    if reason != "verified_read_only":
+        raise HTTPException(status_code=409, detail=reason)
+    return {
+        "verified": True,
+        "admitted": False,
+        "execution_enabled": False,
+        "scan_mode": "extended_500",
+        "scan_id": payload.scan_id,
+        "reason": "atomic_admission_and_persistence_not_implemented",
+    }
 
 
 @app.post("/scan-job")

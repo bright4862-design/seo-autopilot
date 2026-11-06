@@ -119,7 +119,9 @@ def test_every_scanner_key_route_is_still_guarded():
     """Guard inventory: catches a new route added without authentication."""
     guarded = {"/health/auth", "/scan", "/review", "/chat"}
     open_routes = {"/health", "/revision"}
-    durable = {"/scan-job", "/scan-job-drain", "/scan-reconcile"}
+    # Read-only Extended 500 preflight shares the private IAM + invoker-OIDC
+    # guard, never the scanner API key or Standard 150 authority path.
+    durable = {"/scan-job", "/scan-job-drain", "/scan-reconcile", "/scan-job-extended500-preflight"}
 
     for route in main.app.routes:
         path = getattr(route, "path", None)

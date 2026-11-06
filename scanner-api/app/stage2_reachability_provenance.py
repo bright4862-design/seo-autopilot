@@ -11,7 +11,9 @@ from typing import Any
 
 REACHABILITY_PROVENANCE_VERSION = "money_page_reachability_provenance_v1"
 REACHABILITY_SCOPE = "observed_standard150_sample_only"
+EXTENDED_REACHABILITY_SCOPE = "observed_extended500_sample_only"
 MAX_ASSESSED_PAGES = 150
+MAX_EXTENDED_ASSESSED_PAGES = 500
 MAX_DISCOVERY_TARGETS = MAX_ASSESSED_PAGES * 8
 MAX_SOURCE_SAMPLES = 20
 MAX_OUTGOING_LINKS_PER_SOURCE = 2000
@@ -147,16 +149,19 @@ def observed_crawl_depths(
     discovery: dict[str, Any],
     *,
     seed_url: str,
+    max_assessed_pages: int = MAX_ASSESSED_PAGES,
 ) -> dict[str, int]:
     """Compute shortest observed accepted-HTML path from the submitted seed.
 
     A sitemap listing never creates an edge. Depth is therefore unknown for a
     sitemap-only page rather than being invented from crawl order.
     """
-    if not isinstance(pages, list) or len(pages) > MAX_ASSESSED_PAGES:
-        raise ValueError("Expected at most 150 assessed pages")
-    if not isinstance(discovery, dict) or len(discovery) > MAX_DISCOVERY_TARGETS:
-        raise ValueError("Discovery graph exceeds the bounded Standard-150 frontier")
+    if max_assessed_pages not in (MAX_ASSESSED_PAGES, MAX_EXTENDED_ASSESSED_PAGES):
+        raise ValueError("Unsupported assessed-page capacity")
+    if not isinstance(pages, list) or len(pages) > max_assessed_pages:
+        raise ValueError(f"Expected at most {max_assessed_pages} assessed pages")
+    if not isinstance(discovery, dict) or len(discovery) > max_assessed_pages * 8:
+        raise ValueError(f"Discovery graph exceeds the bounded {max_assessed_pages}-page frontier")
     accepted_sources = _accepted_source_urls(pages)
     seed = _text(seed_url)
     if not seed or seed not in accepted_sources:
@@ -165,7 +170,7 @@ def observed_crawl_depths(
     depths: dict[str, int] = {seed: 0}
     # The accepted assessed set is at most 150 pages. Repeated relaxation avoids
     # depending on concurrent fetch/queue order while remaining tightly bounded.
-    for _ in range(MAX_ASSESSED_PAGES):
+    for _ in range(max_assessed_pages):
         changed = False
         for target, sources in edges.items():
             source_depths = [depths[source] for source in sources if source in depths]
@@ -185,21 +190,26 @@ def enrich_pages_with_reachability_provenance(
     discovery: dict[str, Any],
     *,
     seed_url: str,
+    max_assessed_pages: int = MAX_ASSESSED_PAGES,
 ) -> list[dict[str, Any]]:
     """Attach B11 provenance to retained assessed pages in place.
 
     The number/order of pages is unchanged. All counts are scoped to verified
     links observed on accepted pages inside the retained Standard-150 sample.
     """
-    if not isinstance(pages, list) or len(pages) > MAX_ASSESSED_PAGES:
-        raise ValueError("Expected at most 150 assessed pages")
+    if max_assessed_pages not in (MAX_ASSESSED_PAGES, MAX_EXTENDED_ASSESSED_PAGES):
+        raise ValueError("Unsupported assessed-page capacity")
+    if not isinstance(pages, list) or len(pages) > max_assessed_pages:
+        raise ValueError(f"Expected at most {max_assessed_pages} assessed pages")
     if any(not isinstance(page, dict) for page in pages):
         raise ValueError("Expected page dictionaries")
-    if not isinstance(discovery, dict) or len(discovery) > MAX_DISCOVERY_TARGETS:
-        raise ValueError("Discovery graph exceeds the bounded Standard-150 frontier")
+    if not isinstance(discovery, dict) or len(discovery) > max_assessed_pages * 8:
+        raise ValueError(f"Discovery graph exceeds the bounded {max_assessed_pages}-page frontier")
 
     accepted_sources = _accepted_source_urls(pages)
-    depths = observed_crawl_depths(pages, discovery, seed_url=seed_url)
+    depths = observed_crawl_depths(
+        pages, discovery, seed_url=seed_url, max_assessed_pages=max_assessed_pages,
+    )
     original_count = len(pages)
 
     for page in pages:
@@ -252,7 +262,10 @@ def enrich_pages_with_reachability_provenance(
         page.update(
             {
                 "reachability_provenance_version": REACHABILITY_PROVENANCE_VERSION,
-                "reachability_scope": REACHABILITY_SCOPE,
+                "reachability_scope": (
+                    REACHABILITY_SCOPE if max_assessed_pages == MAX_ASSESSED_PAGES
+                    else EXTENDED_REACHABILITY_SCOPE
+                ),
                 "reachability_evidence_state": evidence_state,
                 "observed_internal_inlink_count": observed_inlinks,
                 "internal_source_pages": internal_sources[:MAX_SOURCE_SAMPLES],
@@ -271,7 +284,11 @@ def enrich_pages_with_reachability_provenance(
     return pages
 
 
-def enrich_pages_from_retained_link_evidence(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def enrich_pages_from_retained_link_evidence(
+    pages: list[dict[str, Any]],
+    *,
+    max_assessed_pages: int = MAX_ASSESSED_PAGES,
+) -> list[dict[str, Any]]:
     """Build B11 graph evidence from retained raw-link observations after page capping.
 
     ``extract_page`` temporarily retains only target URL identity plus semantic
@@ -280,8 +297,10 @@ def enrich_pages_from_retained_link_evidence(pages: list[dict[str, Any]]) -> lis
     target are retained assessed pages, and then removes the private link cache
     before the scan result can be returned or persisted.
     """
-    if not isinstance(pages, list) or len(pages) > MAX_ASSESSED_PAGES:
-        raise ValueError("Expected at most 150 assessed pages")
+    if max_assessed_pages not in (MAX_ASSESSED_PAGES, MAX_EXTENDED_ASSESSED_PAGES):
+        raise ValueError("Unsupported assessed-page capacity")
+    if not isinstance(pages, list) or len(pages) > max_assessed_pages:
+        raise ValueError(f"Expected at most {max_assessed_pages} assessed pages")
     if any(not isinstance(page, dict) for page in pages):
         raise ValueError("Expected page dictionaries")
 
@@ -318,6 +337,7 @@ def enrich_pages_from_retained_link_evidence(pages: list[dict[str, Any]]) -> lis
             pages,
             discovery,
             seed_url=seed_url,
+            max_assessed_pages=max_assessed_pages,
         )
     finally:
         for page in pages:

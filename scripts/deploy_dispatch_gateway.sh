@@ -54,7 +54,22 @@ HEALTH_JSON="$(mktemp)"
 PRE_JSON="$(mktemp)"
 REVISION_JSON="$(mktemp)"
 CREATED_JSON="$(mktemp)"
-trap 'rm -f "$WORKER_JSON" "$GATEWAY_JSON" "$HEALTH_JSON" "$PRE_JSON" "$REVISION_JSON" "$CREATED_JSON"; rm -rf "$SOURCE_ARCHIVE_DIR"' EXIT
+GATEWAY_ROLLBACK_BASELINE="$(mktemp)"
+PRE_REVISION_JSON="$(mktemp)"
+GATEWAY_PROMOTION_ATTEMPTED=0
+GATEWAY_DEPLOY_VERIFIED=0
+source "$REPO_ROOT/scripts/lib/gateway-rollback.sh"
+finish_gateway_deploy() {
+  local status=$?
+  trap - EXIT
+  set +e
+  gateway_rollback_on_failure "$status"
+  status=$?
+  rm -f "$WORKER_JSON" "$GATEWAY_JSON" "$HEALTH_JSON" "$PRE_JSON" "$REVISION_JSON" "$CREATED_JSON" "$GATEWAY_ROLLBACK_BASELINE" "$PRE_REVISION_JSON"
+  rm -rf "$SOURCE_ARCHIVE_DIR"
+  exit "$status"
+}
+trap finish_gateway_deploy EXIT
 
 # Reads the revision that actually holds traffic, not the desired template.
 # spec.template is whatever the last deploy asked for; status.traffic is what
@@ -129,15 +144,22 @@ if [[ -n "$GATEWAY_CANARY_REVISION" || -n "$GATEWAY_CANARY_OWNER_USER_IDS" ]]; t
     echo "Refusing gateway deployment: canary owner allowlist must be 1-5 exact comma-separated user IDs." >&2
     exit 2
   fi
-  canary_check="$(python3 "$REPO_ROOT/scripts/assert_tagged_zero_traffic_worker.py" \
-    --revision "$GATEWAY_CANARY_REVISION" < "$WORKER_JSON")"
-  case "$canary_check" in
-    "TAGGED_ZERO_TRAFFIC_CANDIDATE_OK revision=$GATEWAY_CANARY_REVISION tag_url=https://"*) ;;
-    *) echo "Refusing gateway deployment: canary revision is not an exact tagged 0% candidate." >&2; exit 2 ;;
-  esac
-  CANARY_WORKER_ORIGIN="${canary_check##* tag_url=}"
+  canary_report="$(GCP_PROJECT="$PROJECT" GCP_REGION="$REGION" CLOUD_RUN_SERVICE="$WORKER" \
+    CLOUD_TASKS_QUEUE="$QUEUE" TASKS_INVOKER_SERVICE_ACCOUNT="$INVOKER_SA" \
+    bash "$REPO_ROOT/scripts/prepare_gateway_canary.sh")"
+  printf '%s\n' "$canary_report"
+  CANARY_WORKER_ORIGIN="$(printf '%s\n' "$canary_report" | sed -n 's/^GATEWAY_CANARY_WORKER_ORIGIN=//p')"
+  [[ "$CANARY_WORKER_ORIGIN" == https://canary-* ]] || { echo 'Missing verified pinned canary origin.' >&2; exit 2; }
   CANARY_OWNER_COUNT="$(printf '%s' "$GATEWAY_CANARY_OWNER_USER_IDS" | tr ',' '\n' | sort -u | grep -c .)"
 fi
+verify_canary_mapping() {
+  [[ -n "$CANARY_WORKER_ORIGIN" ]] || return 0
+  gcloud run services describe "$WORKER" --project="$PROJECT" --region="$REGION" --format=json > "$WORKER_JSON"
+  local check
+  check="$(python3 "$REPO_ROOT/scripts/assert_tagged_zero_traffic_worker.py" \
+    --revision "$GATEWAY_CANARY_REVISION" --tag "canary-${GATEWAY_CANARY_REVISION#fixlist-standard150-worker-}" < "$WORKER_JSON")"
+  [[ "${check##* tag_url=}" == "$CANARY_WORKER_ORIGIN" ]]
+}
 ENV_VARS="^|^SCAN_TASKS_QUEUE_PATH=$QUEUE_PATH|SCAN_DRAIN_QUEUE_PATH=$DRAIN_QUEUE_PATH|SCAN_WORKER_URL=$WORKER_URL|TASKS_INVOKER_SERVICE_ACCOUNT=$INVOKER_SA|DISPATCH_MAX_CLOCK_SKEW_SECONDS=300|DISPATCH_MAX_BODY_BYTES=262144|FIXLIST_GATEWAY_SOURCE_SHA=$SOURCE_SHA"
 if [[ -n "$CANARY_WORKER_ORIGIN" ]]; then
   ENV_VARS="${ENV_VARS}|SCAN_CANARY_WORKER_ORIGIN=$CANARY_WORKER_ORIGIN|SCAN_CANARY_OWNER_USER_IDS=$GATEWAY_CANARY_OWNER_USER_IDS"
@@ -165,6 +187,28 @@ if gcloud run services describe "$GATEWAY" \
 else
   echo "Gateway does not exist; creating it with the Invoker IAM check disabled."
   PUBLIC_ARGS+=(--no-invoker-iam-check)
+fi
+
+# A rollback target is proven before deployment, rather than discovered only
+# after a failure. Save no keys: this captures public /health and revision IDs.
+if [[ -n "$PRE_DEPLOY_REVISION" ]]; then
+  gcloud run revisions describe "$PRE_DEPLOY_REVISION" --project="$PROJECT" --region="$REGION" --format=json > "$PRE_REVISION_JSON"
+  GATEWAY_ROLLBACK_SOURCE_SHA="$(python3 - "$PRE_REVISION_JSON" <<'PY'
+import json, sys
+revision=json.load(open(sys.argv[1]))
+print(next((str(e.get('value') or '') for e in revision.get('spec',{}).get('containers',[{}])[0].get('env',[])
+            if e.get('name')=='FIXLIST_GATEWAY_SOURCE_SHA'), ''))
+PY
+)"
+  GATEWAY_URL="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status",{}).get("url", ""))' "$PRE_JSON")"
+  [[ "$GATEWAY_URL" == https://* ]] || { echo 'Previous gateway URL is missing.' >&2; exit 2; }
+  curl --fail --silent --show-error --max-time 20 "$GATEWAY_URL/health" > "$GATEWAY_ROLLBACK_BASELINE"
+  python3 "$REPO_ROOT/scripts/verify_gateway_rollback.py" \
+    --service-json "$PRE_JSON" --revision-json "$PRE_REVISION_JSON" \
+    --health-json "$GATEWAY_ROLLBACK_BASELINE" --baseline-json "$GATEWAY_ROLLBACK_BASELINE" \
+    --expected-revision "$PRE_DEPLOY_REVISION" --expected-source-sha "$GATEWAY_ROLLBACK_SOURCE_SHA"
+elif [[ -n "$CANARY_WORKER_ORIGIN" ]]; then
+  echo 'Owner canary requires a verified existing gateway rollback target.' >&2; exit 2
 fi
 
 echo
@@ -200,6 +244,7 @@ gcloud run deploy "$GATEWAY" \
   --project="$PROJECT" \
   --region="$REGION" \
   --source="$SOURCE_DIR" \
+  --no-traffic \
   --revision-suffix="$REVISION_SUFFIX" \
   --build-service-account="$BUILD_SA_RESOURCE" \
   --service-account="$DISPATCHER_SA" \
@@ -235,6 +280,8 @@ python3 "$REPO_ROOT/scripts/verify_gateway_deployment.py" \
 # to it, and Cloud Run retires it seconds later -- while the pinned revision
 # keeps serving and the deploy still exits 0. Promotion is therefore explicit
 # and is never inferred from a successful deploy.
+verify_canary_mapping
+GATEWAY_PROMOTION_ATTEMPTED=1
 gcloud run services update-traffic "$GATEWAY" \
   --project="$PROJECT" \
   --region="$REGION" \
@@ -373,6 +420,8 @@ if [[ "$RUNTIME_REVISION" != "$NEW_REVISION" || "$RUNTIME_SOURCE_SHA" != "$SOURC
   exit 2
 fi
 echo "Gateway health contract verified."
+verify_canary_mapping
+GATEWAY_DEPLOY_VERIFIED=1
 
 echo
 echo "GATEWAY_READY=$GATEWAY_URL"

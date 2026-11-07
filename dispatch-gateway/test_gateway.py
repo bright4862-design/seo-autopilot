@@ -216,7 +216,7 @@ class ValidateDispatchTests(unittest.TestCase):
         self.assertRejected(value, "missing_drain_after")
 
 
-CANARY_ORIGIN = "https://candidate---fixlist-standard150-worker-tpucgyfewa-ew.a.run.app"
+CANARY_ORIGIN = "https://canary-00102-nn7---fixlist-standard150-worker-tpucgyfewa-ew.a.run.app"
 CANARY_OWNER = "owner_canary_01"
 
 
@@ -320,6 +320,7 @@ class OwnerCanaryRoutingTests(unittest.TestCase):
         for origin, allow in (
             (CANARY_ORIGIN, frozenset()),
             ("", owners),
+            (f"https://candidate---{host}", owners),
             (f"http://candidate---{host}", owners),
             (f"https://candidate---{host}/scan-job", owners),
             (f"https://candidate---{host}:8443", owners),

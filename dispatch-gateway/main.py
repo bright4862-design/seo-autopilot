@@ -105,7 +105,7 @@ def _validate_canary_config(origin: str, owners: frozenset[str]) -> None:
     tag, separator, service_host = (parts.hostname or "").partition("---")
     if (parts.scheme != "https" or parts.username or parts.password or parts.port
             or parts.path or parts.query or parts.fragment
-            or not separator or not re.fullmatch(r"[a-z][a-z0-9-]{0,45}", tag)
+            or not separator or not re.fullmatch(r"canary-[0-9]{5}-[a-z0-9]{3}", tag)
             or service_host != worker_parts.hostname):
         raise RuntimeError("canary worker origin must be a revision tag URL of the worker service")
 

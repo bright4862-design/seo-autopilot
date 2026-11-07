@@ -58,7 +58,7 @@ revision therefore receives no scans.
 - New optional gateway environment `SCAN_CANARY_WORKER_ORIGIN` +
   `SCAN_CANARY_OWNER_USER_IDS`. Both or neither; otherwise the gateway refuses
   to start. The origin must be a Cloud Run revision-tag URL of the **same**
-  worker service (`<tag>---<worker host>`, https, no path/port/userinfo). At
+  worker service (`canary-<revision suffix>---<worker host>`, https, no path/port/userinfo). The shared `candidate` tag is refused. At
   most five exact owner IDs.
 - Every existing validation runs first and is unchanged (queue, name, 480s
   deadline, serving URL, invoker, audience, scan identity, `standard_150`,
@@ -72,10 +72,23 @@ revision therefore receives no scans.
 - `deploy_dispatch_gateway.sh` enables it only when both
   `GATEWAY_CANARY_REVISION` and `GATEWAY_CANARY_OWNER_USER_IDS` are given. The
   origin is never taken from input: it is resolved from Cloud Run with
-  `assert_tagged_zero_traffic_worker.py` (exact revision, tag `candidate`, 0%).
+  `prepare_gateway_canary.sh`: authenticated runtime verification of source SHA,
+  fingerprint and full marker map, plus route/build/480s checks, precedes creation
+  of a revision-specific `canary-<revision suffix>` tag. Existing conflicting tag
+  mappings are refused. The tag is never removed or reused, including after
+  canary routing is turned off: already queued drain tasks retain their URL.
+  The generic tag operator cannot assign a reserved `canary-` tag.
+  `assert_tagged_zero_traffic_worker.py` rechecks its exact 0% revision mapping
+  immediately before gateway promotion and after the final health check.
   Env and `/health` are verified to carry exactly that route, or none.
   `--set-env-vars` replaces the environment, so any plain gateway deploy
   removes the canary.
+- Gateway deployment first proves the previous 100%-serving revision and its
+  live health/source identity as a rollback baseline. It builds with
+  `--no-traffic`, then explicitly promotes only its reserved new revision.
+  Any failed post-promotion check restores the previous gateway and independently
+  verifies its control-plane traffic, Ready state, immutable image/source and
+  live health identity. Failed rollback is reported separately, never as success.
 - Operator: `deploy-dispatch-gateway` gains `gateway_canary` (default `off`).
   `owner-canary` uses the existing `revision` and `acceptance_owner_user_ids`
   inputs.
@@ -102,3 +115,45 @@ rows are unchanged.
 
 Rollback at any point: plain gateway deploy (removes canary); serving worker
 is untouched at `00097-lvl`.
+
+## Two-phase acceptance contract (review required before canary execution)
+
+The currently served customer bundle exposes an empty source-SHA marker. This
+is a failed site-source attestation, not a passing final acceptance check.
+The ordinary publisher requires a frozen release; these phases resolve that
+ordering without bypassing or weakening its guard.
+
+1. **Backend acceptance before publication.** After review of the canary route
+   and this contract, attest the exact worker and Base44 runtime packages,
+   authority schemas and signing continuity. The deployed ScanRun schema was
+   observed missing `comparison_evidence`; reconcile through an explicitly
+   authorized closed-barrier schema migration before claiming schema parity.
+   Public admission stays closed apart from a short-lived one-owner,
+   one-claim acceptance cohort bound to the exact release SHA.
+2. **Genuine customer read-back.** Run one bounded owner scan through normal
+   admission. Record the request, scan, owner, project, source, candidate and
+   FixList identities, page selection/crawl counts, deterministic evidence,
+   signed persistence, authenticated read-back, browser reload, historical V6
+   readability and terminal admission release. Include delayed drain tasks in
+   the drain reconciliation. A failed or incomplete result is not acceptance.
+3. **Evidence-backed freeze.** Close and drain admission again and remove new
+   canary routing. Keep its revision-specific tag for already queued watchdogs.
+   A reviewed report may establish provisional backend acceptance only after
+   every preceding backend/customer-read-back check passes. It must explicitly
+   state final public site-source acceptance is still pending. Use existing
+   freeze tooling and real immutable evidence; do not manufacture a full
+   production-readiness claim or change fingerprint literals.
+4. **Guarded publication and final acceptance.** The existing frozen-release
+   publisher remains mandatory. Verify exact final site SHA on both public
+   origins and all six V8 runtime build/activation IDs after publication. Freeze
+   changes generated contracts and may change package IDs even with the same
+   scanner fingerprint. Recheck signed read-back and browser recovery.
+5. **Final worker and promotion.** Restage from the final exact current main SHA
+   after merge/freeze; the earlier candidate is not thereby built from that
+   newer commit. Authenticate and reverify its complete release identity at 0%,
+   retain a fresh closed/drained barrier snapshot and verified rollback target,
+   then require explicit production GO and the existing promotion/site guards.
+   Reopen public claims only after post-promotion customer acceptance passes.
+
+No change in this contract permits publishing an unaccepted release, replacing
+keys, altering historical reports, or treating an empty site marker as verified.

@@ -335,7 +335,7 @@ jobs:
       # Tagging is a SEPARATE exact-revision confirmed action, never part of
       # this read-only diagnosis. Do not infer identity from the serving URL.
       - name: Resolve staged worker token audience (read only)
-        if: inputs.operation == 'verify-staged-worker-release'
+        if: inputs.operation == 'verify-staged-worker-release' || (inputs.operation == 'deploy-dispatch-gateway' && inputs.gateway_canary == 'owner-canary')
         id: staged-worker-url
         shell: bash
         run: |
@@ -346,7 +346,7 @@ jobs:
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
       - name: Mint staged worker invoker identity token (read only)
-        if: inputs.operation == 'verify-staged-worker-release'
+        if: inputs.operation == 'verify-staged-worker-release' || (inputs.operation == 'deploy-dispatch-gateway' && inputs.gateway_canary == 'owner-canary')
         id: staged-worker-token
         uses: google-github-actions/auth@v3
         with:
@@ -425,6 +425,8 @@ jobs:
           # clears any previous canary route.
           GATEWAY_CANARY_REVISION: ${{ inputs.gateway_canary == 'owner-canary' && inputs.revision || '' }}
           GATEWAY_CANARY_OWNER_USER_IDS: ${{ inputs.gateway_canary == 'owner-canary' && inputs.acceptance_owner_user_ids || '' }}
+          FIXLIST_WORKER_ID_TOKEN: ${{ steps.staged-worker-token.outputs.id_token }}
+          FIXLIST_WORKER_TOKEN_AUDIENCE: ${{ steps.staged-worker-url.outputs.url }}
         shell: bash
         run: ./scripts/deploy_dispatch_gateway.sh
 

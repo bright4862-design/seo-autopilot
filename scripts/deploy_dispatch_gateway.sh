@@ -177,11 +177,15 @@ echo "canary_worker_origin=${CANARY_WORKER_ORIGIN:-<off>} canary_owner_count=$CA
 # service exists, the exact public-invoker annotation is preserved and future
 # WIF deployments need only service-scoped Cloud Run Developer access.
 PUBLIC_ARGS=()
+# --no-traffic is valid only for an existing service; first creation must
+# take traffic, and has no previous revision to roll back to anyway.
+TRAFFIC_ARGS=()
 PRE_DEPLOY_REVISION=""
 if gcloud run services describe "$GATEWAY" \
   --project="$PROJECT" \
   --region="$REGION" --format=json > "$PRE_JSON" 2>/dev/null; then
   echo "Existing gateway detected; preserving its current invoker-IAM setting."
+  TRAFFIC_ARGS+=(--no-traffic)
   PRE_DEPLOY_REVISION="$(serving_revision_from "$PRE_JSON")"
   echo "pre_deploy_serving_revision=${PRE_DEPLOY_REVISION:-<none>}"
 else
@@ -244,7 +248,7 @@ gcloud run deploy "$GATEWAY" \
   --project="$PROJECT" \
   --region="$REGION" \
   --source="$SOURCE_DIR" \
-  --no-traffic \
+  "${TRAFFIC_ARGS[@]}" \
   --revision-suffix="$REVISION_SUFFIX" \
   --build-service-account="$BUILD_SA_RESOURCE" \
   --service-account="$DISPATCHER_SA" \

@@ -125,6 +125,49 @@ if [[ "$QUEUE_PATH" == "$DRAIN_QUEUE_PATH" ]]; then
 fi
 WORKER_URL="${WORKER_ORIGIN}/scan-job"
 
+# Creating a public Cloud Run service requires run.services.setIamPolicy. The
+# authenticated owner bootstrap performs that one-time creation. After the
+# service exists, the exact public-invoker annotation is preserved and future
+# WIF deployments need only service-scoped Cloud Run Developer access.
+PUBLIC_ARGS=()
+# --no-traffic is valid only for an existing service; first creation must
+# take traffic, and has no previous revision to roll back to anyway.
+TRAFFIC_ARGS=()
+PRE_DEPLOY_REVISION=""
+if gcloud run services describe "$GATEWAY" \
+  --project="$PROJECT" \
+  --region="$REGION" --format=json > "$PRE_JSON" 2>/dev/null; then
+  echo "Existing gateway detected; preserving its current invoker-IAM setting."
+  TRAFFIC_ARGS+=(--no-traffic)
+  PRE_DEPLOY_REVISION="$(serving_revision_from "$PRE_JSON")"
+  echo "pre_deploy_serving_revision=${PRE_DEPLOY_REVISION:-<none>}"
+else
+  echo "Gateway does not exist; creating it with the Invoker IAM check disabled."
+  PUBLIC_ARGS+=(--no-invoker-iam-check)
+fi
+
+# A rollback target is proven before deployment, rather than discovered only
+# after a failure. Save no keys: this captures public /health and revision IDs.
+if [[ -n "$PRE_DEPLOY_REVISION" ]]; then
+  gcloud run revisions describe "$PRE_DEPLOY_REVISION" --project="$PROJECT" --region="$REGION" --format=json > "$PRE_REVISION_JSON"
+  GATEWAY_ROLLBACK_SOURCE_SHA="$(python3 - "$PRE_REVISION_JSON" <<'PY'
+import json, sys
+revision=json.load(open(sys.argv[1]))
+print(next((str(e.get('value') or '') for e in revision.get('spec',{}).get('containers',[{}])[0].get('env',[])
+            if e.get('name')=='FIXLIST_GATEWAY_SOURCE_SHA'), ''))
+PY
+)"
+  GATEWAY_URL="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status",{}).get("url", ""))' "$PRE_JSON")"
+  [[ "$GATEWAY_URL" == https://* ]] || { echo 'Previous gateway URL is missing.' >&2; exit 2; }
+  curl --fail --silent --show-error --max-time 20 "$GATEWAY_URL/health" > "$GATEWAY_ROLLBACK_BASELINE"
+  python3 "$REPO_ROOT/scripts/verify_gateway_rollback.py" \
+    --service-json "$PRE_JSON" --revision-json "$PRE_REVISION_JSON" \
+    --health-json "$GATEWAY_ROLLBACK_BASELINE" --baseline-json "$GATEWAY_ROLLBACK_BASELINE" \
+    --expected-revision "$PRE_DEPLOY_REVISION" --expected-source-sha "$GATEWAY_ROLLBACK_SOURCE_SHA"
+elif [[ -n "${GATEWAY_CANARY_REVISION:-}" || -n "${GATEWAY_CANARY_OWNER_USER_IDS:-}" ]]; then
+  echo 'Owner canary requires a verified existing gateway rollback target.' >&2; exit 2
+fi
+
 # Optional owner-only release canary. Off unless BOTH an exact zero-traffic
 # tagged worker revision and an owner allowlist are supplied. The canary origin
 # is never taken from input: it is the revision-tag URL Cloud Run reports for
@@ -171,49 +214,6 @@ echo "drain_queue_path=$DRAIN_QUEUE_PATH"
 echo "signing_secret_ref=${SIGNING_SECRET}:${SIGNING_VERSION} (value not read)"
 echo "source_sha=$SOURCE_SHA"
 echo "canary_worker_origin=${CANARY_WORKER_ORIGIN:-<off>} canary_owner_count=$CANARY_OWNER_COUNT"
-
-# Creating a public Cloud Run service requires run.services.setIamPolicy. The
-# authenticated owner bootstrap performs that one-time creation. After the
-# service exists, the exact public-invoker annotation is preserved and future
-# WIF deployments need only service-scoped Cloud Run Developer access.
-PUBLIC_ARGS=()
-# --no-traffic is valid only for an existing service; first creation must
-# take traffic, and has no previous revision to roll back to anyway.
-TRAFFIC_ARGS=()
-PRE_DEPLOY_REVISION=""
-if gcloud run services describe "$GATEWAY" \
-  --project="$PROJECT" \
-  --region="$REGION" --format=json > "$PRE_JSON" 2>/dev/null; then
-  echo "Existing gateway detected; preserving its current invoker-IAM setting."
-  TRAFFIC_ARGS+=(--no-traffic)
-  PRE_DEPLOY_REVISION="$(serving_revision_from "$PRE_JSON")"
-  echo "pre_deploy_serving_revision=${PRE_DEPLOY_REVISION:-<none>}"
-else
-  echo "Gateway does not exist; creating it with the Invoker IAM check disabled."
-  PUBLIC_ARGS+=(--no-invoker-iam-check)
-fi
-
-# A rollback target is proven before deployment, rather than discovered only
-# after a failure. Save no keys: this captures public /health and revision IDs.
-if [[ -n "$PRE_DEPLOY_REVISION" ]]; then
-  gcloud run revisions describe "$PRE_DEPLOY_REVISION" --project="$PROJECT" --region="$REGION" --format=json > "$PRE_REVISION_JSON"
-  GATEWAY_ROLLBACK_SOURCE_SHA="$(python3 - "$PRE_REVISION_JSON" <<'PY'
-import json, sys
-revision=json.load(open(sys.argv[1]))
-print(next((str(e.get('value') or '') for e in revision.get('spec',{}).get('containers',[{}])[0].get('env',[])
-            if e.get('name')=='FIXLIST_GATEWAY_SOURCE_SHA'), ''))
-PY
-)"
-  GATEWAY_URL="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status",{}).get("url", ""))' "$PRE_JSON")"
-  [[ "$GATEWAY_URL" == https://* ]] || { echo 'Previous gateway URL is missing.' >&2; exit 2; }
-  curl --fail --silent --show-error --max-time 20 "$GATEWAY_URL/health" > "$GATEWAY_ROLLBACK_BASELINE"
-  python3 "$REPO_ROOT/scripts/verify_gateway_rollback.py" \
-    --service-json "$PRE_JSON" --revision-json "$PRE_REVISION_JSON" \
-    --health-json "$GATEWAY_ROLLBACK_BASELINE" --baseline-json "$GATEWAY_ROLLBACK_BASELINE" \
-    --expected-revision "$PRE_DEPLOY_REVISION" --expected-source-sha "$GATEWAY_ROLLBACK_SOURCE_SHA"
-elif [[ -n "$CANARY_WORKER_ORIGIN" ]]; then
-  echo 'Owner canary requires a verified existing gateway rollback target.' >&2; exit 2
-fi
 
 echo
 echo "=== Reserve this deployment's revision name ==="

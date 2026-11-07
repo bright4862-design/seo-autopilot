@@ -95,3 +95,17 @@ def test_generic_tag_operator_cannot_reassign_a_canary_tag(tmp_path):
     assert result.returncode != 0
     assert "reserved canary" in result.stderr
     assert "--update-tags=" not in calls
+
+
+def test_gateway_rollback_baseline_precedes_canary_tag_creation():
+    """A bad or absent previous gateway must fail before creating a durable tag."""
+    deploy = (ROOT / "scripts/deploy_dispatch_gateway.sh").read_text()
+    assert deploy.index('python3 "$REPO_ROOT/scripts/verify_gateway_rollback.py"') < deploy.index(
+        'bash "$REPO_ROOT/scripts/prepare_gateway_canary.sh"'
+    )
+    assert deploy.index("Owner canary requires a verified existing gateway rollback target.") < deploy.index(
+        'bash "$REPO_ROOT/scripts/prepare_gateway_canary.sh"'
+    )
+    assert deploy.index('bash "$REPO_ROOT/scripts/prepare_gateway_canary.sh"') < deploy.index(
+        'gcloud run deploy "$GATEWAY"'
+    )

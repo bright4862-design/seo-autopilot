@@ -103,31 +103,57 @@ rows are unchanged.
    retain that generation and use `verify-zero-admission-obligations`; do not
    replay a close with stale prior mode. The November 7 checkpoint is 77/closed.
 3. Verify Base44 V8 runtime packages and authority-schema parity independently.
-   Stop on mismatch; the pending schema migration needs explicit authorization.
-4. Restage from the exact merged main SHA, then tag and authenticate the new
-   0% candidate. Do not attribute an old revision to a newer main commit.
-5. While claims stay closed, `deploy-dispatch-gateway` with
-   `gateway_canary=owner-canary`, `revision=<exact verified 0% candidate>` and
-   `acceptance_owner_user_ids=<owner>`. Verify the runtime route and rollback.
-6. Run `cutover-resume` at the fresh closed generation. Confirmation is
-   `RESUME-STANDARD150-CUTOVER:<exact main SHA>:<generation>`. This resumes the
-   scheduler, drain queue and main queue **without opening claims**. Require
-   `STANDARD150_DRAIN_PLANE_RESUMED_CLAIMS_CLOSED`; otherwise stop. Recheck the
-   closed barrier and zero obligations. `acceptance-only` refuses paused queues.
-7. Only now enable a short-lived `acceptance-only` cohort bound to the same main
-   SHA and exact owner, total/per-owner claim budget 1. Record the returned new
-   generation; never assume it still equals the closed checkpoint.
-8. Run one bounded owner Standard 150 scan; verify the full journey and signed
-   persistence per the recovery runbook. Preserve failures.
-9. `cutover-pause` using the actual acceptance generation and prior mode to
-   close claims, drain outstanding scan/watchdog obligations and pause the
-   queues/reconciler again. Verify the new closed generation.
-10. Plain `deploy-dispatch-gateway` (canary off), retaining dedicated worker tags
-    for delayed tasks. Keep the barrier closed until the acceptance report,
-    freeze and explicit production GO.
+   Stop on mismatch; the pending `ScanRun.comparison_evidence` migration needs
+   explicit owner authorization. Do not treat PR review as migration consent.
+4. Restage from the exact merged main SHA, then authenticate the new 0% candidate.
+   Do not attribute an old revision to a newer main commit.
+5. Read the serving V8 admission/intake state before changing any Base44 setting.
+   `startStandardScanJobV8` requires BOTH `BETA_SCAN_ADMISSION_ENABLED=true`
+   and `BETA_SCAN_INTAKE_ENABLED=true` for any scan, even an owner canary.
+   If admission connectivity is off, its existing guarded setter must be
+   separately authorized and run while the barrier is CLOSED and drained,
+   **before** `acceptance-only` (the setter refuses other modes). Keep public
+   intake paused until the exact owner-only cohort is active. Do not read,
+   replace or log signing-key material.
+6. While claims remain closed, `deploy-dispatch-gateway` with
+   `gateway_canary=owner-canary`, `revision=<exact verified 0% candidate>`
+   and `acceptance_owner_user_ids=<owner>`. The script proves the existing
+   gateway rollback baseline BEFORE creating the revision-specific worker tag.
+   Verify the live gateway route and rollback provenance.
+7. Run `cutover-resume` at the fresh closed generation. Confirmation is
+   `RESUME-STANDARD150-CUTOVER:<exact main SHA>:<generation>`. This resumes
+   the scheduler, drain queue and main queue **without opening claims**. Require
+   `STANDARD150_DRAIN_PLANE_RESUMED_CLAIMS_CLOSED` and recheck zero obligations.
+   `acceptance-only` refuses paused queues.
+8. Only now activate a short-lived `acceptance-only` cohort bound to the
+   same main SHA and exact owner, total/per-owner claim budget 1. Capture its
+   new generation and verified snapshot; the prior closed generation is stale.
+9. Check the signed acceptance-only boundary and the live owner-only gateway
+   before enabling Base44 `BETA_SCAN_INTAKE_ENABLED` via its guarded setter,
+   if currently disabled and separately authorized. This global intake switch
+   is not an owner allowlist; the coordinator's acceptance-only cohort is.
+   Public/open claims remain prohibited.
+10. Run one bounded owner Standard 150 scan; verify signed persistence,
+    authenticated result, browser reload, terminal admission release and
+    delayed drain obligations. A failed or missing result is not acceptance.
+11. Pause Base44 intake through its guarded setter, then use `cutover-pause`
+    with the **actual acceptance generation and prior mode** to close claims,
+    drain active/watchdog obligations and pause queues/reconciler. Recheck the
+    new closed generation and zero obligations. Do not pause the drain queue
+    while it still has active admission obligations.
+12. Deploy the plain gateway with canary off after the barrier is closed,
+    keeping revision-specific worker tags for delayed tasks. Retain the V6
+    serving worker and the production NO-GO until reviewed evidence, freeze,
+    guarded publication, final acceptance and explicit production GO.
 
-Rollback at any point: plain gateway deploy (removes canary); serving worker
-is untouched at `00097-lvl`.
+Every admission, intake, schema, tag, gateway, worker and site mutation above
+requires its own established confirmation and owner authorization. This
+sequence is a reviewable plan, **not** authorization to perform those actions.
+
+Rollback at any point: a confirmed plain gateway deployment removes new canary
+routing; the serving worker remains untouched at `00097-lvl`. A failure
+during execution must be reconciled against actual live state, not assumed
+fixed by a successful command.
 
 ## Two-phase acceptance contract (review required before canary execution)
 

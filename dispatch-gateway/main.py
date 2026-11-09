@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from copy import deepcopy
 import hashlib
 import hmac
 import json
@@ -75,6 +76,52 @@ WORKER_ORIGIN = f"{worker_parts.scheme}://{worker_parts.netloc}"
 DRAIN_URL = f"{WORKER_ORIGIN}/scan-job-drain"
 ALLOWED_URLS = {WORKER_URL, DRAIN_URL}
 TASK_RE = re.compile(r"^standard150-(?:(drain)-)?([A-Za-z0-9_-]+)-a([1-9][0-9]*)$")
+
+# Owner-only release canary. Off unless BOTH variables are set. A zero-traffic
+# Cloud Run candidate is reachable only through its revision-tag URL, which
+# addresses that one revision of the SAME service; the ID-token audience stays
+# the canonical service origin, so no new invoker or audience is trusted. Only
+# tasks whose signed job names an allowlisted owner are re-targeted; every
+# other task still goes to the serving worker. Admission (acceptance-only
+# cohort) remains the gate on who may start a scan at all.
+CANARY_OWNER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
+CANARY_MAX_OWNERS = 5
+CANARY_WORKER_ORIGIN = os.environ.get("SCAN_CANARY_WORKER_ORIGIN", "").strip().rstrip("/")
+CANARY_OWNER_USER_IDS = frozenset(
+    item.strip()
+    for item in os.environ.get("SCAN_CANARY_OWNER_USER_IDS", "").split(",")
+    if item.strip()
+)
+
+
+def _validate_canary_config(origin: str, owners: frozenset[str]) -> None:
+    if not origin and not owners:
+        return
+    if not origin or not owners:
+        raise RuntimeError("canary worker origin and owner allowlist must be set together")
+    if len(owners) > CANARY_MAX_OWNERS or not all(CANARY_OWNER_ID_RE.fullmatch(o) for o in owners):
+        raise RuntimeError("canary owner allowlist is invalid")
+    parts = urlsplit(origin)
+    tag, separator, service_host = (parts.hostname or "").partition("---")
+    if (parts.scheme != "https" or parts.username or parts.password or parts.port
+            or parts.path or parts.query or parts.fragment
+            or not separator or not re.fullmatch(r"canary-[0-9]{5}-[a-z0-9]{3}", tag)
+            or service_host != worker_parts.hostname):
+        raise RuntimeError("canary worker origin must be a revision tag URL of the worker service")
+
+
+_validate_canary_config(CANARY_WORKER_ORIGIN, CANARY_OWNER_USER_IDS)
+
+
+def route_task(task: dict[str, Any], job: dict[str, Any], is_drain: bool) -> tuple[dict[str, Any], str]:
+    """Re-target an already validated task to the canary only for allowlisted owners."""
+    owner = str(job.get("owner_user_id") or "").strip()
+    if not CANARY_WORKER_ORIGIN or owner not in CANARY_OWNER_USER_IDS:
+        return task, "serving"
+    routed = deepcopy(task)
+    path = urlsplit(DRAIN_URL if is_drain else WORKER_URL).path
+    routed["httpRequest"]["url"] = f"{CANARY_WORKER_ORIGIN}{path}"
+    return routed, "canary"
 
 
 def response_error(code: str, status: int):
@@ -226,7 +273,8 @@ def validate_dispatch(payload: Any) -> tuple[dict[str, Any] | None, str | None]:
                 return None, "robots_policy_type"
             return None, "robots_policy_pair"
 
-    return task, None
+    routed, _route = route_task(task, job, is_drain)
+    return routed, None
 
 
 @app.get("/health")
@@ -240,6 +288,8 @@ def health():
         "queue": QUEUE_PATH,
         "drain_queue": DRAIN_QUEUE_PATH,
         "worker_origin": WORKER_ORIGIN,
+        "canary_worker_origin": CANARY_WORKER_ORIGIN or None,
+        "canary_owner_count": len(CANARY_OWNER_USER_IDS),
     })
 
 

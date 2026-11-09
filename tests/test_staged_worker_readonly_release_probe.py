@@ -34,6 +34,34 @@ def test_exact_tagged_candidate_at_zero_percent_passes():
     assert verify_tagged_zero_traffic(tagged_candidate(), REVISION) == TAG_URL
 
 
+def test_revision_specific_canary_survives_shared_candidate_reassignment():
+    service = tagged_candidate()
+    tag = "canary-00101-zh2"
+    url = "https://canary-00101-zh2---fixlist-standard150-worker.example.a.run.app"
+    service["status"]["traffic"][1] = {"revisionName": REVISION, "tag": tag, "url": url}
+    service["status"]["traffic"].append({"revisionName": "fixlist-standard150-worker-00102-nn7", "tag": "candidate", "url": TAG_URL})
+    assert verify_tagged_zero_traffic(service, REVISION, tag=tag) == url
+
+
+def test_canary_tag_cannot_name_a_different_revision():
+    with pytest.raises(CandidateNotIsolated, match="canary_tag_revision_mismatch"):
+        verify_tagged_zero_traffic(tagged_candidate(), REVISION, tag="canary-00102-nn7")
+
+
+def test_canary_url_must_bind_the_exact_tag_and_same_service():
+    service = tagged_candidate()
+    service["status"]["traffic"][1].update(tag="canary-00101-zh2", url=TAG_URL)
+    with pytest.raises(CandidateNotIsolated, match="canary_tag_url_mismatch"):
+        verify_tagged_zero_traffic(service, REVISION, tag="canary-00101-zh2")
+
+
+def test_canary_tag_reassignment_is_rejected():
+    service = tagged_candidate()
+    service["status"]["traffic"][1].update(tag="canary-00101-zh2", revisionName="fixlist-standard150-worker-00102-nn7")
+    with pytest.raises(CandidateNotIsolated, match="canary_tag_reassigned"):
+        verify_tagged_zero_traffic(service, REVISION, tag="canary-00101-zh2")
+
+
 @pytest.mark.parametrize(("modifier", "failure"), [
     (lambda x: x["status"]["traffic"][1].update(percent=1), "candidate_receives_traffic"),
     (lambda x: x["status"]["traffic"][1].update(percent=100), "candidate_receives_traffic"),

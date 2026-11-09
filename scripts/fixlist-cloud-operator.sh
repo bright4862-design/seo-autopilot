@@ -692,6 +692,10 @@ PY
 tag_worker_candidate() {
   local revision="$1" tag_url percent
   [ -n "$revision" ] || { echo "No revision to tag." >&2; exit 2; }
+  if [[ "$WORKER_CANDIDATE_TAG" == canary-* ]]; then
+    echo 'Refusing to reassign a reserved canary tag; use the verified canary preflight.' >&2
+    exit 2
+  fi
 
   # Tagging is a mutation of the live service, so it is confirmation-gated on
   # the exact revision name like every other traffic operation here.

@@ -5,6 +5,9 @@ rollback_gateway() {
   if [[ -z "${PRE_DEPLOY_REVISION:-}" || ! -s "${GATEWAY_ROLLBACK_BASELINE:-}" ]]; then
     echo 'GATEWAY_ROLLBACK_FAILED: no verified previous gateway target.' >&2; return 1
   fi
+  if [[ "${GATEWAY_ROLLBACK_URL:-}" != https://* ]]; then
+    echo 'GATEWAY_ROLLBACK_FAILED: no verified previous gateway URL.' >&2; return 1
+  fi
   tmp="$(mktemp -d)"
   if ! gcloud run services update-traffic "$GATEWAY" --project="$PROJECT" --region="$REGION" \
       --to-revisions="${PRE_DEPLOY_REVISION}=100" --quiet; then
@@ -15,7 +18,7 @@ rollback_gateway() {
   while :; do
     if gcloud run services describe "$GATEWAY" --project="$PROJECT" --region="$REGION" --format=json > "$tmp/service.json" \
       && gcloud run revisions describe "$PRE_DEPLOY_REVISION" --project="$PROJECT" --region="$REGION" --format=json > "$tmp/revision.json" \
-      && curl --fail --silent --show-error --max-time 20 "$GATEWAY_URL/health" > "$tmp/health.json" \
+      && curl --fail --silent --show-error --max-time 20 "$GATEWAY_ROLLBACK_URL/health" > "$tmp/health.json" \
       && python3 "$REPO_ROOT/scripts/verify_gateway_rollback.py" \
         --service-json "$tmp/service.json" --revision-json "$tmp/revision.json" \
         --health-json "$tmp/health.json" --baseline-json "$GATEWAY_ROLLBACK_BASELINE" \

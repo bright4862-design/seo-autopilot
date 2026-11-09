@@ -159,7 +159,10 @@ PY
 )"
   GATEWAY_URL="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status",{}).get("url", ""))' "$PRE_JSON")"
   [[ "$GATEWAY_URL" == https://* ]] || { echo 'Previous gateway URL is missing.' >&2; exit 2; }
-  curl --fail --silent --show-error --max-time 20 "$GATEWAY_URL/health" > "$GATEWAY_ROLLBACK_BASELINE"
+  # Rollback keeps its own copy: the post-promotion check below reassigns
+  # GATEWAY_URL from a heredoc, and a failure there leaves it empty.
+  GATEWAY_ROLLBACK_URL="$GATEWAY_URL"
+  curl --fail --silent --show-error --max-time 20 "$GATEWAY_ROLLBACK_URL/health" > "$GATEWAY_ROLLBACK_BASELINE"
   python3 "$REPO_ROOT/scripts/verify_gateway_rollback.py" \
     --service-json "$PRE_JSON" --revision-json "$PRE_REVISION_JSON" \
     --health-json "$GATEWAY_ROLLBACK_BASELINE" --baseline-json "$GATEWAY_ROLLBACK_BASELINE" \

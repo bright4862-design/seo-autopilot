@@ -75,15 +75,15 @@ test("V8 packages preserve V7 behavior outside route identity and the isolated c
     const v8files = fs.readdirSync(v8dir).sort();
     const comparisonFiles =
       canonical === "getCustomerScanResult"
-        ? ["comparisonEvidence.js", "comparisonGateway.js", "comparisonReader.js"]
+        ? ["comparisonEvidence.js", "comparisonGateway.js", "comparisonReader.js", "signedArchitectureContext.js"]
         : canonical === "persistDurableScanAuthority"
-          ? ["comparisonEvidence.js"]
+          ? ["comparisonEvidence.js", "signedArchitectureContext.js"]
           : [];
     const comparisonChangedInheritedFiles =
       canonical === "getCustomerScanResult"
         ? new Set(["projectionStage1Legacy.js"])
         : canonical === "persistDurableScanAuthority"
-          ? new Set(["authoritySnapshotStage1Legacy.js"])
+          ? new Set(["authoritySnapshotStage1Legacy.js", "entry.ts"])
           : new Set();
     assert.deepEqual(v8files, [...v7files, ...comparisonFiles].sort(), canonical);
     for (const file of v7files) {
@@ -101,6 +101,12 @@ test("V8 packages preserve V7 behavior outside route identity and the isolated c
     if (canonical === "persistDurableScanAuthority") {
       assert.match(source(path.join(v8dir, "authoritySnapshotStage1Legacy.js")), /sanitizeComparisonEvidence/);
       assert.match(source(path.join(v8dir, "authoritySnapshotStage1Legacy.js")), /comparison_evidence/);
+      // The only new entry divergence from V7 is the defensive role-context
+      // persistence check, not a new action or changed admission flow.
+      const entry = source(path.join(v8dir, "entry.ts"));
+      assert.match(entry, /signedArchitecturePriorityContext/);
+      assert.match(entry, /canonicalRepairRowsPersisted/);
+      assert.match(entry, /verifyAuthoritySeal\(signedDocument, secret, proof\)/);
     }
     if (canonical === "getCustomerScanResult") {
       assert.match(source(path.join(v8dir, "projectionStage1Legacy.js")), /sanitizeComparisonEvidence/);

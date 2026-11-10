@@ -222,30 +222,47 @@ def _score(
     role_bonus: int,
 ) -> int:
     score = ACTION_RANK[action_priority] * 1000 + SEVERITY_RANK[base_severity] * 100
+
+    # Within one action band and technical severity tier, architectural role
+    # takes precedence over sampling breadth, confidence, and repeat volume.
+    # This prevents a large batch of low-level leaves from narrowly reversing
+    # a structural/business-critical page. All contextual additions stay below
+    # 100, so lower technical severity never outranks a higher one in-band.
+    roles = context.get("architecture_role_counts") or {}
+    if roles.get("structural") or roles.get("business_critical"):
+        role_tier = 60
+    elif roles.get("commercial_leaf"):
+        role_tier = 22
+    elif roles.get("support"):
+        role_tier = 8
+    else:
+        role_tier = 0
+    score += role_tier
+    score += min(4, max(0, int(role_bonus or 0)) // 6)
+
     searchable = context.get("searchable_coverage")
     checked = context.get("checked_coverage")
     search_facing = bool(context.get("search_facing"))
     coverage = searchable if search_facing and searchable is not None else checked
     if coverage is not None:
         try:
-            score += round(min(1.0, max(0.0, float(coverage))) * 40)
-        except (TypeError, ValueError):
+            score += round(min(1.0, max(0.0, float(coverage))) * 10)
+        except (TypeError, ValueError, OverflowError):
             pass
-
-    # Architecture replaces the old linear "important page" bonus. Structural
-    # and business-critical surfaces receive strong bounded credit, while the
-    # marginal value of repeated product/activity leaves saturates quickly.
-    score += max(0, int(role_bonus or 0))
 
     confidence = fix.get("evidence_confidence")
     if confidence is None:
         confidence = fix.get("confidence_score")
     try:
-        score += round(max(0.0, min(100.0, float(confidence or 0))) / 10)
-    except (TypeError, ValueError):
+        score += round(max(0.0, min(100.0, float(confidence or 0))) * 3 / 100)
+    except (TypeError, ValueError, OverflowError):
         pass
     if context.get("shared_repair_confirmed") is True and int(context.get("affected_checked") or 0) >= 2:
         score += 15
+
+    # Maximum within-tier addition: role 60 + saturation 4 + coverage 10
+    # + confidence 3 + confirmed shared repair 15 = 92 < 100.
+
     return score
 
 
@@ -271,6 +288,7 @@ def annotate_calibrated_repair_priority(fix: dict[str, Any], pages: list[dict[st
         checked_eligible=context.get("checked_eligible"),
         **identity_context,
     )
+    context["architecture_role_counts"] = architecture.get("role_counts") or {}
     score = _score(
         base_severity,
         action_priority,
@@ -289,6 +307,7 @@ def annotate_calibrated_repair_priority(fix: dict[str, Any], pages: list[dict[st
         "action_priority_score": score,
         "architecture_priority_version": architecture.get("version"),
         "architecture_role_counts": architecture.get("role_counts"),
+        "architecture_score_policy_version": "architecture_score_policy_v2_role_first",
         "architecture_role_bonus": architecture.get("role_bonus"),
         "repair_reach": architecture.get("repair_reach"),
     })

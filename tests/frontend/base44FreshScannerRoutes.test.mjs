@@ -84,6 +84,7 @@ test("fresh Base44 routes preserve canonical source outside preview, Stage 3, an
       "customerPreviewSealStage1Legacy.js",
       "stage3V7Delivery.js",
       "stage3V7DeliveryStrict.js",
+      "signedArchitectureContext.js",
     ]],
     ["getCustomerScanResult", [
       "comparisonEvidence.js",
@@ -92,6 +93,7 @@ test("fresh Base44 routes preserve canonical source outside preview, Stage 3, an
       "customerPreviewSeal.js",
       "projectionStage1Legacy.js",
       "stage3V7Delivery.js",
+      "signedArchitectureContext.js",
     ]],
   ]);
   const intentionallyChangedInheritedFiles = new Map([

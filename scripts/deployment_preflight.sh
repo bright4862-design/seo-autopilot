@@ -131,6 +131,42 @@ if [ -f "admission-coordinator/main.py" ]; then
 fi
 
 echo
+echo "=== 1d. Closed-barrier ScanRun schema migration ==="
+SCHEMA_MIGRATION="scripts/migrate-scanrun-comparison-evidence.sh"
+SCHEMA_PREFLIGHT="scripts/base44-v8-preflight.sh"
+SCHEMA_CLIENT="scripts/base44_named_schema_client.mjs"
+SCHEMA_PARITY="scripts/base44_authority_schema.mjs"
+need_file "$SCHEMA_MIGRATION" "named ScanRun schema migration present"
+need_file "$SCHEMA_PREFLIGHT" "read-only Base44 V8 preflight present"
+need_file "$SCHEMA_CLIENT" "named entity-schema client present"
+need_file "$SCHEMA_PARITY" "authority schema parity checker present"
+if [ -f "$SCHEMA_MIGRATION" ]; then
+  has 'APPLY-SCANRUN-COMPARISON-EVIDENCE:' "$SCHEMA_MIGRATION" && pass "schema apply confirmation is bound to source and generation" || fail "schema apply confirmation is not bound"
+  has 'ROLLBACK-SCANRUN-COMPARISON-EVIDENCE:' "$SCHEMA_MIGRATION" && pass "schema rollback confirmation is bound to source and generation" || fail "schema rollback confirmation is not bound"
+  has 'verify-zero-admission-obligations' "$SCHEMA_MIGRATION" && pass "schema migration rechecks the closed barrier" || fail "schema migration does not recheck the closed barrier"
+  if grep -q 'entities[[:space:]]\+push' "$SCHEMA_MIGRATION" || grep -q 'entityNameToSchema:' "$SCHEMA_CLIENT"; then
+    fail "schema migration contains the prohibited bulk entity sync"
+  else
+    pass "schema migration does not bulk-push entities"
+  fi
+  APPLY_LINE="$(grep -n 'base44_named_schema_client.mjs" put' "$SCHEMA_MIGRATION" | head -1 | cut -d: -f1)"
+  BARRIER_LINE="$(grep -n 'verify-zero-admission-obligations' "$SCHEMA_MIGRATION" | head -1 | cut -d: -f1)"
+  if [ -n "$BARRIER_LINE" ] && [ -n "$APPLY_LINE" ] && [ "$BARRIER_LINE" -lt "$APPLY_LINE" ]; then
+    pass "schema write stays behind the closed-barrier proof"
+  else
+    fail "schema write is not behind the closed-barrier proof"
+  fi
+fi
+if [ -f "$SCHEMA_PREFLIGHT" ]; then
+  has 'READONLY-BASE44-V8-PREFLIGHT:' "$SCHEMA_PREFLIGHT" && pass "Base44 V8 preflight confirmation is bound to source" || fail "Base44 V8 preflight confirmation is not bound"
+  if grep -q 'entities[[:space:]]\+push\|secrets set\|named_schema_client.mjs" put' "$SCHEMA_PREFLIGHT"; then
+    fail "Base44 V8 preflight contains a mutation"
+  else
+    pass "Base44 V8 preflight is read-only"
+  fi
+fi
+
+echo
 echo "=== 2. Worker deployment artifact ==="
 need_file "Dockerfile" "Dockerfile present"
 need_file "$WORKER_BUILD" "worker build artifact present"

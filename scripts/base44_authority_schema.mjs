@@ -227,7 +227,10 @@ export function liveDiffIsOnlyComparisonEvidence(before, after, action, approved
   const right = structuredClone(after);
   if (action === "apply") {
     const added = right.properties[COMPARISON_EVIDENCE_FIELD];
-    if (!added || Object.hasOwn(left.properties, COMPARISON_EVIDENCE_FIELD) || !same(added, approvedProperty)) {
+    // Base44 may echo the new property without description, default, or
+    // additionalProperties. Those omissions are the same contract.
+    const echoed = normalizeProperty(approvedProperty, added);
+    if (!added || Object.hasOwn(left.properties, COMPARISON_EVIDENCE_FIELD) || !same(echoed, approvedProperty)) {
       return false;
     }
     delete right.properties[COMPARISON_EVIDENCE_FIELD];
@@ -422,6 +425,13 @@ if (invoked) {
       const ok = liveDiffIsOnlyComparisonEvidence(before, after, action);
       process.stdout.write(`SCHEMA_LIVE_DIFF action=${action} only_comparison_evidence=${ok ? "yes" : "no"}\n`);
       process.exit(ok ? 0 : 1);
+    } else if (command === "verify-others") {
+      const assessment = assessInventory(loadRemoteInventory(process.argv[3]));
+      const others = assessment.reports.filter((report) => report.entity !== "ScanRun");
+      for (const report of others) process.stdout.write(`${formatReport(report)}\n`);
+      const ok = others.length === 2 && others.every((report) => report.status === "match");
+      process.stdout.write(`SCHEMA_OTHER_ENTITIES match=${ok ? "yes" : "no"}\n`);
+      process.exit(ok ? 0 : 1);
     } else if (command === "write-live-mutation") {
       writeLiveMutation(process.argv[3], process.argv[4], process.argv[5]);
     } else if (command === "extract-scanrun") {
@@ -474,7 +484,7 @@ if (invoked) {
       }
       process.stdout.write("HMAC_CONTRACT_SOURCE=match\n");
     } else {
-      fail("usage: classify|decide|verify-live|write-live-mutation|extract-scanrun|function-inventory|secret-present|signing-refs|hmac-contract");
+      fail("usage: classify|decide|verify-live|verify-others|write-live-mutation|extract-scanrun|function-inventory|secret-present|signing-refs|hmac-contract");
     }
   } catch (error) {
     fail(error instanceof Error ? error.message : "schema parity failed");

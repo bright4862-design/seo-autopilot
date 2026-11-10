@@ -98,6 +98,11 @@ test("live schema mutation changes only comparison_evidence", () => {
   const tampered = structuredClone(applied);
   tampered.properties.website_url.description = "rewritten";
   assert.equal(liveDiffIsOnlyComparisonEvidence(live, tampered, "apply", approved), false);
+  const echoed = structuredClone(applied);
+  delete echoed.properties.comparison_evidence.description;
+  delete echoed.properties.comparison_evidence.default;
+  delete echoed.properties.comparison_evidence.additionalProperties;
+  assert.equal(liveDiffIsOnlyComparisonEvidence(live, echoed, "apply", approved), true);
 });
 
 test("stored comparison evidence is empty only for missing or blank values", () => {
@@ -479,7 +484,7 @@ test("rollback deletes only comparison_evidence after a clear row scan", async (
       if (url.pathname.endsWith("/entities/ScanRun/v2/list")) {
         response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify({
-          items: [{ id: "empty-a", comparison_evidence: {} }, { id: "empty-b" }],
+          items: [{ id: "empty-a", comparison_evidence: {} }, { id: "empty-b", comparison_evidence: null }],
           has_more: false,
         }));
         return;
@@ -552,6 +557,104 @@ test("rollback is refused with no write when a row already stores comparison evi
   } finally {
     server.close();
     rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a stored comparison_evidence on an unfinished page cannot be overridden", async () => {
+  const fixture = migrationFixture();
+  const sha = "3".repeat(40);
+  const schemas = localInventory();
+  const puts = [];
+  const lists = [];
+  const server = await listen((request, response) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => {
+      const url = new URL(request.url, "http://127.0.0.1");
+      if (request.method === "PUT") puts.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      if (url.pathname.endsWith("/entities/ScanRun/v2/list")) {
+        lists.push(url.search);
+        if (url.searchParams.get("cursor")) {
+          response.writeHead(500);
+          response.end("{}");
+          return;
+        }
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({
+          items: [{ id: "kept", comparison_evidence: { version: "scan_comparison_evidence_v1_missing_h1" } }],
+          has_more: true,
+          next_cursor: "page-2",
+        }));
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        schemas: Object.entries(schemas).map(([entity_name, entity_schema]) => ({ entity_name, entity_schema })),
+      }));
+    });
+  });
+  writeFileSync(join(fixture.root, "auth.json"), JSON.stringify({ accessToken: "3".repeat(40) }));
+  try {
+    const result = await run("bash", ["scripts/migrate-scanrun-comparison-evidence.sh"], {
+      cwd: fixture.root,
+      env: migrationEnv(fixture, sha, `ROLLBACK-SCANRUN-COMPARISON-EVIDENCE-UNVERIFIED-ROWS:${sha}:77`, server.address().port),
+    });
+    assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /state=present/);
+    assert.doesNotMatch(result.stdout, /state=unverified/);
+    assert.match(result.stderr, /stored comparison_evidence/);
+    assert.equal(puts.length, 0);
+    assert.equal(lists.length, 1);
+  } finally {
+    server.close();
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("every comparison_evidence page requests the field, and a missing key is not empty", async () => {
+  const seen = [];
+  const server = await listen((request, response) => {
+    const url = new URL(request.url, "http://127.0.0.1");
+    seen.push(`${url.pathname}${url.search}`);
+    response.writeHead(200, { "content-type": "application/json" });
+    if (!url.searchParams.get("cursor")) {
+      response.end(JSON.stringify({
+        items: [{ id: "a", comparison_evidence: {} }],
+        has_more: true,
+        next_cursor: "page-2",
+      }));
+      return;
+    }
+    response.end(JSON.stringify({
+      items: [{ id: "b" }],
+      has_more: false,
+    }));
+  });
+  const root = mkdtempSync(join(tmpdir(), "evidence-pages-"));
+  const auth = join(root, "auth.json");
+  writeFileSync(auth, JSON.stringify({ accessToken: "p".repeat(40) }));
+  try {
+    const result = await run("node", ["scripts/base44_named_schema_client.mjs", "evidence-rows"], {
+      env: {
+        ...process.env,
+        BASE44_SCHEMA_API_FIXTURE: `http://127.0.0.1:${server.address().port}`,
+        BASE44_AUTH_FILE: auth,
+        BASE44_API_KEY: "",
+        GITHUB_ACTIONS: "",
+      },
+    });
+    assert.equal(result.status, 4, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /state=unverified reason=bad_item/);
+    assert.equal(seen.length, 2);
+    for (const url of seen) {
+      assert.match(url, /fields=comparison_evidence/);
+      assert.match(url, /limit=500/);
+      assert.match(url, /sort=created_date/);
+    }
+    assert.match(seen[1], /cursor=page-2/);
+  } finally {
+    server.close();
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

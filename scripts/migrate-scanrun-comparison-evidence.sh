@@ -14,9 +14,11 @@
 # from the live pre-image. A failed post-check, which requires the before and
 # after documents to differ by that property alone, restores the pre-image.
 #
-# Rollback also reads ScanRun rows, requesting only comparison_evidence, and
-# stops when any row has a stored value. A list that cannot be finished does
-# not count as proof: rollback then requires
+# Rollback also reads ScanRun rows, requesting comparison_evidence on every
+# page, and stops at the first stored value. A later page failure cannot turn
+# that find into an unverified scan. A list that cannot be finished, and has
+# not already found a stored value, does not count as proof: rollback then
+# requires
 # ROLLBACK-SCANRUN-COMPARISON-EVIDENCE-UNVERIFIED-ROWS:<sha>:<generation>.
 # That override never applies when a stored value was actually returned.
 set -euo pipefail
@@ -121,7 +123,8 @@ node "$REPO_ROOT/scripts/base44_authority_schema.mjs" write-live-mutation "$ACTI
 node "$REPO_ROOT/scripts/base44_named_schema_client.mjs" put "$TMP/next.json"
 if ! node "$REPO_ROOT/scripts/base44_named_schema_client.mjs" fetch "$TMP/after.json" \
   || ! node "$REPO_ROOT/scripts/base44_authority_schema.mjs" extract-scanrun "$TMP/after.json" "$TMP/after-scan.json" \
-  || ! node "$REPO_ROOT/scripts/base44_authority_schema.mjs" verify-live "$ACTION" "$TMP/preimage.json" "$TMP/after-scan.json"; then
+  || ! node "$REPO_ROOT/scripts/base44_authority_schema.mjs" verify-live "$ACTION" "$TMP/preimage.json" "$TMP/after-scan.json" \
+  || ! node "$REPO_ROOT/scripts/base44_authority_schema.mjs" verify-others "$TMP/after.json"; then
   echo "SCHEMA_MIGRATION_VERIFY_FAILED restoring the pre-write ScanRun schema" >&2
   if node "$REPO_ROOT/scripts/base44_named_schema_client.mjs" put "$TMP/preimage.json"; then
     echo "SCHEMA_MIGRATION_PREIMAGE_RESTORED entity=ScanRun" >&2

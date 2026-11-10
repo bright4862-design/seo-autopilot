@@ -167,25 +167,30 @@ function unverifiedEvidence(reason) {
   process.exit(4);
 }
 
-// Read-only page through ScanRun. Only comparison_evidence is requested.
-// A finished list with no stored value exits 0. Any stored value exits 3.
-// A list that cannot be finished exits 4 and must not be treated as proof.
+function presentEvidence(pages, examined) {
+  process.stdout.write(
+    `SCANRUN_COMPARISON_EVIDENCE_ROWS state=present pages=${pages} examined=${examined} nonempty=1\n`,
+  );
+  process.exit(3);
+}
+
+// Read-only page through ScanRun. fields, limit, and sort go on every page,
+// including cursor continuations, so a later page cannot drop the field and
+// look empty. The first stored value exits 3 immediately. Exit 4 is only for
+// a scan that has not yet seen a stored value and cannot be finished. A
+// record that omits comparison_evidence after it was requested is not empty.
 async function evidenceRows() {
   const id = appId();
   const seenCursors = new Set();
   let cursor = "";
   let pages = 0;
   let examined = 0;
-  let nonempty = 0;
   while (pages < EVIDENCE_PAGE_CAP) {
     const params = new URLSearchParams();
-    if (cursor) {
-      params.set("cursor", cursor);
-    } else {
-      params.set("fields", "comparison_evidence");
-      params.set("limit", String(EVIDENCE_PAGE_LIMIT));
-      params.set("sort", "created_date");
-    }
+    params.set("fields", "comparison_evidence");
+    params.set("limit", String(EVIDENCE_PAGE_LIMIT));
+    params.set("sort", "created_date");
+    if (cursor) params.set("cursor", cursor);
     let result;
     try {
       result = await request("GET", `/api/apps/${id}/entities/ScanRun/v2/list?${params}`);
@@ -198,16 +203,17 @@ async function evidenceRows() {
     }
     pages += 1;
     for (const item of page.items) {
-      if (!item || typeof item !== "object" || Array.isArray(item)) unverifiedEvidence("bad_item");
+      if (!item || typeof item !== "object" || Array.isArray(item) || !Object.hasOwn(item, "comparison_evidence")) {
+        unverifiedEvidence("bad_item");
+      }
       examined += 1;
-      if (!comparisonEvidenceIsEmpty(item.comparison_evidence)) nonempty += 1;
+      if (!comparisonEvidenceIsEmpty(item.comparison_evidence)) presentEvidence(pages, examined);
     }
     if (!page.has_more) {
-      const state = nonempty > 0 ? "present" : "clear";
       process.stdout.write(
-        `SCANRUN_COMPARISON_EVIDENCE_ROWS state=${state} pages=${pages} examined=${examined} nonempty=${nonempty}\n`,
+        `SCANRUN_COMPARISON_EVIDENCE_ROWS state=clear pages=${pages} examined=${examined} nonempty=0\n`,
       );
-      process.exit(nonempty > 0 ? 3 : 0);
+      process.exit(0);
     }
     const next = page.next_cursor;
     if (typeof next !== "string" || next.length < 1 || next.length > 8000 || seenCursors.has(next)) {

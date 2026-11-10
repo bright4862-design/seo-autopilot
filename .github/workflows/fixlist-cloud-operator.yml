@@ -34,13 +34,16 @@ on:
           - open-claim-barrier
           - acceptance-only
           - sync-base44-signing-key
+          - verify-base44-v8-preflight
+          - apply-scanrun-comparison-evidence
+          - rollback-scanrun-comparison-evidence
       revision:
         description: "Exact Cloud Run revision for promote/rollback/activate. Prefilled for the currently verified Standard 150 worker candidate."
         required: false
         default: "fixlist-standard150-worker-00011-v7m"
         type: string
       confirm:
-        description: "Exact operation-specific confirmation shown in the release runbook"
+        description: "Exact operation confirmation. V8 preflight: READONLY-BASE44-V8-PREFLIGHT:<main-sha>. Schema apply: APPLY-SCANRUN-COMPARISON-EVIDENCE:<main-sha>:<generation>. Schema rollback: ROLLBACK-SCANRUN-COMPARISON-EVIDENCE:<main-sha>:<generation>. Rollback when the row scan cannot finish: ROLLBACK-SCANRUN-COMPARISON-EVIDENCE-UNVERIFIED-ROWS:<main-sha>:<generation>."
         required: true
         type: string
       barrier_generation:
@@ -135,7 +138,7 @@ env:
 
 jobs:
   operate:
-    if: github.event_name == 'workflow_dispatch' && github.actor == 'bright4862-design' && inputs.operation != 'verify-admission-identity' && inputs.operation != 'diagnose-ironwood-access'
+    if: github.event_name == 'workflow_dispatch' && github.actor == 'bright4862-design' && inputs.operation != 'verify-admission-identity' && inputs.operation != 'diagnose-ironwood-access' && inputs.operation != 'verify-base44-v8-preflight' && inputs.operation != 'apply-scanrun-comparison-evidence' && inputs.operation != 'rollback-scanrun-comparison-evidence'
     name: ${{ inputs.operation }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -385,7 +388,7 @@ jobs:
           OPERATION=verify-worker-runtime-revision bash ./scripts/fixlist-cloud-operator.sh
 
       - name: Run allowlisted worker operation
-        if: inputs.operation != 'deploy-dispatch-gateway' && inputs.operation != 'deploy-admission-coordinator' && inputs.operation != 'build-worker-candidate' && inputs.operation != 'sync-base44-signing-key' && inputs.operation != 'verify-serving-worker-release' && inputs.operation != 'verify-staged-worker-release'
+        if: inputs.operation != 'deploy-dispatch-gateway' && inputs.operation != 'deploy-admission-coordinator' && inputs.operation != 'build-worker-candidate' && inputs.operation != 'sync-base44-signing-key' && inputs.operation != 'verify-serving-worker-release' && inputs.operation != 'verify-staged-worker-release' && inputs.operation != 'verify-base44-v8-preflight' && inputs.operation != 'apply-scanrun-comparison-evidence' && inputs.operation != 'rollback-scanrun-comparison-evidence'
         env:
           OPERATION: ${{ inputs.operation }}
           CONFIRM: ${{ inputs.confirm }}
@@ -1718,6 +1721,195 @@ jobs:
       - name: Run protected GCP-to-Base44 key synchronization
         shell: bash
         run: bash scripts/sync-base44-signing-key.sh
+
+  verify-base44-v8-preflight:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.actor == 'bright4862-design' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.operation == 'verify-base44-v8-preflight'
+    name: Read-only Base44 V8 preflight
+    environment: fixlist-production-owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact main SHA
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact clean main and the read-only confirmation
+        shell: /bin/bash {0}
+        env:
+          INPUT_CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          test "${{ github.actor }}" = "bright4862-design"
+          test "${{ github.ref }}" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          test "$(git rev-parse origin/main)" = "${{ github.sha }}"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          test "$INPUT_CONFIRM" = "READONLY-BASE44-V8-PREFLIGHT:${{ github.sha }}"
+          /bin/bash -n scripts/base44-v8-preflight.sh
+          /bin/bash -n scripts/authenticate-base44-owner-session.sh
+          test -z "${BASE44_API_KEY:-}"
+
+      - name: Set up pinned Node runtime
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20.19.5"
+
+      - name: Authenticate Base44 owner with ephemeral device code
+        shell: /bin/bash {0}
+        env:
+          BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
+        run: /bin/bash scripts/authenticate-base44-owner-session.sh
+
+      - name: Authenticate keylessly as the cloud operator
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Read Base44 package, schema, and signing-reference identity
+        shell: /bin/bash {0}
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          SOURCE_SHA: ${{ github.sha }}
+          BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
+        run: /bin/bash scripts/base44-v8-preflight.sh
+
+      - name: Remove ephemeral Base44 owner session
+        if: ${{ always() }}
+        shell: /bin/bash {0}
+        run: rm -rf "$HOME/.base44"
+
+  migrate-scanrun-comparison-evidence:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.actor == 'bright4862-design' &&
+      github.ref == 'refs/heads/main' &&
+      (inputs.operation == 'apply-scanrun-comparison-evidence' || inputs.operation == 'rollback-scanrun-comparison-evidence')
+    name: Closed-barrier ScanRun comparison_evidence migration
+    environment: fixlist-production-owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact main SHA
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact clean main and the closed-barrier confirmation
+        shell: /bin/bash {0}
+        env:
+          INPUT_OPERATION: ${{ inputs.operation }}
+          INPUT_CONFIRM: ${{ inputs.confirm }}
+          INPUT_GENERATION: ${{ inputs.barrier_generation }}
+          INPUT_PRIOR_MODE: ${{ inputs.barrier_prior_mode }}
+        run: |
+          set -euo pipefail
+          test "${{ github.actor }}" = "bright4862-design"
+          test "${{ github.ref }}" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          test "$(git rev-parse origin/main)" = "${{ github.sha }}"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          test "$INPUT_PRIOR_MODE" = "closed"
+          case "$INPUT_OPERATION" in
+            apply-scanrun-comparison-evidence)
+              test "$INPUT_CONFIRM" = "APPLY-SCANRUN-COMPARISON-EVIDENCE:${{ github.sha }}:${INPUT_GENERATION}"
+              ;;
+            rollback-scanrun-comparison-evidence)
+              test "$INPUT_CONFIRM" = "ROLLBACK-SCANRUN-COMPARISON-EVIDENCE:${{ github.sha }}:${INPUT_GENERATION}" \
+                || test "$INPUT_CONFIRM" = "ROLLBACK-SCANRUN-COMPARISON-EVIDENCE-UNVERIFIED-ROWS:${{ github.sha }}:${INPUT_GENERATION}"
+              ;;
+            *) echo "Refusing unknown schema operation" >&2; exit 2 ;;
+          esac
+          /bin/bash -n scripts/migrate-scanrun-comparison-evidence.sh
+          /bin/bash -n scripts/authenticate-base44-owner-session.sh
+          /bin/bash -n scripts/fixlist-cloud-operator.sh
+          test -z "${BASE44_API_KEY:-}"
+
+      - name: Set up pinned Node runtime
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20.19.5"
+
+      - name: Authenticate keylessly as the admission operator
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Mint coordinator operator identity token
+        id: operator-id-token
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ env.ADMISSION_OPERATOR_AUDIENCE }}
+          id_token_include_email: true
+          create_credentials_file: false
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Prove the closed barrier before any Base44 sign-in
+        shell: /bin/bash {0}
+        env:
+          OPERATION: verify-zero-admission-obligations
+          CONFIRM: VERIFY-ZERO-ADMISSION:${{ github.sha }}:${{ inputs.barrier_generation }}
+          SOURCE_SHA: ${{ github.sha }}
+          BARRIER_EXPECTED_GENERATION: ${{ inputs.barrier_generation }}
+          BARRIER_EXPECTED_PRIOR_MODE: closed
+          CHANGE_TICKET: ${{ inputs.change_ticket }}
+          CUTOVER_REASON: ${{ inputs.reason }}
+          GCP_OPERATOR_SERVICE_ACCOUNT: ${{ env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT }}
+          FIXLIST_OPERATOR_ID_TOKEN: ${{ steps.operator-id-token.outputs.id_token }}
+          FIXLIST_OPERATOR_TOKEN_AUDIENCE: ${{ env.ADMISSION_OPERATOR_AUDIENCE }}
+        run: /bin/bash scripts/fixlist-cloud-operator.sh
+
+      - name: Authenticate Base44 owner with ephemeral device code
+        shell: /bin/bash {0}
+        env:
+          BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
+        run: /bin/bash scripts/authenticate-base44-owner-session.sh
+
+      - name: Apply or roll back only ScanRun.comparison_evidence
+        shell: /bin/bash {0}
+        env:
+          ACTION: ${{ inputs.operation == 'rollback-scanrun-comparison-evidence' && 'rollback' || 'apply' }}
+          CONFIRM: ${{ inputs.confirm }}
+          SOURCE_SHA: ${{ github.sha }}
+          BARRIER_EXPECTED_GENERATION: ${{ inputs.barrier_generation }}
+          BARRIER_EXPECTED_PRIOR_MODE: ${{ inputs.barrier_prior_mode }}
+          CHANGE_TICKET: ${{ inputs.change_ticket }}
+          CUTOVER_REASON: ${{ inputs.reason }}
+          BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
+          GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT: ${{ env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT }}
+          FIXLIST_OPERATOR_ID_TOKEN: ${{ steps.operator-id-token.outputs.id_token }}
+          FIXLIST_OPERATOR_TOKEN_AUDIENCE: ${{ env.ADMISSION_OPERATOR_AUDIENCE }}
+        run: /bin/bash scripts/migrate-scanrun-comparison-evidence.sh
+
+      - name: Remove ephemeral Base44 owner session
+        if: ${{ always() }}
+        shell: /bin/bash {0}
+        run: rm -rf "$HOME/.base44"
 
 # capacity diagnostic refresh: 2026-08-17T19:49Z
 # staged worker trigger checkpoint: 2026-08-21T00:46+02:00

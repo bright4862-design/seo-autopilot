@@ -43,7 +43,7 @@ on:
         default: "fixlist-standard150-worker-00011-v7m"
         type: string
       confirm:
-        description: "Exact operation confirmation. V8 preflight: READONLY-BASE44-V8-PREFLIGHT:<main-sha>. Schema apply: APPLY-SCANRUN-COMPARISON-EVIDENCE:<main-sha>:<generation>. Schema rollback: ROLLBACK-SCANRUN-COMPARISON-EVIDENCE:<main-sha>:<generation>."
+        description: "Exact operation confirmation. V8 preflight: READONLY-BASE44-V8-PREFLIGHT:<main-sha>. Schema apply: APPLY-SCANRUN-COMPARISON-EVIDENCE:<main-sha>:<generation>. Schema rollback: ROLLBACK-SCANRUN-COMPARISON-EVIDENCE:<main-sha>:<generation>. Rollback when the row scan cannot finish: ROLLBACK-SCANRUN-COMPARISON-EVIDENCE-UNVERIFIED-ROWS:<main-sha>:<generation>."
         required: true
         type: string
       barrier_generation:
@@ -1830,7 +1830,8 @@ jobs:
               test "$INPUT_CONFIRM" = "APPLY-SCANRUN-COMPARISON-EVIDENCE:${{ github.sha }}:${INPUT_GENERATION}"
               ;;
             rollback-scanrun-comparison-evidence)
-              test "$INPUT_CONFIRM" = "ROLLBACK-SCANRUN-COMPARISON-EVIDENCE:${{ github.sha }}:${INPUT_GENERATION}"
+              test "$INPUT_CONFIRM" = "ROLLBACK-SCANRUN-COMPARISON-EVIDENCE:${{ github.sha }}:${INPUT_GENERATION}" \
+                || test "$INPUT_CONFIRM" = "ROLLBACK-SCANRUN-COMPARISON-EVIDENCE-UNVERIFIED-ROWS:${{ github.sha }}:${INPUT_GENERATION}"
               ;;
             *) echo "Refusing unknown schema operation" >&2; exit 2 ;;
           esac

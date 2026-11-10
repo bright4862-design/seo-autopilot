@@ -11,6 +11,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { comparisonEvidenceIsEmpty } from "./base44_authority_schema.mjs";
 
 const ENTITY_NAME = "ScanRun";
 const AUTHORITY_ENTITIES = ["ScanRun", "FixList", "FixItem"];
@@ -157,6 +158,67 @@ async function fetchInventory(destination) {
   process.stdout.write(`SCHEMA_INVENTORY entities=${AUTHORITY_ENTITIES.join(",")}\n`);
 }
 
+const EVIDENCE_PAGE_LIMIT = 500;
+const EVIDENCE_PAGE_CAP = 40;
+
+function unverifiedEvidence(reason) {
+  const safe = String(reason || "unverified").replace(/[^a-z0-9_]/g, "").slice(0, 40) || "unverified";
+  process.stdout.write(`SCANRUN_COMPARISON_EVIDENCE_ROWS state=unverified reason=${safe}\n`);
+  process.exit(4);
+}
+
+// Read-only page through ScanRun. Only comparison_evidence is requested.
+// A finished list with no stored value exits 0. Any stored value exits 3.
+// A list that cannot be finished exits 4 and must not be treated as proof.
+async function evidenceRows() {
+  const id = appId();
+  const seenCursors = new Set();
+  let cursor = "";
+  let pages = 0;
+  let examined = 0;
+  let nonempty = 0;
+  while (pages < EVIDENCE_PAGE_CAP) {
+    const params = new URLSearchParams();
+    if (cursor) {
+      params.set("cursor", cursor);
+    } else {
+      params.set("fields", "comparison_evidence");
+      params.set("limit", String(EVIDENCE_PAGE_LIMIT));
+      params.set("sort", "created_date");
+    }
+    let result;
+    try {
+      result = await request("GET", `/api/apps/${id}/entities/ScanRun/v2/list?${params}`);
+    } catch {
+      unverifiedEvidence("request_failed");
+    }
+    const page = result.parsed;
+    if (result.status !== 200 || !page || !Array.isArray(page.items) || typeof page.has_more !== "boolean") {
+      unverifiedEvidence(`http_${result.status}`);
+    }
+    pages += 1;
+    for (const item of page.items) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) unverifiedEvidence("bad_item");
+      examined += 1;
+      if (!comparisonEvidenceIsEmpty(item.comparison_evidence)) nonempty += 1;
+    }
+    if (!page.has_more) {
+      const state = nonempty > 0 ? "present" : "clear";
+      process.stdout.write(
+        `SCANRUN_COMPARISON_EVIDENCE_ROWS state=${state} pages=${pages} examined=${examined} nonempty=${nonempty}\n`,
+      );
+      process.exit(nonempty > 0 ? 3 : 0);
+    }
+    const next = page.next_cursor;
+    if (typeof next !== "string" || next.length < 1 || next.length > 8000 || seenCursors.has(next)) {
+      unverifiedEvidence("bad_cursor");
+    }
+    seenCursors.add(next);
+    cursor = next;
+  }
+  unverifiedEvidence("page_cap");
+}
+
 async function putScanRun(schemaFile) {
   const schema = JSON.parse(fs.readFileSync(schemaFile, "utf8"));
   if (schema?.name !== ENTITY_NAME || !schema.properties || typeof schema.properties !== "object") {
@@ -179,11 +241,18 @@ const invoked = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPa
 if (invoked) {
   const command = process.argv[2] || "";
   const target = process.argv[3] || "";
-  if (!target || target.includes("\0")) fail("Refusing schema request: destination is missing.");
   try {
-    if (command === "fetch") await fetchInventory(target);
-    else if (command === "put") await putScanRun(target);
-    else fail("usage: fetch <inventory.json> | put <scanrun-schema.json>");
+    if (command === "evidence-rows") {
+      await evidenceRows();
+    } else if (!target || target.includes("\0")) {
+      fail("Refusing schema request: destination is missing.");
+    } else if (command === "fetch") {
+      await fetchInventory(target);
+    } else if (command === "put") {
+      await putScanRun(target);
+    } else {
+      fail("usage: fetch <inventory.json> | put <scanrun-schema.json> | evidence-rows");
+    }
   } catch (error) {
     if (error && typeof error === "object" && error.code === "ERR_INVALID_URL") {
       fail("Refusing Base44 schema request: URL is invalid.");

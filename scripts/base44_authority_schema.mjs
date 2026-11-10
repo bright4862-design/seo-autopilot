@@ -21,6 +21,17 @@ export const ENTITIES_DIR = path.join(REPO_ROOT, "base44", "entities");
 
 export const AUTHORITY_ENTITIES = ["ScanRun", "FixList", "FixItem"];
 export const COMPARISON_EVIDENCE_FIELD = "comparison_evidence";
+
+// A stored row blocks rollback only when this field carries a value. Missing,
+// null, blank text, and {} are the platform's empty states. Any other value,
+// including an object with keys, is treated as evidence that must stay readable.
+export function comparisonEvidenceIsEmpty(value) {
+  if (value == null) return true;
+  if (typeof value === "string") return value.trim() === "";
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === "object") return Object.keys(value).length === 0;
+  return false;
+}
 export const SERVER_MANAGED_PROPERTIES = new Set([
   "id",
   "created_date",
@@ -168,15 +179,68 @@ export function schemaDigest(schema) {
   };
 }
 
-export function schemaForAction(action, entitiesDir = ENTITIES_DIR) {
-  const local = readLocalSchema("ScanRun", entitiesDir);
-  if (action === "apply") return local;
+export function approvedComparisonEvidenceProperty(entitiesDir = ENTITIES_DIR) {
+  const property = readLocalSchema("ScanRun", entitiesDir).properties?.[COMPARISON_EVIDENCE_FIELD];
+  if (!property || property.type !== "object" || property.additionalProperties !== true) {
+    throw new Error("Local comparison_evidence property is not the approved object shape");
+  }
+  if (JSON.stringify(property.default) !== "{}") {
+    throw new Error("Local comparison_evidence default is not an empty object");
+  }
+  if (property.rls?.write?.user_condition?.role !== "admin") {
+    throw new Error("Local comparison_evidence write rule is not admin-only");
+  }
+  return structuredClone(property);
+}
+
+// Copy the live schema and change only comparison_evidence. Remote-only
+// annotations, platform fields, and property text stay on the document that
+// was fetched. The approved property is inserted as stored in source; it is
+// not a second copy of the whole local entity.
+export function mutateLiveScanRun(preimage, action, approvedProperty = approvedComparisonEvidenceProperty()) {
+  if (!asObject(preimage) || !asObject(preimage.properties)) {
+    throw new Error("Live ScanRun schema is not an object with properties");
+  }
+  const next = structuredClone(preimage);
+  if (action === "apply") {
+    if (Object.hasOwn(next.properties, COMPARISON_EVIDENCE_FIELD)) {
+      throw new Error("Refusing apply: live ScanRun already has comparison_evidence");
+    }
+    next.properties[COMPARISON_EVIDENCE_FIELD] = structuredClone(approvedProperty);
+    return next;
+  }
   if (action === "rollback") {
-    const copy = structuredClone(local);
-    delete copy.properties[COMPARISON_EVIDENCE_FIELD];
-    return copy;
+    if (!Object.hasOwn(next.properties, COMPARISON_EVIDENCE_FIELD)) {
+      throw new Error("Refusing rollback: live ScanRun has no comparison_evidence");
+    }
+    delete next.properties[COMPARISON_EVIDENCE_FIELD];
+    return next;
   }
   throw new Error(`Refusing schema materialization for ${action}`);
+}
+
+export function liveDiffIsOnlyComparisonEvidence(before, after, action, approvedProperty = approvedComparisonEvidenceProperty()) {
+  if (!asObject(before) || !asObject(after) || !asObject(before.properties) || !asObject(after.properties)) {
+    return false;
+  }
+  const left = structuredClone(before);
+  const right = structuredClone(after);
+  if (action === "apply") {
+    const added = right.properties[COMPARISON_EVIDENCE_FIELD];
+    if (!added || Object.hasOwn(left.properties, COMPARISON_EVIDENCE_FIELD) || !same(added, approvedProperty)) {
+      return false;
+    }
+    delete right.properties[COMPARISON_EVIDENCE_FIELD];
+    return same(left, right);
+  }
+  if (action === "rollback") {
+    if (!Object.hasOwn(left.properties, COMPARISON_EVIDENCE_FIELD) || Object.hasOwn(right.properties, COMPARISON_EVIDENCE_FIELD)) {
+      return false;
+    }
+    delete left.properties[COMPARISON_EVIDENCE_FIELD];
+    return same(left, right);
+  }
+  return false;
 }
 
 function formatReport(report) {
@@ -322,8 +386,9 @@ export function localReleaseFingerprint(root = REPO_ROOT) {
   return match[1];
 }
 
-function writeSchema(action, destination) {
-  const schema = schemaForAction(action);
+function writeLiveMutation(action, preimageFile, destination) {
+  const preimage = JSON.parse(fs.readFileSync(preimageFile, "utf8"));
+  const schema = mutateLiveScanRun(preimage, action);
   fs.writeFileSync(destination, `${JSON.stringify(schema)}\n`);
   const digest = schemaDigest(schema);
   process.stdout.write(`SCHEMA_BYTES entity=ScanRun action=${action} sha256=${digest.sha256} bytes=${digest.bytes}\n`);
@@ -350,14 +415,15 @@ if (invoked) {
         process.exit(2);
       }
       process.stdout.write(`SCHEMA_MIGRATION_ALLOWED action=${wanted}\n`);
-    } else if (command === "verify") {
-      const assessment = printAssessment(process.argv[3]);
-      const wanted = process.argv[4];
-      const ok = (wanted === "apply" && assessment.decision === "match")
-        || (wanted === "rollback" && assessment.decision === "apply");
+    } else if (command === "verify-live") {
+      const action = process.argv[3];
+      const before = JSON.parse(fs.readFileSync(process.argv[4], "utf8"));
+      const after = JSON.parse(fs.readFileSync(process.argv[5], "utf8"));
+      const ok = liveDiffIsOnlyComparisonEvidence(before, after, action);
+      process.stdout.write(`SCHEMA_LIVE_DIFF action=${action} only_comparison_evidence=${ok ? "yes" : "no"}\n`);
       process.exit(ok ? 0 : 1);
-    } else if (command === "write-schema") {
-      writeSchema(process.argv[3], process.argv[4]);
+    } else if (command === "write-live-mutation") {
+      writeLiveMutation(process.argv[3], process.argv[4], process.argv[5]);
     } else if (command === "extract-scanrun") {
       const schemas = loadRemoteInventory(process.argv[3]);
       const schema = schemas.ScanRun;
@@ -408,7 +474,7 @@ if (invoked) {
       }
       process.stdout.write("HMAC_CONTRACT_SOURCE=match\n");
     } else {
-      fail("usage: classify|decide|verify|write-schema|function-inventory|secret-present|signing-refs|hmac-contract");
+      fail("usage: classify|decide|verify-live|write-live-mutation|extract-scanrun|function-inventory|secret-present|signing-refs|hmac-contract");
     }
   } catch (error) {
     fail(error instanceof Error ? error.message : "schema parity failed");

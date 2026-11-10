@@ -143,6 +143,8 @@ need_file "$SCHEMA_PARITY" "authority schema parity checker present"
 if [ -f "$SCHEMA_MIGRATION" ]; then
   has 'APPLY-SCANRUN-COMPARISON-EVIDENCE:' "$SCHEMA_MIGRATION" && pass "schema apply confirmation is bound to source and generation" || fail "schema apply confirmation is not bound"
   has 'ROLLBACK-SCANRUN-COMPARISON-EVIDENCE:' "$SCHEMA_MIGRATION" && pass "schema rollback confirmation is bound to source and generation" || fail "schema rollback confirmation is not bound"
+  has 'ROLLBACK-SCANRUN-COMPARISON-EVIDENCE-UNVERIFIED-ROWS:' "$SCHEMA_MIGRATION" && pass "unfinished row scan requires a separate rollback confirmation" || fail "unfinished row scan can roll back with the ordinary confirmation"
+  has 'evidence-rows' "$SCHEMA_MIGRATION" && pass "rollback reads stored comparison_evidence before deleting the property" || fail "rollback does not read stored comparison_evidence"
   has 'verify-zero-admission-obligations' "$SCHEMA_MIGRATION" && pass "schema migration rechecks the closed barrier" || fail "schema migration does not recheck the closed barrier"
   if grep -q 'entities[[:space:]]\+push' "$SCHEMA_MIGRATION" || grep -q 'entityNameToSchema:' "$SCHEMA_CLIENT"; then
     fail "schema migration contains the prohibited bulk entity sync"
@@ -151,10 +153,16 @@ if [ -f "$SCHEMA_MIGRATION" ]; then
   fi
   APPLY_LINE="$(grep -n 'base44_named_schema_client.mjs" put' "$SCHEMA_MIGRATION" | head -1 | cut -d: -f1)"
   BARRIER_LINE="$(grep -n 'verify-zero-admission-obligations' "$SCHEMA_MIGRATION" | head -1 | cut -d: -f1)"
+  EVIDENCE_LINE="$(grep -n 'evidence-rows' "$SCHEMA_MIGRATION" | head -1 | cut -d: -f1)"
   if [ -n "$BARRIER_LINE" ] && [ -n "$APPLY_LINE" ] && [ "$BARRIER_LINE" -lt "$APPLY_LINE" ]; then
     pass "schema write stays behind the closed-barrier proof"
   else
     fail "schema write is not behind the closed-barrier proof"
+  fi
+  if [ -n "$EVIDENCE_LINE" ] && [ -n "$APPLY_LINE" ] && [ "$EVIDENCE_LINE" -lt "$APPLY_LINE" ]; then
+    pass "stored comparison_evidence is read before the schema write"
+  else
+    fail "stored comparison_evidence is not read before the schema write"
   fi
 fi
 if [ -f "$SCHEMA_PREFLIGHT" ]; then

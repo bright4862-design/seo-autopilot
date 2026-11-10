@@ -7,12 +7,15 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  approvedComparisonEvidenceProperty,
   assessInventory,
+  comparisonEvidenceIsEmpty,
   diffEntity,
   functionInventoryProblems,
   hmacContractProblems,
+  liveDiffIsOnlyComparisonEvidence,
+  mutateLiveScanRun,
   readLocalSchema,
-  schemaForAction,
   signingContinuity,
   signingSecretPresence,
 } from "../../scripts/base44_authority_schema.mjs";
@@ -75,12 +78,35 @@ test("schema parity allows only the additive comparison_evidence gap", () => {
   assert.equal(diffEntity("ScanRun", readLocalSchema("ScanRun"), changed.ScanRun).status, "drift");
 });
 
-test("rollback schema removes only comparison_evidence", () => {
-  const local = readLocalSchema("ScanRun");
-  const rollback = schemaForAction("rollback");
-  assert.equal(Object.hasOwn(rollback.properties, "comparison_evidence"), false);
-  assert.equal(Object.keys(local.properties).length, Object.keys(rollback.properties).length + 1);
-  assert.deepEqual(schemaForAction("apply"), local);
+test("live schema mutation changes only comparison_evidence", () => {
+  const live = readLocalSchema("ScanRun");
+  delete live.properties.comparison_evidence;
+  delete live.properties.website_url.description;
+  live.properties.created_date = { type: "string" };
+  live.platform_marker = "live-only";
+  const approved = approvedComparisonEvidenceProperty();
+  const applied = mutateLiveScanRun(live, "apply", approved);
+  assert.equal(applied.platform_marker, "live-only");
+  assert.deepEqual(applied.properties.created_date, { type: "string" });
+  assert.equal(Object.hasOwn(applied.properties.website_url, "description"), false);
+  assert.deepEqual(applied.properties.comparison_evidence, approved);
+  assert.equal(liveDiffIsOnlyComparisonEvidence(live, applied, "apply", approved), true);
+  const rolled = mutateLiveScanRun(applied, "rollback", approved);
+  assert.equal(Object.hasOwn(rolled.properties, "comparison_evidence"), false);
+  assert.equal(rolled.platform_marker, "live-only");
+  assert.equal(liveDiffIsOnlyComparisonEvidence(applied, rolled, "rollback", approved), true);
+  const tampered = structuredClone(applied);
+  tampered.properties.website_url.description = "rewritten";
+  assert.equal(liveDiffIsOnlyComparisonEvidence(live, tampered, "apply", approved), false);
+});
+
+test("stored comparison evidence is empty only for missing or blank values", () => {
+  assert.equal(comparisonEvidenceIsEmpty(undefined), true);
+  assert.equal(comparisonEvidenceIsEmpty(null), true);
+  assert.equal(comparisonEvidenceIsEmpty({}), true);
+  assert.equal(comparisonEvidenceIsEmpty(""), true);
+  assert.equal(comparisonEvidenceIsEmpty({ version: "scan_comparison_evidence_v1_missing_h1" }), false);
+  assert.equal(comparisonEvidenceIsEmpty(0), false);
 });
 
 test("signing continuity compares pinned references and never accepts plaintext", () => {
@@ -185,7 +211,7 @@ test("named schema client updates only ScanRun and refuses bulk sync", async () 
   }
 });
 
-function migrationFixture() {
+function migrationFixture({ operatorExit = 0 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "schema-migration-"));
   mkdirSync(join(root, "scripts", "lib"), { recursive: true });
   mkdirSync(join(root, "base44", "entities"), { recursive: true });
@@ -205,6 +231,7 @@ fixlist_require_base44_owner() { :; }
   const operatorLog = join(root, "operator.log");
   writeFileSync(join(root, "scripts/fixlist-cloud-operator.sh"), `#!/usr/bin/env bash
 printf 'operation=%s confirm=%s mode=%s\\n' "$OPERATION" "$CONFIRM" "$BARRIER_EXPECTED_PRIOR_MODE" >> "$TEST_OPERATOR_LOG"
+exit ${operatorExit}
 `);
   chmodSync(join(root, "scripts/fixlist-cloud-operator.sh"), 0o755);
   return { root, operatorLog };
@@ -239,6 +266,9 @@ test("schema migration proves the closed barrier before the named ScanRun update
   const sha = "b".repeat(40);
   const schemas = localInventory((schema) => {
     delete schema.properties.comparison_evidence;
+    delete schema.properties.website_url.description;
+    schema.properties.created_date = { type: "string" };
+    schema.platform_marker = "live-only";
     return schema;
   });
   let stored = structuredClone(schemas.ScanRun);
@@ -289,8 +319,12 @@ test("schema migration proves the closed barrier before the named ScanRun update
     assert.match(operator, new RegExp(`confirm=VERIFY-ZERO-ADMISSION:${sha}:77`));
     assert.match(operator, /mode=closed/);
     assert.equal(puts.length, 1);
-    assert.equal(puts[0].properties.comparison_evidence.type, "object");
+    assert.equal(puts[0].platform_marker, "live-only");
+    assert.deepEqual(puts[0].properties.created_date, { type: "string" });
+    assert.equal(Object.hasOwn(puts[0].properties.website_url, "description"), false);
+    assert.deepEqual(puts[0].properties.comparison_evidence, approvedComparisonEvidenceProperty());
     assert.match(result.stdout, /SCANRUN_COMPARISON_EVIDENCE_APPLY/);
+    assert.match(result.stdout, /only_comparison_evidence=yes/);
   } finally {
     server.close();
     rmSync(fixture.root, { recursive: true, force: true });
@@ -349,6 +383,232 @@ test("a failed post-check restores the fetched ScanRun schema", async () => {
   }
 });
 
+function migrationEnv(fixture, sha, confirm, port) {
+  return {
+    ...process.env,
+    ACTION: confirm.startsWith("ROLLBACK") ? "rollback" : "apply",
+    SOURCE_SHA: sha,
+    CONFIRM: confirm,
+    BARRIER_EXPECTED_GENERATION: "77",
+    BARRIER_EXPECTED_PRIOR_MODE: "closed",
+    CHANGE_TICKET: "incident-378",
+    BASE44_EXPECTED_OWNER: "owner@example.com",
+    BASE44_SCHEMA_API_FIXTURE: `http://127.0.0.1:${port}`,
+    BASE44_AUTH_FILE: join(fixture.root, "auth.json"),
+    BASE44_API_KEY: "",
+    GITHUB_ACTIONS: "",
+    TEST_OPERATOR_LOG: fixture.operatorLog,
+    GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT: "fixlist-admission-operator@example.iam.gserviceaccount.com",
+  };
+}
+
+function listen(handler) {
+  const server = createServer(handler);
+  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server)));
+}
+
+test("a failed closed-barrier proof performs no schema write", async () => {
+  const fixture = migrationFixture({ operatorExit: 1 });
+  const sha = "d".repeat(40);
+  const requests = [];
+  const server = await listen((request, response) => {
+    requests.push(request.method);
+    response.writeHead(500);
+    response.end("{}");
+  });
+  writeFileSync(join(fixture.root, "auth.json"), JSON.stringify({ accessToken: "d".repeat(40) }));
+  try {
+    const result = await run("bash", ["scripts/migrate-scanrun-comparison-evidence.sh"], {
+      cwd: fixture.root,
+      env: migrationEnv(fixture, sha, `APPLY-SCANRUN-COMPARISON-EVIDENCE:${sha}:77`, server.address().port),
+    });
+    assert.notEqual(result.status, 0);
+    assert.deepEqual(requests, []);
+  } finally {
+    server.close();
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("apply is refused with no write when comparison_evidence is already present", async () => {
+  const fixture = migrationFixture();
+  const sha = "e".repeat(40);
+  const schemas = localInventory();
+  const puts = [];
+  const server = await listen((request, response) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => {
+      if (request.method === "PUT") puts.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        schemas: Object.entries(schemas).map(([entity_name, entity_schema]) => ({ entity_name, entity_schema })),
+      }));
+    });
+  });
+  writeFileSync(join(fixture.root, "auth.json"), JSON.stringify({ accessToken: "e".repeat(40) }));
+  try {
+    const result = await run("bash", ["scripts/migrate-scanrun-comparison-evidence.sh"], {
+      cwd: fixture.root,
+      env: migrationEnv(fixture, sha, `APPLY-SCANRUN-COMPARISON-EVIDENCE:${sha}:77`, server.address().port),
+    });
+    assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stderr, /SCHEMA_MIGRATION_REFUSED action=apply decision=match/);
+    assert.equal(puts.length, 0);
+  } finally {
+    server.close();
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("rollback deletes only comparison_evidence after a clear row scan", async () => {
+  const fixture = migrationFixture();
+  const sha = "f".repeat(40);
+  const schemas = localInventory((schema) => {
+    schema.platform_marker = "live-only";
+    schema.properties.created_date = { type: "string" };
+    return schema;
+  });
+  let stored = structuredClone(schemas.ScanRun);
+  const puts = [];
+  const server = await listen((request, response) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => {
+      const url = new URL(request.url, "http://127.0.0.1");
+      if (url.pathname.endsWith("/entities/ScanRun/v2/list")) {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({
+          items: [{ id: "empty-a", comparison_evidence: {} }, { id: "empty-b" }],
+          has_more: false,
+        }));
+        return;
+      }
+      if (request.method === "PUT") {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        puts.push(body.entity_schema);
+        stored = body.entity_schema;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        schemas: Object.entries({ ...schemas, ScanRun: stored }).map(([entity_name, entity_schema]) => ({ entity_name, entity_schema })),
+      }));
+    });
+  });
+  writeFileSync(join(fixture.root, "auth.json"), JSON.stringify({ accessToken: "f".repeat(40) }));
+  try {
+    const result = await run("bash", ["scripts/migrate-scanrun-comparison-evidence.sh"], {
+      cwd: fixture.root,
+      env: migrationEnv(fixture, sha, `ROLLBACK-SCANRUN-COMPARISON-EVIDENCE:${sha}:77`, server.address().port),
+    });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.equal(puts.length, 1);
+    assert.equal(Object.hasOwn(puts[0].properties, "comparison_evidence"), false);
+    assert.equal(puts[0].platform_marker, "live-only");
+    assert.deepEqual(puts[0].properties.created_date, { type: "string" });
+    assert.match(result.stdout, /state=clear/);
+    assert.match(result.stdout, /SCANRUN_COMPARISON_EVIDENCE_ROLLBACK/);
+  } finally {
+    server.close();
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("rollback is refused with no write when a row already stores comparison evidence", async () => {
+  const fixture = migrationFixture();
+  const sha = "1".repeat(40);
+  const schemas = localInventory();
+  const puts = [];
+  const server = await listen((request, response) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => {
+      const url = new URL(request.url, "http://127.0.0.1");
+      if (request.method === "PUT") puts.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      if (url.pathname.endsWith("/entities/ScanRun/v2/list")) {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({
+          items: [{ id: "kept", comparison_evidence: { version: "scan_comparison_evidence_v1_missing_h1" } }],
+          has_more: false,
+        }));
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        schemas: Object.entries(schemas).map(([entity_name, entity_schema]) => ({ entity_name, entity_schema })),
+      }));
+    });
+  });
+  writeFileSync(join(fixture.root, "auth.json"), JSON.stringify({ accessToken: "1".repeat(40) }));
+  try {
+    const result = await run("bash", ["scripts/migrate-scanrun-comparison-evidence.sh"], {
+      cwd: fixture.root,
+      env: migrationEnv(fixture, sha, `ROLLBACK-SCANRUN-COMPARISON-EVIDENCE:${sha}:77`, server.address().port),
+    });
+    assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /state=present/);
+    assert.match(result.stderr, /stored comparison_evidence/);
+    assert.equal(puts.length, 0);
+  } finally {
+    server.close();
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("an unfinished row scan refuses rollback unless the unverified-rows confirmation is supplied", async () => {
+  const fixture = migrationFixture();
+  const sha = "2".repeat(40);
+  const schemas = localInventory((schema) => {
+    schema.platform_marker = "live-only";
+    return schema;
+  });
+  let stored = structuredClone(schemas.ScanRun);
+  const puts = [];
+  const server = await listen((request, response) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => {
+      const url = new URL(request.url, "http://127.0.0.1");
+      if (url.pathname.endsWith("/entities/ScanRun/v2/list")) {
+        response.writeHead(503, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { code: "database_unavailable" } }));
+        return;
+      }
+      if (request.method === "PUT") {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        puts.push(body.entity_schema);
+        stored = body.entity_schema;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        schemas: Object.entries({ ...schemas, ScanRun: stored }).map(([entity_name, entity_schema]) => ({ entity_name, entity_schema })),
+      }));
+    });
+  });
+  writeFileSync(join(fixture.root, "auth.json"), JSON.stringify({ accessToken: "2".repeat(40) }));
+  const port = server.address().port;
+  try {
+    const refused = await run("bash", ["scripts/migrate-scanrun-comparison-evidence.sh"], {
+      cwd: fixture.root,
+      env: migrationEnv(fixture, sha, `ROLLBACK-SCANRUN-COMPARISON-EVIDENCE:${sha}:77`, port),
+    });
+    assert.equal(refused.status, 2, refused.stderr);
+    assert.match(refused.stdout, /state=unverified/);
+    assert.equal(puts.length, 0);
+    const allowed = await run("bash", ["scripts/migrate-scanrun-comparison-evidence.sh"], {
+      cwd: fixture.root,
+      env: migrationEnv(fixture, sha, `ROLLBACK-SCANRUN-COMPARISON-EVIDENCE-UNVERIFIED-ROWS:${sha}:77`, port),
+    });
+    assert.equal(allowed.status, 0, `${allowed.stdout}\n${allowed.stderr}`);
+    assert.equal(puts.length, 1);
+    assert.equal(puts[0].platform_marker, "live-only");
+    assert.equal(Object.hasOwn(puts[0].properties, "comparison_evidence"), false);
+  } finally {
+    server.close();
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("cloud operator exposes the read-only preflight and the closed-barrier migration separately", () => {
   for (const operation of [
     "verify-base44-v8-preflight",
@@ -376,6 +636,7 @@ test("cloud operator exposes the read-only preflight and the closed-barrier migr
   const write = migrationJob.indexOf("Apply or roll back only ScanRun.comparison_evidence");
   assert.ok(barrier > -1 && login > barrier && write > login);
   assert.match(migrationJob, /VERIFY-ZERO-ADMISSION:/);
+  assert.match(migrationJob, /ROLLBACK-SCANRUN-COMPARISON-EVIDENCE-UNVERIFIED-ROWS:/);
   assert.match(migrationJob, /GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT/);
   assert.match(migration, /verify-zero-admission-obligations/);
   assert.doesNotMatch(migration, /entities[[:space:]]+push|entityNameToSchema/);

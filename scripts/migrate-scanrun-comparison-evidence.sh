@@ -8,10 +8,17 @@
 # through the named entity-schema API.
 #
 # Apply is allowed only when FixList and FixItem already match and ScanRun's
-# only difference is a missing comparison_evidence property. Rollback puts the
-# same local schema with that one property removed, and only when the live
-# schema otherwise matches. A failed post-check restores the schema fetched
-# before the write.
+# only semantic difference is a missing comparison_evidence property. The write
+# is the fetched ScanRun document plus that one approved property. Rollback
+# deletes only that property from the fetched document. Every other byte comes
+# from the live pre-image. A failed post-check, which requires the before and
+# after documents to differ by that property alone, restores the pre-image.
+#
+# Rollback also reads ScanRun rows, requesting only comparison_evidence, and
+# stops when any row has a stored value. A list that cannot be finished does
+# not count as proof: rollback then requires
+# ROLLBACK-SCANRUN-COMPARISON-EVIDENCE-UNVERIFIED-ROWS:<sha>:<generation>.
+# That override never applies when a stored value was actually returned.
 set -euo pipefail
 
 APP_ID="${BASE44_APP_ID:-6a498732ec779dfaaeab0e53}"
@@ -43,19 +50,25 @@ fi
 case "$ACTION" in
   apply)
     EXPECTED_CONFIRM="APPLY-SCANRUN-COMPARISON-EVIDENCE:${SOURCE_SHA}:${BARRIER_EXPECTED_GENERATION}"
+    if [[ "$CONFIRM" != "$EXPECTED_CONFIRM" ]]; then
+      echo "Refusing ScanRun schema migration: confirmation must be exactly '$EXPECTED_CONFIRM'." >&2
+      exit 2
+    fi
     ;;
   rollback)
     EXPECTED_CONFIRM="ROLLBACK-SCANRUN-COMPARISON-EVIDENCE:${SOURCE_SHA}:${BARRIER_EXPECTED_GENERATION}"
+    UNVERIFIED_CONFIRM="ROLLBACK-SCANRUN-COMPARISON-EVIDENCE-UNVERIFIED-ROWS:${SOURCE_SHA}:${BARRIER_EXPECTED_GENERATION}"
+    if [[ "$CONFIRM" != "$EXPECTED_CONFIRM" && "$CONFIRM" != "$UNVERIFIED_CONFIRM" ]]; then
+      echo "Refusing ScanRun schema migration: confirmation must be exactly '$EXPECTED_CONFIRM'." >&2
+      echo "If the row scan cannot be finished, the only other accepted confirmation is '$UNVERIFIED_CONFIRM'." >&2
+      exit 2
+    fi
     ;;
   *)
     echo "Refusing ScanRun schema migration: ACTION must be apply or rollback." >&2
     exit 2
     ;;
 esac
-if [[ "$CONFIRM" != "$EXPECTED_CONFIRM" ]]; then
-  echo "Refusing ScanRun schema migration: confirmation must be exactly '$EXPECTED_CONFIRM'." >&2
-  exit 2
-fi
 
 # Prove the barrier before any Base44 session or schema write. The nested
 # operator reads only its own signing secret and does not pause queues.
@@ -77,12 +90,38 @@ fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TMP/whoami" "$APP_ID"
 
 node "$REPO_ROOT/scripts/base44_named_schema_client.mjs" fetch "$TMP/before.json"
 node "$REPO_ROOT/scripts/base44_authority_schema.mjs" decide "$TMP/before.json" "$ACTION"
-node "$REPO_ROOT/scripts/base44_authority_schema.mjs" write-schema "$ACTION" "$TMP/next.json"
 node "$REPO_ROOT/scripts/base44_authority_schema.mjs" extract-scanrun "$TMP/before.json" "$TMP/preimage.json"
 
+if [[ "$ACTION" == "rollback" ]]; then
+  set +e
+  node "$REPO_ROOT/scripts/base44_named_schema_client.mjs" evidence-rows > "$TMP/evidence.txt"
+  evidence_status=$?
+  set -e
+  cat "$TMP/evidence.txt"
+  if [[ "$evidence_status" -eq 0 ]]; then
+    echo "SCANRUN_COMPARISON_EVIDENCE_ROWS_PROOF=clear"
+  elif [[ "$evidence_status" -eq 3 ]]; then
+    echo "Refusing rollback: a ScanRun row has stored comparison_evidence. The schema property stays." >&2
+    exit 2
+  elif [[ "$evidence_status" -eq 4 ]]; then
+    if [[ "$CONFIRM" != "$UNVERIFIED_CONFIRM" ]]; then
+      echo "Refusing rollback: the comparison_evidence row scan did not finish." >&2
+      echo "Re-run only with confirmation '$UNVERIFIED_CONFIRM' if you accept that absence was not proven." >&2
+      echo "That confirmation does not override a row the scan actually returned." >&2
+      exit 2
+    fi
+    echo "SCANRUN_COMPARISON_EVIDENCE_ROWS_PROOF=unverified-override"
+  else
+    echo "Refusing rollback: the comparison_evidence row scan failed." >&2
+    exit 2
+  fi
+fi
+
+node "$REPO_ROOT/scripts/base44_authority_schema.mjs" write-live-mutation "$ACTION" "$TMP/preimage.json" "$TMP/next.json"
 node "$REPO_ROOT/scripts/base44_named_schema_client.mjs" put "$TMP/next.json"
 if ! node "$REPO_ROOT/scripts/base44_named_schema_client.mjs" fetch "$TMP/after.json" \
-  || ! node "$REPO_ROOT/scripts/base44_authority_schema.mjs" verify "$TMP/after.json" "$ACTION"; then
+  || ! node "$REPO_ROOT/scripts/base44_authority_schema.mjs" extract-scanrun "$TMP/after.json" "$TMP/after-scan.json" \
+  || ! node "$REPO_ROOT/scripts/base44_authority_schema.mjs" verify-live "$ACTION" "$TMP/preimage.json" "$TMP/after-scan.json"; then
   echo "SCHEMA_MIGRATION_VERIFY_FAILED restoring the pre-write ScanRun schema" >&2
   if node "$REPO_ROOT/scripts/base44_named_schema_client.mjs" put "$TMP/preimage.json"; then
     echo "SCHEMA_MIGRATION_PREIMAGE_RESTORED entity=ScanRun" >&2

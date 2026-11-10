@@ -653,6 +653,10 @@ async def scan_job(
                             cms_platform=payload.cms_platform or "",
                             timeout_seconds=CRAWL_BUDGET_SECONDS,
                             job_mode=True,
+                            # Only this Cloud Tasks OIDC-authenticated durable route
+                            # may opt into the canary feature. /scan's client
+                            # async_job flag cannot authorize sitemap backfill.
+                            durable_standard150_job=True,
                         ),
                         timeout=WORKER_CRAWL_WALL_TIMEOUT_SECONDS,
                     )

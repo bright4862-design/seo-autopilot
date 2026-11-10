@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import inspect
 import math
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -143,6 +144,10 @@ SCAN_BUDGETS = {
 }
 
 SITEMAP_DISCOVERY_LIMIT = 5000
+SITEMAP_BACKFILL_VERSION = "sitemap_backfill_v1_idle_frontier"
+# Fail closed until an explicitly released, owner-operated canary enables it.
+# Do not change the Standard 150 production path merely by merging this code.
+ENABLE_STANDARD150_SITEMAP_BACKFILL = os.getenv("FIXLIST_STANDARD150_BACKFILL_ENABLED", "").strip().lower() == "true"
 
 # Durable scans can adapt when a site explicitly rate-limits a burst. Normal
 # sites keep the existing concurrent crawler behavior. Once HTTP 429 is seen,
@@ -462,6 +467,7 @@ async def run_scan(
     concurrency: int = 8,
     timeout_seconds: float | None = None,
     job_mode: bool = False,
+    durable_standard150_job: bool = False,
     **kwargs,
 ) -> dict:
     budget = resolve_scan_budget(scan_mode, timeout_seconds, job_mode=job_mode)
@@ -686,6 +692,28 @@ async def run_scan(
             preferred_market=primary_market_hint,
         )
         sampling_evidence = sampling_report(sitemap_urls, sampled_sitemap_urls, family_of, path_of)
+        # Preserve the existing seed and balanced 149-URL prefix. Only durable
+        # Standard 150 canaries may draw from this local, bounded standby list.
+        # Reserving a candidate never makes a network request or bypasses enqueue.
+        backfill_enabled = bool(
+            job_mode
+            and durable_standard150_job
+            and str(scan_mode or "").lower() == "advanced"
+            and ENABLE_STANDARD150_SITEMAP_BACKFILL
+        )
+        backfill_candidates: list[str] = []
+        backfill_reserve_truncated = False
+        if backfill_enabled:
+            selected_sitemap_urls = set(sampled_sitemap_urls)
+            unselected = [url for url in sitemap_urls if url not in selected_sitemap_urls]
+            if unselected:
+                backfill_candidates = select_balanced_urls(
+                    unselected, family_of, path_of, min(len(unselected), max_pages * 8),
+                    preferred_market=primary_market_hint,
+                )
+                # Queue exhaustion is NOT proof of inventory exhaustion when
+                # the ranked reserve omitted other discovered sitemap URLs.
+                backfill_reserve_truncated = len(unselected) > len(backfill_candidates)
         scope_evidence["effective_path_prefix"] = prefix
         sampling_evidence["crawl_scope"] = dict(scope_evidence)
         for url in sampled_sitemap_urls:
@@ -713,6 +741,9 @@ async def run_scan(
             "in_flight": 0,
             "final_url_duplicates_deduped": 0,
             "final_url_duplicate_examples": [],
+            "sitemap_backfill_cursor": 0,
+            "sitemap_backfill_enqueued": 0,
+            "sitemap_backfill_skipped": 0,
         }
         rate_limit_pacer = _AdaptiveRateLimitPacer(
             deadline=timing_budget["crawl_deadline"],
@@ -744,9 +775,24 @@ async def run_scan(
                         target = candidate
                         break
                     if target is None:
-                        # Nothing queued: stop only when no other worker might enqueue more.
+                        # Only replenish after every active fetch has completed:
+                        # workers may still discover useful internal links.
                         if crawl_state["in_flight"] == 0:
-                            return
+                            if backfill_enabled:
+                                while (
+                                    crawl_state["sitemap_backfill_cursor"] < len(backfill_candidates)
+                                    and len(queue) + len(seen) < max_pages * 8
+                                ):
+                                    candidate = backfill_candidates[crawl_state["sitemap_backfill_cursor"]]
+                                    crawl_state["sitemap_backfill_cursor"] += 1
+                                    queue_before = len(queue)
+                                    enqueue(candidate, "sitemap", "/sitemap.xml", "")
+                                    if len(queue) > queue_before:
+                                        crawl_state["sitemap_backfill_enqueued"] += 1
+                                        break
+                                    crawl_state["sitemap_backfill_skipped"] += 1
+                            if not queue:
+                                return
                     else:
                         seen.add(target)
                         crawl_state["claimed"] += 1
@@ -1048,7 +1094,14 @@ async def run_scan(
         "initial_queue_size": initial_queue_size,
         "final_queue_size": final_queue_size,
         "crawl_deadline_reached": crawl_deadline_reached,
-        "queue_exhausted": final_queue_size == 0 and len(pages) < max_pages and not crawl_deadline_reached,
+        "queue_exhausted": (
+            final_queue_size == 0 and len(pages) < max_pages
+            and not crawl_deadline_reached
+            and (not backfill_enabled or (
+                not backfill_reserve_truncated
+                and crawl_state["sitemap_backfill_cursor"] >= len(backfill_candidates)
+            ))
+        ),
         "failed_fetch_count": failed_fetch_count,
         "failure_reason_buckets": failure_reason_buckets,
         "rate_limit_throttle_activated": rate_limit_pacer.active,
@@ -1069,6 +1122,18 @@ async def run_scan(
         "final_url_duplicates_deduped": crawl_state["final_url_duplicates_deduped"],
         "final_url_duplicate_examples": crawl_state["final_url_duplicate_examples"],
     }
+    if backfill_enabled:
+        crawl_timing.update({
+            "sitemap_backfill_version": SITEMAP_BACKFILL_VERSION,
+            "sitemap_backfill_reserve_candidates": len(backfill_candidates),
+            "sitemap_backfill_reserve_truncated": backfill_reserve_truncated,
+            "sitemap_backfill_enqueued": crawl_state["sitemap_backfill_enqueued"],
+            "sitemap_backfill_skipped": crawl_state["sitemap_backfill_skipped"],
+            "sitemap_backfill_reserve_remaining": (
+                len(backfill_candidates) - crawl_state["sitemap_backfill_cursor"]
+            ),
+            "crawl_request_cap_reached": crawl_state["claimed"] >= max_pages * 8,
+        })
     crawl_warnings = []
     if deadline_reached:
         crawl_warnings.append(f"The {scan_mode} scan reached its bounded {budget['timeout']}-second backend budget and returned collected evidence.")

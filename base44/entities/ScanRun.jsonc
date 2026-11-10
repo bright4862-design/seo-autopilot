@@ -84,10 +84,11 @@
         "basic",
         "quick",
         "deep",
-        "advanced"
+        "advanced",
+        "extended_500"
       ],
       "default": "standard_150",
-      "description": "New customer scans use standard_150. Legacy values remain valid so historical scan records stay readable."
+      "description": "Public customer scans remain standard_150; extended_500 is reserved for a separately gated, service-owned private worker. Legacy modes remain readable."
     },
     "scan_source": {
       "type": "string"

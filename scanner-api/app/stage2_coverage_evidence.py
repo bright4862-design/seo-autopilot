@@ -16,6 +16,7 @@ import re
 from .stage2_reachability_provenance import (
     REACHABILITY_PROVENANCE_VERSION,
     REACHABILITY_SCOPE,
+    EXTENDED_REACHABILITY_SCOPE,
 )
 
 MAIN_TEXT_EVIDENCE_VERSION = "main_text_signature_v1"
@@ -30,6 +31,7 @@ CRUX_ADAPTER_VERSION = "crux_optional_v1"
 GSC_ADAPTER_VERSION = "gsc_optional_v1"
 
 MAX_PAGES = 150
+MAX_EXTENDED_PAGES = 500
 MAX_SHINGLES = 512
 MAX_CLUSTER_SAMPLES = 10
 MAX_HUBS = 5
@@ -56,13 +58,19 @@ def _page_url(page: dict[str, Any]) -> str:
     return _clean(page.get("url") or page.get("final_url") or page.get("page_url"))
 
 
-def _bounded_pages(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _bounded_pages(
+    pages: list[dict[str, Any]], *, max_assessed_pages: int = MAX_PAGES,
+) -> list[dict[str, Any]]:
+    # Explicit private 500-page capacity is not inferred from input length.
+    # Standard 150 callers retain the same 150-page fail-closed boundary.
+    if type(max_assessed_pages) is not int or max_assessed_pages not in (MAX_PAGES, MAX_EXTENDED_PAGES):
+        raise ValueError("Unsupported assessed-page capacity")
     if (
         not isinstance(pages, list)
-        or len(pages) > MAX_PAGES
+        or len(pages) > max_assessed_pages
         or any(not isinstance(page, dict) for page in pages)
     ):
-        raise ValueError("Expected at most 150 page objects")
+        raise ValueError(f"Expected at most {max_assessed_pages} page objects")
     return pages
 
 
@@ -107,9 +115,10 @@ def near_duplicate_main_content(
     *,
     similarity_threshold: float = 0.82,
     min_tokens: int = 40,
+    max_assessed_pages: int = MAX_PAGES,
 ) -> dict[str, Any]:
     """Cluster only verified main-content shingles, never chrome/template text."""
-    pages = _bounded_pages(pages)
+    pages = _bounded_pages(pages, max_assessed_pages=max_assessed_pages)
     if not 0.5 <= float(similarity_threshold) <= 1.0:
         raise ValueError("similarity_threshold out of bounds")
 
@@ -200,7 +209,9 @@ def near_duplicate_main_content(
     }
 
 
-def money_page_reachability(pages: list[dict[str, Any]]) -> dict[str, Any]:
+def money_page_reachability(
+    pages: list[dict[str, Any]], *, max_assessed_pages: int = MAX_PAGES,
+) -> dict[str, Any]:
     """Summarize B11 observed reachability without a sitewide orphan claim.
 
     Only the versioned producer envelope is accepted. A sitemap source or legacy
@@ -208,7 +219,12 @@ def money_page_reachability(pages: list[dict[str, Any]]) -> dict[str, Any]:
     Verified weak signals may fail inside the observed sample; partial provenance
     remains unknown, and a pass requires all three B11 dimensions to be known.
     """
-    pages = _bounded_pages(pages)
+    pages = _bounded_pages(pages, max_assessed_pages=max_assessed_pages)
+    expected_scope = (
+        REACHABILITY_SCOPE
+        if max_assessed_pages == MAX_PAGES
+        else EXTENDED_REACHABILITY_SCOPE
+    )
     rows: list[dict[str, Any]] = []
     for page in pages:
         family = _clean(page.get("page_template_family")).lower()
@@ -217,7 +233,7 @@ def money_page_reachability(pages: list[dict[str, Any]]) -> dict[str, Any]:
 
         provenance_ok = (
             page.get("reachability_provenance_version") == REACHABILITY_PROVENANCE_VERSION
-            and page.get("reachability_scope") == REACHABILITY_SCOPE
+            and page.get("reachability_scope") == expected_scope
             and page.get("reachability_evidence_state") == "observed_sample"
             and page.get("sitewide_orphan_claim") is False
         )
@@ -249,7 +265,7 @@ def money_page_reachability(pages: list[dict[str, Any]]) -> dict[str, Any]:
             observed_inlinks = None
 
         depth = page.get("crawl_depth")
-        depth = int(depth) if isinstance(depth, int) and 0 <= depth <= MAX_PAGES else None
+        depth = int(depth) if type(depth) is int and 0 <= depth <= max_assessed_pages else None
         nav = page.get("navigation_presence")
         nav_state = nav if type(nav) is bool else None
 
@@ -292,7 +308,7 @@ def money_page_reachability(pages: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "version": MONEY_REACHABILITY_VERSION,
         "provenance_version": REACHABILITY_PROVENANCE_VERSION,
-        "scope": REACHABILITY_SCOPE,
+        "scope": expected_scope,
         "state": overall_state,
         "money_pages_observed": len(rows),
         "weak_routes": sum(1 for row in rows if row["state"] == "fail"),

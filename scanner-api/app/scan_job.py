@@ -445,12 +445,46 @@ def _first_list(result: dict[str, Any], keys: tuple[str, ...]) -> list:
     return []
 
 
+def require_standard150_authority_capacity(result: dict[str, Any]) -> None:
+    """Fail closed before Standard 150 review sampling or HMAC signing.
+
+    Discovery and queued counts may exceed 150. Only assessed/retained page
+    objects and their asserted assessed count are capped. Do not reinterpret
+    an Extended 500 result as a Standard 150 signed completion merely because
+    a later renderer happens to sample 60 pages.
+    """
+    if not isinstance(result, dict):
+        raise ValueError("Expected Standard 150 result")
+    # A legitimate Extended 500 may end at fewer than 150 pages because of
+    # robots, host pressure or deadline. Count guards alone cannot stop it
+    # being mislabelled and signed as a Standard 150 result.
+    requested_mode = result.get("scan_mode")
+    if requested_mode is not None and requested_mode not in ("advanced", "standard_150"):
+        raise ValueError("Standard 150 authority rejects foreign scan mode")
+    canonical_mode = result.get("canonical_mode")
+    if canonical_mode is not None and canonical_mode != "standard_150":
+        raise ValueError("Standard 150 authority rejects foreign canonical mode")
+    for key in ("pages", "crawled_pages", "scanned_pages", "crawl_pages"):
+        pages = result.get(key)
+        if isinstance(pages, list) and len(pages) > 150:
+            raise ValueError("Standard 150 authority cannot accept more than 150 assessed pages")
+    reported = result.get("pages_crawled")
+    if reported is not None:
+        try:
+            count = int(reported)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Invalid Standard 150 assessed-page count") from exc
+        if count < 0 or count > 150:
+            raise ValueError("Standard 150 authority cannot accept more than 150 assessed pages")
+
+
 def build_authority_review_payload(result: dict[str, Any]) -> dict[str, Any]:
     """Bounded review envelope retained for compatibility evidence.
 
     pages_found carries the full discovery inventory; only the review page
     sample is bounded. The 150-page crawl cap never truncates discovery.
     """
+    require_standard150_authority_capacity(result)
     result = project_scan_result_for_external_boundary(result)
     pages = _first_list(result, ("crawled_pages", "pages", "scanned_pages", "crawl_pages"))[:REVIEW_PAGE_SAMPLE_LIMIT]
     findings = _first_list(result, ("grouped_findings", "recommendations", "findings", "raw_findings", "fixes"))[:REVIEW_FINDING_LIMIT]
@@ -603,6 +637,7 @@ def build_limited_envelope(
     review: dict[str, Any],
     signing_key: str,
 ) -> dict[str, Any]:
+    require_standard150_authority_capacity(result)
     external_result = project_scan_result_for_external_boundary(result)
     identity = {
         "owner_user_id": str(scan.get("owner_user_id") or ""),
@@ -627,6 +662,7 @@ def build_completion_envelope(
     review: dict[str, Any],
     signing_key: str,
 ) -> dict[str, Any]:
+    require_standard150_authority_capacity(result)
     external_result = project_scan_result_for_external_boundary(result)
     identity = {
         "owner_user_id": str(scan.get("owner_user_id") or ""),

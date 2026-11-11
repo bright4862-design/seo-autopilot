@@ -1,0 +1,46 @@
+{
+  "benchmark": "synthetic_review_scaling_v1",
+  "wall_timeout_seconds": 20.0,
+  "limitations": "Synthetic local evidence, not representative production HTML or a 50-site calibration; excludes crawl and finalize memory.",
+  "results": [
+    {
+      "pages": 150,
+      "review_seconds": 0.104029,
+      "page_evidence_total_bytes": 96527,
+      "page_evidence_mean_bytes": 643.51,
+      "review_output_bytes": 567074,
+      "completion_envelope_bytes": 664426,
+      "process_peak_rss_bytes": 35721216,
+      "memory_scope": "fresh review/envelope process high-water RSS including imports and payload; excludes worker parent",
+      "success": true,
+      "subprocess_wall_seconds": 0.36473,
+      "within_wall_timeout": true
+    },
+    {
+      "pages": 500,
+      "review_seconds": 0.264284,
+      "page_evidence_total_bytes": 323426,
+      "page_evidence_mean_bytes": 646.85,
+      "review_output_bytes": 649449,
+      "completion_envelope_bytes": 974050,
+      "process_peak_rss_bytes": 37609472,
+      "memory_scope": "fresh review/envelope process high-water RSS including imports and payload; excludes worker parent",
+      "success": true,
+      "subprocess_wall_seconds": 0.49637,
+      "within_wall_timeout": true
+    },
+    {
+      "pages": 1000,
+      "review_seconds": 0.469622,
+      "page_evidence_total_bytes": 647584,
+      "page_evidence_mean_bytes": 647.58,
+      "review_output_bytes": 690718,
+      "completion_envelope_bytes": 1339981,
+      "process_peak_rss_bytes": 39964672,
+      "memory_scope": "fresh review/envelope process high-water RSS including imports and payload; excludes worker parent",
+      "success": true,
+      "subprocess_wall_seconds": 0.69188,
+      "within_wall_timeout": true
+    }
+  ]
+}

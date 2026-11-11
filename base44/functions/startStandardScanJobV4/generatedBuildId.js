@@ -2,4 +2,4 @@
 // SHA-256 package identity for base44/functions/startStandardScanJobV4.
 // Every regular package file is covered except generatedBuildId.js itself.
 
-export const FUNCTION_BUILD_ID = "b183ae691b6439090be1005347a32b48c131ac217d2ea877d84f0a70c4b0732d";
+export const FUNCTION_BUILD_ID = "39c0e7fe3004a45e42f006679cb6b093c24018a7eeb0ecf51a3d5eb9585e7652";

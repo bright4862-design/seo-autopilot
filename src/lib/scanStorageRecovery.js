@@ -1,3 +1,4 @@
+import { pageCapFromRecord } from "./scanPresentation.js";
 import { base44 } from "@/api/base44Client";
 import { RELEASE_AUTHORITY_CONTRACT } from "@/lib/scanRunModel";
 
@@ -19,7 +20,7 @@ const {
 // standard_150 is the canonical customer mode. The legacy keys are retained so
 // historical Quick/Deep/Advanced records still cap correctly when they are read
 // back; they are no longer producible by the customer path.
-const PAGE_LIMITS = { standard_150: 150, basic: 25, quick: 40, deep: 85, advanced: 150 };
+const PAGE_LIMITS = { standard_150: 150, standard_500: 500, basic: 25, quick: 40, deep: 85, advanced: 150 };
 // The customer path invokes runStandard150Scan. runAdvancedScan is still
 // accepted here because the old gateway remains deployed, so an in-flight
 // response from it must stay capped and keep feeding release authority.
@@ -98,6 +99,8 @@ function compactFix(fix = {}) {
     combined_rules: firstArray(fix, ["combined_rules"]).map(String).slice(0, 8),
     grouping_explanation: String(fix.grouping_explanation || "").slice(0, 600),
     page_count: finiteNumber(fix.page_count, affectedPages.length),
+    ...(Number.isInteger(fix.affected_page_count) ? { affected_page_count: fix.affected_page_count } : {}),
+    ...(fix.affected_page_count_is_lower_bound === true ? { affected_page_count_is_lower_bound: true } : {}),
   };
 }
 
@@ -106,6 +109,8 @@ function compactPage(page = {}) {
     url: page.url || page.final_url || "",
     final_url: page.final_url || page.url || "",
     path: page.path || "",
+    importance_tier: page.importance_tier || "",
+    selection_reason: page.selection_reason || "",
     status_code: finiteNumber(page.status_code),
     fetch_error: page.fetch_error || "",
     title: String(page.title || "").slice(0, 180),
@@ -216,7 +221,7 @@ function authorityFor(record = {}) {
 
 function compactScanRecord(record = {}, { emergency = false } = {}) {
   if (!record || typeof record !== "object") return record;
-  const limit = pageLimit(record.scan_mode);
+  const limit = pageCapFromRecord(record);
   const pagePreviewLimit = emergency ? 12 : limit;
   const fixPreviewLimit = emergency ? 12 : 100;
   const pages = firstArray(record, ["crawled_pages", "pages", "scanned_pages", "crawl_pages"])
@@ -250,7 +255,9 @@ function compactScanRecord(record = {}, { emergency = false } = {}) {
     business_name: record.business_name || "",
     cms_platform: record.cms_platform || "custom",
     cms_name: record.cms_name || "Custom / Not sure",
-    scan_mode: record.scan_mode || "quick",
+    scan_mode: record.scan_mode || "standard_150",
+    page_cap: limit,
+    pages_planned: Math.min(limit, Math.max(0, Math.trunc(Number(record.pages_planned) || 0))),
     health_score: finiteNumber(record.health_score, record.seo_score),
     seo_score: finiteNumber(record.seo_score, record.health_score),
     health_grade: record.health_grade || record.website_health_report?.health_grade || "",

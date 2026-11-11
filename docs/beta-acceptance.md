@@ -1,12 +1,12 @@
 # FixList production acceptance records
 
-## Current status — Standard 150 beta candidate
+## Current status — staged large-site scan candidate
 
 **Status: CANDIDATE — production acceptance NOT met.**
 
 | | |
 |---|---|
-| Candidate fingerprint | `e0eca935c350e590` |
+| Candidate fingerprint | `1470ccb6398a7f4f` |
 | Classifier | `archetype_classifier_v12_locale_normalized_structural_routes` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,12 +15,14 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `e0eca935c350e590` with classifier
+fingerprint `1470ccb6398a7f4f` with classifier
 `archetype_classifier_v12_locale_normalized_structural_routes`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v7_content_applicability`.
 
-The current `e0eca935c350e590` local candidate prioritizes commercial category, city/location and service hubs within the Standard 150 page cap, while retaining representative detail pages and diagnostic coverage. Sitemap traversal interleaves business structures before repeated language and numbered siblings. Offline evidence and limitations are recorded in `docs/standard150-commercial-sampling-acceptance.md`; this is not a live acceptance report. Exact-SHA CI, coordinated scanner/Base44 deployment verification and live acceptance remain pending.
+The current `1470ccb6398a7f4f` candidate implements section-based importance sampling, resumable staged execution, server-owned 150/500 caps and V9 publication/readback. V8/monolith remains the default and production acceptance is still **not met**. Offline evidence, infrastructure preparation and the owner-cohort rollout gates are documented in `docs/scans/staged-scan-runbook.md`. This record is not evidence of deployment or representative live-site acceptance.
+
+The preceding `e0eca935c350e590` local candidate prioritizes commercial category, city/location and service hubs within the Standard 150 page cap, while retaining representative detail pages and diagnostic coverage. Sitemap traversal interleaves business structures before repeated language and numbered siblings. Offline evidence and limitations are recorded in `docs/standard150-commercial-sampling-acceptance.md`; this is not a live acceptance report. Exact-SHA CI, coordinated scanner/Base44 deployment verification and live acceptance remain pending.
 
 The preceding `01ebe8e90df1e6bd` candidate preserves published route identity through review, grouped repair evidence, signed counts, persistence and customer readers. It adds the internal `standard_review_snapshot_hmac_identity_v1` seal while retaining public V6 routes, GEO capability and the Standard 150 cap. Historical authority and preview proofs retain their original serialization. Local implementation and regression checks are recorded in `docs/full-blueprint-progress.md`; full-blueprint acceptance remains pending.
 

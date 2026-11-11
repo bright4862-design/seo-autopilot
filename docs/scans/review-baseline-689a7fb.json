@@ -1,0 +1,37 @@
+{
+  "source_commit": "689a7fb43825f322af70188e7426730552daebd9",
+  "scope": "recorded scanner fixture to review only",
+  "canonicalization": "JSON sorted keys, compact separators, UTF-8, ensure_ascii=False",
+  "fixtures": [
+    {
+      "fixture": "center-street-lending.scan.json",
+      "input_sha256": "cfd3f4619a038380629737ea88c1fc3a6b9b37d53e0ae9a3c58940c93b04e71d",
+      "review_sha256": "3a1138e73475568e6fe148acd7724a4b9638cb6bab7126c18a5989c3ca4555bf",
+      "review_bytes": 144384
+    },
+    {
+      "fixture": "funbooker.scan.json",
+      "input_sha256": "9abe390f00f26d1e0f9925f050c89378c68b68a00436199f2427e3f4ab963a33",
+      "review_sha256": "b20a0696d897a3475e6f85ce69af0a0783c1491913c654339cf60afa3b6f41db",
+      "review_bytes": 75514
+    },
+    {
+      "fixture": "jacks-surfboards.scan.json",
+      "input_sha256": "247bd4d78c88073642be9c59888f27bd4249f97258b64948a14498b0d60e8a84",
+      "review_sha256": "e27d995fbf45f8b24849d41a96f65634c148180f500ab5ef9ae861aefecbc882",
+      "review_bytes": 156680
+    },
+    {
+      "fixture": "meilleurtaux.scan.json",
+      "input_sha256": "f9e9bed18af55f50ed6b82dbcda0af789c25d0f781547f02d597549b76159713",
+      "review_sha256": "df6430dcb67acb5565b5cc883ca258bb5204548f11251270993a88f7956b4928",
+      "review_bytes": 105601
+    },
+    {
+      "fixture": "saas-auth-app.scan.json",
+      "input_sha256": "f3cad4fc1956e60b105eea915e499b970b395259763934051b21b2700e019fc1",
+      "review_sha256": "1c8d051f76f541e77c16551235b805bd97a02f4405011985b222c866bf3fd32c",
+      "review_bytes": 144331
+    }
+  ]
+}

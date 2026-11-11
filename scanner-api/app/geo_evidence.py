@@ -3,6 +3,7 @@
 No fetching; retained observations are versioned separately from the evaluator.
 Missing semantic applicability is unknown, not a failure or an exclusion.
 """
+from .scan_limits import current_page_cap
 from dataclasses import asdict
 from datetime import date, datetime
 from hashlib import sha256
@@ -175,8 +176,8 @@ def _validate_retained(value):
 
 def assess_geo_pages(pages, *, parent_authoritative=False, entry_verified=False, access_limited=False):
     """Assess accepted retained evidence; malformed/duplicate input raises ValueError."""
-    if not isinstance(pages, (list, tuple)) or len(pages) > 150 or any(not isinstance(p, dict) for p in pages):
-        raise ValueError("Expected at most 150 page objects")
+    if not isinstance(pages, (list, tuple)) or len(pages) > current_page_cap() or any(not isinstance(p, dict) for p in pages):
+        raise ValueError(f"Expected at most {current_page_cap()} page objects")
     indexed = [(_page_id(page), page) for page in pages]
     if len({key for key, _ in indexed}) != len(indexed):
         raise ValueError("Duplicate GEO page")

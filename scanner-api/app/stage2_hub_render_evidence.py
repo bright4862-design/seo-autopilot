@@ -7,6 +7,8 @@ surfaces only; neither is promoted to sole truth.
 """
 from __future__ import annotations
 
+from .scan_limits import current_page_cap
+
 from typing import Any, Iterable
 from urllib.parse import urldefrag, urljoin, urlparse
 
@@ -210,7 +212,7 @@ def build_hub_link_comparison(
     """Build truthful B12 selected/completed/failed/unassessed evidence."""
     if not isinstance(pages, list):
         raise ValueError("Expected retained page list")
-    if len(pages) > 150:
+    if len(pages) > current_page_cap():
         raise ValueError("B12 cannot exceed the Standard-150 assessed set")
 
     rendered = rendered_pages_by_url or {}

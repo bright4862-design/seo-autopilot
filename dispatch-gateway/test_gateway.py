@@ -92,6 +92,30 @@ def task(*, scan_id="scan_abc123", drain=False, attempt=1, respect_robots_txt=Tr
 
 
 class ValidateDispatchTests(unittest.TestCase):
+    def test_workspace_cleanup_is_pinned_to_control_queue_and_delete_route(self):
+        value = task()
+        value["name"] = f"{main.DRAIN_QUEUE_PATH}/tasks/standard150-cleanup-scan_abc123-a1"
+        value["httpRequest"]["url"] = main.WORKSPACE_DELETE_URL
+        value["httpRequest"]["body"] = encoded({
+            "scan_id": "scan_abc123", "request_id": "req_abc123",
+            "website_url": "https://example.com/", "workspace_cleanup": True,
+        })
+        self.assertIsNone(self.validate(value, queue_path=main.DRAIN_QUEUE_PATH)[1])
+        wrong = deepcopy(value)
+        wrong["httpRequest"]["url"] = main.WORKER_URL
+        self.assertEqual(self.validate(wrong, queue_path=main.DRAIN_QUEUE_PATH), (None, "invalid_worker_target"))
+
+    def test_500_dispatch_requires_signed_cap_and_staged_owner_cohort(self):
+        job = {"scan_mode": "standard_500", "page_cap": 500,
+               "pipeline_mode": "staged", "owner_user_id": "owner500"}
+        self.assertFalse(main._valid_scan_mode(job))
+        with patch.dict(os.environ, {"SCAN_PIPELINE_MODE": "staged", "SCAN_STAGED_OWNER_IDS": "owner500"}):
+            self.assertTrue(main._valid_scan_mode(job))
+            for override in ({"page_cap": True}, {"page_cap": 501},
+                             {"page_cap": "500"}, {"owner_user_id": "other"},
+                             {"pipeline_mode": "monolith"}):
+                self.assertFalse(main._valid_scan_mode({**job, **override}))
+
     def validate(self, value, *, queue_path=None):
         inferred_queue = main.DRAIN_QUEUE_PATH if "standard150-drain-" in str(value.get("name") or "") else main.QUEUE_PATH
         return main.validate_dispatch({

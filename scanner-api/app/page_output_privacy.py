@@ -67,6 +67,10 @@ _EXTERNAL_PAGE_ALLOWED_FIELDS = frozenset({
     "url_verification",
     "evidence_url_identity_version",
     "trust_discovery_probe",
+    "importance_score",
+    "importance_tier",
+    "selection_reason",
+    "route_pattern",
 
     # Search metadata and accepted Stage-1 content evidence.
     "title",

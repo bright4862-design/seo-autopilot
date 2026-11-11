@@ -113,6 +113,19 @@ export function buildRepairCard(item = {}) {
   const base = legacy.buildRepairCard(item);
   const stage3 = stage3Fields(item);
   const card = stage3 ? { ...base, ...stage3 } : base;
+  // Retain the row identity for a server-owned shortlist. Historical merged
+  // cards continue to use their existing mergedFromFixIds identities.
+  if (typeof (item.fix_id || item.id) === "string" && (item.fix_id || item.id)) card.fixId = item.fix_id || item.id;
+  const estimates = item.template_impact_estimates || item.original?.template_impact_estimates;
+  if (Array.isArray(estimates)) {
+    const qualified = estimates.filter(value => value?.is_extrapolation === true
+      && Number.isInteger(value.checked_sample_count) && value.checked_sample_count >= 3
+      && value.observed_affected_count === value.checked_sample_count
+      && Number.isInteger(value.inventory_count) && value.inventory_count > value.checked_sample_count
+      && value.estimated_affected_page_count === value.inventory_count
+      && typeof value.qualification === "string" && value.qualification.trim());
+    if (qualified.length) card.templateImpactEstimates = qualified.slice(0, 10);
+  }
   return hasStage3PresentationSignal(item)
     ? markStage3PresentationOrigin(card)
     : card;

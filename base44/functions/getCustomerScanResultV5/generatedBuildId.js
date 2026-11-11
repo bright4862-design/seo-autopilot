@@ -2,4 +2,4 @@
 // SHA-256 package identity for base44/functions/getCustomerScanResultV5.
 // Every regular package file is covered except generatedBuildId.js itself.
 
-export const FUNCTION_BUILD_ID = "d9161e36a0e95f4965c93ff256dc3c81953868194f706d50e9462fe6d0bc14b0";
+export const FUNCTION_BUILD_ID = "db334594ed38d320755e5e29a509c4b943f600a53757beb653ceab65f56ac541";

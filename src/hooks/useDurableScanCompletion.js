@@ -19,6 +19,8 @@ const EMPTY_STATE = {
   statusDetail: "",
   pagesFound: 0,
   pagesCrawled: 0,
+  pagesPlanned: 0,
+  pageCap: 150,
 };
 
 // The run is already fetched on every tick to decide completion. Surfacing the
@@ -30,6 +32,8 @@ function progressFrom(run) {
     statusDetail: String(run?.status_detail || ""),
     pagesFound: Number(run?.pages_found) || 0,
     pagesCrawled: Number(run?.pages_crawled) || 0,
+    pagesPlanned: Number.isInteger(run?.pages_planned) && run.pages_planned > 0 && run.pages_planned <= 500 ? run.pages_planned : 0,
+    pageCap: run?.page_cap === 500 ? 500 : 150,
   };
 }
 
@@ -74,6 +78,8 @@ export default function useDurableScanCompletion(scanId, active) {
           statusDetail: next.statusDetail || previous.statusDetail,
           pagesFound: Math.max(previous.pagesFound, next.pagesFound),
           pagesCrawled: Math.max(previous.pagesCrawled, next.pagesCrawled),
+          pagesPlanned: next.pagesPlanned || previous.pagesPlanned,
+          pageCap: run ? next.pageCap : previous.pageCap,
         };
       });
     }

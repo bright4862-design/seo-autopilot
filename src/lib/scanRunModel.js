@@ -1,3 +1,4 @@
+import { pageCapFromRecord } from "./scanPresentation.js";
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 // Pure mapping logic for the durable scan models (ScanRun / FixList / FixItem).
 // No Base44 imports so tests can exercise it directly; persistence lives in
@@ -11,7 +12,6 @@ const LIMITED_SCAN_STATUSES = new Set([
   "blocked_or_incomplete",
 ]);
 
-const MODE_PAGE_LIMITS = { standard_150: 150, advanced: 150 };
 export const RELEASE_AUTHORITY_CONTRACT = Object.freeze({
   scannerVersion: RELEASE_COMPONENT_VERSIONS.scanner_version,
   scannerBuildRevision: RELEASE_COMPONENT_VERSIONS.scanner_build_revision,
@@ -55,10 +55,6 @@ function normalizeMetadataStateCounts(value = {}) {
     empty: Math.max(0, Number(source.empty || 0)),
     malformed: Math.max(0, Number(source.malformed || 0)),
   };
-}
-
-function modePageLimit(scanMode) {
-  return MODE_PAGE_LIMITS[toStr(scanMode).toLowerCase()] || MODE_PAGE_LIMITS.standard_150;
 }
 
 function firstPageEvidence(record = {}) {
@@ -159,7 +155,7 @@ export function hasAuthorityProof(record = {}) {
 // so they are a necessary precondition for release authority but prove nothing
 // on their own -- only the server seal does.
 export function buildScanRunFields(record = {}, { status, requireAuthorityProof = false } = {}) {
-  const pageLimit = modePageLimit(record.scan_mode);
+  const pageLimit = pageCapFromRecord(record);
   const authorityMarkers = buildDiagnosticAuthorityMarkers(record);
   const scannerVersion = toStr(record.scanner_version || record.technical_audit_summary?.scanner_version || record.debug?.scanner_version);
   const advancedScanBackend = toStr(record.advanced_scan_backend || record.technical_audit_summary?.advanced_scan_backend)
@@ -218,6 +214,8 @@ export function buildScanRunFields(record = {}, { status, requireAuthorityProof 
     beta_revision_fingerprint: authorityMarkers.beta_revision_fingerprint,
     metadata_evidence_version: authorityMarkers.metadata_evidence_version,
     title_evidence_version: authorityMarkers.title_evidence_version,
+    page_cap: pageLimit,
+    pages_planned: Math.min(pageLimit, Math.max(0, Math.trunc(Number(record.pages_planned) || 0))),
     pages_found: Number(record.pages_found || 0),
     pages_crawled: pagesCrawled,
     pages_retained: pagesRetained,

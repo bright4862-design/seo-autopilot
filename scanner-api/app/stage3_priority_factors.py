@@ -323,6 +323,30 @@ def _reach(
     if not affected_keys or any(key not in family_page_lookup for key in affected_keys):
         return ReachFactor(None, 0, len(denominator_keys), "unknown", "affected evidence is outside the matching observed family denominator")
 
+    if fix.get("affected_pages_complete") is False and "affected_page_count" in fix:
+        proved = _finite_number(fix.get("affected_page_count"))
+        partitions = fix.get("family_breakdown")
+        if (
+            fix.get("affected_page_count_is_lower_bound") is True
+            or proved is None or not proved.is_integer()
+            or proved < len(affected_keys) or proved > len(family_page_lookup)
+            or not isinstance(partitions, dict)
+            or set(partitions) != {family}
+            or _finite_number(partitions.get(family)) != proved
+        ):
+            return ReachFactor(None, 0, len(denominator_keys), "unknown", "incomplete affected evidence does not prove an exact matching-family numerator")
+        if proved == len(family_page_lookup):
+            # Exact affected cardinality equals the entire observed family, so
+            # every indexable member of that family is necessarily affected.
+            numerator = len(denominator_keys)
+        elif len(denominator_keys) == len(family_page_lookup):
+            # Every observed family member is indexable. A proved exact subset
+            # cardinality is therefore also its exact indexable numerator.
+            numerator = int(proved)
+        else:
+            return ReachFactor(None, 0, len(denominator_keys), "unknown", "omitted affected identities have unknown indexability")
+        return ReachFactor(numerator / len(denominator_keys), numerator, len(denominator_keys), "known", "proved full affected count in the matching observed/indexable family")
+
     numerator = sum(1 for key in affected_keys if key in denominator_keys)
     denominator = len(denominator_keys)
     value = numerator / denominator
@@ -378,6 +402,13 @@ def build_four_factor_priority(
     gsc_value = _valid_gsc_page_value(fix)
     page_value = base_page_value
     page_value_source = "base_role" if base_page_value is not None else "unknown"
+    if gsc_value is None:
+        importance_values = [_finite_number(page.get("importance_score")) for page in affected_pages]
+        importance_values = [value for value in importance_values if value is not None and 0 <= value <= 1]
+        if importance_values:
+            page_value = max(importance_values)
+            page_value_source = "page_importance"
+            page_value_state = "known"
     if gsc_value is not None:
         page_value = max(base_page_value or 0.0, gsc_value)
         page_value_source = "base_role+gsc_verified"

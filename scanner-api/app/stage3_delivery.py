@@ -120,8 +120,32 @@ def summarize_candidate_counts(
     candidate = _dict(candidate)
     sample_limit = max(0, int(sample_limit))
     affected_pages = _affected_page_union(candidate)
+    affected_count = len(affected_pages)
+    lower_bound = candidate.get("affected_page_count_is_lower_bound") is True
+    declared_count = _nonnegative_int(candidate.get("affected_page_count"))
+    has_count_metadata = declared_count is not None
+    root_has_proved_total = declared_count is not None and candidate.get("affected_pages_complete") is False and declared_count >= affected_count
+    if declared_count is not None and candidate.get("affected_pages_complete") is False:
+        affected_count = max(affected_count, declared_count)
+    for group in _list(candidate.get("groups")):
+        if not isinstance(group, dict):
+            continue
+        child_count = _nonnegative_int(group.get("affected_page_count"))
+        if child_count is not None and group.get("affected_pages_complete") is False:
+            has_count_metadata = True
+            if not root_has_proved_total and child_count > len(_affected_page_union(group)):
+                lower_bound = True
+            if child_count > affected_count:
+                # Omitted child identities cannot establish a disjoint union.
+                # Their maximum is a proved lower bound; summing is unsound.
+                affected_count = child_count
+                lower_bound = True
+            if not root_has_proved_total:
+                lower_bound = lower_bound or group.get("affected_page_count_is_lower_bound") is True
 
     explicit_observations = _nonnegative_int(candidate.get("observation_count"))
+    if explicit_observations is None and has_count_metadata:
+        explicit_observations = _nonnegative_int(candidate.get("repair_observation_count"))
     if explicit_observations is None:
         raw_observations = candidate.get("observations")
         if isinstance(raw_observations, (list, tuple)):
@@ -136,18 +160,19 @@ def summarize_candidate_counts(
     # denominator smaller than its confirmed numerator is internally
     # inconsistent evidence, so keep it unknown rather than signing an
     # impossible ratio into downstream customer output.
-    if known_population is not None and known_population < len(affected_pages):
+    if known_population is not None and known_population < affected_count:
         known_population = None
     displayed = affected_pages[:sample_limit]
 
     return {
-        "unique_affected_page_count": len(affected_pages),
+        "unique_affected_page_count": affected_count,
+        **({"affected_page_count_is_lower_bound": True} if lower_bound else {}),
         "observation_count": explicit_observations,
         "known_population_count": known_population,
         "displayed_sample_count": len(displayed),
         "displayed_samples": displayed,
-        "examples_partial": len(displayed) < len(affected_pages),
-        "truncated_sample_count": max(0, len(affected_pages) - len(displayed)),
+        "examples_partial": len(displayed) < affected_count,
+        "truncated_sample_count": max(0, affected_count - len(displayed)),
     }
 
 
@@ -529,6 +554,7 @@ def _handoff_fix(candidate: dict[str, Any], *, sample_limit: int) -> dict[str, A
         },
         "counts": {
             "unique_affected_pages": counts["unique_affected_page_count"],
+            **({"affected_page_count_is_lower_bound": True} if counts.get("affected_page_count_is_lower_bound") is True else {}),
             "observations": counts["observation_count"],
             "known_population": counts["known_population_count"],
             "displayed_examples": counts["displayed_sample_count"],

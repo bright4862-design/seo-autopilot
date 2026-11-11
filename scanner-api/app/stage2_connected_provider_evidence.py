@@ -8,6 +8,8 @@ become current scan evidence.
 """
 from __future__ import annotations
 
+from .scan_limits import DEFAULT_PAGE_CAP, current_page_cap
+
 from datetime import date
 from typing import Any, Iterable
 
@@ -19,7 +21,7 @@ from .stage2_coverage_evidence import (
 )
 
 CONNECTED_PROVIDER_EVIDENCE_VERSION = "connected_provider_evidence_v1"
-MAX_PROVIDER_PAGES = 150
+MAX_PROVIDER_PAGES = DEFAULT_PAGE_CAP
 
 
 def _text(value: Any) -> str:
@@ -40,8 +42,8 @@ def _date(value: Any) -> date | None:
 
 def _assessed_url_set(values: Iterable[Any]) -> set[str]:
     urls = {_text(value) for value in values if _text(value)}
-    if len(urls) > MAX_PROVIDER_PAGES:
-        raise ValueError("Expected at most 150 assessed URLs")
+    if len(urls) > current_page_cap():
+        raise ValueError(f"Expected at most {current_page_cap()} assessed URLs")
     return urls
 
 

@@ -32,7 +32,8 @@ const HISTORICAL_COMPAT_V5_REL = "base44/functions/getCustomerScanResultV5/relea
 const HISTORICAL_COMPAT_V6_REL = "base44/functions/getCustomerScanResultV6/releaseCompatibility.js";
 const HISTORICAL_COMPAT_V7_REL = "base44/functions/getCustomerScanResultV7/releaseCompatibility.js";
 const HISTORICAL_COMPAT_V8_REL = "base44/functions/getCustomerScanResultV8/releaseCompatibility.js";
-const HISTORICAL_COMPAT_RELS = new Set([HISTORICAL_COMPAT_REL, HISTORICAL_COMPAT_ALIAS_REL, HISTORICAL_COMPAT_V3_REL, HISTORICAL_COMPAT_V4_REL, HISTORICAL_COMPAT_V5_REL, HISTORICAL_COMPAT_V6_REL, HISTORICAL_COMPAT_V7_REL, HISTORICAL_COMPAT_V8_REL]);
+const HISTORICAL_COMPAT_V9_REL = "base44/functions/getCustomerScanResultV9/releaseCompatibility.js";
+const HISTORICAL_COMPAT_RELS = new Set([HISTORICAL_COMPAT_V9_REL, HISTORICAL_COMPAT_REL, HISTORICAL_COMPAT_ALIAS_REL, HISTORICAL_COMPAT_V3_REL, HISTORICAL_COMPAT_V4_REL, HISTORICAL_COMPAT_V5_REL, HISTORICAL_COMPAT_V6_REL, HISTORICAL_COMPAT_V7_REL, HISTORICAL_COMPAT_V8_REL]);
 const HISTORICAL_COMPAT = path.join(ROOT, HISTORICAL_COMPAT_REL);
 const GENERATOR = path.join(ROOT, "scripts/generate_release_contracts.mjs");
 
@@ -298,6 +299,7 @@ test("every declared cross-runtime component is a real marker in shipped code", 
    * in the code it claims to version.
    */
   const owners = {
+    staged_scan_pipeline_version: "scanner-api/app/staged_scan.py",
     admission_reconciliation_version: "base44/functions/durableScanWorkerControl/generatedReleaseContract.js",
     authority_seal_version: "base44/functions/persistDurableScanAuthority/authoritySeal.js",
     customer_projection_version: "base44/functions/getCustomerScanResult/projection.js",

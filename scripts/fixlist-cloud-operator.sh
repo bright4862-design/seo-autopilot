@@ -307,10 +307,14 @@ verify_iam() {
 base44_routes_called() {
   local ref="$1"
   git -C "$REPO_ROOT" show "${ref}:scanner-api/app/scan_job.py" 2>/dev/null \
-    | grep -oE 'invoke_function\([[:space:]]*client,[[:space:]]*"[A-Za-z0-9_]+"' \
-    | grep -oE '"[A-Za-z0-9_]+"' \
-    | tr -d '"' \
-    | sort -u
+    | python3 -c '
+import re, sys
+source = sys.stdin.read()
+routes = set(re.findall(r"invoke_function\(\s*client,\s*(?:worker_function_name\()?\"([A-Za-z0-9_]+)\"", source))
+if "def worker_function_name(" in source:
+    routes.update(route[:-2] + "V9" for route in list(routes) if route.endswith("V8"))
+print("\n".join(sorted(routes)))
+'
 }
 
 # The durable pipeline sends every Cloud Task to POST /scan-job and the

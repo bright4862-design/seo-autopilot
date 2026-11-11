@@ -273,18 +273,23 @@ def _merge_repair_group(
         lead["page_count"] = len(affected)
         merged = _normalize_canonical_repair_evidence(lead, pages, **identity_context)
     else:
-        lead["page_count"] = max(
-            len(affected),
-            sum(max(_diagnostic_count(member.get("page_count")), len(_dedupe_urls(member.get("affected_pages"), **identity_context))) for member in members),
-        )
         breakdown: dict[str, int] = {}
         representatives: dict[str, str] = {}
+        family_samples: dict[str, set[str]] = {}
+        family_members: dict[str, int] = {}
         for member in members:
             member_breakdown = member.get("family_breakdown") if isinstance(member.get("family_breakdown"), dict) else {}
             for family, count in member_breakdown.items():
                 key = _clean_text(family)
                 if key:
-                    breakdown[key] = breakdown.get(key, 0) + max(0, _diagnostic_count(count))
+                    # With incomplete samples, overlap outside the retained
+                    # URLs is unknown. Sum only disjoint family partitions;
+                    # repeated families contribute their maximum proved count.
+                    breakdown[key] = max(breakdown.get(key, 0), max(0, _diagnostic_count(count)))
+                    family_members[key] = family_members.get(key, 0) + 1
+            if len(member_breakdown) == 1:
+                family = next(iter(member_breakdown))
+                family_samples.setdefault(family, set()).update(_dedupe_urls(member.get("affected_pages"), **identity_context))
             member_representatives = (
                 member.get("representative_pages_by_family")
                 if isinstance(member.get("representative_pages_by_family"), dict)
@@ -295,8 +300,22 @@ def _merge_repair_group(
                 value = _clean_text(url)
                 if key and value and key not in representatives:
                     representatives[key] = value
-        if breakdown:
-            lead["family_breakdown"] = breakdown
+        for family, observed_urls in family_samples.items():
+            breakdown[family] = max(breakdown.get(family, 0), len(observed_urls))
+        if not breakdown or sum(breakdown.values()) < len(affected):
+            # Mixed samples without an exact family attribution cannot support
+            # a fabricated partition. Keep a conservative unknown partition.
+            breakdown = {"unknown": max(len(affected), sum(breakdown.values()), max((_diagnostic_count(member.get("page_count")) for member in members), default=0))}
+            lead["page_scope"], lead["page_template_family"] = "mixed", "mixed"
+        lead["page_count"] = sum(breakdown.values())
+        lead["family_breakdown"] = breakdown
+        if len(breakdown) > 1 and lead.get("page_scope") not in {"sitewide", "cross_cutting"}:
+            lead["page_scope"], lead["page_template_family"] = "mixed", "mixed"
+        lead["affected_pages"] = affected[:150]
+        if lead["page_count"] > 150 or any("affected_page_count" in member for member in members):
+            lead["affected_page_count"] = lead["page_count"]
+        if any(count > 1 for count in family_members.values()):
+            lead["affected_page_count_is_lower_bound"] = True
         if representatives:
             lead["representative_pages_by_family"] = representatives
         merged = annotate_repair_identity(lead)
@@ -953,6 +972,10 @@ def _normalize_canonical_repair_evidence(
         if any(not key_for(value) for value in snapshot.get("affected_pages") or []):
             raise CanonicalRepairContractError("unresolvable affected evidence")
     if snapshot.get("affected_pages_complete") is False:
+        if len(snapshot.get("affected_pages") or []) > 150:
+            snapshot = normalize_repair_scope(snapshot, pages, family_resolver=normalize_template_family, **identity_context)
+        if _diagnostic_count(snapshot.get("page_count")) > 150:
+            snapshot["affected_page_count"] = _diagnostic_count(snapshot.get("page_count"))
         return annotate_repair_identity(snapshot)
 
     normalized = normalize_repair_scope(

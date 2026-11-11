@@ -61,6 +61,15 @@
     "scan_claim_expires_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "page_cap": {
+      "type": "integer",
+      "enum": [
+        150,
+        500
+      ],
+      "default": 150,
+      "description": "Administrator-controlled scan entitlement. A 500-page grant also requires staged cohort activation."
     }
   },
   "required": [

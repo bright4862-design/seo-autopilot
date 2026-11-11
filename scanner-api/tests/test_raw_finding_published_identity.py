@@ -178,6 +178,11 @@ async def test_unsampled_internal_link_probe_verifies_broken_target_without_expa
     monkeypatch.setitem(scanner.SCAN_BUDGETS, "basic", {
         "max_pages": 4, "timeout": 20, "fetch_timeout": 3, "max_sitemap_fetches": 2,
     })
+    # Fix the assessed sample explicitly: this test exercises the separate
+    # unsampled-link probe contract, independent of evolving importance ranks.
+    monkeypatch.setattr(scanner, "select_balanced_urls", lambda *_args, **_kwargs: [
+        ORIGIN + path for path in ("/a", "/b", "/c")
+    ])
     requests = mock_network({
         ORIGIN + "/robots.txt": {"body": "User-agent: *\nAllow: /", "content_type": "text/plain"},
         ORIGIN + "/sitemap.xml": {"body": "<urlset/>", "content_type": "application/xml"},

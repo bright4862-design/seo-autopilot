@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import re
-from collections import defaultdict
-from typing import Any, Callable, Iterable
+import hashlib
+import math
+from collections import Counter, defaultdict
+from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import urlparse
 
 from .extract import is_legal_page_path, is_route_boundary
 from .market_scope import strip_market_locale_prefix
 
-SAMPLING_VERSION = "balanced_sitemap_buckets_v7_commercial_hubs_before_repeated_leaves"
+SAMPLING_VERSION = "balanced_sitemap_buckets_v8_importance_section_quotas"
 TRUST_PREFIXES = (
     "/about", "/contact", "/privacy", "/terms", "/legal", "/mentions-legales",
     "/cgv", "/security", "/impressum", "/conditions", "/a-propos",
@@ -104,6 +106,42 @@ def selection_role(path: str, family: str) -> str:
     return family if family in MONEY_FAMILIES else "diagnostic"
 
 
+def route_pattern(path: str) -> str:
+    """A sampling pattern only; never use this as a request/evidence identity."""
+    parts = [part for part in route_signature(path).split("/") if part]
+    if not parts:
+        return "/"
+    for index, part in enumerate(parts):
+        if part.isdigit():
+            parts[index] = ":id"
+        elif any(char.isdigit() for char in part) or (len(parts) >= 2 and index == len(parts) - 1):
+            parts[index] = ":slug"
+    return "/" + "/".join(parts)
+
+
+def section_keys(urls: Iterable[str], path_of: Callable[[str], str]) -> dict[str, str]:
+    """Partition by locale-stripped section; split dominant repeated branches.
+
+    Standalone top-level pages share the root section; an inventory section's
+    actual hub belongs to that section. Dominant sections split at genuine
+    subdirectories, never into thousands of leaf slugs.
+    """
+    paths = {url: [part for part in strip_locale_prefix(path_of(url)).split("/") if part] for url in urls}
+    branch_roots = {parts[0] for parts in paths.values() if len(parts) >= 2}
+    keys = {url: "/" + parts[0] if parts and (len(parts) >= 2 or parts[0] in branch_roots) else "/" for url, parts in paths.items()}
+    counts = Counter(keys.values())
+    for section, count in counts.items():
+        if section == "/" or count <= len(paths) / 2:
+            continue
+        branches = Counter(parts[1] for url, parts in paths.items() if keys[url] == section and len(parts) >= 3)
+        if sum(value >= 2 for value in branches.values()) < 2:
+            continue
+        for url, parts in paths.items():
+            if keys[url] == section and len(parts) >= 2 and branches[parts[1]] >= 2:
+                keys[url] = section + "/" + parts[1]
+    return keys
+
+
 def select_balanced_urls(
     urls: Iterable[str],
     family_of: Callable[[str], str],
@@ -111,136 +149,197 @@ def select_balanced_urls(
     budget: int,
     *,
     preferred_market: str = "",
+    homepage_links: Iterable[str] = (),
+    lastmod: Mapping[str, str] | None = None,
+    importance_scores: Mapping[str, Any] | None = None,
 ) -> list[str]:
-    urls = list(urls)
+    """Select sections before volume, retaining commercial and trust reserves.
+
+    Floors are bounded by available URLs and allocated in rounds, so when a
+    budget cannot fit every three-page floor it still covers as many sections
+    as possible. Locale/query duplicates fill only after fresh routes.
+    """
+    urls = list(dict.fromkeys(urls))
+    homepage_links = tuple(homepage_links)
     if budget <= 0:
         return []
     if len(urls) <= budget:
         return urls
+    from .page_importance import build_page_importance
 
-    # This is a scheduling key, separate from exact request/evidence identities.
-    # Only a verified/explicit leading locale hint may affect market preference.
-    market_parts = str(preferred_market or "").strip("/").split("/")
-    market_parts = market_parts if 1 <= len(market_parts) <= 2 and all(LOCALE_SEGMENT_RE.fullmatch(part) for part in market_parts) else []
-    market_prefix = "/" + "/".join(part.lower() for part in market_parts) if market_parts else ""
     paths = {url: path_of(url) for url in urls}
     families = {url: family_of(url) for url in urls}
     roles = {url: selection_role(paths[url], families[url]) for url in urls}
     signatures = {url: route_signature(paths[url]) for url in urls}
+    scores = importance_scores or build_page_importance(urls, family_of, path_of, homepage_links=homepage_links, lastmod=lastmod)
+    navigation = set(homepage_links)
+    market_parts = str(preferred_market or "").strip("/").split("/")
+    valid_market = 1 <= len(market_parts) <= 2 and all(LOCALE_SEGMENT_RE.fullmatch(part) for part in market_parts)
+    market_prefix = "/" + "/".join(part.lower() for part in market_parts) if valid_market else ""
+
+    def importance(url: str) -> float:
+        value = scores.get(url, 0.0)
+        if isinstance(value, Mapping):
+            value = value.get("importance_score", 0.0)
+        try:
+            return min(1.0, max(0.0, float(value)))
+        except (TypeError, ValueError):
+            return 0.0
 
     def rank(url: str) -> tuple:
         path = str(paths[url]).lower().split("?", 1)[0].split("#", 1)[0]
         preferred = bool(market_prefix) and (path == market_prefix or path.startswith(market_prefix + "/"))
-        return (not preferred, signatures[url], url)
+        return (not preferred, -importance(url), hashlib.sha256(url.encode("utf-8")).hexdigest(), url)
 
-    urls = sorted(set(urls), key=rank)
-    buckets: dict[str, list[str]] = defaultdict(list)
-    role_buckets: dict[str, list[str]] = defaultdict(list)
+    urls.sort(key=rank)
+    # Pick a preferred-market representative before spending on translations.
+    fresh_urls, repeats, known = [], [], set()
     for url in urls:
-        buckets[families[url]].append(url)
-        role_buckets[roles[url]].append(url)
+        signature = signatures[url]
+        if signature in known:
+            repeats.append(url)
+        else:
+            fresh_urls.append(url)
+            known.add(signature)
+    # Allocate section quotas *inside* the preferred market. Replacing a
+    # finished selection with the first preferred URLs would undo every quota
+    # on locale-prefixed sites and let one recognized family consume the cap.
+    if market_prefix:
+        preferred = [url for url in fresh_urls if rank(url)[0] is False]
+        if preferred:
+            if len(preferred) >= budget:
+                return select_balanced_urls(
+                    preferred, family_of, path_of, budget,
+                    homepage_links=homepage_links, lastmod=lastmod,
+                    importance_scores=scores,
+                )
+            preferred_set = set(preferred)
+            remaining = select_balanced_urls(
+                [url for url in fresh_urls if url not in preferred_set] + repeats,
+                family_of, path_of, budget - len(preferred),
+                homepage_links=homepage_links, lastmod=lastmod,
+                importance_scores=scores,
+            )
+            return preferred + remaining
+    sections = section_keys(fresh_urls, path_of)
+    buckets: dict[str, list[str]] = defaultdict(list)
+    for url in fresh_urls:
+        buckets[sections[url]].append(url)
 
-    selected: list[str] = []
-    chosen: set[str] = set()
-    seen_signatures: set[str] = set()
+    def spread(values: list[str]) -> list[str]:
+        patterns: dict[str, list[str]] = defaultdict(list)
+        for url in values:
+            patterns[route_pattern(paths[url])].append(url)
+        pattern_order = sorted(patterns, key=lambda key: rank(patterns[key][0]))
+        output = []
+        for index in range(max((len(group) for group in patterns.values()), default=0)):
+            for pattern in pattern_order:
+                if index < len(patterns[pattern]):
+                    output.append(patterns[pattern][index])
+        return output
+
+    buckets = {section: spread(values) for section, values in buckets.items()}
+    section_order = sorted(buckets, key=lambda section: rank(buckets[section][0]))
+    selected, chosen = [], set()
+    counts = Counter()
 
     def take(url: str) -> bool:
         if url in chosen or len(selected) >= budget:
             return False
         chosen.add(url)
-        seen_signatures.add(signatures[url])
         selected.append(url)
+        counts[sections[url]] += 1
         return True
 
-    def fresh(candidates: Iterable[str]) -> list[str]:
-        """One exact URL per new sampling route; repeats can fill unused space."""
-        result = []
-        pending: set[str] = set()
-        for url in candidates:
-            signature = signatures[url]
-            if url not in chosen and signature not in seen_signatures and signature not in pending:
-                pending.add(signature)
-                result.append(url)
-        return result
-
-    def interleave(groups: dict[str, list[str]]) -> Iterable[str]:
-        pending = {key: iter(values) for key, values in sorted(groups.items()) if values}
-        while pending:
-            for key in list(pending):
-                try:
-                    yield next(pending[key])
-                except StopIteration:
-                    del pending[key]
-
-    trust_candidates = [url for url in urls if is_trust_path(paths[url])]
-    trust_fresh = fresh(trust_candidates)
-    trust_fresh_set = set(trust_fresh)
-    trust_order = trust_fresh + [url for url in trust_candidates if url not in trust_fresh_set]
-    for url in trust_order[:TRUST_RESERVE]:
+    # Exact homepage, bounded trust, then observed navigation.
+    for url in fresh_urls:
+        if signatures[url] == "/":
+            take(url)
+    for url in [url for url in fresh_urls if is_trust_path(paths[url])][:TRUST_RESERVE]:
         take(url)
     reserved_trust = list(selected)
+    for url in [url for url in fresh_urls if url in navigation][:max(1, int(budget * 0.15))]:
+        take(url)
+    reserved_nav = [url for url in selected if url not in reserved_trust]
 
-    # Hubs lead to many commercial pages. Reserve half the sample for distinct
-    # available hubs before a large activity/product inventory takes the fill.
-    # Keep a separate bounded leaf reserve so we still review actual inventory.
+    # One head in every section before a second or third representative.
+    heads = []
+    for round_index in range(3):
+        for section in section_order:
+            want = min(3, len(buckets[section]))
+            if counts[section] >= min(want, round_index + 1):
+                continue
+            candidate = next((url for url in buckets[section] if url not in chosen), None)
+            if candidate and take(candidate) and round_index == 0:
+                heads.append(candidate)
+
+    # Preserve v7's demonstrated business-identity protections, after section
+    # floors so an unfamiliar vocabulary can no longer be starved by them.
     for allowed_roles, limit in ((HUB_ROLES, budget // 2), (LEAF_ROLES, min(IDENTITY_RESERVE, max(1, budget // 4)))):
-        added = 0
-        for url in interleave({role: fresh(values) for role, values in role_buckets.items() if role in allowed_roles}):
-            if added >= limit or len(selected) >= budget:
-                break
-            if signatures[url] not in seen_signatures and take(url):
-                added += 1
+        available: dict[str, list[str]] = defaultdict(list)
+        for url in fresh_urls:
+            if roles[url] in allowed_roles and url not in chosen:
+                available[roles[url]].append(url)
+        have = sum(roles[url] in allowed_roles for url in selected)
+        while available and have < limit and len(selected) < budget:
+            for role in sorted(list(available)):
+                if have >= limit:
+                    break
+                if take(available[role].pop(0)):
+                    have += 1
+                if not available[role]:
+                    del available[role]
 
-    min_per_family = 1 if budget < SMALL_BUDGET else MIN_PER_MATERIAL_FAMILY
-    for family in sorted(f for f, values in buckets.items() if len(values) >= MATERIAL_THRESHOLD):
-        want = min(min_per_family, len({signatures[url] for url in buckets[family]}))
-        have = len({signatures[url] for url in selected if families[url] == family})
-        for url in fresh(buckets[family]):
-            if have >= want or len(selected) >= budget:
-                break
-            if take(url):
-                have += 1
-
-    for family, family_urls in sorted(buckets.items()):
-        if len(family_urls) < MATERIAL_THRESHOLD:
-            take(family_urls[0])
-
-    remaining = budget - len(selected)
-    if remaining > 0:
-        pool = {role: fresh(values) for role, values in role_buckets.items()}
-        weights = {
-            role: len(values) * (HUB_WEIGHT if role in HUB_ROLES else MONEY_WEIGHT if role in MONEY_FAMILIES else 1.0)
-            for role, values in pool.items() if values
-        }
-        total = sum(weights.values())
-        if total > 0:
-            quotas = {role: int(remaining * weight / total) for role, weight in weights.items()}
-            for url in interleave({role: pool[role][:quota] for role, quota in quotas.items()}):
-                if signatures[url] not in seen_signatures:
-                    take(url)
-
-    # Use fresh paths across every role before any remaining language/query
-    # variants. This changes selection, never the exact URLs we fetch or seal.
-    for url in fresh(urls) + urls:
+    # Floors precede square-root proportional fill. Deficit allocation reuses
+    # capacity from exhausted sections without a sitemap-order-dependent tail.
+    weights = {}
+    for section, values in buckets.items():
+        mean_score = sum(importance(url) for url in values) / len(values)
+        role_weight = sum(HUB_WEIGHT if roles[url] in HUB_ROLES else MONEY_WEIGHT if roles[url] in LEAF_ROLES else 1.0 for url in values) / len(values)
+        weights[section] = math.sqrt(len(values)) * (0.2 + mean_score) * role_weight
+    total_weight = sum(weights.values())
+    targets = {section: budget * weight / total_weight for section, weight in weights.items()}
+    # A 40% ceiling is feasible only when at least three sizeable sections can
+    # supply the balance. Small /trust and singleton sections do not count.
+    sizeable = [section for section, values in buckets.items() if len(values) >= max(3, int(budget * 0.2)) and not all(is_trust_path(paths[url]) for url in values)]
+    ceiling = max(1, int(budget * 0.4)) if len(sizeable) >= 4 else budget
+    remaining = {section: [url for url in values if url not in chosen] for section, values in buckets.items()}
+    while len(selected) < budget:
+        eligible = [section for section in section_order if remaining[section] and counts[section] < ceiling]
+        if not eligible:
+            eligible = [section for section in section_order if remaining[section]]
+        if not eligible:
+            break
+        section = min(eligible, key=lambda key: (counts[key] / max(targets[key], 0.000001), rank(remaining[key][0])))
+        take(remaining[section].pop(0))
+    # Repeated routes fill unused space; original exact URL identities survive.
+    for url in repeats:
         if len(selected) >= budget:
             break
-        take(url)
+        if url not in chosen:
+            chosen.add(url)
+            selected.append(url)
 
-    # Membership and fetch order answer different questions. Two hub rounds
-    # followed by one leaf/diagnostic round gives deadlines a diverse prefix,
-    # instead of fetching all pages from the largest XML family first.
-    pending_hubs = {role: iter([url for url in selected if url not in reserved_trust and roles[url] == role]) for role in sorted(HUB_ROLES)}
-    pending_leaves = {role: iter([url for url in selected if url not in reserved_trust and roles[url] == role]) for role in sorted(LEAF_ROLES)}
-    pending_diagnostics = {family: iter([url for url in selected if url not in reserved_trust and roles[url] == "diagnostic" and families[url] == family]) for family in sorted(buckets)}
-    ordered = list(reserved_trust)
-    while pending_hubs or pending_leaves or pending_diagnostics:
-        for groups in (pending_hubs, pending_hubs, pending_leaves, pending_diagnostics):
-            for key in list(groups):
-                try:
-                    ordered.append(next(groups[key]))
-                except StopIteration:
-                    del groups[key]
+    # Fetch order leads with nav/heads, then commercial hubs before more leaves.
+    selected_set = set(selected)
+    leading = reserved_trust + reserved_nav + sorted(set(heads), key=rank)
+    leading = [url for url in dict.fromkeys(leading) if url in selected_set]
+    leading_set = set(leading)
+    groups = [{}, {}, {}]
+    for url in sorted((url for url in selected if url not in leading_set), key=rank):
+        group = groups[0] if roles[url] in HUB_ROLES else groups[1] if roles[url] in LEAF_ROLES else groups[2]
+        group.setdefault(roles[url] if group is not groups[2] else families[url], []).append(url)
+    ordered = list(leading)
+    while any(groups):
+        for group in (groups[0], groups[0], groups[0], groups[1], groups[2]):
+            for key in sorted(list(group)):
+                ordered.append(group[key].pop(0))
+                if not group[key]:
+                    del group[key]
+    if market_prefix:
+        ordered.sort(key=lambda url: rank(url)[0])
     return ordered
+
 
 
 def sampling_report(
@@ -296,6 +395,11 @@ def sampling_report(
 
     identity_selected = [url for url in selected if family_of(url) in MONEY_FAMILIES]
     identity_all = [url for url in all_urls if family_of(url) in MONEY_FAMILIES]
+    inventory_patterns = Counter(route_pattern(path_of(url)) for url in all_urls)
+    selected_patterns = Counter(route_pattern(path_of(url)) for url in selected)
+    sections = section_keys(all_urls, path_of)
+    discovered_sections = Counter(sections.values())
+    selected_sections = Counter(sections[url] for url in selected if url in sections)
 
     # Every count below is built from `selected` -- the URLs chosen for an
     # attempt, before a single page has been fetched. The word "sampled" read as
@@ -339,6 +443,13 @@ def sampling_report(
         "markets_discovered": dict(markets),
         "path_prefixes_discovered": top_path_prefixes,
         "identity_pages_in_sitemap": len(identity_all),
+        "sections_discovered": dict(discovered_sections),
+        "sections_selected": {key: selected_sections[key] for key in discovered_sections},
+        "sections_never_selected": sorted(key for key in discovered_sections if not selected_sections[key]),
+        "route_patterns": {
+            key: {"inventory_count": count, "selected_count": selected_patterns[key]}
+            for key, count in sorted(inventory_patterns.items())
+        },
         **selection,
         **legacy_aliases,
     }
@@ -368,10 +479,12 @@ def enrich_checked_coverage(
     """
     pages = [page for page in (checked_pages or []) if isinstance(page, dict)]
     prefix_counts: dict[str, int] = defaultdict(int)
+    pattern_counts: Counter[str] = Counter()
     for page in pages:
         url = str(page.get("final_url") or page.get("url") or "").strip()
         if not url:
             continue
+        pattern_counts[route_pattern(path_of(url))] += 1
         segments = [segment for segment in str(path_of(url) or "/").split("/") if segment]
         if segments:
             prefix_counts[f"/{segments[0]}"] += 1
@@ -381,4 +494,8 @@ def enrich_checked_coverage(
     discovered = report.get("path_prefixes_discovered") or {}
     report["pages_checked"] = len(pages)
     report["path_prefixes_checked"] = {key: prefix_counts.get(key, 0) for key in discovered}
+    patterns = report.setdefault("route_patterns", {})
+    for pattern in set(patterns) | set(pattern_counts):
+        row = patterns.setdefault(pattern, {"inventory_count": 0, "selected_count": 0})
+        row["checked_count"] = pattern_counts[pattern]
     return report

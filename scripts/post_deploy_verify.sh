@@ -329,6 +329,21 @@ else
 fi
 
 echo
+if [ "${VERIFY_STAGED_SCAN_PIPELINE:-0}" = "1" ]; then
+  echo "=== 8. Staged workspace and queue contract ==="
+  if [ -z "${SCAN_WORKSPACE_BUCKET:-}" ] || [ -z "${SCAN_STAGE_QUEUE:-}" ] || [ -z "${SCAN_STAGE_TARGET_URL:-}" ]; then
+    fail "staged verification requires SCAN_WORKSPACE_BUCKET, SCAN_STAGE_QUEUE and SCAN_STAGE_TARGET_URL"
+  elif python3 scripts/verify_staged_scan_infra.py \
+    --project "$PROJECT" --region "$REGION" \
+    --bucket "$SCAN_WORKSPACE_BUCKET" --queue "$SCAN_STAGE_QUEUE" \
+    --worker-sa "$EXPECTED_RUNTIME_SA" --invoker-sa "$EXPECTED_INVOKER_SA" \
+    --worker-url "$SCAN_STAGE_TARGET_URL"; then
+    pass "staged bucket, queue and scoped IAM match the reviewed contract"
+  else
+    fail "staged workspace or queue verification failed"
+  fi
+fi
+
 echo "=== Result ==="
 if [ "$FAILED" -gt 0 ]; then
   echo "POST-DEPLOY VERIFICATION FAILED ($FAILED check(s))"

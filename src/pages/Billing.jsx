@@ -248,6 +248,7 @@ export default function Billing() {
           <h1 className="mt-2 text-[28px] font-semibold leading-tight tracking-[-0.035em]">Billing</h1>
           <p className="mt-2 max-w-[54ch] text-[15px] leading-relaxed text-ink-muted">
             Standard 150 access is a one-time payment. Checkout is securely handled by Stripe.
+            {access?.fullAccess ? ` Your account has a ${access.record?.page_cap === 500 ? 500 : 150}-page scan budget.` : ""}
           </p>
         </div>
 

@@ -16,7 +16,7 @@ test("required copy is present verbatim", () => {
   // Both spec strings are pinned in siteOwnershipRobotsPolicy.test.mjs.
   assert.match(scanForm, /const scanSpecLine = scanSpecForOwnership\(siteOwnership\);/);
   assert.match(scanForm, /Business or website name \(optional\)/);
-  assert.match(scanForm, /Scans up to 150 pages\. Larger sites coming soon\./);
+  assert.match(scanForm, /The page budget is set by your account\./);
   assert.match(scanForm, /Scan time varies by site\. FixList will tell you when it’s safe to leave this page\./);
 });
 

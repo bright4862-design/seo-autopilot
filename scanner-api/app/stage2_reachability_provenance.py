@@ -7,11 +7,13 @@ no value in this module is evidence of sitewide orphaning.
 """
 from __future__ import annotations
 
+from .scan_limits import DEFAULT_PAGE_CAP, current_page_cap
+
 from typing import Any
 
 REACHABILITY_PROVENANCE_VERSION = "money_page_reachability_provenance_v1"
 REACHABILITY_SCOPE = "observed_standard150_sample_only"
-MAX_ASSESSED_PAGES = 150
+MAX_ASSESSED_PAGES = DEFAULT_PAGE_CAP
 MAX_DISCOVERY_TARGETS = MAX_ASSESSED_PAGES * 8
 MAX_SOURCE_SAMPLES = 20
 MAX_OUTGOING_LINKS_PER_SOURCE = 2000
@@ -153,9 +155,9 @@ def observed_crawl_depths(
     A sitemap listing never creates an edge. Depth is therefore unknown for a
     sitemap-only page rather than being invented from crawl order.
     """
-    if not isinstance(pages, list) or len(pages) > MAX_ASSESSED_PAGES:
-        raise ValueError("Expected at most 150 assessed pages")
-    if not isinstance(discovery, dict) or len(discovery) > MAX_DISCOVERY_TARGETS:
+    if not isinstance(pages, list) or len(pages) > current_page_cap():
+        raise ValueError(f"Expected at most {current_page_cap()} assessed pages")
+    if not isinstance(discovery, dict) or len(discovery) > current_page_cap() * 8:
         raise ValueError("Discovery graph exceeds the bounded Standard-150 frontier")
     accepted_sources = _accepted_source_urls(pages)
     seed = _text(seed_url)
@@ -165,7 +167,7 @@ def observed_crawl_depths(
     depths: dict[str, int] = {seed: 0}
     # The accepted assessed set is at most 150 pages. Repeated relaxation avoids
     # depending on concurrent fetch/queue order while remaining tightly bounded.
-    for _ in range(MAX_ASSESSED_PAGES):
+    for _ in range(current_page_cap()):
         changed = False
         for target, sources in edges.items():
             source_depths = [depths[source] for source in sources if source in depths]
@@ -191,11 +193,11 @@ def enrich_pages_with_reachability_provenance(
     The number/order of pages is unchanged. All counts are scoped to verified
     links observed on accepted pages inside the retained Standard-150 sample.
     """
-    if not isinstance(pages, list) or len(pages) > MAX_ASSESSED_PAGES:
-        raise ValueError("Expected at most 150 assessed pages")
+    if not isinstance(pages, list) or len(pages) > current_page_cap():
+        raise ValueError(f"Expected at most {current_page_cap()} assessed pages")
     if any(not isinstance(page, dict) for page in pages):
         raise ValueError("Expected page dictionaries")
-    if not isinstance(discovery, dict) or len(discovery) > MAX_DISCOVERY_TARGETS:
+    if not isinstance(discovery, dict) or len(discovery) > current_page_cap() * 8:
         raise ValueError("Discovery graph exceeds the bounded Standard-150 frontier")
 
     accepted_sources = _accepted_source_urls(pages)
@@ -280,8 +282,8 @@ def enrich_pages_from_retained_link_evidence(pages: list[dict[str, Any]]) -> lis
     target are retained assessed pages, and then removes the private link cache
     before the scan result can be returned or persisted.
     """
-    if not isinstance(pages, list) or len(pages) > MAX_ASSESSED_PAGES:
-        raise ValueError("Expected at most 150 assessed pages")
+    if not isinstance(pages, list) or len(pages) > current_page_cap():
+        raise ValueError(f"Expected at most {current_page_cap()} assessed pages")
     if any(not isinstance(page, dict) for page in pages):
         raise ValueError("Expected page dictionaries")
 

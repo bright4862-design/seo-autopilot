@@ -339,3 +339,22 @@ from the authenticated owner workstation). Base44 CLI authentication uses a
 device-code session stored under the owner's home directory. Never copy that
 refresh-token-bearing auth file into a hosted Actions secret; the scripts use
 the existing session, verify it with `whoami`, and fail closed when it is absent.
+
+
+## Staged pipeline variables (opt-in V9 candidate)
+
+The existing monolith/V8 contract remains the default. The staged candidate is described in [the rollout runbook](scans/staged-scan-runbook.md); it is not enabled by adding these source files. Preserve the existing variables and signing-secret references when deploying a candidate.
+
+| Variable | Purpose |
+| --- | --- |
+| `SCAN_PIPELINE_MODE` | `monolith` by default; `staged` admits only the explicit owner cohort. |
+| `SCAN_STAGED_OWNER_IDS` | Same comma-separated owner IDs in Base44, gateway and worker. |
+| `SCAN_PIPELINE_OWNER_IDS` | Worker compatibility alias; prefer `SCAN_STAGED_OWNER_IDS`. |
+| `SCAN_WORKSPACE_BUCKET` | Private GCS bucket; configured storage must remain available while staged scans drain. |
+| `SCAN_TASKS_PROJECT`, `SCAN_TASKS_LOCATION`, `SCAN_STAGE_QUEUE` | Explicit project/location/queue for stage dispatch. |
+| `SCAN_STAGE_TASKS_QUEUE_PATH` | Full stage queue path; `SCAN_STAGE_QUEUE_PATH` is a worker compatibility alias. |
+| `SCAN_STAGE_TARGET_URL` | Pinned worker origin for stage tasks; `SCAN_STAGE_WORKER_URL` is a compatibility alias. |
+| `VITE_SCAN_FUNCTION_GENERATION` | Frontend defaults to V8; V9 only after its packages and schema are verified. |
+| `VERIFY_STAGED_SCAN_PIPELINE` | Set to `1` to include the private bucket/stage queue verifier in post-deploy checks. |
+
+`TASKS_INVOKER_SERVICE_ACCOUNT` remains the only stage-task invoker identity. Workspace deletion uses the existing signed dispatch gateway and drain queue, with the scan stopped and a scan-wide tombstone before storage deletion. Stage retries must span the 450-second lease: the candidate pins ten attempts, 10–120 second backoff, four doublings and a 1,800-second retry window. No live configuration has been verified by local implementation.

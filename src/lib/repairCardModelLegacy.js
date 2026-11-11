@@ -100,9 +100,12 @@ const affectedOf = (item) => {
 };
 
 const countOf = (item) => {
-  const declared = Number(item?.pageCount ?? item?.page_count ?? 0);
+  const declared = Math.max(...[item?.pageCount, item?.page_count, item?.affected_page_count, item?.original?.affected_page_count].map(value => Number(value) || 0));
   return Math.max(affectedOf(item).length, Number.isFinite(declared) ? declared : 0);
 };
+
+const countIsLowerBound = (item) => item?.affected_page_count_is_lower_bound === true
+  || item?.original?.affected_page_count_is_lower_bound === true;
 
 function breakdownOf(item) {
   const raw = item?.familyBreakdown || item?.family_breakdown;
@@ -128,6 +131,7 @@ function breakdownOf(item) {
 export function whereLine(item) {
   const count = countOf(item);
   if (count <= 0) return "";
+  const quantity = `${countIsLowerBound(item) ? "At least " : ""}${count}`;
   const noun = count === 1 ? "page" : "pages";
   const breakdown = Object.entries(breakdownOf(item));
   const named = breakdown
@@ -136,16 +140,16 @@ export function whereLine(item) {
     .map(([family]) => familyWord(family));
   const hasUnnamed = breakdown.length > named.length;
 
-  if (named.length === 0) return `${count} ${noun} on your site.`;
+  if (named.length === 0) return `${quantity} ${noun} on your site.`;
   if (named.length === 1 && !hasUnnamed) {
     const only = breakdown.find(([family]) => familyWord(family));
-    return `${count} ${familyNoun(only[0], count)}.`;
+    return `${quantity} ${familyNoun(only[0], count)}.`;
   }
   const listed = hasUnnamed ? [...named, "other"] : named;
   const spread = listed.length <= 3
     ? `${listed.slice(0, -1).join(", ")} and ${listed[listed.length - 1]}`
     : `${listed.slice(0, 3).join(", ")} and other`;
-  return `${count} ${noun}, across ${spread} pages.`;
+  return `${quantity} ${noun}, across ${spread} pages.`;
 }
 
 export function customerActionKey(item, fallbackRowIdentity = "") {
@@ -388,7 +392,9 @@ export function mergeCustomerActions(items = []) {
         breakdown[family] = (breakdown[family] || 0) + count;
       }
     }
-    const declared = members.reduce((total, member) => total + countOf(member), 0);
+    const declared = members.some(countIsLowerBound)
+      ? Math.max(...members.map(countOf))
+      : members.reduce((total, member) => total + countOf(member), 0);
     const namedFamilies = Object.keys(breakdown).filter((family) => familyWord(family));
     const spansFamilies = namedFamilies.length > 1;
     return {
@@ -398,6 +404,7 @@ export function mergeCustomerActions(items = []) {
       affected_pages: affected,
       pageCount: Math.max(declared, affected.length),
       page_count: Math.max(declared, affected.length),
+      ...(members.some(countIsLowerBound) ? { affected_page_count_is_lower_bound: true } : {}),
       familyBreakdown: breakdown,
       family_breakdown: breakdown,
       evidenceGroups: evidenceGroupsFor(members),
@@ -439,6 +446,7 @@ export function buildRepairCard(item = {}) {
       ...(evidenceIdentityOptions(item).identityVersion ? evidenceIdentityOptions(item) : {}),
       affectedPages: affected,
       pageCount: countOf(item),
+      ...(countIsLowerBound(item) ? { pageCountIsLowerBound: true } : {}),
       familyBreakdown: breakdownOf(item),
       representativePages: affected.slice(0, 3),
       mergedFromFixIds: Array.isArray(item.mergedFromFixIds) ? item.mergedFromFixIds : [],
@@ -464,7 +472,7 @@ function scopeHintFor(card = {}) {
   if (scope === "section" || scope === "path_prefix") return "One section";
 
   const count = Number(card?.evidence?.pageCount || 0);
-  if (count > 0) return `${count} specific ${count === 1 ? "page" : "pages"}`;
+  if (count > 0) return `${card?.evidence?.pageCountIsLowerBound ? "At least " : ""}${count} specific ${count === 1 ? "page" : "pages"}`;
 
   const label = customerEvidenceClassLabel(card?.evidenceClass);
   return label || "";

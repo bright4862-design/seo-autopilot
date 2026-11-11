@@ -13,15 +13,16 @@
     "focused_scan_scope_version": "focused_scan_scope_v3_fullsite_scope_type_case_preserved_candidates",
     "limited_result_integrity_version": "standard_limited_result_integrity_v5_report_evidence",
     "priority_summary_version": "priority_summary_v1_action_band_consistent",
-    "repair_presentation_contract_version": "repair_presentation_v6_published_content_evidence",
     "repair_invariant_version": "repair_invariant_v2_published_route_identity",
+    "repair_presentation_contract_version": "repair_presentation_v6_published_content_evidence",
     "repair_suggestion_library_version": "v2_stage1_content_evidence",
     "repair_write_contract_version": "repair_contract_v2_shadow_calibrated",
     "review_attestation_version": "standard_review_snapshot_hmac_identity_v1",
     "sampling_disclosure_version": "sampling_disclosure_v5_selection_language",
     "scan_history_delete_version": "scan_history_delete_v2_drain_children",
-    "scan_history_version": "scan_history_v3_focused_parent_children"
+    "scan_history_version": "scan_history_v3_focused_parent_children",
+    "staged_scan_pipeline_version": "staged_scan_pipeline_v1_sequential_workspace_cas"
   },
-  "note": "Canonical cross-runtime release components. Standard 150 now includes a domain-separated two-fix customer preview seal created only after full authority persistence verifies; the V7 customer reader may verify that bounded preview without reconstructing the full FixList. Existing full authority, limited-result integrity, history, focused-scan, robots, admission, and repair contracts remain unchanged.",
+  "note": "Canonical cross-runtime release components. Staged execution and the V9 150/500 cap contract are an offline candidate behind owner-cohort activation. Historical authority, preview, and limited-result domains remain readable.",
   "schema_version": "cross_runtime_release_components_v1"
 }

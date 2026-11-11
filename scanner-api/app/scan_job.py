@@ -19,7 +19,9 @@ import multiprocessing as mp
 import os
 import re
 import time
-from contextlib import asynccontextmanager
+from copy import deepcopy
+from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
 from typing import Any
 from urllib.parse import urlparse
 
@@ -32,6 +34,7 @@ from .acceptance_evidence import (
 )
 from .observability import emit
 from .page_output_privacy import project_scan_result_for_external_boundary
+from .scan_limits import current_page_cap, page_cap_for_mode, scan_page_limit
 
 WORKER_VERSION = "scan_job_worker_v1_cloud_tasks"
 CONTROL_VERSION = "durable_standard150_control_v1"
@@ -56,6 +59,44 @@ LOCAL_REVIEW_PROCESS_JOIN_GRACE_SECONDS = 1.0
 WORKER_HEARTBEAT_INTERVAL_SECONDS = 60.0
 
 TERMINAL_STATUSES = frozenset({"complete", "limited", "failed", "cancelled"})
+
+_function_generation = ContextVar("worker_function_generation", default="V8")
+
+
+@contextmanager
+def worker_function_generation(generation: str):
+    """Opt a trusted worker stage into V9 without changing legacy invocations."""
+    if generation not in {"V8", "V9"}:
+        raise ValueError("Unsupported worker function generation")
+    token = _function_generation.set(generation)
+    try:
+        yield
+    finally:
+        _function_generation.reset(token)
+
+
+def worker_function_name(legacy_name: str) -> str:
+    return legacy_name.removesuffix("V8") + _function_generation.get()
+
+
+def compact_v9_transport_document(document: dict[str, Any]) -> dict[str, Any]:
+    """Remove identical legacy aliases without dropping observed populations.
+
+    The workspace retains the original evidence. Both V9 producers read these
+    aliases in the order below, so retaining the first and removing only equal
+    copies leaves authority reconstruction unchanged and bounds transport cost.
+    """
+    compact = dict(document)
+    for aliases in (
+        ("crawled_pages", "pages", "scanned_pages", "crawl_pages"),
+        ("recommendations", "fixes", "findings", "cleaned_fixes", "raw_fixes", "recommended_actions", "grouped_findings"),
+    ):
+        primary = next((key for key in aliases if isinstance(compact.get(key), list) and compact[key]), None)
+        if primary:
+            for key in aliases:
+                if key != primary and compact.get(key) == compact[primary]:
+                    compact.pop(key, None)
+    return compact
 
 
 def diagnostic_classifier_marker(review: dict[str, Any]) -> str:
@@ -141,6 +182,7 @@ def build_control_envelope(
     scan_id: str | None = None,
     identity: dict[str, Any] | None = None,
     failure: dict[str, Any] | None = None,
+    progress: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     signed = {
         "version": CONTROL_VERSION,
@@ -149,6 +191,8 @@ def build_control_envelope(
         "identity": identity,
         "failure": failure,
     }
+    if action == "progress":
+        signed["progress"] = progress
     return {**signed, "proof": create_authority_seal(signed, signing_key)}
 
 
@@ -205,7 +249,7 @@ async def read_scan_run(client: httpx.AsyncClient, scan_id: str) -> dict[str, An
     if not signing_key or not clean_scan_id:
         return None
     envelope = build_control_envelope("read", signing_key, scan_id=clean_scan_id)
-    response = await invoke_function(client, "durableScanWorkerControlV8", envelope, timeout=20.0)
+    response = await invoke_function(client, worker_function_name("durableScanWorkerControlV8"), envelope, timeout=20.0)
     if response["status_code"] != 200 or response["body"].get("success") is not True:
         return None
     scan = response["body"].get("scanRun")
@@ -219,12 +263,43 @@ async def mark_scan_started(client: httpx.AsyncClient, scan: dict[str, Any]) -> 
     if not signing_key or not all(identity.values()):
         raise RuntimeError("Durable scan start signing is not configured.")
     envelope = build_control_envelope("start", signing_key, identity=identity)
-    response = await invoke_function(client, "durableScanWorkerControlV8", envelope, timeout=20.0)
+    response = await invoke_function(client, worker_function_name("durableScanWorkerControlV8"), envelope, timeout=20.0)
     if response["status_code"] >= 300 or response["body"].get("success") is not True:
         raise RuntimeError("The durable scan start state could not be verified.")
     persisted = response["body"].get("scanRun")
     if not isinstance(persisted, dict):
         raise RuntimeError("The durable scan start response is missing its ScanRun.")
+    return persisted
+
+
+async def mark_scan_progress(
+    client: httpx.AsyncClient, scan: dict[str, Any],
+    pages_crawled: int, pages_planned: int, batch_committed: int | None = None,
+) -> dict[str, Any]:
+    """Write attempt-fenced progress only after a durable batch commit."""
+    cap = page_cap_for_mode(scan.get("scan_mode") or "standard_150")
+    if (type(pages_crawled) is not int or type(pages_planned) is not int
+            or not 0 <= pages_crawled <= pages_planned <= cap):
+        raise ValueError("Invalid committed scan progress")
+    if batch_committed is not None and (type(batch_committed) is not int or batch_committed < 0):
+        raise ValueError("Invalid committed batch identity")
+    signing_key = str(os.getenv("SCAN_EVIDENCE_SIGNING_KEY") or "")
+    identity = _scan_identity(scan)
+    if not signing_key or not all(identity.values()):
+        raise RuntimeError("Durable progress signing is not configured.")
+    progress = {"pages_crawled": pages_crawled, "pages_planned": pages_planned}
+    if batch_committed is not None:
+        progress["batch_committed"] = batch_committed
+    envelope = build_control_envelope(
+        "progress", signing_key, identity=identity,
+        progress=progress,
+    )
+    response = await invoke_function(client, "durableScanWorkerControlV9", envelope, timeout=20.0)
+    if response["status_code"] >= 300 or response["body"].get("success") is not True:
+        raise RuntimeError("The committed scan progress could not be verified.")
+    persisted = response["body"].get("scanRun")
+    if not isinstance(persisted, dict):
+        raise RuntimeError("The progress response is missing its ScanRun.")
     return persisted
 
 
@@ -298,7 +373,7 @@ async def reconcile_stale_scans(client: httpx.AsyncClient) -> dict[str, Any]:
     if not signing_key:
         raise RuntimeError("Durable reconciliation signing is not configured.")
     envelope = build_control_envelope("sweep", signing_key)
-    response = await invoke_function(client, "durableScanWorkerControlV8", envelope, timeout=60.0)
+    response = await invoke_function(client, worker_function_name("durableScanWorkerControlV8"), envelope, timeout=60.0)
     if response["status_code"] >= 300 or response["body"].get("success") is not True:
         # The sweep's first act is a coordinator call, made before a single scan
         # row is read, so a rejected signing root, a missing release identity and
@@ -315,7 +390,7 @@ async def reconcile_stale_scans(client: httpx.AsyncClient) -> dict[str, Any]:
     counts = response["body"].get("reconciliation")
     if not isinstance(counts, dict):
         raise RuntimeError("Durable scan reconciliation response is malformed.")
-    return {
+    summary = {
         key: max(0, int(counts.get(key) or 0))
         for key in (
             "examined",
@@ -330,6 +405,10 @@ async def reconcile_stale_scans(client: httpx.AsyncClient) -> dict[str, Any]:
             "errors",
         )
     }
+
+    if _function_generation.get() == "V9":
+        summary["finalize_candidates"] = response["body"].get("finalize_candidates") or []
+    return summary
 
 
 async def write_terminal_failure(
@@ -361,7 +440,7 @@ async def write_terminal_failure(
         identity=identity,
         failure={"code": str(failure_code or "scan_failed"), "detail": str(detail or "")},
     )
-    response = await invoke_function(client, "durableScanWorkerControlV8", envelope, timeout=20.0)
+    response = await invoke_function(client, worker_function_name("durableScanWorkerControlV8"), envelope, timeout=20.0)
     if response["status_code"] >= 300 or response["body"].get("success") is not True:
         raise RuntimeError("The durable failure state could not be verified.")
     return True
@@ -468,8 +547,9 @@ def build_authority_review_payload(result: dict[str, Any]) -> dict[str, Any]:
         "beta_revision_fingerprint": result.get("beta_revision_fingerprint"),
         "advanced_scan_backend": result.get("advanced_scan_backend"),
         "deno_fallback_used": False,
-        "scan_mode": "standard_150",
-        "canonical_mode": "standard_150",
+        "scan_mode": "standard_500" if result.get("scan_mode") == "standard_500" else "standard_150",
+        "canonical_mode": "standard_500" if result.get("scan_mode") == "standard_500" else "standard_150",
+        **({"page_cap": result["page_cap"]} if "page_cap" in result else {}),
         "request_id": result.get("request_id"),
         "idempotency_key": result.get("idempotency_key"),
         "scan_id": result.get("scan_id"),
@@ -604,6 +684,8 @@ def build_limited_envelope(
     signing_key: str,
 ) -> dict[str, Any]:
     external_result = project_scan_result_for_external_boundary(result)
+    if _function_generation.get() == "V9":
+        external_result = compact_v9_transport_document(external_result)
     identity = {
         "owner_user_id": str(scan.get("owner_user_id") or ""),
         "scan_id": str(scan.get("id") or ""),
@@ -628,6 +710,8 @@ def build_completion_envelope(
     signing_key: str,
 ) -> dict[str, Any]:
     external_result = project_scan_result_for_external_boundary(result)
+    if _function_generation.get() == "V9":
+        external_result = compact_v9_transport_document(external_result)
     identity = {
         "owner_user_id": str(scan.get("owner_user_id") or ""),
         "scan_id": str(scan.get("id") or ""),
@@ -641,7 +725,8 @@ def build_completion_envelope(
         "version": COMPLETION_VERSION,
         "identity": identity,
         "scan": external_result,
-        "review": completion_review_payload(review),
+        "review": (compact_v9_transport_document(completion_review_payload(review))
+                   if _function_generation.get() == "V9" else completion_review_payload(review)),
     }
     return {**signed, "proof": create_authority_seal(signed, signing_key)}
 
@@ -693,7 +778,9 @@ class LocalReviewProcessTimeout(RuntimeError):
 def _local_review_process_entry(result: dict[str, Any], send_conn: Any) -> None:
     """Run local review in a child process and return only a bounded result envelope."""
     try:
-        reviewed = build_local_review(result)
+        cap = page_cap_for_mode(result.get("scan_mode", "standard_150"))
+        with scan_page_limit(cap):
+            reviewed = build_local_review(result)
         send_conn.send(("ok", reviewed))
     except BaseException as exc:  # noqa: BLE001 - child must never strand its parent
         try:
@@ -888,7 +975,7 @@ async def persist_limited_result(
         elapsed_ms=int((time.monotonic() - phase_started) * 1000),
         coverage_state=coverage_state_of(review),
     )
-    persisted = await invoke_function(client, "persistLimitedScanResultV8", envelope)
+    persisted = await invoke_function(client, worker_function_name("persistLimitedScanResultV8"), envelope)
     status_code = int(persisted.get("status_code") or 0)
     emit(
         "scan_job_completion_phase",
@@ -967,9 +1054,20 @@ async def complete_authority(
             "fix_list_id": str(fresh.get("fix_list_id") or ""),
             "authority_proof": str(fresh.get("authority_proof") or ""),
         }
+    if already_terminal(fresh):
+        # Cancellation, failure, deletion and a completed limited result are
+        # terminal too. None can be replaced by a late finalizer.
+        return {"ok": False, "transient": False, "superseded": True,
+                "failure_code": "already_terminal"}
     if not robots_policy_matches(fresh, result):
         return {"ok": False, "transient": False, "failure_code": "scan_identity_mismatch"}
     scan = fresh
+    if _function_generation.get() == "V9":
+        mode = str(scan.get("scan_mode") or "standard_150")
+        cap = page_cap_for_mode(mode)
+        if scan.get("page_cap", cap) != cap or int(result.get("pages_crawled") or 0) > cap:
+            return {"ok": False, "transient": False, "failure_code": "scan_page_cap_invalid"}
+        result = {**result, "scan_mode": mode, "canonical_mode": mode, "page_cap": cap}
 
     crawl_limitation = terminal_crawl_limitation(result)
     emit(
@@ -1027,10 +1125,14 @@ async def complete_authority(
         elapsed_ms=int((time.monotonic() - phase_started) * 1000),
         release_gate_eligible=reviewed.get("release_gate_eligible") is True,
     )
+    # A cached isolated review carries this worker-private measurement too.
+    # Remove it regardless of whether review was supplied or computed here.
+    reviewed = dict(reviewed)
+    review_process_peak = reviewed.pop("_worker_peak_memory_bytes", None)
     worker_peak_memory = (
         measure_worker_peak_memory_bytes()
         if supplied_review
-        else reviewed.pop("_worker_peak_memory_bytes", None)
+        else review_process_peak
     )
     classification_integrity = build_classification_integrity(reviewed)
     if classification_integrity:
@@ -1047,6 +1149,21 @@ async def complete_authority(
             "failure_code": limitation["code"],
             "customer_message": limitation["detail"],
         }
+
+    if _function_generation.get() == "V9" and result.get("pipeline_limited") is True:
+        # Useful committed evidence survives a wall limit or stalled chain,
+        # while its review can never claim complete/authoritative coverage.
+        reviewed = deepcopy(reviewed)
+        reason = "staged_wall_budget" if result.get("pipeline_limit_reason") == "wall_budget" else "staged_partial_evidence"
+        reviewed.update({"scan_status": "limited", "release_gate_eligible": False,
+                         "score_is_provisional": True, "coverage_state": "limited_coverage",
+                         "limitation": "The scan stopped early. These findings cover only the pages checked."})
+        fingerprint = reviewed.setdefault("site_fingerprint", {})
+        assessment = fingerprint.setdefault("coverage_assessment", {})
+        assessment.update({"state": "limited_coverage", "authoritative": False,
+                           "release_gate_eligible": False, "score_is_provisional": True,
+                           "reasons": sorted(set(assessment.get("reasons") or []) | {reason})})
+        return await persist_limited_result(client, scan, result, reviewed, signing_key, phase_started=phase_started)
 
     # A scan the coverage assessment limited is not authoritative, but it is not
     # nothing either. Failing it here would throw away evidence the customer can
@@ -1098,7 +1215,7 @@ async def complete_authority(
         archetype_classifier_version=diagnostic_classifier_marker(reviewed),
         beta_revision_fingerprint=diagnostic_fingerprint_marker(reviewed),
     )
-    persisted = await invoke_function(client, "persistDurableScanAuthorityV8", envelope)
+    persisted = await invoke_function(client, worker_function_name("persistDurableScanAuthorityV8"), envelope)
     emit(
         "scan_job_completion_phase",
         scan_id=scan_id,

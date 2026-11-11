@@ -113,6 +113,8 @@ def collect_component_versions() -> dict[str, str]:
     )
     from .review_calibration import CALIBRATION_VERSION, IMAGE_ALT_EVIDENCE_VERSION
     from .sampling import SAMPLING_VERSION
+    from .page_importance import PAGE_IMPORTANCE_VERSION
+    from .scan_limits import PAGE_CAP_CONTRACT_VERSION
     from .scan_timing import SITEMAP_TIME_RESERVATION_VERSION
     from .sitemap import SITEMAP_PARSER_VERSION
     from .scanner import (
@@ -142,6 +144,8 @@ def collect_component_versions() -> dict[str, str]:
         "redirect_evidence_version": REDIRECT_EVIDENCE_VERSION,
         "render_evidence_version": RENDER_EVIDENCE_VERSION,
         "sampling_version": SAMPLING_VERSION,
+        "page_importance_version": PAGE_IMPORTANCE_VERSION,
+        "scan_page_cap_contract_version": PAGE_CAP_CONTRACT_VERSION,
         "sitemap_parser_version": SITEMAP_PARSER_VERSION,
         "sitemap_time_reservation_version": SITEMAP_TIME_RESERVATION_VERSION,
         "render_followup_version": RENDER_FOLLOWUP_VERSION,

@@ -47,6 +47,12 @@ export const RELEASE_FUNCTIONS = [
   "ownerScanDebugControl",
 ];
 
+export const STAGED_RELEASE_FUNCTIONS = [
+  "startStandardScanJobV9", "durableScanWorkerControlV9", "persistDurableScanAuthorityV9",
+  "persistLimitedScanResultV9", "getCustomerScanResultV9", "deleteCustomerScanDataV9",
+];
+export const STAGED_RELEASE_ENTITIES = ["ScanRun", "FixList", "FixItem", "Access"];
+
 export const RELEASE_ENTITIES = [
   "ScanRun",
   "FixList",
@@ -247,7 +253,7 @@ export function buildManifest(
   return { functions, entities, functionDigest, entityDigest, releaseDigest };
 }
 
-export function compareReleaseDirectories(remoteFunctionsDir, remoteEntitiesDir) {
+export function compareReleaseDirectories(remoteFunctionsDir, remoteEntitiesDir, {functions = RELEASE_FUNCTIONS, entities = RELEASE_ENTITIES} = {}) {
   const remoteRoot = path.resolve(String(remoteFunctionsDir || ""));
   const remoteEntityRoot = path.resolve(String(remoteEntitiesDir || ""));
   const problems = [];
@@ -257,21 +263,21 @@ export function compareReleaseDirectories(remoteFunctionsDir, remoteEntitiesDir)
   if (!remoteEntitiesDir || !fs.existsSync(remoteEntityRoot) || !fs.statSync(remoteEntityRoot).isDirectory()) {
     return { ok: false, problems: ["pulled Base44 entities directory is missing"], local: null, remote: null };
   }
-  for (const fnName of RELEASE_FUNCTIONS) {
+  for (const fnName of functions) {
     if (!fs.existsSync(path.join(remoteRoot, fnName))) {
       problems.push(`${fnName}: missing from pulled Base44 inventory`);
     }
   }
-  for (const entityName of RELEASE_ENTITIES) {
+  for (const entityName of entities) {
     if (!fs.existsSync(path.join(remoteEntityRoot, `${entityName}.jsonc`))) {
       problems.push(`${entityName}: entity schema missing from pulled Base44 inventory`);
     }
   }
   if (problems.length) return { ok: false, problems, local: null, remote: null };
 
-  const local = buildManifest(RELEASE_FUNCTIONS, FUNCTIONS_DIR);
-  const remote = buildManifest(RELEASE_FUNCTIONS, remoteRoot, RELEASE_ENTITIES, remoteEntityRoot);
-  for (const fnName of RELEASE_FUNCTIONS) {
+  const local = buildManifest(functions, FUNCTIONS_DIR, entities);
+  const remote = buildManifest(functions, remoteRoot, entities, remoteEntityRoot);
+  for (const fnName of functions) {
     const localPackage = local.functions[fnName];
     const remotePackage = remote.functions[fnName];
     if (localPackage.packageDigest !== remotePackage.packageDigest) {
@@ -280,7 +286,7 @@ export function compareReleaseDirectories(remoteFunctionsDir, remoteEntitiesDir)
       );
     }
   }
-  for (const entityName of RELEASE_ENTITIES) {
+  for (const entityName of entities) {
     const localSchema = local.entities[entityName];
     const remoteSchema = remote.entities[entityName];
     if (localSchema.sha256 !== remoteSchema.sha256) {
@@ -300,17 +306,20 @@ export function compareReleaseDirectories(remoteFunctionsDir, remoteEntitiesDir)
 const invokedDirectly = process.argv[1] && import.meta.url.endsWith(path.basename(process.argv[1]));
 if (invokedDirectly) {
   const mode = process.argv[2] || "verify";
+  const staged = process.argv.includes("--staged");
+  const functions = staged ? STAGED_RELEASE_FUNCTIONS : RELEASE_FUNCTIONS;
+  const entities = staged ? STAGED_RELEASE_ENTITIES : RELEASE_ENTITIES;
   if (mode === "manifest") {
-    process.stdout.write(`${JSON.stringify(buildManifest(), null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify(buildManifest(functions, FUNCTIONS_DIR, entities), null, 2)}\n`);
   } else if (mode === "compare") {
-    const comparison = compareReleaseDirectories(process.argv[3], process.argv[4]);
+    const comparison = compareReleaseDirectories(process.argv[3], process.argv[4], {functions, entities});
     if (!comparison.ok) {
       for (const problem of comparison.problems) process.stdout.write(`FAIL ${problem}\n`);
       process.exit(1);
     }
     process.stdout.write(`OK   pulled Base44 function/entity inventory matches ${comparison.local.releaseDigest}\n`);
   } else {
-    const results = auditAll();
+    const results = auditAll(functions);
     const problems = results.flatMap((r) => r.problems);
     for (const r of results) {
       const count = r.problems.length;

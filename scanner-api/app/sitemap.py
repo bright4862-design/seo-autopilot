@@ -14,13 +14,21 @@ from .security import ResponseBodyTooLarge, safe_get
 MAX_SITEMAP_FETCHES = 60
 MAX_SITEMAP_DECODED_BYTES = 5_000_000
 MAX_SITEMAP_TARGET_PROVENANCE = 10_000
-SITEMAP_PARSER_VERSION = "sitemap_parser_v2_exact_origin_identity"
+SITEMAP_PARSER_VERSION = "sitemap_parser_v3_exact_origin_lastmod_inventory_cap"
 
 SITEMAP_LOC_RE = re.compile(
     r"<(?:[A-Za-z_][\w.-]*:)?loc\b[^>]*>(.*?)</(?:[A-Za-z_][\w.-]*:)?loc\s*>",
     re.I | re.S,
 )
 SITEMAP_XML_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
+SITEMAP_URL_ENTRY_RE = re.compile(
+    r"<(?:[A-Za-z_][\w.-]*:)?url\b[^>]*>(.*?)</(?:[A-Za-z_][\w.-]*:)?url\s*>",
+    re.I | re.S,
+)
+SITEMAP_LASTMOD_RE = re.compile(
+    r"<(?:[A-Za-z_][\w.-]*:)?lastmod\b[^>]*>(.*?)</(?:[A-Za-z_][\w.-]*:)?lastmod\s*>",
+    re.I | re.S,
+)
 XML_ENTITY_RE = re.compile(
     r"&(?:(amp|lt|gt|quot|apos)|#([0-9]+)|#x([0-9A-Fa-f]+));"
 )
@@ -74,6 +82,23 @@ def parse_sitemap_locs(body: str) -> list[str]:
     return locs
 
 
+def parse_sitemap_lastmod(body: str) -> dict[str, str]:
+    """Retain URL-associated dates without treating index dates as page dates."""
+    dates = {}
+    source = SITEMAP_XML_COMMENT_RE.sub("", str(body or ""))
+    for entry in SITEMAP_URL_ENTRY_RE.finditer(source):
+        lastmod = SITEMAP_LASTMOD_RE.search(entry.group(1))
+        if not lastmod:
+            continue
+        locations = parse_sitemap_locs(entry.group(1))
+        value = _unescape_xml(lastmod.group(1)).strip()
+        if locations and value and len(value) <= 64:
+            dates[locations[0]] = value
+        if len(dates) >= MAX_SITEMAP_TARGET_PROVENANCE:
+            break
+    return dates
+
+
 class _SitemapRequestPacer:
     """Space sequential sitemap-discovery requests for burst-sensitive origins.
 
@@ -123,6 +148,8 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
     # name the exact source file that published the target without pretending
     # aggregate sitemap success/failure applies to every child.
     diagnostics.setdefault("sitemap_target_sources", [])
+    diagnostics.setdefault("sitemap_lastmod", {})
+    diagnostics.setdefault("inventory_capped", False)
     request_interval = max(0.0, float(min_request_interval_seconds or 0.0))
     diagnostics["sitemap_request_interval_seconds"] = request_interval
     request_pacer = _SitemapRequestPacer(request_interval)
@@ -249,6 +276,12 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
         scope_evidence["multimarket_detected"] = True
     output = output[:limit]
     output_set = set(output)
+    diagnostics["inventory_capped"] = bool(limit > 0 and len(output) >= limit)
+    diagnostics["sitemap_lastmod"] = {
+        normalize_sitemap_page_url(url, origin): date
+        for url, date in diagnostics.get("sitemap_lastmod", {}).items()
+        if normalize_sitemap_page_url(url, origin) in output_set
+    }
     diagnostics["sitemap_target_sources"] = [
         row
         for row in diagnostics.get("sitemap_target_sources", [])
@@ -426,6 +459,13 @@ async def fetch_sitemap_locs(client: httpx.AsyncClient, sitemap_url: str, fetche
     if not body:
         _record_sitemap_failure(diagnostics, "empty_sitemap_body", source_url=sitemap_url)
         return []
+    if diagnostics is not None:
+        dates = diagnostics.setdefault("sitemap_lastmod", {})
+        for url, date in parse_sitemap_lastmod(body).items():
+            if len(dates) >= MAX_SITEMAP_TARGET_PROVENANCE:
+                break
+            # Repeated publication order cannot determine a page's recency.
+            dates[url] = max(str(dates.get(url) or ""), date)
     locs: list[str] = []
     for loc in parse_sitemap_locs(body):
         if is_artifact_url(loc):

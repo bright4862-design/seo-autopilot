@@ -84,7 +84,8 @@
         "basic",
         "quick",
         "deep",
-        "advanced"
+        "advanced",
+        "standard_500"
       ],
       "default": "standard_150",
       "description": "New customer scans use standard_150. Legacy values remain valid so historical scan records stay readable."
@@ -725,6 +726,39 @@
           }
         }
       }
+    },
+    "page_cap": {
+      "type": "integer",
+      "enum": [
+        150,
+        500
+      ],
+      "description": "Server-owned entitlement cap, frozen when admitted."
+    },
+    "pipeline_mode": {
+      "type": "string",
+      "enum": [
+        "monolith",
+        "staged"
+      ],
+      "default": "monolith"
+    },
+    "pages_planned": {
+      "type": "integer"
+    },
+    "workspace_cleanup_state": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "complete"
+      ]
+    },
+    "workspace_cleanup_completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_committed_batch": {
+      "type": "integer"
     }
   },
   "required": [

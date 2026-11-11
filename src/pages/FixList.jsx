@@ -41,6 +41,7 @@ import { displayPathPrefix, focusedPathSections, focusedSectionOnboardingPath, o
 import { buildPageAccounting } from "@/lib/pageAccounting";
 import { customerSafeLimitationLine, durableScanStatePresentation } from "@/lib/durableScanStatePresentation";
 import { readSiteOwnership, resolveScanOwnership } from "@/lib/siteOwnershipPolicy";
+import { pageCapFromRecord, inventoryCoverageLine, serverSelectedPriorityCards } from "@/lib/scanPresentation";
 import { healthScoreExplanation } from "@/lib/healthScoreExplanation";
 
 const CMS_OPTIONS = [
@@ -477,7 +478,7 @@ export default function FixList() {
   );
   const showPageAccounting = Boolean(
     hasAuthoritativeScan
-    && pageAccounting.total > 150
+    && pageAccounting.total > pageCapFromRecord(scanRecord)
     && !String(scanRecord?.scope_type || "").trim()
     && !String(scanRecord?.path_prefix || scanRecord?.requested_path_prefix || "").trim()
   );
@@ -611,7 +612,7 @@ export default function FixList() {
                   Scan again
                 </button>
               </div>
-              <ScoreExplanation explanation={healthScoreExplanation(scanRecord)} />
+              {!Array.isArray(scanRecord.top_fix_ids) ? <ScoreExplanation explanation={healthScoreExplanation(scanRecord)} /> : null}
             </CustomerResultsSummary>
 
             {displayedRepairCount === 0 ? (
@@ -710,6 +711,7 @@ export default function FixList() {
               </summary>
               <div className="border-t border-hairline-soft px-5 pb-5 pt-5">
                 <h2 className="text-[14px] font-semibold text-ink">What we checked</h2>
+                {Array.isArray(scanRecord.top_fix_ids) ? <ScoreExplanation explanation={healthScoreExplanation(scanRecord)} /> : null}
                 <p className="mt-2 max-w-[65ch] text-[13px] leading-relaxed text-ink-muted">
                   This scan checked {formatCount(pagesScanned)}{pagesFound > 0 ? ` of ${formatCount(pagesFound)} pages found` : " pages"}.
                   {pagesFound > pagesScanned ? " Pages outside that sample were not checked, so findings and page counts describe the collected evidence." : " Findings describe the evidence collected in this scan."}
@@ -745,7 +747,7 @@ export default function FixList() {
                   {sampleCoverage.notChosenSummary ? (
                     <p className="text-ink-muted">{sampleCoverage.notChosenSummary}</p>
                   ) : null}
-                  <p>These are the pages this scan set out to check, up to its 150-page limit. The counts above the fix list say how many it reached.</p>
+                  <p>These are the pages this scan set out to check, up to its {pageCapFromRecord(scanRecord)}-page limit. The counts above the fix list say how many it reached.</p>
                 </div>
               </details>
             ) : null}
@@ -756,7 +758,7 @@ export default function FixList() {
                   Pages found
                 </summary>
                 <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
-                  FixList found {formatCount(pageAccounting.total)} pages. The counts below add up to that total; pages without a clear folder are kept in the final row.
+                  FixList found {scanRecord.inventory_capped === true || scanRecord.sampling_evidence?.inventory_capped === true ? "at least " : ""}{formatCount(pageAccounting.total)} pages. The counts below add up to that total; pages without a clear folder are kept in the final row.
                 </p>
                 <dl className="mt-4 divide-y divide-hairline-soft">
                   {pageAccounting.rows.map((row) => (
@@ -787,7 +789,7 @@ export default function FixList() {
                   Sections to scan next
                 </summary>
                 <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
-                  Run a separate scan of up to 150 pages in one of these suggested folders.
+                  Run a separate scan of up to {pageCapFromRecord(scanRecord)} pages in one of these suggested folders.
                 </p>
                 <div className="mt-4 divide-y divide-hairline-soft">
                   {focusedSections.map((section) => {
@@ -876,9 +878,14 @@ export function CustomerResultsSummary({
         <p className="mb-4 inline-flex rounded-full bg-warnink/10 px-3 py-1 text-[12px] font-medium text-ink-muted">Limited scan</p>
       ) : null}
       <div className="flex items-center gap-4">
-        <ScoreRing score={healthScore} unavailable={scoreUnavailable} size={64} />
+        {!Array.isArray(scanRecord.top_fix_ids) ? <ScoreRing score={healthScore} unavailable={scoreUnavailable} size={64} /> : null}
         <div className="min-w-0">
           <h1 className="break-words text-[27px] font-semibold leading-tight tracking-[-0.03em] sm:text-[30px]">{websiteHost || safeHostname(scanRecord.website_url) || "Website scan"}</h1>
+          {Array.isArray(scanRecord.top_fix_ids) ? (
+            <p className="mt-2 text-[14px] leading-relaxed text-ink-muted">
+              {inventoryCoverageLine(scanRecord)} {scanRecord.top_fix_ids.length} {scanRecord.top_fix_ids.length === 1 ? "thing is" : "things are"} worth fixing first.
+            </p>
+          ) : null}
           <p className="mt-2 text-[13px] leading-relaxed text-ink-muted tabular-nums sm:text-[14px]">
             Scanned {scanRecord.created_at ? formatDate(scanRecord.created_at) : "recently"}
             {" · "}{formatCount(pagesScanned)}{pagesFound > 0 ? ` of ${formatCount(pagesFound)}` : ""} {(pagesFound > 0 ? pagesFound : pagesScanned) === 1 ? "page" : "pages"} checked
@@ -1208,7 +1215,7 @@ export function CustomerCanonicalRepairs({ scanRecord, requestedScanId, customer
     && scanRecord.total_fixes === sourceItems.length
     && customerRepairCards.length === sourceItems.length;
   if (!completePopulation) {
-    return <CustomerRepairList cards={customerRepairCards} websiteUrl={scanRecord?.website_url} />;
+    return <CustomerRepairList cards={customerRepairCards} websiteUrl={scanRecord?.website_url} topFixIds={scanRecord?.top_fix_ids} />;
   }
   return (
     <CustomerRepairGuidance
@@ -1219,15 +1226,30 @@ export function CustomerCanonicalRepairs({ scanRecord, requestedScanId, customer
       cardsScanId={scanRecord.scan_id}
       authorityVerified={completePopulation}
       renderCards={(cards, { explanationForCard }) => (
-        <CustomerRepairList cards={cards} explanationForCard={explanationForCard} websiteUrl={scanRecord.website_url} />
+        <CustomerRepairList cards={cards} explanationForCard={explanationForCard} websiteUrl={scanRecord.website_url} topFixIds={scanRecord.top_fix_ids} />
       )}
     />
   );
 }
 
-function CustomerRepairList({ cards = [], websiteUrl = "", explanationForCard }) {
+function CustomerRepairList({ cards = [], websiteUrl = "", explanationForCard, topFixIds }) {
   const list = Array.isArray(cards) ? cards.filter(Boolean) : [];
   if (list.length === 0) return null;
+  const shortlist = serverSelectedPriorityCards(list, topFixIds);
+  if (shortlist) {
+    return (
+      <section className="mt-8" aria-labelledby="priority-fixes-heading">
+        <h2 id="priority-fixes-heading" className="text-[19px] font-semibold tracking-tight">Start with these {shortlist.first.length}</h2>
+        <div className="mt-4 space-y-4">
+          {shortlist.first.map(card => <PriorityRepairCard key={card.fixId || card.evidence.mergedFromFixIds.join("|")} card={card} websiteUrl={websiteUrl} />)}
+        </div>
+        <details className="mt-6 rounded-xl border border-hairline-soft bg-white px-5 py-4">
+          <summary className="cursor-pointer text-[14px] font-medium">See all {list.length} fixes</summary>
+          <CustomerRepairList cards={list} websiteUrl={websiteUrl} explanationForCard={explanationForCard} />
+        </details>
+      </section>
+    );
+  }
 
   // These are reading groups only. Preserve the authenticated canonical array
   // instead of regrouping or sorting repairs by their presentation labels.
@@ -1280,6 +1302,42 @@ function CustomerRepairList({ cards = [], websiteUrl = "", explanationForCard })
   );
 }
 
+function PriorityRepairCard({ card, websiteUrl }) {
+  const [copyState, setCopyState] = useState("");
+  const developerOwned = /developer|web person|specialist/i.test(card.who || "");
+  const pageCount = Math.max(Number(card.evidence?.pageCount || 0), card.evidence?.affectedPages?.length || 0);
+  async function copyBrief() {
+    const brief = [card.title, websiteUrl, `Why: ${card.whyItMatters}`, `What to change: ${card.whatToChange}`, card.where, ...(card.evidence?.affectedPages || [])].filter(Boolean).join("\n\n");
+    try {
+      await navigator.clipboard.writeText(brief);
+      setCopyState("Brief copied");
+    } catch {
+      setCopyState("Could not copy. Open Show me how to select the instructions.");
+    }
+  }
+  return (
+    <article className="rounded-xl border border-hairline-soft bg-white p-5">
+      <h3 className="text-[17px] font-semibold leading-snug">{card.title}</h3>
+      <p className="mt-2 text-[14px] leading-relaxed text-ink-muted">{card.whyItMatters}</p>
+      <p className="mt-3 text-[12.5px] text-ink-muted">
+        {developerOwned ? "Your web person" : card.who || "You"}
+        {pageCount > 0 ? ` · ${card.evidence?.pageCountIsLowerBound ? "at least " : ""}${pageCount} ${pageCount === 1 ? "page" : "pages"}` : ""}
+        {card.sharedRepairConfirmed ? " · one shared change" : ""}
+      </p>
+      {card.templateImpactEstimates?.map(estimate => (
+        <p key={estimate.route_pattern} className="mt-2 text-[12px] leading-relaxed text-ink-muted">Estimate: {estimate.qualification}</p>
+      ))}
+      <details className="mt-4">
+        <summary className="w-fit cursor-pointer rounded-lg bg-ink px-4 py-2 text-[13px] font-medium text-white">Show me how</summary>
+        <p className="mt-3 whitespace-pre-line text-[14px] leading-relaxed text-ink-muted">{card.whatToChange}</p>
+        {card.where ? <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">{card.where}</p> : null}
+      </details>
+      {developerOwned ? <button type="button" onClick={copyBrief} className="mt-3 text-[13px] font-medium underline underline-offset-4">Copy brief for my web person</button> : null}
+      {copyState ? <p role="status" className="mt-2 text-[12px] text-ink-muted">{copyState}</p> : null}
+    </article>
+  );
+}
+
 function CustomerRepairCard({ card = {}, websiteUrl = "", explanation, initiallyOpen = false }) {
   const pages = Array.isArray(card?.evidence?.affectedPages) ? card.evidence.affectedPages.filter(Boolean) : [];
   const reportedCount = Math.max(Number(card?.evidence?.pageCount || 0), pages.length);
@@ -1305,7 +1363,7 @@ function CustomerRepairCard({ card = {}, websiteUrl = "", explanation, initially
           <p className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[12px] leading-relaxed text-ink-muted">
             <span>{evidenceLabel || card.customerCategory}</span>
             {card.scopeHint ? ` · ${card.scopeHint}` : ""}
-            {reportedCount > 0 ? <span>{reportedCount} {reportedCount === 1 ? "page" : "pages"}</span> : null}
+            {reportedCount > 0 ? <span>{card.evidence?.pageCountIsLowerBound ? "At least " : ""}{reportedCount} {reportedCount === 1 ? "page" : "pages"}</span> : null}
           </p>
         </div>
         <ChevronDown aria-hidden="true" className="mt-1 h-4 w-4 text-ink-muted transition-transform group-open/repair:rotate-180" />
@@ -1352,12 +1410,15 @@ function CustomerRepairCard({ card = {}, websiteUrl = "", explanation, initially
           ) : null}
           {reportedCount > 0 ? (
             <p className={`${card.technicalLabel ? "mt-1.5 " : ""}text-[12px] leading-relaxed text-ink-faint`}>
-              {reportedCount} affected {reportedCount === 1 ? "page" : "pages"}.
+              {card.evidence?.pageCountIsLowerBound ? "At least " : ""}{reportedCount} affected {reportedCount === 1 ? "page" : "pages"}.
               {pages.length < reportedCount
                 ? ` This saved result contains ${pages.length} of those URLs in its evidence list.`
                 : ""}
             </p>
           ) : null}
+          {card.templateImpactEstimates?.map(estimate => (
+            <p key={estimate.route_pattern} className="mt-2 text-[12px] leading-relaxed text-ink-muted">Estimate: {estimate.qualification}</p>
+          ))}
           {redirectRows.length > 0 ? (
             <section className="mt-3 border-t border-hairline-soft pt-3" aria-label="Observed redirect evidence">
               <h5 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Observed redirect evidence</h5>
@@ -1803,7 +1864,7 @@ function PreviewResultState({ scanRecord = {} }) {
               const title = cleanString(item.issue_title) || `Issue ${index + 1}`;
               const category = cleanString(item.customer_category);
               const priority = customerPriorityLabel(item.action_priority || item.priority);
-              const pageCount = Math.max(0, Number(item.page_count || 0));
+              const pageCount = Math.max(0, Number(item.affected_page_count ?? item.page_count ?? 0));
               const explanation = cleanString(item.plain_english_explanation);
               const why = cleanString(item.why_it_matters);
               const recommendation = cleanString(item.recommended_value || item.simple_next_step);
@@ -1815,7 +1876,7 @@ function PreviewResultState({ scanRecord = {} }) {
                     <div className="min-w-0 flex-1">
                       <h3 className="text-[17px] font-medium tracking-tight text-ink">{title}</h3>
                       <p className="mt-1 text-[12px] font-medium text-ink-faint">
-                        {[priority, category, pageCount > 0 ? `${formatCount(pageCount)} ${pageCount === 1 ? "page" : "pages"}` : ""].filter(Boolean).join(" · ")}
+                        {[priority, category, pageCount > 0 ? `${item.affected_page_count_is_lower_bound === true ? "at least " : ""}${formatCount(pageCount)} ${pageCount === 1 ? "page" : "pages"}` : ""].filter(Boolean).join(" · ")}
                       </p>
                     </div>
                   </div>
@@ -2210,7 +2271,8 @@ export function normalizeRecommendation(item = {}, scanRecord = {}) {
     recommendation,
     affectedPages,
     sourcePages: normalizeAffectedPageList(firstArray([item.source_pages, item.evidence?.source_pages])),
-    pageCount: Math.max(Number(item.page_count || 0), affectedPages.length),
+    pageCount: Math.max(Number(item.affected_page_count || item.page_count || 0), affectedPages.length),
+    ...(item.affected_page_count_is_lower_bound === true ? { affected_page_count_is_lower_bound: true } : {}),
     excludedEvidenceCount: Math.max(0, combinedPages.length - affectedPages.length),
     websiteUrl: cleanString(scanRecord?.website_url || scanRecord?.raw?.scanner?.website_url),
     templateFamily: cleanString(item.page_template_family),
@@ -2679,6 +2741,7 @@ export function normalizeDurableScanBundle(bundle = {}) {
     no_high_confidence_findings: run.no_high_confidence_findings === true || fixList.no_high_confidence_findings === true,
     created_at: run.completed_at || run.created_date || run.queued_at || "",
     recommendations: Array.isArray(bundle.fixItems) ? bundle.fixItems : [],
+    top_fix_ids: Array.isArray(bundle.top_fix_ids) ? bundle.top_fix_ids : run.top_fix_ids,
   };
 }
 

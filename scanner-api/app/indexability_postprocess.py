@@ -121,7 +121,7 @@ def group_indexability_quality_findings(findings: list[dict]) -> list[dict]:
             page
             for member in members
             for page in (member.get("affected_pages") or [member.get("page_url")])
-        )[:150]
+        )
         if len(affected) < GROUP_MIN_AFFECTED:
             output.extend(members)
             continue

@@ -3,7 +3,7 @@
 // Run that generator after changing either input; CI fails on drift.
 
 export const RELEASE_CONTRACT_SCHEMA_VERSION = "beta_crawler_revision_v1";
-export const RELEASE_FINGERPRINT = "e0eca935c350e590";
+export const RELEASE_FINGERPRINT = "1470ccb6398a7f4f";
 export const RELEASE_STATUS = "candidate";
 export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "acceptance_evidence_version": "standard150_acceptance_evidence_v2_aggregate_rss_fail_closed",
@@ -42,6 +42,7 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "navigation_indexability_version": "navigation_indexability_v2_published_evidence",
   "orphan_asset_evidence_version": "orphan_asset_evidence_v1",
   "page_evidence_gate_version": "page_evidence_gate_v2_vendor_access_block",
+  "page_importance_version": "page_importance_v1_observed_navigation_sections",
   "page_level_asset_evidence_version": "page_level_asset_evidence_v3_markdown",
   "page_template_classifier_version": "page_template_classifier_v4_bookable_inventory_routes",
   "priority_summary_version": "priority_summary_v1_action_band_consistent",
@@ -63,14 +64,16 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "review_version": "python_review_v2_structural_marketplace",
   "route_boundary_classifier_version": "route_boundary_classifier_v2_wordpress_author_archives",
   "sampling_disclosure_version": "sampling_disclosure_v5_selection_language",
-  "sampling_version": "balanced_sitemap_buckets_v7_commercial_hubs_before_repeated_leaves",
+  "sampling_version": "balanced_sitemap_buckets_v8_importance_section_quotas",
   "scan_history_delete_version": "scan_history_delete_v2_drain_children",
   "scan_history_version": "scan_history_v3_focused_parent_children",
+  "scan_page_cap_contract_version": "server_scan_page_caps_v1_150_500",
   "scanner_build_revision": "authenticated_health_probe_v1",
   "scanner_version": "python_scanner_v5_observed_finding_identity",
   "search_applicability_version": "search_applicability_v1_evidence_relevance",
-  "sitemap_parser_version": "sitemap_parser_v2_exact_origin_identity",
+  "sitemap_parser_version": "sitemap_parser_v3_exact_origin_lastmod_inventory_cap",
   "sitemap_time_reservation_version": "sitemap_time_reservation_v1_crawl_first",
+  "staged_scan_pipeline_version": "staged_scan_pipeline_v1_sequential_workspace_cas",
   "title_evidence_version": "title_evidence_v1_contextual_duplicates",
   "trust_discovery_version": "trust_page_discovery_v1",
   "trust_finding_gate_version": "trust_page_finding_gate_v1",

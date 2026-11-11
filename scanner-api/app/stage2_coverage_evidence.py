@@ -6,6 +6,8 @@ evidence stays explicit rather than being coerced to a pass or a zero.
 """
 from __future__ import annotations
 
+from .scan_limits import DEFAULT_PAGE_CAP, current_page_cap
+
 from collections import defaultdict
 from datetime import date, datetime
 from hashlib import sha256
@@ -29,7 +31,7 @@ PAGE_WEIGHT_VERSION = "page_weight_evidence_v1"
 CRUX_ADAPTER_VERSION = "crux_optional_v1"
 GSC_ADAPTER_VERSION = "gsc_optional_v1"
 
-MAX_PAGES = 150
+MAX_PAGES = DEFAULT_PAGE_CAP
 MAX_SHINGLES = 512
 MAX_CLUSTER_SAMPLES = 10
 MAX_HUBS = 5
@@ -59,10 +61,10 @@ def _page_url(page: dict[str, Any]) -> str:
 def _bounded_pages(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if (
         not isinstance(pages, list)
-        or len(pages) > MAX_PAGES
+        or len(pages) > current_page_cap()
         or any(not isinstance(page, dict) for page in pages)
     ):
-        raise ValueError("Expected at most 150 page objects")
+        raise ValueError(f"Expected at most {current_page_cap()} page objects")
     return pages
 
 
@@ -249,7 +251,7 @@ def money_page_reachability(pages: list[dict[str, Any]]) -> dict[str, Any]:
             observed_inlinks = None
 
         depth = page.get("crawl_depth")
-        depth = int(depth) if isinstance(depth, int) and 0 <= depth <= MAX_PAGES else None
+        depth = int(depth) if isinstance(depth, int) and 0 <= depth <= current_page_cap() else None
         nav = page.get("navigation_presence")
         nav_state = nav if type(nav) is bool else None
 

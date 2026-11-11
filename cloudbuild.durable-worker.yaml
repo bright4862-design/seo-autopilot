@@ -3,6 +3,10 @@
 # include .fixlist-source-sha containing that same 40-character SHA.
 
 substitutions:
+  _STAGED_SCAN_MODE: "off"
+  _STAGED_ENV_SUFFIX: ""
+  _STAGED_TAG: ""
+  _STAGED_CONFIG_SHA256: ""
   _RELEASE_SHA: ""
   _WORKER_SERVICE: ""
   _REGION: ""
@@ -17,6 +21,14 @@ substitutions:
 steps:
   - id: require-substitutions
     name: gcr.io/cloud-builders/gcloud
+    env:
+      - STAGED_SCAN_MODE=${_STAGED_SCAN_MODE}
+      - STAGED_ENV_SUFFIX=${_STAGED_ENV_SUFFIX}
+      - STAGED_TAG=${_STAGED_TAG}
+      - STAGED_CONFIG_SHA256=${_STAGED_CONFIG_SHA256}
+      - STAGED_SOURCE_SHA=${_RELEASE_SHA}
+      - STAGED_PROJECT=${PROJECT_ID}
+      - STAGED_REGION=${_REGION}
     entrypoint: bash
     args:
       - -c
@@ -49,6 +61,7 @@ steps:
           echo "Invalid _SIGNING_KEY_VERSION: expected a numeric pinned version."
           exit 1
         fi
+        python3 scripts/staged_candidate_cloudbuild.py validate --source-stamp=/workspace/.fixlist-source-sha
         echo "All required substitutions supplied."
         echo "Release identity pinned to ${_RELEASE_SHA}."
 
@@ -118,8 +131,13 @@ steps:
       - --max-instances=40
       - --no-traffic
       - --clear-network
-      - --set-env-vars=TASKS_INVOKER_SERVICE_ACCOUNT=${_INVOKER_SA},BASE44_APP_ID=${_BASE44_APP_ID},BASE44_API_URL=${_BASE44_API_URL},GROK_PROXY_ENABLED=false,FIXLIST_WORKER_SOURCE_SHA=${_RELEASE_SHA}
+      - --set-env-vars=TASKS_INVOKER_SERVICE_ACCOUNT=${_INVOKER_SA},BASE44_APP_ID=${_BASE44_APP_ID},BASE44_API_URL=${_BASE44_API_URL},GROK_PROXY_ENABLED=false,FIXLIST_WORKER_SOURCE_SHA=${_RELEASE_SHA}${_STAGED_ENV_SUFFIX}
       - --set-secrets=SCAN_EVIDENCE_SIGNING_KEY=${_SIGNING_KEY_SECRET}:${_SIGNING_KEY_VERSION}
+
+  - id: tag-staged-worker-candidate
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: python3
+    args: ["scripts/staged_candidate_cloudbuild.py", "tag", "--mode=${_STAGED_SCAN_MODE}", "--source-sha=${_RELEASE_SHA}", "--tag=${_STAGED_TAG}", "--digest=${_STAGED_CONFIG_SHA256}", "--worker-service=${_WORKER_SERVICE}", "--region=${_REGION}", "--project=${PROJECT_ID}"]
 
 images:
   - ${_IMAGE}:${_RELEASE_SHA}

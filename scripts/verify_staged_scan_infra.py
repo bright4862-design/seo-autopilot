@@ -47,9 +47,10 @@ def validate_binding(policy, role, email):
             f"Missing explicit resource-scoped {role} binding for {email}")
 
 
-def validate_queue(queue, expected_path, concurrency):
+def validate_queue(queue, expected_path, concurrency, expected_state="RUNNING"):
     require(queue.get("name") == expected_path, "Stage queue name does not match the configured queue")
-    require(queue.get("state") == "RUNNING", "Stage queue must be RUNNING")
+    require(expected_state in {"PAUSED", "RUNNING"}, "Expected stage queue state must be PAUSED or RUNNING")
+    require(queue.get("state") == expected_state, f"Stage queue must be {expected_state}")
     require((queue.get("rateLimits") or {}).get("maxConcurrentDispatches") == concurrency,
             "Stage queue concurrency differs from the reviewed configuration")
     retry = queue.get("retryConfig") or {}
@@ -82,6 +83,7 @@ def main(argv=None):
     # Share validated identity/resource arguments with the preparation script.
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--task")
+    parser.add_argument("--expected-queue-state", choices=("PAUSED", "RUNNING"), default="RUNNING")
     extra, rest = parser.parse_known_args(argv)
     args = infra_arguments(rest)
     require(not args.apply, "The verifier is read-only; --apply is not accepted")
@@ -90,12 +92,12 @@ def main(argv=None):
     validate_bucket(describe(["storage", "buckets", "describe", bucket, project]),
                     describe(["storage", "buckets", "get-iam-policy", bucket, project]), args.worker_sa)
     validate_queue(describe(["tasks", "queues", "describe", args.queue, project, location]),
-                   f"projects/{args.project}/locations/{args.region}/queues/{args.queue}", args.concurrency)
+                   f"projects/{args.project}/locations/{args.region}/queues/{args.queue}", args.concurrency, extra.expected_queue_state)
     validate_binding(describe(["tasks", "queues", "get-iam-policy", args.queue, project, location]),
                      "roles/cloudtasks.enqueuer", args.worker_sa)
     validate_binding(describe(["iam", "service-accounts", "get-iam-policy", args.invoker_sa, project]),
                      "roles/iam.serviceAccountUser", args.worker_sa)
-    print("PASS: private workspace, lifecycle, queue retry policy and resource-scoped IAM")
+    print(f"PASS: private workspace, lifecycle, {extra.expected_queue_state} queue retry policy and resource-scoped IAM")
     if extra.task:
         validate_task(describe(["tasks", "describe", extra.task, f"--queue={args.queue}", project, location]),
                       args.worker_url, args.invoker_sa, args.token_audience)

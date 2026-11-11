@@ -39,7 +39,7 @@ def arguments(argv=None):
             parser.error(f"--{name.replace('_', '-')} must be a service-account email")
     origin = urlsplit(args.worker_url)
     if (origin.scheme != "https" or not origin.hostname or origin.username or origin.password
-            or origin.port not in (None, 443) or origin.path not in ("", "/")
+            or origin.port is not None or origin.path not in ("", "/")
             or origin.query or origin.fragment):
         parser.error("--worker-url must be an HTTPS origin without credentials or a path")
     if not 1 <= args.concurrency <= 40:
@@ -47,7 +47,7 @@ def arguments(argv=None):
     args.worker_url = args.worker_url.rstrip("/")
     audience = urlsplit(args.token_audience or args.worker_url)
     if (audience.scheme != "https" or not audience.hostname or audience.username or audience.password
-            or audience.port not in (None, 443) or audience.path not in ("", "/")
+            or audience.port is not None or audience.path not in ("", "/")
             or audience.query or audience.fragment or "---" in audience.hostname):
         parser.error("--token-audience must be a canonical HTTPS service origin")
     args.token_audience = (args.token_audience or args.worker_url).rstrip("/")
@@ -79,6 +79,7 @@ def plan(args, lifecycle_path):
          f"--max-concurrent-dispatches={args.concurrency}", "--max-attempts=10",
          "--min-backoff=10s", "--max-backoff=120s", "--max-doublings=4",
          "--max-retry-duration=1800s"],
+        ["gcloud", "tasks", "queues", "pause", args.queue, project, location],
         ["gcloud", "tasks", "queues", "add-iam-policy-binding", args.queue,
          project, location, worker, "--role=roles/cloudtasks.enqueuer"],
         ["gcloud", "iam", "service-accounts", "add-iam-policy-binding", args.invoker_sa,
@@ -96,6 +97,8 @@ def worker_environment(args):
         "SCAN_STAGE_TARGET_URL": args.worker_url,
         "SCAN_STAGE_TOKEN_AUDIENCE": args.token_audience,
         "TASKS_INVOKER_SERVICE_ACCOUNT": args.invoker_sa,
+        "SCAN_PIPELINE_MODE": "monolith",
+        "SCAN_STAGED_OWNER_IDS": "",
     }
 
 

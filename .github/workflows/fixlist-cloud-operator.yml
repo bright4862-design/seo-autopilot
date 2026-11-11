@@ -25,6 +25,8 @@ on:
           - deploy-dispatch-gateway
           - deploy-admission-coordinator
           - build-worker-candidate
+          - prepare-staged-scan-infra
+          - verify-staged-scan-infra
           - promote-worker
           - rollback-worker
           - barrier-status
@@ -101,6 +103,14 @@ on:
         options:
           - "off"
           - owner-canary
+      stage_config:
+        description: "build-worker-candidate only: optional inactive staged storage/queue configuration at 0% traffic"
+        required: false
+        default: "off"
+        type: choice
+        options:
+          - "off"
+          - inactive
   issue_comment:
     types: [created]
   push:
@@ -388,7 +398,7 @@ jobs:
           OPERATION=verify-worker-runtime-revision bash ./scripts/fixlist-cloud-operator.sh
 
       - name: Run allowlisted worker operation
-        if: inputs.operation != 'deploy-dispatch-gateway' && inputs.operation != 'deploy-admission-coordinator' && inputs.operation != 'build-worker-candidate' && inputs.operation != 'sync-base44-signing-key' && inputs.operation != 'verify-serving-worker-release' && inputs.operation != 'verify-staged-worker-release' && inputs.operation != 'verify-base44-v8-preflight' && inputs.operation != 'apply-scanrun-comparison-evidence' && inputs.operation != 'rollback-scanrun-comparison-evidence'
+        if: inputs.operation != 'deploy-dispatch-gateway' && inputs.operation != 'deploy-admission-coordinator' && inputs.operation != 'build-worker-candidate' && inputs.operation != 'prepare-staged-scan-infra' && inputs.operation != 'verify-staged-scan-infra' && inputs.operation != 'sync-base44-signing-key' && inputs.operation != 'verify-serving-worker-release' && inputs.operation != 'verify-staged-worker-release' && inputs.operation != 'verify-base44-v8-preflight' && inputs.operation != 'apply-scanrun-comparison-evidence' && inputs.operation != 'rollback-scanrun-comparison-evidence'
         env:
           OPERATION: ${{ inputs.operation }}
           CONFIRM: ${{ inputs.confirm }}
@@ -416,8 +426,20 @@ jobs:
         env:
           CONFIRM: ${{ inputs.confirm }}
           SOURCE_SHA: ${{ github.sha }}
+          FIXLIST_STAGED_SCAN_MODE: ${{ inputs.stage_config || 'off' }}
+          SCAN_WORKSPACE_BUCKET: ${{ inputs.stage_config == 'inactive' && 'fixlist-scan-workspaces-seo-autopilot-501517' || '' }}
+          SCAN_STAGE_TASKS_QUEUE_PATH: ${{ inputs.stage_config == 'inactive' && 'projects/seo-autopilot-501517/locations/europe-west1/queues/fixlist-scan-stages' || '' }}
         shell: bash
         run: ./scripts/build-worker-candidate.sh
+
+      - name: Prepare or verify inactive staged scan infrastructure
+        if: inputs.operation == 'prepare-staged-scan-infra' || inputs.operation == 'verify-staged-scan-infra'
+        shell: bash
+        env:
+          OPERATION: ${{ inputs.operation }}
+          SOURCE_SHA: ${{ github.sha }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: /bin/bash scripts/operate-staged-scan-infra.sh
 
       - name: Deploy canonical dispatch gateway
         if: inputs.operation == 'deploy-dispatch-gateway'

@@ -11,8 +11,9 @@ on:
         options:
           - scanner-functions
           - site-and-functions
+          - staged-v9-candidate
       confirm:
-        description: "Exact current main SHA. Must equal the release source SHA."
+        description: "Exact current main SHA, or PUBLISH-BASE44-STAGED-V9:<main-sha> for the isolated V9 candidate."
         required: true
         type: string
 
@@ -53,7 +54,7 @@ jobs:
           test "${{ github.actor }}" = "bright4862-design"
           test "${{ github.ref }}" = "refs/heads/main"
           case "$INPUT_DEPLOYMENT_TARGET" in
-            scanner-functions|site-and-functions) ;;
+            scanner-functions|site-and-functions|staged-v9-candidate) ;;
             *) echo "Refusing unknown Base44 deployment target: $INPUT_DEPLOYMENT_TARGET" >&2; exit 2 ;;
           esac
           test "$(git rev-parse HEAD)" = "${{ github.sha }}"
@@ -63,16 +64,23 @@ jobs:
           /bin/bash -n scripts/deploy-base44-beta-site.sh
           /bin/bash -n scripts/authenticate-base44-owner-session.sh
           /bin/bash -n scripts/lib/release-source-guard.sh
+          /bin/bash -n scripts/deploy-base44-staged-functions.sh
+          /bin/bash -n scripts/verify-base44-staged-functions.sh
 
       - name: Resolve exact owner confirmation
         id: confirm
         shell: /bin/bash {0}
         env:
           INPUT_CONFIRM: ${{ inputs.confirm }}
+          INPUT_DEPLOYMENT_TARGET: ${{ inputs.deployment_target }}
         run: |
           set -euo pipefail
           source_sha="$(git rev-parse HEAD)"
-          test "$INPUT_CONFIRM" = "$source_sha"
+          if [[ "$INPUT_DEPLOYMENT_TARGET" == staged-v9-candidate ]]; then
+            test "$INPUT_CONFIRM" = "PUBLISH-BASE44-STAGED-V9:$source_sha"
+          else
+            test "$INPUT_CONFIRM" = "$source_sha"
+          fi
           echo "confirm=$INPUT_CONFIRM" >> "$GITHUB_OUTPUT"
 
       - name: Set up pinned Node runtime
@@ -102,6 +110,24 @@ jobs:
           CONFIRM: ${{ steps.confirm.outputs.confirm }}
           BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
         run: /bin/bash scripts/deploy-base44-beta-functions.sh
+
+      - name: Deploy and attest isolated V9 candidate functions
+        if: ${{ inputs.deployment_target == 'staged-v9-candidate' }}
+        shell: /bin/bash {0}
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          CONFIRM: ${{ steps.confirm.outputs.confirm }}
+          BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
+          READINESS_OUTPUT: ${{ runner.temp }}/fixlist-staged-v9-readiness.json
+        run: /bin/bash scripts/deploy-base44-staged-functions.sh
+
+      - name: Upload V9 candidate verification evidence
+        if: ${{ inputs.deployment_target == 'staged-v9-candidate' && success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fixlist-staged-v9-readiness-${{ github.sha }}
+          path: ${{ runner.temp }}/fixlist-staged-v9-readiness.json
+          if-no-files-found: error
 
       - name: Publish exact Base44 site and canonical release functions
         if: ${{ inputs.deployment_target == 'site-and-functions' }}

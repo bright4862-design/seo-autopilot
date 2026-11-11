@@ -10,6 +10,19 @@ BUILD_SA_INPUT="${CLOUD_BUILD_SERVICE_ACCOUNT:-}"
 EGRESS_MODE="${FIXLIST_EGRESS_MODE:-none}"
 EGRESS_NETWORK="${FIXLIST_EGRESS_NETWORK:-}"
 EGRESS_SUBNET="${FIXLIST_EGRESS_SUBNET:-}"
+STAGED_SCAN_MODE="${FIXLIST_STAGED_SCAN_MODE:-off}"
+case "$STAGED_SCAN_MODE" in
+  off|inactive) ;;
+  owner-canary)
+    echo "Refusing: staged owner cohorts require verified deployed V9 runtime acceptance and a separately reviewed activation." >&2
+    exit 2
+    ;;
+  *) echo "Refusing unsupported FIXLIST_STAGED_SCAN_MODE=$STAGED_SCAN_MODE." >&2; exit 2 ;;
+esac
+if [[ "$STAGED_SCAN_MODE" == inactive && ( -n "${SCAN_STAGED_OWNER_IDS:-}" || -n "${SCAN_PIPELINE_OWNER_IDS:-}" || "${SCAN_PIPELINE_MODE:-monolith}" != monolith ) ]]; then
+  echo "Refusing: an inactive staged candidate must use monolith mode and an empty owner cohort." >&2
+  exit 2
+fi
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$REPO_ROOT/scripts/lib/release-source-guard.sh"
 fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$CONFIRM"
@@ -44,9 +57,10 @@ gcloud config set project "$PROJECT" >/dev/null
 WORKER_JSON="$(mktemp)"
 REVISIONS_JSON="$(mktemp)"
 SERVICE_JSON="$(mktemp)"
+STAGED_CONFIG_JSON="$(mktemp)"
 BUILD_CONTEXT="$(mktemp -d)"
 cleanup() {
-  rm -f "$WORKER_JSON" "$REVISIONS_JSON" "$SERVICE_JSON"
+  rm -f "$WORKER_JSON" "$REVISIONS_JSON" "$SERVICE_JSON" "$STAGED_CONFIG_JSON"
   rm -rf "$BUILD_CONTEXT"
 }
 trap cleanup EXIT
@@ -71,6 +85,20 @@ for x in items: print(x)
 PY
 )
 IMAGE="${VALUES[0]}"; RUNTIME_SA="${VALUES[1]}"; INVOKER_SA="${VALUES[2]}"; BASE44_APP="${VALUES[3]}"; BASE44_API="${VALUES[4]}"; SIGNING_SECRET="${VALUES[5]}"; SIGNING_VERSION="${VALUES[6]}"
+
+STAGED_TAG=""; STAGED_CONFIG_SHA256=""; STAGED_ENV_SUFFIX=""
+if [[ "$STAGED_SCAN_MODE" == inactive ]]; then
+  python3 "$REPO_ROOT/scripts/staged_candidate_cloudbuild.py" prepare \
+    --worker-json="$WORKER_JSON" --source-sha="$SOURCE_SHA" --project="$PROJECT" --region="$REGION" \
+    --bucket="${SCAN_WORKSPACE_BUCKET:-}" --queue-path="${SCAN_STAGE_TASKS_QUEUE_PATH:-}" > "$STAGED_CONFIG_JSON"
+  readarray -t STAGED_VALUES < <(python3 - "$STAGED_CONFIG_JSON" <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1])); print(value['tag']); print(value['digest'])
+print(',' + ','.join(key + '=' + value['environment'][key] for key in sorted(value['environment'])))
+PY
+  )
+  STAGED_TAG="${STAGED_VALUES[0]}"; STAGED_CONFIG_SHA256="${STAGED_VALUES[1]}"; STAGED_ENV_SUFFIX="${STAGED_VALUES[2]}"
+fi
 
 normalize_build_sa() {
   local raw="$1"; raw="${raw##*/}"
@@ -105,6 +133,11 @@ case "$EGRESS_MODE" in
     ;;
 esac
 test -f "$BUILD_CONFIG" || { echo "Worker build config missing: $BUILD_CONFIG" >&2; exit 2; }
+if [[ "$STAGED_SCAN_MODE" == inactive ]]; then
+  # The suffix contains environment commas. A separate substitutions delimiter
+  # preserves those commas and the intentionally empty owner list verbatim.
+  BUILD_SUBSTITUTIONS="^|^${BUILD_SUBSTITUTIONS//,/|}|_STAGED_SCAN_MODE=inactive|_STAGED_ENV_SUFFIX=$STAGED_ENV_SUFFIX|_STAGED_TAG=$STAGED_TAG|_STAGED_CONFIG_SHA256=$STAGED_CONFIG_SHA256"
+fi
 
 gcloud builds submit "$BUILD_CONTEXT" \
   --project="$PROJECT" \
@@ -114,14 +147,16 @@ gcloud builds submit "$BUILD_CONTEXT" \
   --substitutions="$BUILD_SUBSTITUTIONS"
 
 gcloud run revisions list --service="$WORKER" --project="$PROJECT" --region="$REGION" --format=json > "$REVISIONS_JSON"
-CANDIDATE="$(python3 - "$REVISIONS_JSON" "$SOURCE_SHA" "$EGRESS_MODE" "$EGRESS_NETWORK" "$EGRESS_SUBNET" <<'PY'
+CANDIDATE="$(python3 - "$REVISIONS_JSON" "$SOURCE_SHA" "$EGRESS_MODE" "$EGRESS_NETWORK" "$EGRESS_SUBNET" "$STAGED_SCAN_MODE" "$STAGED_CONFIG_SHA256" <<'PY'
 import json, sys
-rows=json.load(open(sys.argv[1])); sha, mode, network, subnet = sys.argv[2:]
+rows=json.load(open(sys.argv[1])); sha, mode, network, subnet, staged, digest = sys.argv[2:]
 matches=[]
 for r in rows:
   spec=r.get('spec',{}); c=(spec.get('containers') or [{}])[0]
   env={i.get('name'):i.get('value','') for i in c.get('env',[])}
   if env.get('FIXLIST_WORKER_SOURCE_SHA') != sha or env.get('FIXLIST_EGRESS_MODE','none') != mode:
+    continue
+  if staged == 'inactive' and env.get('FIXLIST_STAGED_CONFIG_SHA256') != digest:
     continue
   annotations=r.get('metadata',{}).get('annotations',{}) or {}
   raw=annotations.get('run.googleapis.com/network-interfaces','')
@@ -175,12 +210,22 @@ if str(ready.get('status') or '').lower()!='true': raise SystemExit('candidate r
 PY
 
 gcloud run services describe "$WORKER" --project="$PROJECT" --region="$REGION" --format=json > "$SERVICE_JSON"
-python3 - "$SERVICE_JSON" "$CANDIDATE" <<'PY'
+python3 - "$SERVICE_JSON" "$CANDIDATE" "$STAGED_SCAN_MODE" "$STAGED_CONFIG_JSON" "$REVISIONS_JSON" "$SOURCE_SHA" <<'PY'
 import json,sys
-v=json.load(open(sys.argv[1])); candidate=sys.argv[2]
+v=json.load(open(sys.argv[1])); candidate, staged, config_path, revision_path, sha = sys.argv[2:]
 for item in v.get('status',{}).get('traffic',[]) or []:
   if item.get('revisionName')==candidate and int(item.get('percent') or 0)>0:
     raise SystemExit('candidate unexpectedly receives traffic')
+if staged == 'inactive':
+  config=json.load(open(config_path)); revision=json.load(open(revision_path))
+  env={item.get('name'):item.get('value','') for item in (revision.get('spec',{}).get('containers') or [{}])[0].get('env',[])}
+  if env.get('FIXLIST_WORKER_SOURCE_SHA') != sha or any(env.get(key) != value for key,value in config['environment'].items()):
+    raise SystemExit('Refusing: inactive candidate environment does not match its exact source-bound configuration.')
+  tags=[item for item in v.get('status',{}).get('traffic',[]) if item.get('tag') == config['tag']]
+  if len(tags) != 1 or tags[0].get('revisionName') != candidate or tags[0].get('url','').rstrip('/') != config['environment']['SCAN_STAGE_TARGET_URL']:
+    raise SystemExit('Refusing: immutable staged tag does not resolve to the exact configured candidate.')
 print('Candidate traffic verified at 0%.')
 PY
 printf 'WORKER_CANDIDATE_READY=%s\nWORKER_CANDIDATE_SOURCE_SHA=%s\nWORKER_CANDIDATE_EGRESS_MODE=%s\n' "$CANDIDATE" "$SOURCE_SHA" "$EGRESS_MODE"
+printf 'WORKER_CANDIDATE_STAGE_MODE=%s\n' "$STAGED_SCAN_MODE"
+if [[ "$STAGED_SCAN_MODE" == inactive ]]; then printf 'WORKER_CANDIDATE_STAGE_TAG=%s\n' "$STAGED_TAG"; fi

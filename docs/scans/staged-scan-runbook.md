@@ -31,7 +31,7 @@ python3 scripts/prepare_staged_scan_infra.py \
   --worker-url https://YOUR-WORKER.run.app
 ```
 
-Review the printed plan, then append `--apply` to execute it. This is a one-time bootstrap: creation fails if resources already exist. After a partial failure, inspect the resources and run only the outstanding reviewed commands; the script does not silently adopt or overwrite existing resources.
+Review the printed plan, then append `--apply` to execute it. This is a one-time bootstrap: creation fails if resources already exist. After a partial failure, inspect the resources and run only the outstanding reviewed commands; the script does not silently adopt or overwrite existing resources. The new stage queue is paused immediately after creation, before granting enqueue access; provisioning does not activate it.
 
 The plan creates:
 
@@ -60,13 +60,17 @@ Cloud Run and Cloud Tasks request deadlines stay at 480 seconds. Each staged HTT
 
 ## Deploy without enabling customer traffic
 
-1. Add and verify an isolated V9 candidate publishing path before deploying the V9 function generation and entity schema. The current Base44 publisher is V8-only and requires an accepted release record; do not bypass that production gate to publish a candidate. Keep V2–V8 available for historical records and in-flight jobs, and keep public frontend routing on V8 during candidate acceptance.
+1. Use the Base44 Release Publish workflow's `staged-v9-candidate` target, confirmed with `PUBLISH-BASE44-STAGED-V9:<exact-main-sha>`. It authenticates the configured owner through the existing ephemeral device login, deploys only the six V9 packages, compares a fresh pull against their complete local package bytes and verifies their live build/activation identities. Its readiness artifact records candidate verification, not production acceptance. It leaves entities, secrets, the global release-source stamp, V8 functions and the public site unchanged. Apply the reviewed additive entity schema separately before a real staged scan. The V8/site publishers retain their accepted-release gate.
 2. Deploy the worker containing staged endpoints, the workspace adapter and stage dispatcher. Preserve private invocation, attempt fences, SSRF/robots policy, signing secrets and existing admission controls.
 3. Deploy the dispatch gateway that recognizes the staged 500 contract. Workspace deletion uses the existing signed gateway control/drain queue; it is not an unauthenticated direct bucket deletion endpoint.
 4. Configure the new bucket and queue variables. Keep `SCAN_PIPELINE_MODE=monolith` until all three runtimes are verified.
 5. Use the existing `scripts/post_deploy_verify.sh` release checks for the exact worker revision, traffic target, private IAM, timeout, entry/drain queues and signing configuration. Those checks remain required; the new infrastructure verifier supplements them. Set `VERIFY_STAGED_SCAN_PIPELINE=1` with explicit `SCAN_WORKSPACE_BUCKET`, `SCAN_STAGE_QUEUE` and `SCAN_STAGE_TARGET_URL` to include the new infrastructure verifier in the post-deploy check. Verify the V9 packages using `node scripts/base44_release_manifest.mjs verify --staged`, then compare a fresh deployed pull using its `compare <functions-directory> <entities-directory> --staged` command before enabling V9 frontend routing.
 
 Do not run a deployment command that replaces environment variables without retaining the new stage settings. Existing build manifests use explicit environment lists; include the reviewed stage variables in the candidate deployment configuration.
+
+The Cloud Operator has bounded `prepare-staged-scan-infra` and read-only `verify-staged-scan-infra` operations for the fixed FixList bucket, stage queue and service accounts. Provisioning requires `PREPARE-STAGED-SCAN-INFRA:<exact-main-sha>` and finishes by verifying a **paused** stage queue. It does not grant the operator broader permissions; an actual IAM denial requires an administrator to complete that narrowly scoped bootstrap.
+
+For `build-worker-candidate`, set the `stage_config` workflow input to `inactive` to add the explicit bucket/queue settings without an owner cohort. The destination uses a source-bound tag `staged-<first-12-source-sha-characters>`, with the full source SHA and configuration verified against the revision. An existing tag cannot be rebound. OIDC keeps the canonical service audience. Mode `off` preserves the legacy candidate build. Inactive candidates remain at 0% traffic, use `SCAN_PIPELINE_MODE=monolith`, and have an empty staged owner list. The presence of the workspace bucket selects V9 control calls even in monolith mode; do not promote this configuration before the V9 release and live acceptance checks pass.
 
 ## Read-only infrastructure verification
 
@@ -100,6 +104,8 @@ SCAN_STAGED_OWNER_IDS=OWNER_ID_1,OWNER_ID_2
 ```
 
 Base44 grants `page_cap=500` only from an active server-owned entitlement; the browser cannot select it. Test staged 150 first, then grant the owner-test account 500 through the existing authorized administrative path. Do not set a wildcard cohort. The dispatch gateway independently requires the staged signed contract and matching owner cohort before admitting 500.
+
+`scripts/run-staged-owner-canary.sh` submits one explicitly confirmed staged-150 request through the authenticated pinned CLI. Supply the exact source SHA, expected administrator owner ID, an existing matching project and target URL, `EXPECTED_PAGE_CAP=150`, a stable request ID and a new acceptance-output path. Its confirmation binds that source, owner, project and request ID. It verifies the authenticated user, project and existing active entitlement before starting, and never creates a project or grant. Reuse the request ID after a lost response. The filtered report requires verified authority, the current release fingerprint, staged batch progress, duration and measured memory; absent evidence prevents an acceptance claim. This canary does not configure a cohort, open public claims or freeze a production release.
 
 Before expanding the cohort, verify:
 

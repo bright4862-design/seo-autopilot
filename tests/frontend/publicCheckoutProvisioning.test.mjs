@@ -119,7 +119,7 @@ test("public checkout source contains no static invitation membership gate", () 
   assert.doesNotMatch(checkoutSource, /BETA_COHORT_ALLOWED_USER_IDS|checkout_not_invited|MAX_BETA_CUSTOMERS/);
 });
 
-test("simultaneous first-time checkout requests converge on one pending Access row", async () => {
+test("simultaneous first-time checkout requests converge on one pending Access row", { timeout: 2000 }, async () => {
   const priorDeno = globalThis.Deno;
   const env = new Map([
     ["CHECKOUT_ENABLED", "true"],
@@ -127,6 +127,10 @@ test("simultaneous first-time checkout requests converge on one pending Access r
   ]);
   let rows = [];
   let createSequence = 0;
+  let emptyReadSequence = 0;
+  let retrieveCount = 0;
+  let checkoutPersisted;
+  const firstCheckoutPersisted = new Promise((resolve) => { checkoutPersisted = resolve; });
   const sessionsByKey = new Map();
 
   const Access = {
@@ -135,7 +139,14 @@ test("simultaneous first-time checkout requests converge on one pending Access r
         (query.owner_user_id && query.owner_user_id === record.owner_user_id)
         || (query.user_email && query.user_email === record.user_email)
       )).map((record) => ({ ...record }));
-      if (rows.length === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+      if (rows.length === 0) {
+        const firstRequest = ++emptyReadSequence <= 2;
+        await new Promise((resolve) => setTimeout(resolve, firstRequest ? 5 : 25));
+        // Both requests observed an empty inventory. Release the second
+        // snapshot after the first checkout is saved, exercising session reuse
+        // rather than depending on the duration of the async Stripe-key hash.
+        if (!firstRequest) await firstCheckoutPersisted;
+      }
       return snapshot;
     },
     async create(fields) {
@@ -147,6 +158,7 @@ test("simultaneous first-time checkout requests converge on one pending Access r
       const index = rows.findIndex((record) => record.id === id);
       if (index < 0) throw new Error("missing access");
       rows[index] = { ...rows[index], ...fields };
+      if (fields.stripe_checkout_session_id) checkoutPersisted();
       return { ...rows[index] };
     },
     async delete(id) {
@@ -161,7 +173,11 @@ test("simultaneous first-time checkout requests converge on one pending Access r
   class FakeStripe {
     constructor() {
       this.checkout = { sessions: {
-        retrieve: async (id) => Array.from(sessionsByKey.values()).find((session) => session.id === id),
+        retrieve: async (id, options) => {
+          retrieveCount += 1;
+          assert.deepEqual(options, { expand: ["line_items.data.price"] });
+          return Array.from(sessionsByKey.values()).find((session) => session.id === id);
+        },
         create: async (params, options) => {
           if (!sessionsByKey.has(options.idempotencyKey)) {
             sessionsByKey.set(options.idempotencyKey, {
@@ -172,6 +188,9 @@ test("simultaneous first-time checkout requests converge on one pending Access r
               customer_email: params.customer_email,
               client_reference_id: params.client_reference_id,
               metadata: params.metadata,
+              line_items: {
+                data: params.line_items.map(({ price, quantity }) => ({ price: { id: price }, quantity })),
+              },
             });
           }
           return sessionsByKey.get(options.idempotencyKey);
@@ -204,6 +223,7 @@ test("simultaneous first-time checkout requests converge on one pending Access r
     assert.equal(rows[0].owner_user_id, "user-race");
     assert.equal(rows[0].user_email, "race@example.com");
     assert.equal(rows[0].stripe_checkout_session_id, "cs_race");
+    assert.equal(retrieveCount, 1, "the second request reuses the first request's correctly priced session");
   } finally {
     delete globalThis.__publicCheckoutRaceHarness;
     if (priorDeno === undefined) delete globalThis.Deno;

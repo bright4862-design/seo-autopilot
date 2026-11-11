@@ -15,6 +15,8 @@ Implementation and inactive deployment controls are merged through [PR #409](htt
 Do not rerun the whole one-time creation script: the bucket now exists. Use an existing authorized administrator identity to complete the remaining resource configuration below. These commands grant runtime access on the selected resources; they do not broaden the GitHub operator's permissions.
 
 ```bash
+set -euo pipefail
+
 cat > /tmp/fixlist-staged-workspace-lifecycle.json <<'JSON'
 {"rule":[{"action":{"type":"Delete"},"condition":{"age":30}}]}
 JSON

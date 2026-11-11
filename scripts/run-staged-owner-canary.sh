@@ -187,6 +187,16 @@ try {
   if (report.durable_worker_owned) report.ownership_evidence = ['owner_user_id', 'project_id', 'request_id', 'pipeline_mode', 'last_committed_batch', 'python_scanner_api', 'python_review_api', 'authority_verified'];
   const checks = {
     terminal_complete:report.terminal_status === 'complete',
+    // A verified customer read must return the same persisted FixList, not just
+    // an authority flag and progress data.
+    customer_fix_list_readback: typeof run.fix_list_id === 'string'
+      && /^[A-Za-z0-9_-]{6,160}$/.test(run.fix_list_id)
+      && projection.fix_list_id === run.fix_list_id
+      && projection.run?.fix_list_id === run.fix_list_id
+      && projection.fixList?.id === run.fix_list_id
+      && projection.fixList?.scan_run_id === report.scan_id
+      && projection.fixList?.project_id === config.projectId
+      && projection.fixList?.is_authoritative === true,
     signed_authority:report.authority_verified && /^[a-f0-9]{64}$/.test(String(run.authority_proof || '')) && Boolean(run.authority_seal_version),
     release_fingerprint:report.release_contract_current && report.release_fingerprint === config.expectedFingerprint && run.beta_revision_fingerprint === config.expectedFingerprint,
     staged_150:report.page_cap === 150 && report.pipeline_mode === 'staged',

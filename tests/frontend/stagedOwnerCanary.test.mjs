@@ -35,7 +35,16 @@ const scenario=process.env.CANARY_TEST_SCENARIO;
 const track=(name,payload)=>appendFileSync(process.env.CANARY_TEST_TRACE,JSON.stringify({name,payload})+'\\n');
 track('cli_args',process.argv.slice(2));
 const owner='${ownerId}', project='${projectId}', request='${requestId}', url='https://norris.example/';
-const run={id:'scan_123456',owner_user_id:owner,project_id:project,request_id:request,idempotency_key:request,website_url:url,scan_mode:'standard_150',page_cap:150,pipeline_mode:'staged',fix_list_id:'fixlist_123456',status:scenario==='timeout'?'crawling':'complete',pages_crawled:150,pages_planned:150,last_committed_batch:2,started_at:'2026-11-11T12:00:00.000Z',completed_at:'2026-11-11T12:01:00.000Z',beta_revision_fingerprint:'${fingerprint}',authority_proof:'a'.repeat(64),authority_seal_version:'standard_review_snapshot_hmac_identity_v1'};
+const fixtureNow=Date.now();
+const run={id:'scan_123456',owner_user_id:owner,project_id:project,request_id:request,idempotency_key:request,website_url:url,scan_mode:'standard_150',page_cap:150,pipeline_mode:'staged',fix_list_id:'fixlist_123456',status:scenario==='timeout'?'crawling':'complete',pages_crawled:150,pages_planned:150,last_committed_batch:2,started_at:new Date(fixtureNow-65000).toISOString(),completed_at:new Date(fixtureNow-5000).toISOString(),beta_revision_fingerprint:'${fingerprint}',authority_proof:'a'.repeat(64),authority_seal_version:'standard_review_snapshot_hmac_identity_v1'};
+if(scenario==='staleTerminalReplay'||scenario==='staleWithoutReplayFlag') {
+  run.started_at=new Date(fixtureNow-31*24*60*60*1000).toISOString();
+  run.completed_at=new Date(fixtureNow-31*24*60*60*1000+60000).toISOString();
+}
+if(scenario==='futureDated') {
+  run.started_at=new Date(fixtureNow+24*60*60*1000).toISOString();
+  run.completed_at=new Date(fixtureNow+24*60*60*1000+60000).toISOString();
+}
 if(scenario==='missingProgress') delete run.last_committed_batch;
 const projected={...run,advanced_scan_backend:'python_scanner_api',deno_fallback_used:false,ai_review_backend:'python_review_api',python_review_fallback_used:false,worker_peak_memory_bytes:123456789,email:'never-print@example.com',main_text:'private page body'};
 if(scenario==='missingMemory') delete projected.worker_peak_memory_bytes;
@@ -50,7 +59,7 @@ const base44={auth:{me:async()=>{track('auth.me');return{id:scenario==='wrongOwn
 BusinessProject:{get:async(id)=>{track('BusinessProject.get',id);return{id,owner_user_id:scenario==='wrongProject'?'other_123':owner,website_url:url};},create:denied,update:denied},
 Access:{filter:async(query)=>{track('Access.filter',query);return scenario==='duplicateGrant'?[grant,{...grant,id:'access_456'}]:[grant];},create:denied,update:denied},
 ScanRun:{get:async(id)=>{track('ScanRun.get',id);return run;},create:denied,update:denied}
-},functions:{invoke:async(name,payload)=>{track(name,payload);if(name==='startStandardScanJobV9')return{data:{success:true,accepted:true,scan_id:run.id,scan_mode:'standard_150',page_cap:150,pipeline_mode:scenario==='monolith'?'monolith':'staged'}};if(name==='getCustomerScanResultV9')return{data:{
+},functions:{invoke:async(name,payload)=>{track(name,payload);if(name==='startStandardScanJobV9')return{data:{success:true,accepted:true,scan_id:run.id,scan_mode:'standard_150',page_cap:150,pipeline_mode:scenario==='monolith'?'monolith':'staged',replayed:scenario==='missingReplaySignal'?undefined:['staleTerminalReplay','recentTerminalReplay'].includes(scenario)}};if(name==='getCustomerScanResultV9')return{data:{
   success:true,scan_id:run.id,authority_verified:true,release_contract_current:true,run:projected,
   fix_list_id:scenario==='missingCustomerFixList'?'':run.fix_list_id,
   fixList:scenario==='missingCustomerFixList'?null:
@@ -141,6 +150,9 @@ test('one stable request produces a filtered verified staged-150 acceptance repo
   assert.equal(result.report.production_freeze,false);
   assert.equal(result.report.deployed_git_source_sha.state,'unverified');
   assert.equal(result.report.release_fingerprint,fingerprint);
+  assert.equal(result.report.admission_replayed,false);
+  assert.equal(result.report.admission_kind,'freshly_admitted');
+  assert.ok(!result.report.unverified.includes('scan_time_window'));
   assert.ok(!result.report.unverified.includes('customer_fix_list_readback'));
   assert.doesNotMatch(JSON.stringify(result.report),/never-print|private page body|authority_proof/);
   assert.doesNotMatch(result.stdout,/never-print|private page body/);
@@ -171,6 +183,32 @@ for (const scenario of ['missingCustomerFixList','foreignCustomerFixList','wrong
     assert.equal(result.calls.filter(row=>row.name==='startStandardScanJobV9').length,1);
   });
 }
+
+for (const [scenario, missing] of [
+  ['staleTerminalReplay','fresh_admission'],
+  ['recentTerminalReplay','fresh_admission'],
+  ['staleWithoutReplayFlag','scan_time_window'],
+  ['futureDated','scan_time_window'],
+  ['missingReplaySignal','fresh_admission'],
+]) {
+  test(`canary rejects ${scenario} as fresh acceptance without losing signed read-back`, t => {
+    const result=fixture(t).run(scenario);
+    assert.equal(result.status,1);
+    assert.equal(result.report.acceptance_verified,false);
+    assert.ok(result.report.unverified.includes(missing));
+    assert.equal(result.calls.filter(row=>row.name==='startStandardScanJobV9').length,1);
+    assert.equal(result.calls.filter(row=>row.name==='getCustomerScanResultV9').length,1);
+    assert.equal(result.report.authority_verified,true);
+  });
+}
+
+test('a recent replay remains recoverable signed history, not a new owner canary', t => {
+  const result=fixture(t).run('recentTerminalReplay');
+  assert.equal(result.report.admission_kind,'recovered_existing');
+  assert.equal(result.report.admission_replayed,true);
+  assert.ok(!result.report.unverified.includes('scan_time_window'));
+  assert.ok(result.report.unverified.includes('fresh_admission'));
+});
 
 test('a still-running scan stops polling at the configured deadline without resubmitting', t => {
   const result=fixture(t).run('timeout');

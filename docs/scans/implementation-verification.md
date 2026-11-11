@@ -36,6 +36,7 @@ On 11 November 2026, the existing GitHub Cloud Operator authenticated through GC
 | Build and deploy exact merged source | [Run 43089277776](https://github.com/bright4862-design/seo-autopilot/actions/runs/43089277776): revision `fixlist-standard150-worker-00104-l79` ready, concurrency 1, timeout 480 seconds, traffic 0% |
 | Tag exact revision without moving traffic | [Run 43089863245](https://github.com/bright4862-design/seo-autopilot/actions/runs/43089863245): `candidate` tag resolves to that revision, traffic remains 0% |
 | Authenticated runtime and route verification | [Run 43090015295](https://github.com/bright4862-design/seo-autopilot/actions/runs/43090015295): tagged zero-traffic check, runtime release identity, exact source SHA, routes and timeout passed |
+| Post-deployment live status | [Run 43090150954](https://github.com/bright4862-design/seo-autopilot/actions/runs/43090150954): existing revision `fixlist-standard150-worker-00097-lvl` still receives 100% traffic; entry and drain queues remain paused |
 
 This deploys the worker code as an isolated candidate. It does not enable the staged pipeline, publish the V9 functions or frontend, or establish end-to-end scan acceptance. The Base44 connector confirms an active GitHub connection; its current app sandbox remains at `624aaf1ae459c49b5f26a0f8a366044c348b79bb`, with V8 scanner packages and no V9 scanner packages in that source tree. Sandbox source is not proof of published function bytes.
 

@@ -337,7 +337,8 @@ if [ "${VERIFY_STAGED_SCAN_PIPELINE:-0}" = "1" ]; then
     --project "$PROJECT" --region "$REGION" \
     --bucket "$SCAN_WORKSPACE_BUCKET" --queue "$SCAN_STAGE_QUEUE" \
     --worker-sa "$EXPECTED_RUNTIME_SA" --invoker-sa "$EXPECTED_INVOKER_SA" \
-    --worker-url "$SCAN_STAGE_TARGET_URL"; then
+    --worker-url "$SCAN_STAGE_TARGET_URL" \
+    --token-audience "${SCAN_STAGE_TOKEN_AUDIENCE:-$SCAN_STAGE_TARGET_URL}"; then
     pass "staged bucket, queue and scoped IAM match the reviewed contract"
   else
     fail "staged workspace or queue verification failed"

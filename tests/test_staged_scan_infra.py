@@ -66,6 +66,25 @@ def test_grants_are_bucket_queue_and_invoker_scoped():
     assert not any("projects" in command[1:3] for command in grants)
 
 
+def test_tagged_canary_uses_canonical_service_audience():
+    target = "https://canary-00104-abc---worker-example.run.app"
+    args = prepare.arguments(ARGS[:-1] + [target, "--token-audience", ORIGIN])
+    env = prepare.worker_environment(args)
+    assert env["SCAN_STAGE_TARGET_URL"] == target
+    assert env["SCAN_STAGE_TOKEN_AUDIENCE"] == ORIGIN
+    with pytest.raises(SystemExit):
+        prepare.arguments(ARGS[:-1] + [target])
+    with pytest.raises(SystemExit):
+        prepare.arguments(ARGS[:-1] + [target, "--token-audience", "https://other.run.app"])
+    task = {"dispatchDeadline": "480s", "httpRequest": {
+        "url": target + "/scan-batch", "httpMethod": "POST",
+        "oidcToken": {"audience": ORIGIN, "serviceAccountEmail": INVOKER}}}
+    verify.validate_task(task, target, INVOKER, ORIGIN)
+    task["httpRequest"]["oidcToken"]["audience"] = target
+    with pytest.raises(verify.VerificationError, match="audience"):
+        verify.validate_task(task, target, INVOKER, ORIGIN)
+
+
 @pytest.mark.parametrize("url", ["http://worker.run.app", "https://worker.run.app/scan-batch",
                                     "https://user:password@worker.run.app", "https://worker.run.app?x=1"])
 def test_worker_target_must_be_a_pinned_https_origin(url):

@@ -52,6 +52,7 @@ SCAN_TASKS_LOCATION=europe-west1
 SCAN_STAGE_QUEUE=fixlist-scan-stages
 SCAN_STAGE_TASKS_QUEUE_PATH=projects/seo-autopilot-501517/locations/europe-west1/queues/fixlist-scan-stages
 SCAN_STAGE_TARGET_URL=https://YOUR-WORKER.run.app
+SCAN_STAGE_TOKEN_AUDIENCE=https://YOUR-WORKER.run.app
 TASKS_INVOKER_SERVICE_ACCOUNT=fixlist-standard150-invoker@seo-autopilot-501517.iam.gserviceaccount.com
 ```
 
@@ -83,6 +84,13 @@ python3 scripts/verify_staged_scan_infra.py \
 This checks bucket privacy/lifecycle, explicit resource-scoped IAM and stage queue settings. It does not enqueue anything. Supply `--task EXISTING_TASK_ID` while an owner-test stage task exists to verify its exact URL, OIDC identity/audience and dispatch deadline. Without `--task`, these per-task settings are reported as **unverified**, even when infrastructure checks pass. Successful static verification does not establish that inherited project IAM is least privilege or that the deployed code matches the intended revision.
 
 ## Enable an owner cohort
+
+For a tagged 0%-traffic candidate, set `SCAN_STAGE_TARGET_URL` to its tagged
+origin and `SCAN_STAGE_TOKEN_AUDIENCE` to the canonical service origin. Pass
+`--token-audience https://CANONICAL-SERVICE.run.app` to the preparation and
+verification scripts. The target must be a tag belonging to that same service;
+a tag URL is not a valid Cloud Run OIDC audience. Keep this mapping in place
+while the candidate's stage tasks drain.
 
 Use the **same explicit owner IDs** in Base44, gateway and worker:
 

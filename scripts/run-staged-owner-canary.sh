@@ -85,6 +85,8 @@ const report = {
   request_id:config.requestId, expected_page_cap:150,
   expected_release_fingerprint:config.expectedFingerprint,
   scan_id:null, accepted:false, acceptance_verified:false, terminal_status:null,
+  scan_invoked_at:null, scan_started_at:null, scan_completed_at:null,
+  admission_replayed:null, admission_kind:'unknown',
   authority_verified:false, release_fingerprint:null, release_contract_current:false,
   durable_worker_owned:false, ownership_evidence:[], page_cap:null, pages_crawled:null,
   pipeline_mode:null, last_committed_batch:null, committed_batch_count:null,
@@ -146,6 +148,8 @@ try {
   requireCondition(paidGrant || manualGrant || ownerGrant, 'access_grant_unverified');
 
   // One start call only. The operator must reuse REQUEST_ID to recover a lost response.
+  const requestedAt = Date.now();
+  report.scan_invoked_at = new Date(requestedAt).toISOString();
   const accepted = body(await bounded(() => base44.functions.invoke('startStandardScanJobV9', {
     request_id:config.requestId, idempotency_key:config.requestId,
     project_id:config.projectId, website_url:config.targetUrl, submitted_url:config.targetUrl,
@@ -153,6 +157,9 @@ try {
   })));
   requireCondition(accepted?.success === true && accepted?.accepted === true, 'scan_not_accepted');
   report.accepted = true;
+  report.admission_replayed = typeof accepted.replayed === 'boolean' ? accepted.replayed : null;
+  report.admission_kind = report.admission_replayed === false ? 'freshly_admitted'
+    : report.admission_replayed === true ? 'recovered_existing' : 'unknown';
   requireCondition(accepted.page_cap === 150 && accepted.pipeline_mode === 'staged' && accepted.scan_mode === 'standard_150', 'accepted_scan_contract_mismatch');
   report.scan_id = String(accepted.scan_id || accepted.scan_run_id || '');
   requireCondition(/^[A-Za-z0-9_-]{6,160}$/.test(report.scan_id), 'accepted_scan_identity_missing');
@@ -176,7 +183,18 @@ try {
   report.pages_crawled = safeInteger(run.pages_crawled) ? run.pages_crawled : null;
   report.last_committed_batch = safeInteger(run.last_committed_batch) ? run.last_committed_batch : null;
   report.committed_batch_count = report.last_committed_batch === null ? null : report.last_committed_batch + 1;
-  const duration = Date.parse(String(run.completed_at || '')) - Date.parse(String(run.started_at || ''));
+  const startedAt = Date.parse(String(run.started_at || ''));
+  const completedAt = Date.parse(String(run.completed_at || ''));
+  const observedAt = Date.now();
+  // Allow bounded clock skew; not a substitute for authenticated worker provenance.
+  const clockSkewAllowanceMs = 120000;
+  report.scan_started_at = Number.isFinite(startedAt) ? new Date(startedAt).toISOString() : null;
+  report.scan_completed_at = Number.isFinite(completedAt) ? new Date(completedAt).toISOString() : null;
+  const scanTimeWindowValid = Number.isFinite(startedAt) && Number.isFinite(completedAt)
+    && startedAt >= requestedAt - clockSkewAllowanceMs
+    && startedAt <= observedAt + clockSkewAllowanceMs
+    && completedAt >= startedAt && completedAt <= observedAt + clockSkewAllowanceMs;
+  const duration = completedAt - startedAt;
   report.duration_ms = finitePositive(duration) ? duration : null;
   const memory = projection.run?.worker_peak_memory_bytes ?? projection.run?.peak_memory_bytes;
   report.worker_peak_memory_bytes = finitePositive(memory) ? memory : null;
@@ -187,6 +205,9 @@ try {
   if (report.durable_worker_owned) report.ownership_evidence = ['owner_user_id', 'project_id', 'request_id', 'pipeline_mode', 'last_committed_batch', 'python_scanner_api', 'python_review_api', 'authority_verified'];
   const checks = {
     terminal_complete:report.terminal_status === 'complete',
+    // A recovered terminal result proves historical read-back, not a new V9 scan.
+    fresh_admission:report.admission_replayed === false,
+    scan_time_window:scanTimeWindowValid,
     // A verified customer read must return the same persisted FixList, not just
     // an authority flag and progress data.
     customer_fix_list_readback: typeof run.fix_list_id === 'string'

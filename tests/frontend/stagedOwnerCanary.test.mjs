@@ -35,14 +35,15 @@ const scenario=process.env.CANARY_TEST_SCENARIO;
 const track=(name,payload)=>appendFileSync(process.env.CANARY_TEST_TRACE,JSON.stringify({name,payload})+'\\n');
 track('cli_args',process.argv.slice(2));
 const owner='${ownerId}', project='${projectId}', request='${requestId}', url='https://norris.example/';
-const run={id:'scan_123456',owner_user_id:owner,project_id:project,request_id:request,idempotency_key:request,website_url:url,scan_mode:'standard_150',page_cap:150,pipeline_mode:'staged',fix_list_id:'fixlist_123456',status:scenario==='timeout'?'crawling':'complete',pages_crawled:150,pages_planned:150,last_committed_batch:2,started_at:new Date(Date.now()-65000).toISOString(),completed_at:new Date(Date.now()-5000).toISOString(),beta_revision_fingerprint:'${fingerprint}',authority_proof:'a'.repeat(64),authority_seal_version:'standard_review_snapshot_hmac_identity_v1'};
+const fixtureNow=Date.now();
+const run={id:'scan_123456',owner_user_id:owner,project_id:project,request_id:request,idempotency_key:request,website_url:url,scan_mode:'standard_150',page_cap:150,pipeline_mode:'staged',fix_list_id:'fixlist_123456',status:scenario==='timeout'?'crawling':'complete',pages_crawled:150,pages_planned:150,last_committed_batch:2,started_at:new Date(fixtureNow-65000).toISOString(),completed_at:new Date(fixtureNow-5000).toISOString(),beta_revision_fingerprint:'${fingerprint}',authority_proof:'a'.repeat(64),authority_seal_version:'standard_review_snapshot_hmac_identity_v1'};
 if(scenario==='staleTerminalReplay'||scenario==='staleWithoutReplayFlag') {
-  run.started_at=new Date(Date.now()-31*24*60*60*1000).toISOString();
-  run.completed_at=new Date(Date.now()-31*24*60*60*1000+60000).toISOString();
+  run.started_at=new Date(fixtureNow-31*24*60*60*1000).toISOString();
+  run.completed_at=new Date(fixtureNow-31*24*60*60*1000+60000).toISOString();
 }
 if(scenario==='futureDated') {
-  run.started_at=new Date(Date.now()+24*60*60*1000).toISOString();
-  run.completed_at=new Date(Date.now()+24*60*60*1000+60000).toISOString();
+  run.started_at=new Date(fixtureNow+24*60*60*1000).toISOString();
+  run.completed_at=new Date(fixtureNow+24*60*60*1000+60000).toISOString();
 }
 if(scenario==='missingProgress') delete run.last_committed_batch;
 const projected={...run,advanced_scan_backend:'python_scanner_api',deno_fallback_used:false,ai_review_backend:'python_review_api',python_review_fallback_used:false,worker_peak_memory_bytes:123456789,email:'never-print@example.com',main_text:'private page body'};

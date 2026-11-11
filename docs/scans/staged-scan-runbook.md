@@ -1,6 +1,6 @@
 # Staged large-site scans: deployment and acceptance
 
-The repository implements the plan → sequential 50-page batches → finalize pipeline. Provisioning and rollout remain separate operator actions. No GCP resource was created, no Base44 function deployed and no production cohort enabled during implementation. Live configuration is **unverified**: this execution environment has no GCP credentials or `gcloud` installation.
+The repository implements the plan → sequential 50-page batches → finalize pipeline. Provisioning and rollout remain separate operator actions. The merged worker code is deployed as the authenticated, verified **0%-traffic** candidate `fixlist-standard150-worker-00104-l79` from source `4274ac453e93fe2e161e01c88d31823bd5134795`, through the existing GitHub Cloud Operator's GCP workload identity. Staged infrastructure, V9 publishing, owner-cohort activation and live scan acceptance remain pending. See [the implementation and deployment evidence](implementation-verification.md).
 
 ## Local evidence
 

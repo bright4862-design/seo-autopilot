@@ -6,6 +6,7 @@
 export const CUSTOMER_RESULT_READER_VERSION = "customer_result_reader_v9_published_route_identity";
 
 export const HISTORICAL_READABLE_RELEASE_FINGERPRINTS = Object.freeze([
+  "e0eca935c350e590",
   "47793ce37ca20523",
   "9e4901da590017e1",
   "a511d61013ef9fe3",

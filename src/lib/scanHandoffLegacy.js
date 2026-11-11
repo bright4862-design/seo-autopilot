@@ -114,6 +114,7 @@ function handoffFix(card = {}, index = 0, siteOrigin = "") {
     what_to_change: clean(card.whatToChange),
     where: clean(card.where),
     pages_affected: pagesAffected,
+    ...(evidence.pageCountIsLowerBound === true ? { pages_affected_is_lower_bound: true, count_qualification: `At least ${pagesAffected} affected pages were observed; the saved evidence does not establish the exact total.` } : {}),
     example_pages: samples,
     example_pages_are_partial: pagesAffected > samples.length,
     ...(redirects.length > 0 ? { redirect_evidence: redirects } : {}),

@@ -1,7 +1,7 @@
 export const SCAN_PROGRESS_PRESENTATION_VERSION = "scan_progress_presentation_v1_truthful_denominator";
 
 const ACTIVE_STATES = new Set(["queued", "crawling", "reviewing"]);
-const TERMINAL_STATES = new Set(["complete", "failed", "cancelled"]);
+const TERMINAL_STATES = new Set(["complete", "limited", "failed", "cancelled"]);
 
 function clean(value = "") {
   return String(value || "").trim();
@@ -36,6 +36,9 @@ function pagesCheckedOf(scan = {}) {
 }
 
 function explicitFinalTotal(scan = {}) {
+  // A committed staged plan is the actual selected workload, unlike inventory
+  // size or entitlement. A zero means planning has not produced a workload yet.
+  if (Number.isInteger(scan.pages_planned) && scan.pages_planned > 0 && scan.pages_planned <= 500) return scan.pages_planned;
   const locked = scan.progress_total_locked === true
     || scan.progress_total_is_final === true
     || scan.crawl_timing?.progress_total_is_final === true;
@@ -64,6 +67,7 @@ function phaseLabel(status) {
   if (status === "crawling") return "Finding and checking pages…";
   if (status === "reviewing") return "Building your FixList…";
   if (status === "complete") return "Scan complete";
+  if (status === "limited") return "Scan finished with limited evidence";
   if (status === "failed") return "Scan stopped";
   if (status === "cancelled") return "Scan cancelled";
   return "Checking your website…";
@@ -77,7 +81,8 @@ function phaseLabel(status) {
  * crawling, and a site may legitimately finish well below 150 pages.
  *
  * A determinate percentage is emitted only when the backend explicitly marks a
- * total as final/locked, or once the scan itself is complete.
+ * total as final/locked, supplies a committed pages_planned workload, or once
+ * the scan itself is complete.
  */
 export function scanProgressModel(scan = {}) {
   const status = statusOf(scan);

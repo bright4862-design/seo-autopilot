@@ -74,8 +74,9 @@ if worker_parts.scheme != "https" or not worker_parts.netloc:
     raise RuntimeError("SCAN_WORKER_URL must be an HTTPS URL")
 WORKER_ORIGIN = f"{worker_parts.scheme}://{worker_parts.netloc}"
 DRAIN_URL = f"{WORKER_ORIGIN}/scan-job-drain"
-ALLOWED_URLS = {WORKER_URL, DRAIN_URL}
-TASK_RE = re.compile(r"^standard150-(?:(drain)-)?([A-Za-z0-9_-]+)-a([1-9][0-9]*)$")
+WORKSPACE_DELETE_URL = f"{WORKER_ORIGIN}/scan-workspace-delete"
+ALLOWED_URLS = {WORKER_URL, DRAIN_URL, WORKSPACE_DELETE_URL}
+TASK_RE = re.compile(r"^standard150-(?:(drain|cleanup)-)?([A-Za-z0-9_-]+)-a([1-9][0-9]*)$")
 
 # Owner-only release canary. Off unless BOTH variables are set. A zero-traffic
 # Cloud Run candidate is reachable only through its revision-tag URL, which
@@ -119,7 +120,7 @@ def route_task(task: dict[str, Any], job: dict[str, Any], is_drain: bool) -> tup
     if not CANARY_WORKER_ORIGIN or owner not in CANARY_OWNER_USER_IDS:
         return task, "serving"
     routed = deepcopy(task)
-    path = urlsplit(DRAIN_URL if is_drain else WORKER_URL).path
+    path = urlsplit(task["httpRequest"]["url"]).path
     routed["httpRequest"]["url"] = f"{CANARY_WORKER_ORIGIN}{path}"
     return routed, "canary"
 
@@ -201,6 +202,24 @@ def _valid_robots_policy(job: dict[str, Any]) -> bool:
     return owner_override == (respect is False)
 
 
+def _valid_scan_mode(job: dict[str, Any]) -> bool:
+    """The signed V9 intake may grant 500 only to a staged owner cohort.
+
+    The worker independently rechecks the durable entitlement before fetching;
+    this gate cannot grant a larger cap by itself.
+    """
+    if job.get("scan_mode") == "standard_150":
+        return job.get("page_cap", 150) == 150
+    owners = {owner.strip() for owner in os.getenv("SCAN_STAGED_OWNER_IDS", "").split(",") if owner.strip()}
+    return (
+        job.get("scan_mode") == "standard_500"
+        and type(job.get("page_cap")) is int and job["page_cap"] == 500
+        and job.get("pipeline_mode") == "staged"
+        and os.getenv("SCAN_PIPELINE_MODE") == "staged"
+        and str(job.get("owner_user_id") or "") in owners
+    )
+
+
 def validate_dispatch(payload: Any) -> tuple[dict[str, Any] | None, str | None]:
     if not isinstance(payload, dict):
         return None, "invalid_payload"
@@ -220,9 +239,10 @@ def validate_dispatch(payload: Any) -> tuple[dict[str, Any] | None, str | None]:
     match = TASK_RE.fullmatch(short_name)
     if not match:
         return None, "invalid_task_name"
-    is_drain = bool(match.group(1))
+    is_drain = match.group(1) == "drain"
+    is_cleanup = match.group(1) == "cleanup"
     name_scan_id = match.group(2)
-    expected_queue = DRAIN_QUEUE_PATH if is_drain else QUEUE_PATH
+    expected_queue = DRAIN_QUEUE_PATH if is_drain or is_cleanup else QUEUE_PATH
     if queue_path != expected_queue:
         return None, "invalid_queue"
 
@@ -236,7 +256,7 @@ def validate_dispatch(payload: Any) -> tuple[dict[str, Any] | None, str | None]:
         return None, "invalid_method"
 
     target = str(http.get("url") or "")
-    expected_target = DRAIN_URL if is_drain else WORKER_URL
+    expected_target = WORKSPACE_DELETE_URL if is_cleanup else DRAIN_URL if is_drain else WORKER_URL
     if target not in ALLOWED_URLS or target != expected_target:
         return None, "invalid_worker_target"
 
@@ -256,7 +276,10 @@ def validate_dispatch(payload: Any) -> tuple[dict[str, Any] | None, str | None]:
     if not scan_id or scan_id != name_scan_id:
         return None, "scan_identity_mismatch"
 
-    if is_drain:
+    if is_cleanup:
+        if job.get("workspace_cleanup") is not True or task.get("scheduleTime"):
+            return None, "invalid_workspace_cleanup"
+    elif is_drain:
         if not task.get("scheduleTime"):
             return None, "missing_drain_schedule"
         if not str(job.get("drain_after") or "").strip():
@@ -264,7 +287,7 @@ def validate_dispatch(payload: Any) -> tuple[dict[str, Any] | None, str | None]:
     else:
         if task.get("scheduleTime"):
             return None, "unexpected_scan_schedule"
-        if job.get("scan_mode") != "standard_150":
+        if not _valid_scan_mode(job):
             return None, "invalid_scan_mode"
         if not _valid_robots_policy(job):
             if "respect_robots_txt" not in job or "owner_attested_robots_override" not in job:

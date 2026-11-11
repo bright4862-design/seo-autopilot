@@ -3,6 +3,7 @@
 Inputs are classified observations from a future trusted adapter. This module
 does not establish their truth and is deliberately not wired into scan results.
 """
+from .scan_limits import current_page_cap
 from dataclasses import dataclass
 from fractions import Fraction
 from types import MappingProxyType
@@ -46,11 +47,11 @@ def evaluate_geo(page_ids, observations, *, parent_authoritative=False,
     if any(type(flag) is not bool for flag in
            (parent_authoritative, entry_verified, access_limited)):
         raise ValueError("Assessment gates require explicit booleans")
-    if not isinstance(page_ids, (list, tuple)) or len(page_ids) > 150:
-        raise ValueError("Expected at most 150 page IDs")
+    if not isinstance(page_ids, (list, tuple)) or len(page_ids) > current_page_cap():
+        raise ValueError(f"Expected at most {current_page_cap()} page IDs")
     if any(not _bounded_text(page) for page in page_ids) or len(set(page_ids)) != len(page_ids):
         raise ValueError("Page IDs must be unique bounded nonempty strings")
-    if not isinstance(observations, (list, tuple)) or len(observations) > 150 * len(CHECKS):
+    if not isinstance(observations, (list, tuple)) or len(observations) > current_page_cap() * len(CHECKS):
         raise ValueError("Observation matrix exceeds Standard 150 bounds")
     pages = set(page_ids)
     matrix = {}

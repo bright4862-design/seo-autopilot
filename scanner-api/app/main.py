@@ -53,6 +53,7 @@ from .scan_job import (
     write_terminal_failure,
 )
 from .scanner import VERSION, run_scan
+from .scan_limits import PAGE_CAPS
 from .trust_discovery import apply_trust_discovery_gate, enrich_scan_with_trust_pages
 from .url_evidence import URL_EVIDENCE_VERSION, apply_verified_url_contract
 
@@ -60,7 +61,7 @@ SCANNER_API_KEY = os.getenv("SCANNER_API_KEY", "")
 GROK_PROXY_ENABLED = os.getenv("GROK_PROXY_ENABLED", "").strip().lower() == "true"
 WORKER_SOURCE_SHA = os.getenv("FIXLIST_WORKER_SOURCE_SHA", "").strip()
 TRUST_DISCOVERY_TIMEOUTS = {"basic": 2.0, "quick": 3.0, "deep": 5.0, "advanced": 7.0}
-SCAN_RESPONSE_PAGE_LIMITS = {"basic": 25, "quick": 40, "deep": 85, "advanced": 150}
+SCAN_RESPONSE_PAGE_LIMITS = {mode: PAGE_CAPS[mode] for mode in ("basic", "quick", "deep", "advanced")}
 GROK_ERROR_DETAIL_VERSION = "grok_upstream_detail_v1"
 WORKER_TERMINAL_DRAIN_AFTER_START_SECONDS = 1800
 WORKER_QUEUED_DRAIN_AFTER_QUEUE_SECONDS = 1800
@@ -129,7 +130,7 @@ def valid_robots_policy_pair(respect_robots_txt: bool, owner_attested_robots_ove
     return owner_attested_robots_override == (respect_robots_txt is False)
 
 
-def enforce_scan_response_page_budget(result: dict[str, Any], scan_mode: str) -> dict[str, Any]:
+def enforce_scan_response_page_budget(result: dict[str, Any], scan_mode: str, *, page_limit: int | None = None) -> dict[str, Any]:
     """Enforce mode page limits at the final HTTP response boundary.
 
     The crawler already owns a cap, but this second boundary protects callers from
@@ -139,7 +140,7 @@ def enforce_scan_response_page_budget(result: dict[str, Any], scan_mode: str) ->
     if not isinstance(result, dict):
         return result
     mode = str(scan_mode or result.get("scan_mode") or "advanced").lower()
-    limit = SCAN_RESPONSE_PAGE_LIMITS.get(mode, SCAN_RESPONSE_PAGE_LIMITS["advanced"])
+    limit = page_limit if page_limit is not None else SCAN_RESPONSE_PAGE_LIMITS.get(mode, SCAN_RESPONSE_PAGE_LIMITS["advanced"])
     pages: list[dict[str, Any]] = []
     for key in ("crawled_pages", "pages", "scanned_pages", "crawl_pages"):
         value = result.get(key)
@@ -186,7 +187,13 @@ def apply_post_crawl_transforms(result: dict[str, Any]) -> dict[str, Any]:
     result = apply_render_evidence_quality(result)
     # Server-side 150-page cap. Discovery stays broad; only the crawl sample is
     # bounded.
-    return enforce_scan_response_page_budget(result, "advanced")
+    mode = str(result.get("canonical_mode") or result.get("scan_mode") or "advanced")
+    if result.get("pipeline_mode") == "staged" and mode in {"standard_150", "standard_500"}:
+        from .scan_limits import current_page_cap
+        if current_page_cap() != PAGE_CAPS[mode]:
+            raise ValueError("Staged result cap does not match its worker context")
+        return enforce_scan_response_page_budget(result, "advanced", page_limit=PAGE_CAPS[mode])
+    return enforce_scan_response_page_budget(result, mode)
 
 
 def health_payload() -> dict[str, Any]:
@@ -416,6 +423,22 @@ class ScanDrainRequest(BaseModel):
     drain_after: str
 
 
+class ScanStageRequest(ScanJobRequest):
+    batch: int = Field(default=0, ge=0)
+    limited: bool = False
+
+
+class WorkspaceDeleteRequest(BaseModel):
+    scan_id: str
+    request_id: str
+    attempt_count: int = Field(default=1, ge=1)
+    owner_user_id: str
+    idempotency_key: str | None = None
+    project_id: str | None = None
+    website_url: str | None = None
+    normalized_domain: str | None = None
+
+
 def require_cloud_tasks_oidc(authorization: str | None) -> None:
     """Check the invoker identity on an already-IAM-validated Cloud Tasks token.
 
@@ -587,6 +610,20 @@ async def scan_job(
     scan_id = str(payload.scan_id or "").strip()
     if not scan_id or not str(payload.request_id or "").strip():
         raise HTTPException(status_code=400, detail="A durable scan_id and request_id are required.")
+    from .staged_scan import staged_pipeline_enabled
+    if staged_pipeline_enabled(payload.model_dump()):
+        if not valid_robots_policy_pair(payload.respect_robots_txt, payload.owner_attested_robots_override):
+            raise HTTPException(status_code=400, detail="Invalid scan robots policy.")
+        return await run_staged_delivery("plan", payload.model_dump())
+    if staged_control_configured():
+        # A rollout flag controls new intake. Previously admitted staged scans
+        # continue to their committed result when the cohort is switched off.
+        from .scan_job import worker_function_generation
+        with worker_function_generation("V9"):
+            async with httpx.AsyncClient() as staged_client:
+                stored = await read_scan_run(staged_client, scan_id)
+        if stored and stored.get("pipeline_mode") == "staged":
+            return await run_staged_delivery("plan", payload.model_dump())
     if str(payload.scan_mode or "").lower() != "standard_150":
         raise HTTPException(status_code=400, detail="Only the Standard 150 scan is available.")
     if not valid_robots_policy_pair(
@@ -603,204 +640,189 @@ async def scan_job(
         if scan is None:
             # Transient: the row must exist, so let Cloud Tasks retry it.
             raise HTTPException(status_code=503, detail="The scan record is unavailable.")
-        if not identity_matches(scan, job):
-            await persist_terminal_failure_bounded(
-                client, scan_id, "scan_identity_mismatch",
-                "This scan could not be matched to your request. Please start a new scan.",
-                attempt_count=job_attempt,
-            )
-            return {"success": False, "worker_version": WORKER_VERSION, "error_code": "scan_identity_mismatch"}
-        # A superseded task must do nothing at all: no crawl, no failure write,
-        # no persistence, no charge. It is not an error -- the newer attempt
-        # owns the row -- so return 200 and let Cloud Tasks drop the task.
-        if is_superseded_attempt(scan, job_attempt):
-            return {
-                "success": True,
-                "worker_version": WORKER_VERSION,
-                "skipped": "superseded_attempt",
-                "scan_id": scan_id,
-                "task_attempt": job_attempt,
-                "current_attempt": current_attempt(scan),
-            }
-        # Idempotency: a retry after a completed run must not scan again.
-        if already_terminal(scan):
-            return {
-                "success": True,
-                "worker_version": WORKER_VERSION,
-                "skipped": "already_terminal",
-                "status": scan.get("status"),
-                "scan_id": scan_id,
-            }
-
-        try:
-            scan = await mark_scan_started(client, scan)
-        except RuntimeError as exc:
-            raise HTTPException(status_code=503, detail="The scan start state is unavailable.") from exc
-
-        # Liveness must cover the whole job. Bounding each phase is not
-        # enough on its own: a phase that legitimately runs for minutes used
-        # to leave the row silent, so the reconciler closed a live worker as
-        # worker_heartbeat_timeout before it could reach reviewing.
-        async with worker_liveness_heartbeat(client, scan):
-            try:
-                with owner_robots_override(payload.owner_attested_robots_override):
-                    result = await asyncio.wait_for(
-                        run_scan(
-                            website_url=payload.website_url,
-                            path_prefix=payload.path_prefix,
-                            scan_mode="advanced",
-                            business_name=payload.business_name or "",
-                            cms_platform=payload.cms_platform or "",
-                            timeout_seconds=CRAWL_BUDGET_SECONDS,
-                            job_mode=True,
-                        ),
-                        timeout=WORKER_CRAWL_WALL_TIMEOUT_SECONDS,
-                    )
-                # These transforms are synchronous and were previously run
-                # unbounded on the event loop. Heavy evidence could block the
-                # loop, which starves both the heartbeat and every asyncio
-                # deadline, so no wall timeout could fire. They now run off the
-                # loop under their own bound; the page budget itself is
-                # unchanged.
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(apply_post_crawl_transforms, result),
-                    timeout=WORKER_POST_CRAWL_WALL_TIMEOUT_SECONDS,
-                )
-                result["beta_revision_fingerprint"] = live_revision()["fingerprint"]
-                emit(
-                    "scan_job_crawl_completed",
-                    scan_id=scan_id,
-                    attempt_count=job_attempt,
-                    normalized_domain=payload.normalized_domain or website_host(payload.website_url),
-                    **scan_metrics(result),
-                )
-                result.update({
-                    "advanced_scan_backend": "python_scanner_api",
-                    "deno_fallback_used": False,
-                    "request_id": payload.request_id,
-                    "idempotency_key": payload.idempotency_key or payload.request_id,
-                    "scan_id": scan_id,
-                    "scan_run_id": scan_id,
-                    "submitted_url": payload.website_url,
-                    "normalized_domain": payload.normalized_domain or website_host(payload.website_url),
-                    "respect_robots_txt": payload.respect_robots_txt,
-                    "owner_attested_robots_override": payload.owner_attested_robots_override,
-                })
-            except asyncio.TimeoutError:
-                # This is an outer fail-safe, not a retry signal. If the scanner's
-                # own bounded deadline failed to return, redelivering the same task
-                # can repeat the hang. Close the exact attempt truthfully instead.
+        from .scan_job import worker_function_generation
+        with worker_function_generation("V9" if "page_cap" in scan else "V8"):
+            if not identity_matches(scan, job):
                 await persist_terminal_failure_bounded(
-                    client, scan_id, "scanner_wall_timeout",
-                    "The scan exceeded its bounded worker time and was safely stopped. Please try again.",
+                    client, scan_id, "scan_identity_mismatch",
+                    "This scan could not be matched to your request. Please start a new scan.",
                     attempt_count=job_attempt,
                 )
-                return {"success": False, "worker_version": WORKER_VERSION, "error_code": "scanner_wall_timeout"}
-            except Exception:  # noqa: BLE001 - customer-safe envelope
-                await persist_terminal_failure_bounded(
-                    client, scan_id, "scanner_failed",
-                    "The scan stopped unexpectedly. No partial result was saved. Please try again.",
-                    attempt_count=job_attempt,
-                )
-                return {"success": False, "worker_version": WORKER_VERSION, "error_code": "scanner_failed"}
-
-            # Refresh durable liveness after the bounded crawl. A transient failure
-            # here is retryable: the same attempt is safe to redeliver, and the
-            # original started_at remains unchanged by the control function.
-            try:
-                scan = await mark_scan_started(client, scan)
-            except RuntimeError as exc:
-                raise HTTPException(status_code=503, detail="The scan handoff heartbeat is unavailable.") from exc
-
-            signing_key = str(os.getenv("SCAN_EVIDENCE_SIGNING_KEY") or "")
-            if not signing_key:
-                raise HTTPException(status_code=503, detail="Authority signing is not configured.")
-
-            emit(
-                "scan_job_completion_deadline_start",
-                scan_id=scan_id,
-                attempt_count=job_attempt,
-                timeout_seconds=WORKER_COMPLETION_WALL_TIMEOUT_SECONDS,
-            )
-            try:
-                outcome = await await_hard_deadline(
-                    complete_authority(client, scan, result, signing_key),
-                    WORKER_COMPLETION_WALL_TIMEOUT_SECONDS,
-                )
-            except asyncio.TimeoutError:
-                emit(
-                    "scan_job_completion_deadline_timeout",
-                    severity="WARNING",
-                    scan_id=scan_id,
-                    attempt_count=job_attempt,
-                    timeout_seconds=WORKER_COMPLETION_WALL_TIMEOUT_SECONDS,
-                )
-                # Do not await cancellation of the stuck completion operation. It may
-                # still win the race, so terminalize through a fresh client and rely
-                # on the existing attempt/terminal fences on both Base44 paths.
-                async with httpx.AsyncClient() as terminal_client:
-                    terminal = await persist_terminal_failure_bounded(
-                        terminal_client,
-                        scan_id,
-                        "worker_completion_wall_timeout",
-                        "The scan finished crawling but final result persistence exceeded its bounded worker time. Please try again.",
-                        attempt_count=job_attempt,
-                    )
-                if terminal.get("state") == "superseded_attempt":
-                    return {
-                        "success": True,
-                        "worker_version": WORKER_VERSION,
-                        "skipped": "superseded_attempt",
-                        "scan_id": scan_id,
-                        "task_attempt": job_attempt,
-                    }
-                if terminal.get("state") == "terminal_won_race":
-                    persisted = terminal.get("scan") if isinstance(terminal.get("scan"), dict) else {}
-                    return {
-                        "success": True,
-                        "worker_version": WORKER_VERSION,
-                        "skipped": "terminal_won_completion_timeout_race",
-                        "status": persisted.get("status"),
-                        "scan_id": scan_id,
-                    }
-                return {
-                    "success": False,
-                    "worker_version": WORKER_VERSION,
-                    "error_code": "worker_completion_wall_timeout",
-                    "scan_id": scan_id,
-                }
-
-            emit(
-                "scan_job_completion_outcome",
-                scan_id=scan_id,
-                attempt_count=job_attempt,
-                transient=bool(outcome.get("transient")),
-                superseded=bool(outcome.get("superseded")),
-                failure_code=str(outcome.get("failure_code") or ""),
-                ok=outcome.get("ok") is True,
-            )
-            if outcome.get("transient"):
-                # ScanRun untouched: Cloud Tasks retries the same scan_id safely.
-                raise HTTPException(status_code=503, detail="Authority persistence is unavailable.")
-            if outcome.get("superseded"):
-                # A newer attempt owns the row: write nothing, charge nothing.
+                return {"success": False, "worker_version": WORKER_VERSION, "error_code": "scan_identity_mismatch"}
+            # A superseded task must do nothing at all: no crawl, no failure write,
+            # no persistence, no charge. It is not an error -- the newer attempt
+            # owns the row -- so return 200 and let Cloud Tasks drop the task.
+            if is_superseded_attempt(scan, job_attempt):
                 return {
                     "success": True,
                     "worker_version": WORKER_VERSION,
                     "skipped": "superseded_attempt",
                     "scan_id": scan_id,
                     "task_attempt": job_attempt,
+                    "current_attempt": current_attempt(scan),
                 }
-            if not outcome.get("ok"):
-                failure_code = str(outcome.get("failure_code") or "authority_persistence_failed")
-                terminal = await persist_terminal_failure_bounded(
-                    client,
-                    scan_id,
-                    failure_code,
-                    str(outcome.get("customer_message") or "The scan finished, but its result could not be saved. Please try again."),
+            # Idempotency: a retry after a completed run must not scan again.
+            if already_terminal(scan):
+                return {
+                    "success": True,
+                    "worker_version": WORKER_VERSION,
+                    "skipped": "already_terminal",
+                    "status": scan.get("status"),
+                    "scan_id": scan_id,
+                }
+
+            try:
+                scan = await mark_scan_started(client, scan)
+            except RuntimeError as exc:
+                raise HTTPException(status_code=503, detail="The scan start state is unavailable.") from exc
+
+            # Liveness must cover the whole job. Bounding each phase is not
+            # enough on its own: a phase that legitimately runs for minutes used
+            # to leave the row silent, so the reconciler closed a live worker as
+            # worker_heartbeat_timeout before it could reach reviewing.
+            async with worker_liveness_heartbeat(client, scan):
+                try:
+                    with owner_robots_override(payload.owner_attested_robots_override):
+                        result = await asyncio.wait_for(
+                            run_scan(
+                                website_url=payload.website_url,
+                                path_prefix=payload.path_prefix,
+                                scan_mode="advanced",
+                                business_name=payload.business_name or "",
+                                cms_platform=payload.cms_platform or "",
+                                timeout_seconds=CRAWL_BUDGET_SECONDS,
+                                job_mode=True,
+                            ),
+                            timeout=WORKER_CRAWL_WALL_TIMEOUT_SECONDS,
+                        )
+                    # These transforms are synchronous and were previously run
+                    # unbounded on the event loop. Heavy evidence could block the
+                    # loop, which starves both the heartbeat and every asyncio
+                    # deadline, so no wall timeout could fire. They now run off the
+                    # loop under their own bound; the page budget itself is
+                    # unchanged.
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(apply_post_crawl_transforms, result),
+                        timeout=WORKER_POST_CRAWL_WALL_TIMEOUT_SECONDS,
+                    )
+                    result["beta_revision_fingerprint"] = live_revision()["fingerprint"]
+                    emit(
+                        "scan_job_crawl_completed",
+                        scan_id=scan_id,
+                        attempt_count=job_attempt,
+                        normalized_domain=payload.normalized_domain or website_host(payload.website_url),
+                        **scan_metrics(result),
+                    )
+                    result.update({
+                        "advanced_scan_backend": "python_scanner_api",
+                        "deno_fallback_used": False,
+                        "request_id": payload.request_id,
+                        "idempotency_key": payload.idempotency_key or payload.request_id,
+                        "scan_id": scan_id,
+                        "scan_run_id": scan_id,
+                        "submitted_url": payload.website_url,
+                        "normalized_domain": payload.normalized_domain or website_host(payload.website_url),
+                        "respect_robots_txt": payload.respect_robots_txt,
+                        "owner_attested_robots_override": payload.owner_attested_robots_override,
+                    })
+                except asyncio.TimeoutError:
+                    # This is an outer fail-safe, not a retry signal. If the scanner's
+                    # own bounded deadline failed to return, redelivering the same task
+                    # can repeat the hang. Close the exact attempt truthfully instead.
+                    await persist_terminal_failure_bounded(
+                        client, scan_id, "scanner_wall_timeout",
+                        "The scan exceeded its bounded worker time and was safely stopped. Please try again.",
+                        attempt_count=job_attempt,
+                    )
+                    return {"success": False, "worker_version": WORKER_VERSION, "error_code": "scanner_wall_timeout"}
+                except Exception:  # noqa: BLE001 - customer-safe envelope
+                    await persist_terminal_failure_bounded(
+                        client, scan_id, "scanner_failed",
+                        "The scan stopped unexpectedly. No partial result was saved. Please try again.",
+                        attempt_count=job_attempt,
+                    )
+                    return {"success": False, "worker_version": WORKER_VERSION, "error_code": "scanner_failed"}
+
+                # Refresh durable liveness after the bounded crawl. A transient failure
+                # here is retryable: the same attempt is safe to redeliver, and the
+                # original started_at remains unchanged by the control function.
+                try:
+                    scan = await mark_scan_started(client, scan)
+                except RuntimeError as exc:
+                    raise HTTPException(status_code=503, detail="The scan handoff heartbeat is unavailable.") from exc
+
+                signing_key = str(os.getenv("SCAN_EVIDENCE_SIGNING_KEY") or "")
+                if not signing_key:
+                    raise HTTPException(status_code=503, detail="Authority signing is not configured.")
+
+                emit(
+                    "scan_job_completion_deadline_start",
+                    scan_id=scan_id,
                     attempt_count=job_attempt,
+                    timeout_seconds=WORKER_COMPLETION_WALL_TIMEOUT_SECONDS,
                 )
-                if terminal.get("state") == "superseded_attempt":
+                try:
+                    outcome = await await_hard_deadline(
+                        complete_authority(client, scan, result, signing_key),
+                        WORKER_COMPLETION_WALL_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    emit(
+                        "scan_job_completion_deadline_timeout",
+                        severity="WARNING",
+                        scan_id=scan_id,
+                        attempt_count=job_attempt,
+                        timeout_seconds=WORKER_COMPLETION_WALL_TIMEOUT_SECONDS,
+                    )
+                    # Do not await cancellation of the stuck completion operation. It may
+                    # still win the race, so terminalize through a fresh client and rely
+                    # on the existing attempt/terminal fences on both Base44 paths.
+                    async with httpx.AsyncClient() as terminal_client:
+                        terminal = await persist_terminal_failure_bounded(
+                            terminal_client,
+                            scan_id,
+                            "worker_completion_wall_timeout",
+                            "The scan finished crawling but final result persistence exceeded its bounded worker time. Please try again.",
+                            attempt_count=job_attempt,
+                        )
+                    if terminal.get("state") == "superseded_attempt":
+                        return {
+                            "success": True,
+                            "worker_version": WORKER_VERSION,
+                            "skipped": "superseded_attempt",
+                            "scan_id": scan_id,
+                            "task_attempt": job_attempt,
+                        }
+                    if terminal.get("state") == "terminal_won_race":
+                        persisted = terminal.get("scan") if isinstance(terminal.get("scan"), dict) else {}
+                        return {
+                            "success": True,
+                            "worker_version": WORKER_VERSION,
+                            "skipped": "terminal_won_completion_timeout_race",
+                            "status": persisted.get("status"),
+                            "scan_id": scan_id,
+                        }
+                    return {
+                        "success": False,
+                        "worker_version": WORKER_VERSION,
+                        "error_code": "worker_completion_wall_timeout",
+                        "scan_id": scan_id,
+                    }
+
+                emit(
+                    "scan_job_completion_outcome",
+                    scan_id=scan_id,
+                    attempt_count=job_attempt,
+                    transient=bool(outcome.get("transient")),
+                    superseded=bool(outcome.get("superseded")),
+                    failure_code=str(outcome.get("failure_code") or ""),
+                    ok=outcome.get("ok") is True,
+                )
+                if outcome.get("transient"):
+                    # ScanRun untouched: Cloud Tasks retries the same scan_id safely.
+                    raise HTTPException(status_code=503, detail="Authority persistence is unavailable.")
+                if outcome.get("superseded"):
+                    # A newer attempt owns the row: write nothing, charge nothing.
                     return {
                         "success": True,
                         "worker_version": WORKER_VERSION,
@@ -808,26 +830,165 @@ async def scan_job(
                         "scan_id": scan_id,
                         "task_attempt": job_attempt,
                     }
-                if terminal.get("state") == "terminal_won_race":
-                    persisted = terminal.get("scan") if isinstance(terminal.get("scan"), dict) else {}
-                    return {
-                        "success": True,
-                        "worker_version": WORKER_VERSION,
-                        "skipped": "terminal_won_failure_race",
-                        "status": persisted.get("status"),
-                        "scan_id": scan_id,
-                    }
-                return {"success": False, "worker_version": WORKER_VERSION, "error_code": failure_code}
+                if not outcome.get("ok"):
+                    failure_code = str(outcome.get("failure_code") or "authority_persistence_failed")
+                    terminal = await persist_terminal_failure_bounded(
+                        client,
+                        scan_id,
+                        failure_code,
+                        str(outcome.get("customer_message") or "The scan finished, but its result could not be saved. Please try again."),
+                        attempt_count=job_attempt,
+                    )
+                    if terminal.get("state") == "superseded_attempt":
+                        return {
+                            "success": True,
+                            "worker_version": WORKER_VERSION,
+                            "skipped": "superseded_attempt",
+                            "scan_id": scan_id,
+                            "task_attempt": job_attempt,
+                        }
+                    if terminal.get("state") == "terminal_won_race":
+                        persisted = terminal.get("scan") if isinstance(terminal.get("scan"), dict) else {}
+                        return {
+                            "success": True,
+                            "worker_version": WORKER_VERSION,
+                            "skipped": "terminal_won_failure_race",
+                            "status": persisted.get("status"),
+                            "scan_id": scan_id,
+                        }
+                    return {"success": False, "worker_version": WORKER_VERSION, "error_code": failure_code}
 
-            return {
-                "success": True,
-                "worker_version": WORKER_VERSION,
-                "scan_id": scan_id,
-                "pages_crawled": result.get("pages_crawled"),
-                "pages_found": result.get("pages_found"),
-                "fix_list_id": outcome.get("fix_list_id"),
-                "authority_proof_present": len(str(outcome.get("authority_proof") or "")) == 64,
-            }
+                return {
+                    "success": True,
+                    "worker_version": WORKER_VERSION,
+                    "scan_id": scan_id,
+                    "pages_crawled": result.get("pages_crawled"),
+                    "pages_found": result.get("pages_found"),
+                    "fix_list_id": outcome.get("fix_list_id"),
+                    "authority_proof_present": len(str(outcome.get("authority_proof") or "")) == 64,
+                }
+
+
+def build_staged_runtime():
+    """Late construction keeps SDK credentials and clients out of module import."""
+    from . import scanner
+    from .scan_job import mark_scan_progress
+    from .stage_tasks import configured_dispatcher
+    from .staged_scan import StageDependencies, StagedScanRuntime
+    from .workspace import configured_workspace
+    return StagedScanRuntime(configured_workspace(), configured_dispatcher(), StageDependencies(
+        read_scan=read_scan_run, start=mark_scan_started, progress=mark_scan_progress,
+        complete=complete_authority, transform=apply_post_crawl_transforms,
+        fail=write_terminal_failure, state_type=scanner.ScanState,
+        plan=scanner.plan_scan, crawl=scanner.crawl_batch, finalize=scanner.finalize_scan,
+        review=review_staged_result,
+    ))
+
+
+async def review_staged_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Use the same isolated review engine and keep its output for resume."""
+    from .scan_job import run_local_review_isolated, LOCAL_REVIEW_WALL_TIMEOUT_SECONDS
+    return await asyncio.wait_for(asyncio.to_thread(run_local_review_isolated, result, LOCAL_REVIEW_WALL_TIMEOUT_SECONDS), timeout=25)
+
+
+def staged_control_configured() -> bool:
+    return bool(os.getenv("SCAN_WORKSPACE_BUCKET")) or str(os.getenv("SCAN_PIPELINE_MODE") or "").lower() == "staged"
+
+
+async def enqueue_staged_partial(client: httpx.AsyncClient, scan: dict[str, Any]) -> dict[str, Any] | None:
+    """Turn watchdogs into finalize dispatches when committed evidence exists."""
+    if scan.get("pipeline_mode") != "staged":
+        return None
+    from .scan_job import worker_function_generation
+    from .staged_scan import StageRetry
+    from .workspace import WorkspaceConflict, WorkspaceUnavailable, attempt_prefix
+    try:
+        with worker_function_generation("V9"):
+            runtime = build_staged_runtime()
+            prefix = attempt_prefix(str(scan.get("id") or scan.get("scan_id") or ""), current_attempt(scan))
+            frontier = await runtime.store.read(prefix + "frontier.json")
+            if not frontier or not frontier.value.get("committed_batches"):
+                return None
+            plan = await runtime.store.read(prefix + "plan.json")
+            if not plan or not isinstance(plan.value.get("job"), dict):
+                raise StageRetry("The committed scan plan is unavailable")
+            result = await runtime.request_partial_finalize(client, plan.value["job"])
+            return {**result, "limited_finalize_queued": True}
+    except StageRetry as exc:
+        raise HTTPException(status_code=503, detail="Partial scan finalization is pending.", headers={"Retry-After": str(exc.retry_after)}) from exc
+    except (WorkspaceConflict, WorkspaceUnavailable, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail="Partial scan finalization is unavailable.") from exc
+
+
+async def read_scan_for_drain(client: httpx.AsyncClient, scan_id: str) -> dict[str, Any] | None:
+    if staged_control_configured():
+        from .scan_job import worker_function_generation
+        with worker_function_generation("V9"):
+            return await read_scan_run(client, scan_id)
+    return await read_scan_run(client, scan_id)
+
+
+async def write_drain_failure(client: httpx.AsyncClient, scan: dict[str, Any], scan_id: str, code: str, detail: str, *, attempt_count: int) -> bool:
+    from .scan_job import worker_function_generation
+    with worker_function_generation("V9" if scan.get("pipeline_mode") == "staged" else "V8"):
+        return await write_terminal_failure(client, scan_id, code, detail, attempt_count=attempt_count)
+
+
+async def run_staged_delivery(stage: str, job: dict[str, Any], *, batch: int = 0, limited: bool = False) -> dict[str, Any]:
+    from .scan_job import worker_function_generation
+    from .scan_limits import scan_page_limit
+    from .staged_scan import StageRetry
+    from .workspace import WorkspaceConflict, WorkspaceUnavailable
+    try:
+        with worker_function_generation("V9"), scan_page_limit(500 if job.get("scan_mode") == "standard_500" else 150):
+            runtime = build_staged_runtime()
+            async with httpx.AsyncClient() as client:
+                return await asyncio.wait_for(runtime.process(client, stage, job, batch=batch, limited=limited), timeout=420)
+    except StageRetry as exc:
+        raise HTTPException(status_code=503, detail="The scan stage will be retried.", headers={"Retry-After": str(exc.retry_after)}) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid durable scan stage request.") from exc
+    except (WorkspaceConflict, WorkspaceUnavailable, RuntimeError, asyncio.TimeoutError) as exc:
+        raise HTTPException(status_code=503, detail="The scan stage is temporarily unavailable.") from exc
+
+
+@app.post("/scan-batch")
+async def scan_batch(payload: ScanStageRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    require_cloud_tasks_oidc(authorization)
+    # Existing staged scans must drain even after the canary flag is disabled.
+    return await run_staged_delivery("batch", payload.model_dump(exclude={"batch", "limited"}), batch=payload.batch)
+
+
+@app.post("/scan-finalize")
+async def scan_finalize(payload: ScanStageRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    require_cloud_tasks_oidc(authorization)
+    return await run_staged_delivery("finalize", payload.model_dump(exclude={"batch", "limited"}), batch=payload.batch, limited=payload.limited)
+
+
+@app.post("/scan-workspace-delete")
+async def scan_workspace_delete(payload: WorkspaceDeleteRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    require_cloud_tasks_oidc(authorization)
+    from .scan_job import worker_function_generation, build_control_envelope, invoke_function, _scan_identity
+    from .staged_scan import StageRetry
+    from .workspace import WorkspaceConflict, WorkspaceUnavailable
+    try:
+        with worker_function_generation("V9"):
+            runtime = build_staged_runtime()
+            async with httpx.AsyncClient() as client:
+                result = await runtime.delete_workspace(client, payload.model_dump())
+                if result.get("workspace_deleted"):
+                    scan = await read_scan_run(client, payload.scan_id)
+                    if not isinstance(scan, dict):
+                        raise StageRetry("The deleted workspace record is unavailable")
+                    envelope = build_control_envelope("workspace_deleted", str(os.getenv("SCAN_EVIDENCE_SIGNING_KEY") or ""), identity=_scan_identity(scan))
+                    response = await invoke_function(client, "durableScanWorkerControlV9", envelope)
+                    if response["status_code"] >= 300 or response["body"].get("success") is not True:
+                        raise StageRetry("Workspace cleanup acknowledgement is unavailable")
+                return result
+    except StageRetry as exc:
+        raise HTTPException(status_code=503, detail="Workspace cleanup is pending.", headers={"Retry-After": str(exc.retry_after)}) from exc
+    except (WorkspaceConflict, WorkspaceUnavailable, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail="Workspace cleanup is unavailable.") from exc
 
 
 @app.post("/scan-reconcile")
@@ -836,7 +997,17 @@ async def scan_reconcile(authorization: str | None = Header(default=None)) -> di
     require_cloud_tasks_oidc(authorization)
     async with httpx.AsyncClient() as client:
         try:
-            counts = await reconcile_stale_scans(client)
+            from .scan_job import worker_function_generation
+            with worker_function_generation("V9" if staged_control_configured() else "V8"):
+                counts = await reconcile_stale_scans(client)
+                candidates = counts.pop("finalize_candidates", [])
+                if candidates:
+                    counts["limited_finalize_queued"] = 0
+                    for candidate in candidates[:50]:
+                        scan = await read_scan_run(client, str(candidate.get("scan_id") or ""))
+                        if scan and current_attempt(scan) == normalize_attempt(candidate.get("attempt_count")):
+                            queued = await enqueue_staged_partial(client, scan)
+                            counts["limited_finalize_queued"] += int(bool(queued and queued.get("limited_finalize_queued")))
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail="Durable scan reconciliation is unavailable.") from exc
     emit("scan_reconcile_completed", **counts)
@@ -868,7 +1039,7 @@ async def scan_job_drain(
     job = payload.model_dump()
     job_attempt = normalize_attempt(payload.attempt_count)
     async with httpx.AsyncClient() as client:
-        scan = await read_scan_run(client, scan_id)
+        scan = await read_scan_for_drain(client, scan_id)
         if scan is None:
             raise HTTPException(status_code=503, detail="The scan record is unavailable.")
         if not identity_matches(scan, job):
@@ -916,8 +1087,8 @@ async def scan_job_drain(
             if datetime.now(timezone.utc) < queue_deadline:
                 raise HTTPException(status_code=503, detail="The scan has not started yet.")
             try:
-                closed = await write_terminal_failure(
-                    client,
+                closed = await write_drain_failure(
+                    client, scan,
                     scan_id,
                     "scan_queue_drain_timeout",
                     "The scan stayed in the queue too long and was safely stopped. Please start a new scan.",
@@ -959,9 +1130,12 @@ async def scan_job_drain(
                 seconds=WORKER_HEARTBEAT_DRAIN_AFTER_SECONDS,
             )
             if now_utc >= heartbeat_deadline:
+                partial = await enqueue_staged_partial(client, scan)
+                if partial:
+                    return partial
                 try:
-                    closed = await write_terminal_failure(
-                        client,
+                    closed = await write_drain_failure(
+                        client, scan,
                         scan_id,
                         "worker_heartbeat_timeout",
                         "The scan worker stopped reporting progress and was safely stopped. Please start a new scan.",
@@ -986,9 +1160,12 @@ async def scan_job_drain(
         if now_utc < terminal_deadline:
             raise HTTPException(status_code=503, detail="The worker terminal deadline is not due yet.")
 
+        partial = await enqueue_staged_partial(client, scan)
+        if partial:
+            return partial
         try:
-            closed = await write_terminal_failure(
-                client,
+            closed = await write_drain_failure(
+                client, scan,
                 scan_id,
                 "worker_terminal_drain_timeout",
                 "The scan did not reach a final result in time. Please start a new scan.",

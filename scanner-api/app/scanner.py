@@ -1,5 +1,12 @@
+from __future__ import annotations
+
 import asyncio
 import hashlib
+import heapq
+import json
+from copy import deepcopy
+from dataclasses import dataclass, field, fields
+from typing import Any
 import inspect
 import math
 import re
@@ -42,7 +49,9 @@ from .stage2_shared_probe_orchestration import run_stage2_shared_probe_orchestra
 from .content_evidence_findings import content_evidence_findings
 from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
 from .missing_h1_contract import apply_missing_h1_contract
-from .sampling import SAMPLING_VERSION, enrich_checked_coverage, sampling_report, select_balanced_urls
+from .sampling import SAMPLING_VERSION, enrich_checked_coverage, sampling_report, select_balanced_urls, section_keys
+from .page_importance import build_page_importance
+from .scan_limits import page_cap_for_mode, scan_page_limit
 from .scan_timing import (
     SITEMAP_TIME_RESERVATION_VERSION,
     allocate_scan_time_budget,
@@ -50,7 +59,7 @@ from .scan_timing import (
     utc_now_iso,
 )
 from .render_followup import RENDER_FOLLOWUP_VERSION, run_render_followup
-from .robots_policy import SCANNER_USER_AGENT, annotate_robots_evidence, load_robots_policy
+from .robots_policy import RobotsPolicy, SCANNER_USER_AGENT, annotate_robots_evidence, load_robots_policy
 from .security import is_public_http_url, safe_get
 from .sitemap import load_sitemap_urls
 from .url_frontier_policy import FRONTIER_POLICY_VERSION, classify_frontier_url
@@ -346,6 +355,27 @@ class _AdaptiveRateLimitPacer:
             return True
 
 
+    def to_dict(self) -> dict:
+        offset = time.time() - time.monotonic()
+        return {
+            **{key: value for key, value in vars(self).items() if key not in {"_lock", "deadline", "next_request_at"}},
+            "deadline_at": self.deadline + offset,
+            "next_request_at": self.next_request_at + offset if self.next_request_at else 0.0,
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict) -> _AdaptiveRateLimitPacer:
+        offset = time.monotonic() - time.time()
+        pacer = cls(deadline=float(value["deadline_at"]) + offset, enabled=value.get("enabled") is True)
+        for key in vars(pacer):
+            if key not in {"_lock", "deadline", "next_request_at"} and key in value:
+                setattr(pacer, key, value[key])
+        pacer.next_request_at = float(value.get("next_request_at") or 0.0)
+        if pacer.next_request_at:
+            pacer.next_request_at += offset
+        return pacer
+
+
 TRUST_PATHS = ["/about", "/contact", "/privacy", "/terms", "/security", "/legal", "/mentions-legales", "/cgv"]
 
 
@@ -373,6 +403,7 @@ def compute_pages_found(
 # synchronous response window, so a trusted gateway may authorise a longer
 # crawl. Page caps and robots enforcement are never affected by this ceiling.
 ASYNC_JOB_TIMEOUT_CEILING = 120.0
+CRAWL_BATCH_WORK_SECONDS = 150.0
 
 
 def _selection_market_hint(path: str) -> str:
@@ -396,6 +427,8 @@ def resolve_scan_budget(scan_mode: str, timeout_seconds: float | None = None, *,
     """
     base = SCAN_BUDGETS.get(str(scan_mode or "advanced").lower(), SCAN_BUDGETS["advanced"])
     budget = dict(base)
+    if str(scan_mode or "").lower() in {"standard_150", "standard_500"}:
+        budget["max_pages"] = page_cap_for_mode(scan_mode)
     if timeout_seconds is None:
         return budget
     try:
@@ -455,7 +488,197 @@ def _supports_stage2_probe_fetch(fetcher) -> bool:
     return "robots_policy" in parameters and "request_provider" in parameters
 
 
-async def run_scan(
+@dataclass
+class ScanState:
+    """A complete crawl checkpoint; HTTP clients and locks are request-local.
+
+    Runtime clocks use monotonic time. ``to_dict`` translates every deadline
+    into Unix wall time, so waiting in Cloud Tasks consumes the original budget.
+    """
+    budget: dict
+    scan_mode: str
+    concurrency: int
+    job_mode: bool
+    fetch_timeout: float
+    scan_started_at: float
+    scan_started_wall_clock: str
+    deadline: float
+    start_url: str
+    origin: str
+    prefix: str
+    scope_evidence: dict
+    pages: list[dict]
+    queue: list
+    queued: set[str]
+    seen: set[str]
+    discovery: dict
+    artifacts: list[dict]
+    robots_policy: RobotsPolicy
+    rate_limit_profile: str
+    initial_rate_limit_retry_count: int
+    initial_rate_limit_recovered: bool
+    initial_rate_limit_blocked: bool
+    max_pages: int
+    timing_budget: dict
+    sitemap_diagnostics: dict
+    sitemap_urls: list[str]
+    sampling_evidence: dict
+    scan_coverage_counters: dict
+    crawl_started_at: str
+    crawl_started_monotonic: float
+    initial_queue_size: int
+    crawl_state: dict
+    rate_limit_pacer: _AdaptiveRateLimitPacer
+    homepage_links: list[str]
+    importance: dict = field(default_factory=dict)
+    first_pass_urls: set[str] = field(default_factory=set)
+    rescored: bool = False
+    duplicate_merges: list[dict] = field(default_factory=list)
+    crawl_elapsed_ms: int = 0
+    render_page: Any = field(default=None, repr=False)
+
+    @property
+    def completion_reason(self) -> str:
+        if len(self.pages) >= self.max_pages:
+            return "page_cap"
+        if self.initial_rate_limit_blocked:
+            return "initial_access_limited"
+        if not self.queue:
+            return "queue_exhausted"
+        if time.monotonic() >= self.timing_budget["crawl_deadline"] or (
+            self.rate_limit_pacer.active
+            and self.rate_limit_pacer.next_request_at >= self.timing_budget["crawl_deadline"]
+        ):
+            return "wall_budget"
+        if self.crawl_state["claimed"] >= self.max_pages * 8:
+            return "request_budget"
+        return ""
+
+    @property
+    def finished(self) -> bool:
+        return bool(self.completion_reason)
+
+    @property
+    def limited(self) -> bool:
+        return self.completion_reason in {"wall_budget", "request_budget", "initial_access_limited"}
+
+    @property
+    def pages_planned(self) -> int:
+        return min(self.max_pages, max(self.initial_queue_size, len(self.pages)))
+
+    def to_dict(self) -> dict:
+        offset = time.time() - time.monotonic()
+        snapshot = {
+            item.name: deepcopy(getattr(self, item.name))
+            for item in fields(self)
+            if item.name not in {"robots_policy", "rate_limit_pacer", "render_page"}
+        }
+        snapshot["checkpoint_version"] = "scan_state_v1_wall_clock"
+        for name in ("scan_started_at", "deadline", "crawl_started_monotonic"):
+            snapshot[name] += offset
+        snapshot["timing_budget"] = dict(self.timing_budget)
+        for name in ("overall_deadline", "crawl_deadline", "sitemap_deadline"):
+            snapshot["timing_budget"][name] += offset
+        for name in ("queued", "seen", "first_pass_urls"):
+            snapshot[name] = sorted(snapshot[name])
+        snapshot["robots_policy"] = self.robots_policy.to_dict()
+        snapshot["rate_limit_pacer"] = self.rate_limit_pacer.to_dict()
+        return snapshot
+
+    @classmethod
+    def from_dict(cls, value: dict) -> ScanState:
+        if value.get("checkpoint_version") != "scan_state_v1_wall_clock":
+            raise ValueError("Unsupported scan checkpoint version.")
+        snapshot = deepcopy(value)
+        snapshot.pop("checkpoint_version")
+        offset = time.monotonic() - time.time()
+        for name in ("scan_started_at", "deadline", "crawl_started_monotonic"):
+            snapshot[name] += offset
+        for name in ("overall_deadline", "crawl_deadline", "sitemap_deadline"):
+            snapshot["timing_budget"][name] += offset
+        for name in ("queued", "seen", "first_pass_urls"):
+            snapshot[name] = set(snapshot[name])
+        snapshot["queue"] = [tuple(item) for item in snapshot["queue"]]
+        heapq.heapify(snapshot["queue"])
+        snapshot["robots_policy"] = RobotsPolicy.from_dict(snapshot["robots_policy"])
+        snapshot["rate_limit_pacer"] = _AdaptiveRateLimitPacer.from_dict(snapshot["rate_limit_pacer"])
+        snapshot["crawl_state"]["in_flight"] = 0
+        return cls(**snapshot)
+
+    def rebuild_priority(self, *, observed: bool = False) -> None:
+        pending = [item[-1] if isinstance(item, (list, tuple)) else item for item in self.queue]
+        inventory = list(dict.fromkeys(self.sitemap_urls + pending + [self.start_url]))
+        path_of = lambda url: urlparse(url).path or "/"
+        self.importance = build_page_importance(
+            inventory, lambda url: classify_template(path_of(url)), path_of,
+            homepage_links=self.homepage_links,
+            lastmod=self.sitemap_diagnostics.get("sitemap_lastmod", {}),
+            now=datetime.fromisoformat(self.scan_started_wall_clock),
+            observed_inlinks={url: len(set(record.get("source_pages") or [])) for url, record in self.discovery.items()} if observed else None,
+        )
+        if not self.first_pass_urls:
+            selected = set(pending)
+            navigation = sorted(selected.intersection(self.homepage_links), key=self._rank)
+            self.first_pass_urls = {self.start_url, *navigation[:max(1, int(self.max_pages * 0.15))]}
+            sections = section_keys(pending, path_of)
+            for section in set(sections.values()):
+                candidates = [url for url in pending if sections[url] == section]
+                if candidates:
+                    head = min(candidates, key=lambda url: (path_of(url).count("/"), self._rank(url)))
+                    self.first_pass_urls.add(head)
+        self.queue[:] = [self._priority(url) for url in pending]
+        heapq.heapify(self.queue)
+        self.rescored = self.rescored or observed
+        for page in self.pages:
+            self.annotate_importance(page)
+
+    def _rank(self, url: str) -> tuple:
+        return (-float(self.importance.get(url, {}).get("importance_score", 0.0)), hashlib.sha256(url.encode()).hexdigest())
+
+    def _priority(self, url: str) -> tuple:
+        return (0 if url in self.first_pass_urls else 1, *self._rank(url), url)
+
+    def annotate_importance(self, page: dict) -> None:
+        evidence = self.importance.get(page.get("url")) or self.importance.get(page.get("final_url")) or {}
+        for key in ("importance_score", "importance_tier", "selection_reason"):
+            if key in evidence:
+                page[key] = evidence[key]
+
+    def enqueue(self, url: str, source: str, source_page: str = "", link_text: str = "") -> None:
+        clean = normalize_published_request_url(url)
+        if not clean:
+            if is_artifact_url(url):
+                record_artifact(self.artifacts, url, source, source_page, link_text)
+            return
+        frontier = classify_frontier_url(clean)
+        if not frontier.allowed:
+            self.scope_evidence["crawler_trap_urls_skipped"] += 1
+            counts = self.scope_evidence["crawler_trap_reason_counts"]
+            reason = frontier.reason or "frontier_rejected"
+            counts[reason] = int(counts.get(reason, 0)) + 1
+            return
+        clean = frontier.url
+        self.scope_evidence["frontier_tracking_params_removed"] += len(frontier.removed_params)
+        if is_artifact_url(clean):
+            record_artifact(self.artifacts, clean, source, source_page, link_text)
+            return
+        if not same_origin(clean, self.origin):
+            return
+        path = urlparse(clean).path or "/"
+        if not path_within_scope(path, self.prefix) or (
+            self.prefix == "/" and self.scope_evidence.get("market_scope_required") and market_pair_prefix(path)
+        ):
+            if source == "internal_link":
+                self.scope_evidence["internal_urls_excluded_outside_scope"] += 1
+            return
+        merge_discovery(self.discovery.setdefault(clean, empty_discovery()), source, source_page, link_text)
+        if clean in self.queued or clean in self.seen:
+            return
+        self.queued.add(clean)
+        heapq.heappush(self.queue, self._priority(clean))
+
+
+async def plan_scan(
     website_url: str,
     path_prefix: str | None = None,
     scan_mode: str = "advanced",
@@ -463,18 +686,21 @@ async def run_scan(
     timeout_seconds: float | None = None,
     job_mode: bool = False,
     **kwargs,
-) -> dict:
+) -> ScanState:
     budget = resolve_scan_budget(scan_mode, timeout_seconds, job_mode=job_mode)
+    if kwargs.get("staged"):
+        budget["timeout"] = min(600.0, max(20.0, float(timeout_seconds or 600.0)))
     fetch_timeout = float(budget.get("fetch_timeout", min(10, max(3, budget["timeout"] / 5))))
     max_sitemap_fetches = int(budget.get("max_sitemap_fetches", 10))
     scan_started_at = time.monotonic()
     scan_started_wall_clock = utc_now_iso()
     deadline = scan_started_at + budget["timeout"]
+    homepage_links = []
     start_url = normalize_published_request_url(website_url)
     if not start_url:
-        return {"success": False, "version": VERSION, "error": "Missing or invalid website_url."}
+        raise ValueError("Missing or invalid website_url.")
     if not is_public_http_url(start_url):
-        return {"success": False, "version": VERSION, "error": "website_url must resolve to a public host."}
+        raise ValueError("website_url must resolve to a public host.")
 
     parsed_start = urlparse(start_url)
     origin = f"{parsed_start.scheme}://{parsed_start.netloc}"
@@ -633,6 +859,12 @@ async def run_scan(
                     robots_policy = await load_robots_policy(client, origin)
                 if 200 <= landing_status < 300 and same_origin(final_landing_url, origin):
                     primary_market_hint = _selection_market_hint(urlparse(final_landing_url).path)
+                if 200 <= landing_status < 300 and same_origin(final_landing_url, origin):
+                    homepage_links = [
+                        link["href"] for link in extract_links(
+                            str(getattr(landing, "text", "") or ""), final_landing_url,
+                        ) if same_origin(link["href"], origin)
+                    ]
                 redirected_market = market_pair_prefix(final_landing_url)
                 if redirected_market:
                     prefix = redirected_market
@@ -648,6 +880,9 @@ async def run_scan(
             fetch_timeout,
             now=time.monotonic(),
         )
+        if kwargs.get("staged"):
+            timing_budget["sitemap_deadline"] = min(timing_budget["sitemap_deadline"], scan_started_at + 45.0)
+            timing_budget["sitemap_budget_seconds"] = max(0.0, timing_budget["sitemap_deadline"] - time.monotonic())
         sitemap_diagnostics = {
             "version": SITEMAP_TIME_RESERVATION_VERSION,
             "sitemap_started_at": utc_now_iso(),
@@ -681,13 +916,27 @@ async def run_scan(
         sitemap_diagnostics["sitemap_urls_discovered"] = len(sitemap_urls)
         family_of = lambda url: classify_template(urlparse(url).path or "/")
         path_of = lambda url: urlparse(url).path or "/"
+        # Homepage links enter the same normalized/scoped frontier as sitemap
+        # URLs. Their weight can influence selection before the first batch.
+        for url in homepage_links:
+            enqueue(url, "internal_link", urlparse(start_url).path or "/", "")
+        # Reuse the frontier's tracking normalization and scope validation for
+        # the importance signal, rather than scoring the raw href identity.
+        homepage_links = [url for url in queue if url != start_url]
+        candidate_urls = list(dict.fromkeys(sitemap_urls + list(queue)))
+        candidate_urls = [url for url in candidate_urls if url != start_url]
         sampled_sitemap_urls = select_balanced_urls(
-            sitemap_urls, family_of, path_of, max(0, max_pages - 1),
+            candidate_urls, family_of, path_of, max(0, max_pages - 1),
             preferred_market=primary_market_hint,
+            homepage_links=homepage_links,
+            lastmod=sitemap_diagnostics.get("sitemap_lastmod", {}),
         )
         sampling_evidence = sampling_report(sitemap_urls, sampled_sitemap_urls, family_of, path_of)
+        sampling_evidence["inventory_capped"] = bool(sitemap_diagnostics.get("inventory_capped"))
         scope_evidence["effective_path_prefix"] = prefix
         sampling_evidence["crawl_scope"] = dict(scope_evidence)
+        queued = {start_url}
+        queue = [start_url]
         for url in sampled_sitemap_urls:
             enqueue(url, "sitemap", "/sitemap.xml", "")
 
@@ -707,7 +956,6 @@ async def run_scan(
         crawl_started_at = utc_now_iso()
         crawl_started_monotonic = time.monotonic()
         initial_queue_size = len(queue)
-        state_lock = asyncio.Lock()
         crawl_state = {
             "claimed": 0,
             "in_flight": 0,
@@ -725,19 +973,115 @@ async def run_scan(
             ),
         )
 
+
+    state = ScanState(
+        budget=budget,
+        scan_mode=scan_mode,
+        concurrency=concurrency,
+        job_mode=job_mode,
+        fetch_timeout=fetch_timeout,
+        scan_started_at=scan_started_at,
+        scan_started_wall_clock=scan_started_wall_clock,
+        deadline=deadline,
+        start_url=start_url,
+        origin=origin,
+        prefix=prefix,
+        scope_evidence=scope_evidence,
+        pages=pages,
+        queue=queue,
+        queued=queued,
+        seen=seen,
+        discovery=discovery,
+        artifacts=artifacts,
+        robots_policy=robots_policy,
+        rate_limit_profile=rate_limit_profile,
+        initial_rate_limit_retry_count=initial_rate_limit_retry_count,
+        initial_rate_limit_recovered=initial_rate_limit_recovered,
+        initial_rate_limit_blocked=initial_rate_limit_blocked,
+        max_pages=max_pages,
+        timing_budget=timing_budget,
+        sitemap_diagnostics=sitemap_diagnostics,
+        sitemap_urls=sitemap_urls,
+        sampling_evidence=sampling_evidence,
+        scan_coverage_counters=scan_coverage_counters,
+        crawl_started_at=crawl_started_at,
+        crawl_started_monotonic=crawl_started_monotonic,
+        initial_queue_size=initial_queue_size,
+        crawl_state=crawl_state,
+        rate_limit_pacer=rate_limit_pacer,
+        homepage_links=homepage_links,
+        render_page=kwargs.get("_render_page"),
+    )
+    state.rebuild_priority()
+    return state
+
+async def crawl_batch(state: ScanState, max_pages: int = 50) -> list[dict]:
+    """Fetch at most ``max_pages`` additional retained pages and mutate state.
+
+    All in-flight requests complete before this function returns, so callers can
+    persist a coherent snapshot. Network-request ceilings remain scan-wide.
+    """
+    if state.finished:
+        return []
+    budget = state.budget
+    scan_mode = state.scan_mode
+    concurrency = state.concurrency
+    job_mode = state.job_mode
+    fetch_timeout = state.fetch_timeout
+    start_url = state.start_url
+    origin = state.origin
+    prefix = state.prefix
+    scope_evidence = state.scope_evidence
+    pages = state.pages
+    queued = state.queued
+    seen = state.seen
+    discovery = state.discovery
+    artifacts = state.artifacts
+    robots_policy = state.robots_policy
+    timing_budget = state.timing_budget
+    scan_coverage_counters = state.scan_coverage_counters
+    crawl_state = state.crawl_state
+    rate_limit_pacer = state.rate_limit_pacer
+    queue = state.queue
+    final_pages = {final_url_identity(page.get("final_url") or page.get("url") or ""): page for page in pages}
+    batch_started = time.monotonic()
+    batch_deadline = min(timing_budget["crawl_deadline"], batch_started + CRAWL_BATCH_WORK_SECONDS)
+    # Return collected evidence before the HTTP-stage fuse; a slow site may
+    # need more than one batch to fetch fifty pages without losing progress.
+    rate_limit_pacer.deadline = batch_deadline
+    batch_start = len(pages)
+    batch_limit = min(state.max_pages, batch_start + max(1, int(max_pages)))
+    max_pages = state.max_pages
+    state_lock = asyncio.Lock()
+    first_pass_inflight = 0
+
+    def enqueue(url: str, source: str, source_page: str = "", link_text: str = "") -> None:
+        state.enqueue(url, source, source_page, link_text)
+
+    async with httpx.AsyncClient(
+        timeout=fetch_timeout, follow_redirects=False,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; FixListPythonScanner/1.0)"},
+    ) as client:
         async def worker() -> None:
+            nonlocal first_pass_inflight
             while True:
                 target = None
                 snapshot = None
                 async with state_lock:
                     if (
-                        time.monotonic() >= timing_budget["crawl_deadline"]
-                        or len(pages) + crawl_state["in_flight"] >= max_pages
+                        time.monotonic() >= batch_deadline
+                        or len(pages) + crawl_state["in_flight"] >= batch_limit
                         or crawl_state["claimed"] >= max_pages * 8
                     ):
                         return
+                    # Complete the first-pass evidence before spending the rest
+                    # of the sample, then apply observed inlinks exactly once.
+                    if queue and queue[0][0] > 0 and first_pass_inflight == 0 and not state.rescored:
+                        state.rebuild_priority(observed=True)
                     while queue:
-                        candidate = queue.pop(0)
+                        if queue[0][0] > 0 and first_pass_inflight:
+                            break
+                        candidate = heapq.heappop(queue)[-1]
                         queued.discard(candidate)
                         if candidate in seen:
                             continue
@@ -748,6 +1092,8 @@ async def run_scan(
                         if crawl_state["in_flight"] == 0:
                             return
                     else:
+                        if target in state.first_pass_urls:
+                            first_pass_inflight += 1
                         seen.add(target)
                         crawl_state["claimed"] += 1
                         crawl_state["in_flight"] += 1
@@ -816,6 +1162,10 @@ async def run_scan(
                             identity = final_url_identity(page.get("final_url") or page.get("url") or "")
                             retained = final_pages.get(identity) if identity else None
                             if retained is not None:
+                                state.duplicate_merges.append({
+                                    "retained_url": retained.get("url") or "",
+                                    "duplicate_url": page.get("url") or "",
+                                })
                                 merge_duplicate_page_evidence(retained, page)
                                 crawl_state["final_url_duplicates_deduped"] += 1
                                 if len(crawl_state["final_url_duplicate_examples"]) < 10:
@@ -825,10 +1175,21 @@ async def run_scan(
                                         "retained_url": retained.get("url") or "",
                                     })
                             else:
+                                state.annotate_importance(page)
                                 pages.append(page)
                                 if identity:
                                     final_pages[identity] = page
+                        if page is None:
+                            # A pacer can refuse a slot past this batch's bound.
+                            # The URL has not been observed and must survive for
+                            # the next batch rather than becoming falsely seen.
+                            seen.discard(target)
+                            queued.add(target)
+                            heapq.heappush(queue, state._priority(target))
+                            crawl_state["claimed"] -= 1
                         crawl_state["in_flight"] -= 1
+                        if target in state.first_pass_urls:
+                            first_pass_inflight -= 1
                         for link in discovered:
                             if len(queue) + len(seen) >= max_pages * 8:
                                 break
@@ -836,7 +1197,52 @@ async def run_scan(
 
         workers = [asyncio.create_task(worker()) for _ in range(max(1, concurrency))]
         await asyncio.gather(*workers)
-        crawl_elapsed_ms = round((time.monotonic() - crawl_started_monotonic) * 1000)
+    rate_limit_pacer.deadline = timing_budget["crawl_deadline"]
+    state.crawl_elapsed_ms += round((time.monotonic() - batch_started) * 1000)
+    return pages[batch_start:]
+
+
+async def _finalize_scan(state: ScanState) -> dict:
+    """Run bounded cross-page probes, rules and result assembly once."""
+    budget = state.budget
+    scan_mode = state.scan_mode
+    fetch_timeout = state.fetch_timeout
+    scan_started_at = state.scan_started_at
+    scan_started_wall_clock = state.scan_started_wall_clock
+    deadline = state.deadline
+    start_url = state.start_url
+    origin = state.origin
+    prefix = state.prefix
+    scope_evidence = state.scope_evidence
+    pages = state.pages
+    queue = state.queue
+    seen = state.seen
+    discovery = state.discovery
+    artifacts = state.artifacts
+    robots_policy = state.robots_policy
+    rate_limit_profile = state.rate_limit_profile
+    initial_rate_limit_retry_count = state.initial_rate_limit_retry_count
+    initial_rate_limit_recovered = state.initial_rate_limit_recovered
+    initial_rate_limit_blocked = state.initial_rate_limit_blocked
+    max_pages = state.max_pages
+    timing_budget = state.timing_budget
+    sitemap_diagnostics = state.sitemap_diagnostics
+    sitemap_urls = state.sitemap_urls
+    sampling_evidence = state.sampling_evidence
+    scan_coverage_counters = state.scan_coverage_counters
+    crawl_started_at = state.crawl_started_at
+    initial_queue_size = state.initial_queue_size
+    crawl_state = state.crawl_state
+    rate_limit_pacer = state.rate_limit_pacer
+    pages.sort(key=lambda page: state._rank(str(page.get("url") or "")))
+    path_of = lambda url: urlparse(url).path or "/"
+    kwargs = {"_render_page": state.render_page}
+    crawl_started_monotonic = state.crawl_started_monotonic
+    async with httpx.AsyncClient(
+        timeout=fetch_timeout, follow_redirects=False,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; FixListPythonScanner/1.0)"},
+    ) as client:
+        crawl_elapsed_ms = state.crawl_elapsed_ms
         final_queue_size = len(queue)
         # Enforce the selected scan budget again after all concurrent sources finish.
         # Downstream validation and review must never receive more pages than the mode allows.
@@ -1040,7 +1446,7 @@ async def run_scan(
     failure_reason_buckets = build_crawl_failure_buckets(pages)
     failed_fetch_count = sum(failure_reason_buckets.values())
     crawl_timing = {
-        **sitemap_diagnostics,
+        **{key: value for key, value in sitemap_diagnostics.items() if key != "sitemap_lastmod"},
         "version": SITEMAP_TIME_RESERVATION_VERSION,
         "scan_started_at": scan_started_wall_clock,
         "crawl_started_at": crawl_started_at,
@@ -1118,6 +1524,7 @@ async def run_scan(
         "scan_deadline_reached": deadline_reached,
         "pages_crawled": len(pages),
         "pages_found": pages_found,
+        "inventory_capped": bool(sitemap_diagnostics.get("inventory_capped")),
         "scan_coverage": scan_coverage,
         "queued_remaining": len(queue),
         "pages": pages,
@@ -1170,6 +1577,36 @@ async def run_scan(
         },
         "crawl_warnings": crawl_warnings,
     }
+
+async def finalize_scan(state: ScanState) -> dict:
+    with scan_page_limit(page_cap_for_mode("standard_500" if state.max_pages > 150 else "advanced")):
+        return await _finalize_scan(state)
+
+
+async def run_scan(
+    website_url: str,
+    path_prefix: str | None = None,
+    scan_mode: str = "advanced",
+    concurrency: int = 8,
+    timeout_seconds: float | None = None,
+    job_mode: bool = False,
+    **kwargs,
+) -> dict:
+    """In-process facade over the same plan/batch/finalize engine as Tasks."""
+    try:
+        state = await plan_scan(
+            website_url, path_prefix, scan_mode, concurrency, timeout_seconds,
+            job_mode, **kwargs,
+        )
+    except ValueError as exc:
+        return {"success": False, "version": VERSION, "error": str(exc)}
+    while not state.finished:
+        await crawl_batch(state, max_pages=50)
+        if kwargs.get("_roundtrip_state"):
+            state = ScanState.from_dict(json.loads(json.dumps(state.to_dict())))
+            state.render_page = kwargs.get("_render_page")
+    return await finalize_scan(state)
+
 
 
 def build_render_evidence(pages: list[dict]) -> dict:

@@ -30,7 +30,7 @@ test("the durable route owns the longer Python-only scan", () => {
   assert.match(workerMain, /timeout_seconds=CRAWL_BUDGET_SECONDS/);
   assert.match(workerMain, /job_mode=True/);
   assert.match(workerMain, /scan_mode="advanced"/);
-  assert.match(workerMain, /enforce_scan_response_page_budget\(result, "advanced"\)/);
+  assert.match(workerMain, /enforce_scan_response_page_budget\(result, "advanced", page_limit=PAGE_CAPS\[mode\]\)/);
   assert.match(workerJob, /CRAWL_BUDGET_SECONDS = 210\.0/);
   assert.doesNotMatch(job, /SCANNER_API_URL|SCANNER_API_KEY/);
 });

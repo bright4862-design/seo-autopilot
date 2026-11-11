@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
+from collections import defaultdict
 from typing import Any
 from urllib.parse import urlparse
 
@@ -88,14 +90,14 @@ def _page_url(page: dict[str, Any]) -> str:
     return _clean(page.get("url") or page.get("final_url") or page.get("page_url") or page.get("path"))
 
 
-def _affected_pages(fix: dict[str, Any], *, scan_origin: str = "", identity_version: str = "") -> list[str]:
+def _affected_pages(fix: dict[str, Any], *, scan_origin: str = "", identity_version: str = "", key_for: Any = None) -> list[str]:
     values = fix.get("affected_pages") if isinstance(fix.get("affected_pages"), list) else []
     if not values:
         fallback = fix.get("page_url") or fix.get("representative_page_url")
         values = [fallback] if fallback else []
     output: list[str] = []
     seen: set[str] = set()
-    key_for = repair_evidence_key_function(legacy_key=_path, scan_origin=scan_origin, identity_version=identity_version)
+    key_for = key_for or repair_evidence_key_function(legacy_key=_path, scan_origin=scan_origin, identity_version=identity_version)
     for value in values:
         key = key_for(value)
         if key and key not in seen:
@@ -288,10 +290,30 @@ class CoverageContext:
         return ratio if 0.0 <= ratio <= 1.0 else None
 
 
-def build_coverage_context(fix: dict[str, Any], pages: list[dict[str, Any]], *, scan_origin: str = "", identity_version: str = "") -> CoverageContext:
-    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
-    key_for = repair_evidence_key_function(legacy_key=_path, **identity_context)
-    affected = set(_affected_pages(fix, **identity_context))
+@dataclass(frozen=True)
+class CoveragePageIndex:
+    """Page-only facts shared by one review pass, never cached across scans."""
+    scan_origin: str
+    identity_version: str
+    key_for: Any
+    page_lookup: dict
+    eligible_keys: dict
+    eligible_counts: dict
+    indexable_counts: dict
+    important_keys: frozenset
+
+
+def build_coverage_page_index(pages: list[dict[str, Any]], *, scan_origin: str = "", identity_version: str = "") -> CoveragePageIndex:
+    raw_key_for = repair_evidence_key_function(legacy_key=_path, scan_origin=scan_origin, identity_version=identity_version)
+    # A bounded cache belongs to this immutable page universe. Hundreds of
+    # fixes can refer to the same URL without reparsing its published identity.
+    @lru_cache(maxsize=8192)
+    def string_key(value: str) -> str:
+        return raw_key_for(value)
+
+    def key_for(value: Any) -> str:
+        return string_key(value) if isinstance(value, str) else raw_key_for(value)
+
     def observation_keys(page):
         keys = [key_for(_page_url(page))]
         evidence = page.get("redirect_fetch_evidence")
@@ -302,10 +324,33 @@ def build_coverage_context(fix: dict[str, Any], pages: list[dict[str, Any]], *, 
             keys.append(key_for(evidence["final_url"]))
         return [key for key in keys if key]
 
-    page_lookup = {
-        key: page for page in pages if isinstance(page, dict)
-        for key in observation_keys(page)
-    }
+    page_lookup = {}
+    eligible_keys = defaultdict(set)
+    eligible_counts = defaultdict(int)
+    indexable_counts = defaultdict(int)
+    for page in pages or []:
+        if not isinstance(page, dict):
+            continue
+        keys = observation_keys(page)
+        for key in keys:
+            page_lookup[key] = page
+        if _usable_html(page):
+            family = _template_family(page)
+            eligible_keys[family].update(keys)
+            eligible_counts[family] += 1
+            indexable_counts[family] += _indexability_state(page) == "indexable"
+    important_keys = frozenset(key for key, page in page_lookup.items() if _important_page(page))
+    return CoveragePageIndex(scan_origin, identity_version, key_for, page_lookup,
+                             dict(eligible_keys), dict(eligible_counts), dict(indexable_counts), important_keys)
+
+
+def build_coverage_context(fix: dict[str, Any], pages: list[dict[str, Any]], *, scan_origin: str = "", identity_version: str = "", page_index: CoveragePageIndex | None = None) -> CoverageContext:
+    index = page_index or build_coverage_page_index(pages, scan_origin=scan_origin, identity_version=identity_version)
+    if index.scan_origin != scan_origin or index.identity_version != identity_version:
+        raise ValueError("Coverage index identity context does not match the review")
+    key_for = index.key_for
+    affected = set(_affected_pages(fix, key_for=key_for))
+    page_lookup = index.page_lookup
     matched_affected = [page_lookup[key] for key in affected if key in page_lookup]
 
     # A bounded coverage probe can prove an HTTP outcome for a URL that was
@@ -330,8 +375,7 @@ def build_coverage_context(fix: dict[str, Any], pages: list[dict[str, Any]], *, 
 
     family = _fix_family(fix)
     comparable_family = bool(family and family not in {"mixed", "sitewide", "cross_cutting", "standard"})
-    usable = [page for page in pages if isinstance(page, dict) and _usable_html(page)]
-    eligible = [page for page in usable if _template_family(page) == family] if comparable_family else []
+    eligible_count = index.eligible_counts.get(family, 0) if comparable_family else 0
 
     explicit_eligible = fix.get("checked_eligible_count") or fix.get("eligible_page_count")
     try:
@@ -339,12 +383,12 @@ def build_coverage_context(fix: dict[str, Any], pages: list[dict[str, Any]], *, 
     except (TypeError, ValueError):
         explicit_eligible_count = None
 
-    checked_eligible = explicit_eligible_count if explicit_eligible_count and explicit_eligible_count > 0 else (len(eligible) if comparable_family and eligible else None)
+    checked_eligible = explicit_eligible_count if explicit_eligible_count and explicit_eligible_count > 0 else (eligible_count if eligible_count else None)
 
     # The numerator restricted to the denominator's own universe. Without this
     # intersection the two counts describe different sets of URLs and their
     # quotient is not a coverage figure at all.
-    eligible_keys = {key for page in eligible for key in observation_keys(page)}
+    eligible_keys = index.eligible_keys.get(family, set()) if comparable_family else set()
     affected_eligible_pages = [page_lookup[key] for key in affected if key in eligible_keys and key in page_lookup]
 
     states = [_indexability_state(page) for page in affected_eligible_pages]
@@ -359,10 +403,10 @@ def build_coverage_context(fix: dict[str, Any], pages: list[dict[str, Any]], *, 
                 indexable_eligible = max(0, int(fix.get("indexable_checked_eligible_count") or 0))
             except (TypeError, ValueError):
                 indexable_eligible = None
-        elif eligible:
-            indexable_eligible = sum(1 for page in eligible if _indexability_state(page) == "indexable")
+        elif eligible_count:
+            indexable_eligible = index.indexable_counts.get(family, 0)
 
-    important_affected = sum(1 for page in matched_affected if _important_page(page))
+    important_affected = sum(1 for key in affected if key in index.important_keys)
 
     # An explicit eligible count supplied by a detector has no URL set behind
     # it, so the intersection cannot be computed and the observed count is the
@@ -443,7 +487,7 @@ def _priority_reason(
 ) -> str:
     family = _fix_family(fix)
     label = _family_label(family) if family else "relevant pages"
-    affected_count = max(context.affected_checked, len(_affected_pages(fix, scan_origin=scan_origin, identity_version=identity_version)))
+    affected_count = context.affected_reported
 
     # Only state "N of M" when N and M were counted over the same URLs.
     if search_facing and context.indexable_checked_eligible and context.indexable_affected and context.affected_universe_is_comparable:
@@ -488,7 +532,7 @@ def _priority_reason(
     return f"{affected_count} checked pages are affected."
 
 
-def annotate_repair_priority(fix: dict[str, Any], pages: list[dict[str, Any]], *, scan_origin: str = "", identity_version: str = "") -> dict[str, Any]:
+def annotate_repair_priority(fix: dict[str, Any], pages: list[dict[str, Any]], *, scan_origin: str = "", identity_version: str = "", page_index: CoveragePageIndex | None = None) -> dict[str, Any]:
     """Add contextual customer priority without mutating scanner severity.
 
     This is deliberately a synthesis-layer annotation. It does not change crawl
@@ -496,7 +540,7 @@ def annotate_repair_priority(fix: dict[str, Any], pages: list[dict[str, Any]], *
     """
     base_severity = _base_severity(fix)
     evidence_class = _evidence_class(fix)
-    context = build_coverage_context(fix, pages, scan_origin=scan_origin, identity_version=identity_version)
+    context = build_coverage_context(fix, pages, scan_origin=scan_origin, identity_version=identity_version, page_index=page_index)
     search_facing = _is_search_facing(fix)
     action_priority = _action_priority(base_severity, evidence_class, context, search_facing=search_facing)
     score = _sort_score(base_severity, action_priority, context, fix, search_facing=search_facing)
@@ -537,7 +581,8 @@ def annotate_repair_priority(fix: dict[str, Any], pages: list[dict[str, Any]], *
 
 
 def annotate_repair_priorities(fixes: list[dict[str, Any]], pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    annotated = [annotate_repair_priority(fix, pages) for fix in fixes if isinstance(fix, dict)]
+    index = build_coverage_page_index(pages)
+    annotated = [annotate_repair_priority(fix, pages, page_index=index) for fix in fixes if isinstance(fix, dict)]
     return sorted(
         annotated,
         key=lambda fix: (

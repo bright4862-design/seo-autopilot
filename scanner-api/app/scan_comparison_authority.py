@@ -26,6 +26,7 @@ import re
 from typing import Any
 from urllib.parse import urlsplit
 
+from .scan_limits import page_cap_for_mode
 from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION, repair_evidence_key_function
 from .missing_h1_comparison_contract import (
     MISSING_H1_COMPARISON_EVIDENCE_VERSION,
@@ -291,7 +292,11 @@ def _current_rule_evidence(snapshot: dict[str, Any], origin: str) -> tuple[list[
     if evidence.get("evidence_url_identity_version") != PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION:
         raise ValueError("Authenticated comparison evidence URL identity is incompatible")
     observations = evidence.get("observations")
-    if not isinstance(observations, list) or len(observations) > 150:
+    signed_scan = snapshot.get("scan") or {}
+    cap = page_cap_for_mode(signed_scan.get("scan_mode") or signed_scan.get("canonical_mode") or "standard_150")
+    if signed_scan.get("page_cap", cap) != cap:
+        raise ValueError("Authenticated scan cap mismatch")
+    if not isinstance(observations, list) or len(observations) > cap:
         raise ValueError("Authenticated comparison observation population is invalid")
     if _count(evidence.get("observation_count"), "comparison observation_count") != len(observations):
         raise ValueError("Authenticated comparison observation count mismatch")

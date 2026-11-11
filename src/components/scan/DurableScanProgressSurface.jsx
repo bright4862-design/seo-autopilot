@@ -22,8 +22,9 @@ export default function DurableScanProgressSurface({
   const scan = useMemo(() => ({
     status: String(durableScan?.status || ""),
     pages_crawled: Math.max(0, Number(durableScan?.pagesCrawled) || 0),
+    pages_planned: durableScan?.pagesPlanned,
     durable_background_execution: backgroundExecutionProven === true,
-  }), [durableScan?.status, durableScan?.pagesCrawled, backgroundExecutionProven]);
+  }), [durableScan?.status, durableScan?.pagesCrawled, durableScan?.pagesPlanned, backgroundExecutionProven]);
 
   return (
     <TruthfulScanProgress

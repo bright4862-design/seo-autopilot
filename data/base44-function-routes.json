@@ -58,5 +58,15 @@
       "getCustomerScanResult": "getCustomerScanResultV2",
       "deleteCustomerScanData": "deleteCustomerScanDataV2"
     }
+  },
+  "candidate_routes": {
+    "v9": {
+      "startStandardScanJob": "startStandardScanJobV9",
+      "durableScanWorkerControl": "durableScanWorkerControlV9",
+      "persistDurableScanAuthority": "persistDurableScanAuthorityV9",
+      "persistLimitedScanResult": "persistLimitedScanResultV9",
+      "getCustomerScanResult": "getCustomerScanResultV9",
+      "deleteCustomerScanData": "deleteCustomerScanDataV9"
+    }
   }
 }

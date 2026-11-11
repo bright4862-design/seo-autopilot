@@ -27,7 +27,7 @@ which is precisely how a mixed group came to be labelled Homepage.
 
 from __future__ import annotations
 
-from functools import partial
+from functools import lru_cache, partial
 import ipaddress
 import re
 from typing import Any
@@ -134,6 +134,7 @@ _OBSERVED_URL_FORBIDDEN = re.compile(r"[\x00-\x20\x7f-\x9f\\]")
 _OBSERVED_ABSOLUTE_URL = re.compile(r"^(https?)://([^/?#]+)(.*)$", re.IGNORECASE | re.ASCII)
 
 
+@lru_cache(maxsize=256)
 def _published_origin(scheme: str, authority: str) -> str:
     """Normalize only a validated origin, never the observed route text."""
     if "@" in authority or "%" in authority:
@@ -337,6 +338,30 @@ def normalize_repair_scope(
     page_count = len(ordered)
     kept = [raw for _, raw in ordered[:max_affected]]
 
+    # A previously bounded card has already proved its full partition before
+    # shedding URLs for persistence. Re-normalizing the retained sample must
+    # not turn that sample back into the reported total.
+    declared_count = _count(normalized.get("affected_page_count") or normalized.get("page_count"))
+    declared_partitions = normalized.get("family_breakdown")
+    if (
+        normalized.get("affected_pages_complete") is False
+        and declared_count > page_count
+        and isinstance(declared_partitions, dict)
+        and all(_count(value) >= 0 for value in declared_partitions.values())
+        and sum(_count(value) for value in declared_partitions.values()) == declared_count
+        and all(count <= _count(declared_partitions.get(family)) for family, count in breakdown.items())
+    ):
+        normalized.update({
+            "affected_pages": kept,
+            "page_count": declared_count,
+            "affected_page_count": declared_count,
+            "affected_pages_complete": False,
+            "repair_coverage_version": PUBLISHED_REPAIR_COVERAGE_VERSION if identity_version else REPAIR_COVERAGE_VERSION,
+        })
+        if identity_version:
+            normalized["evidence_url_identity_version"] = identity_version
+        return normalized
+
     explicit_scope = str(normalized.get("page_scope") or "").strip().lower()
     known_families = [family for family in breakdown if family != UNKNOWN_FAMILY]
 
@@ -380,6 +405,8 @@ def normalize_repair_scope(
     })
     if identity_version:
         normalized["evidence_url_identity_version"] = identity_version
+    if page_count > max_affected or "affected_page_count" in normalized:
+        normalized["affected_page_count"] = page_count
     return normalized
 
 
@@ -435,6 +462,8 @@ def first_failed_repair_invariant(repair: dict[str, Any] | None, *, scan_origin:
     indexable_affected = _count(repair.get("indexable_affected"))
     indexable_eligible = _optional_count(repair.get("indexable_checked_eligible"))
     page_count = _count(repair.get("page_count"))
+    if "affected_page_count" in repair and _count(repair.get("affected_page_count")) != page_count:
+        return "affected_page_count_disagrees_with_page_count"
     scope = str(repair.get("page_scope") or "").lower()
     partitions = repair.get("family_breakdown") if isinstance(repair.get("family_breakdown"), dict) else {}
     complete = repair.get("affected_pages_complete") is not False

@@ -44,6 +44,26 @@ class RobotsPolicy:
     status_code: int
     parser: robotparser.RobotFileParser | None = None
 
+    def to_dict(self) -> dict:
+        """Serialize rules rather than a process-local RobotFileParser object."""
+        return {
+            "url": self.url, "status": self.status, "status_code": self.status_code,
+            "rules": str(self.parser) if self.parser is not None else None,
+            "allow_all": self.parser.allow_all if self.parser is not None else False,
+            "disallow_all": self.parser.disallow_all if self.parser is not None else False,
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict) -> RobotsPolicy:
+        parser = None
+        if value.get("rules") is not None:
+            parser = robotparser.RobotFileParser()
+            parser.set_url(str(value.get("url") or ""))
+            parser.parse(str(value["rules"]).splitlines())
+            parser.allow_all = value.get("allow_all") is True
+            parser.disallow_all = value.get("disallow_all") is True
+        return cls(str(value.get("url") or ""), str(value.get("status") or "unavailable"), int(value.get("status_code") or 0), parser)
+
     @property
     def rules_known(self) -> bool:
         return self.status in {"available", "missing"}

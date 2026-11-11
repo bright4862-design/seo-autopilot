@@ -299,6 +299,18 @@
     "result_integrity_proof": {
       "type": "string",
       "description": "Server-only HMAC over the limited result. Cryptographically unusable as an authority proof."
+    },
+    "affected_page_count": {
+      "type": "integer"
+    },
+    "affected_page_count_is_lower_bound": {
+      "type": "boolean"
+    },
+    "template_impact_estimates": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "required": [

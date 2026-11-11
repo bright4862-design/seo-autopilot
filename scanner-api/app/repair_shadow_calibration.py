@@ -8,6 +8,7 @@ from .repair_priority import ACTION_RANK, SEVERITY_RANK
 from .repair_priority_calibration import (
     REPAIR_PRIORITY_CALIBRATION_VERSION,
     annotate_calibrated_repair_priority,
+    prepare_calibrated_priority_pages,
 )
 
 REPAIR_SHADOW_CALIBRATION_VERSION = "repair_contract_v2_shadow_calibrated"
@@ -73,8 +74,9 @@ def build_calibrated_shadow_review_analysis(
     fixes_snapshot = deepcopy(live_fixes)
     pages_snapshot = deepcopy(evidence_pages)
     annotated = []
+    prepared = prepare_calibrated_priority_pages(pages_snapshot, scan_origin=scan_origin, identity_version=identity_version)
     for fix in fixes_snapshot:
-        calibrated = annotate_calibrated_repair_priority(fix, pages_snapshot, scan_origin=scan_origin, identity_version=identity_version)
+        calibrated = annotate_calibrated_repair_priority(fix, pages_snapshot, scan_origin=scan_origin, identity_version=identity_version, prepared_pages=prepared)
         with_identity = annotate_repair_identity(calibrated)
         annotated.append({
             **with_identity,

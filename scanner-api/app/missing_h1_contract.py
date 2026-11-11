@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .scan_limits import current_page_cap
+
 from typing import Any
 
 from .page_evidence_gate import page_evidence_class
@@ -113,7 +115,7 @@ def build_missing_h1_comparison_evidence(
         })
 
     observations.sort(key=lambda item: item["page_url"])
-    observations = observations[:150]
+    observations = observations[:current_page_cap()]
     evaluated = [item for item in observations if item["evaluated"] is True]
     present = [item for item in evaluated if item["finding_present"] is True]
     absent = [item for item in evaluated if item["finding_present"] is False]

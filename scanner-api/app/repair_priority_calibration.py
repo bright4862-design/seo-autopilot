@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from typing import Any
+from dataclasses import dataclass
 
-from .repair_architecture_priority import architecture_context, architecture_priority_reason
-from .repair_priority import ACTION_RANK, SEVERITY_RANK, annotate_repair_priority
+from .repair_architecture_priority import architecture_context, architecture_priority_reason, build_architecture_page_index, ArchitecturePageIndex
+from .repair_priority import ACTION_RANK, SEVERITY_RANK, annotate_repair_priority, build_coverage_page_index, CoveragePageIndex
 
 REPAIR_PRIORITY_CALIBRATION_VERSION = "repair_priority_v2_technical_severity"
 
@@ -249,7 +250,21 @@ def _score(
     return score
 
 
-def annotate_calibrated_repair_priority(fix: dict[str, Any], pages: list[dict[str, Any]], *, scan_origin: str = "", identity_version: str = "") -> dict[str, Any]:
+@dataclass(frozen=True)
+class CalibratedPriorityPages:
+    pages: list[dict[str, Any]]
+    coverage: CoveragePageIndex
+    architecture: ArchitecturePageIndex
+
+
+def prepare_calibrated_priority_pages(pages: list[dict[str, Any]], *, scan_origin: str = "", identity_version: str = "") -> CalibratedPriorityPages:
+    normalized = _canonical_priority_pages(pages or [])
+    coverage = build_coverage_page_index(normalized, scan_origin=scan_origin, identity_version=identity_version)
+    architecture = build_architecture_page_index(normalized, scan_origin=scan_origin, identity_version=identity_version, key_for=coverage.key_for)
+    return CalibratedPriorityPages(normalized, coverage, architecture)
+
+
+def annotate_calibrated_repair_priority(fix: dict[str, Any], pages: list[dict[str, Any]], *, scan_origin: str = "", identity_version: str = "", prepared_pages: CalibratedPriorityPages | None = None) -> dict[str, Any]:
     """Recalibrate one repair without changing its underlying finding.
 
     Legacy `priority`, crawl evidence, and normal review output remain intact.
@@ -257,8 +272,9 @@ def annotate_calibrated_repair_priority(fix: dict[str, Any], pages: list[dict[st
     separate canonical snapshot after the ordinary review has finished.
     """
     identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
-    normalized_pages = _canonical_priority_pages(pages or [])
-    annotated = annotate_repair_priority(dict(fix), normalized_pages, **identity_context)
+    prepared = prepared_pages or prepare_calibrated_priority_pages(pages, **identity_context)
+    normalized_pages = prepared.pages
+    annotated = annotate_repair_priority(dict(fix), normalized_pages, page_index=prepared.coverage, **identity_context)
     base_severity, severity_source = technical_base_severity(fix)
     evidence_class = calibrated_evidence_class(fix)
     context = dict(annotated.get("priority_context") or {})
@@ -269,6 +285,7 @@ def annotate_calibrated_repair_priority(fix: dict[str, Any], pages: list[dict[st
         fix,
         normalized_pages,
         checked_eligible=context.get("checked_eligible"),
+        page_index=prepared.architecture,
         **identity_context,
     )
     score = _score(
@@ -299,6 +316,8 @@ def annotate_calibrated_repair_priority(fix: dict[str, Any], pages: list[dict[st
         checked_eligible=context.get("checked_eligible"),
         **identity_context,
         fallback_reason=str(annotated.get("priority_reason") or ""),
+        page_index=prepared.architecture,
+        role_counts=architecture["role_counts"],
     )
 
     return {

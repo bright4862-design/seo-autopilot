@@ -1,0 +1,4 @@
+{
+  "name": "durableScanWorkerControlV9",
+  "entry": "entry.ts"
+}

@@ -119,7 +119,7 @@ def test_every_scanner_key_route_is_still_guarded():
     """Guard inventory: catches a new route added without authentication."""
     guarded = {"/health/auth", "/scan", "/review", "/chat"}
     open_routes = {"/health", "/revision"}
-    durable = {"/scan-job", "/scan-job-drain", "/scan-reconcile"}
+    durable = {"/scan-job", "/scan-job-drain", "/scan-reconcile", "/scan-batch", "/scan-finalize", "/scan-workspace-delete"}
 
     for route in main.app.routes:
         path = getattr(route, "path", None)

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { loadAccess } from "@/lib/access";
+import { pageCapFromRecord } from "@/lib/scanPresentation";
 
 export default function Account() {
   const [access, setAccess] = useState(null);
@@ -54,7 +55,7 @@ export default function Account() {
                       : "No active paid access"}
               </p>
               <p className="mt-2 max-w-[46ch] text-[13.5px] leading-relaxed text-ink-muted">
-                Standard 150 reviews up to 150 pages per scan and turns the evidence it finds into a prioritized FixList.
+                FixList reviews up to {pageCapFromRecord(access?.record)} pages per scan on your account and turns the evidence it finds into a prioritized FixList.
               </p>
             </div>
             <div className="flex shrink-0 flex-wrap gap-2">
@@ -79,7 +80,7 @@ export default function Account() {
           <h2 id="terms-heading" className="mt-2 text-[22px] font-semibold tracking-[-0.025em]">Terms & Conditions</h2>
           <div className="mt-5 space-y-5 text-[14px] leading-relaxed text-ink-muted">
             <p>
-              FixList is an automated website and SEO diagnostic service. Standard 150 can inspect up to 150 pages in a scan, so a FixList may represent a bounded sample rather than every page on a larger website.
+              FixList is an automated website and SEO diagnostic service. Your account can inspect up to {pageCapFromRecord(access?.record)} pages in a scan, so a FixList may represent a bounded sample rather than every page on a larger website.
             </p>
             <p>
               Only submit a website that you own or are authorized to assess. FixList is designed to fetch publicly accessible website content needed for the scan; it is not permission to bypass logins, access controls, robots protections, or other restrictions.

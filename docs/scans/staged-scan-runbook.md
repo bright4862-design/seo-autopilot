@@ -60,7 +60,7 @@ Cloud Run and Cloud Tasks request deadlines stay at 480 seconds. Each staged HTT
 
 ## Deploy without enabling customer traffic
 
-1. Deploy and verify the V9 function generation and entity schema through the existing Base44 workflow. Keep V2–V8 available for historical records and in-flight jobs.
+1. Add and verify an isolated V9 candidate publishing path before deploying the V9 function generation and entity schema. The current Base44 publisher is V8-only and requires an accepted release record; do not bypass that production gate to publish a candidate. Keep V2–V8 available for historical records and in-flight jobs, and keep public frontend routing on V8 during candidate acceptance.
 2. Deploy the worker containing staged endpoints, the workspace adapter and stage dispatcher. Preserve private invocation, attempt fences, SSRF/robots policy, signing secrets and existing admission controls.
 3. Deploy the dispatch gateway that recognizes the staged 500 contract. Workspace deletion uses the existing signed gateway control/drain queue; it is not an unauthenticated direct bucket deletion endpoint.
 4. Configure the new bucket and queue variables. Keep `SCAN_PIPELINE_MODE=monolith` until all three runtimes are verified.

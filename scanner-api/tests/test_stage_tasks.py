@@ -55,9 +55,67 @@ def test_unpinned_worker_origins_are_rejected(origin):
 
 
 def test_infrastructure_environment_contract(monkeypatch):
+    monkeypatch.delenv("SCAN_STAGE_TOKEN_AUDIENCE", raising=False)
     monkeypatch.setenv("SCAN_STAGE_TASKS_QUEUE_PATH", "projects/project/locations/europe-west1/queues/stages")
     monkeypatch.setenv("SCAN_STAGE_TARGET_URL", "https://worker.example")
     monkeypatch.setenv("TASKS_INVOKER_SERVICE_ACCOUNT", "invoker@project.iam.gserviceaccount.com")
     configured = configured_dispatcher()
     assert configured.queue_path == "projects/project/locations/europe-west1/queues/stages"
     assert configured.worker_url == "https://worker.example"
+    assert configured.token_audience == "https://worker.example"
+
+
+@pytest.mark.asyncio
+async def test_tagged_candidate_target_uses_canonical_service_token_audience():
+    client = Client()
+    canonical = "https://fixlist-worker-abc123-ew.a.run.app"
+    candidate = "https://canary-00045-abc---fixlist-worker-abc123-ew.a.run.app"
+    dispatcher = StageTaskDispatcher(
+        "projects/project/locations/europe-west1/queues/stages", candidate,
+        "invoker@project.iam.gserviceaccount.com", token_audience=canonical, client=client,
+    )
+    await dispatcher.enqueue({"scan_id": "scan_test", "attempt_count": 1}, "batch", 0)
+    request = client.requests[0]["task"]["http_request"]
+    assert request["url"] == candidate + "/scan-batch"
+    assert request["oidc_token"]["audience"] == canonical
+
+
+@pytest.mark.parametrize("audience", [
+    "https://different-worker-abc123-ew.a.run.app", "https://worker.example",
+    "https://candidate---fixlist-worker-abc123-ew.a.run.app",
+    "http://fixlist-worker-abc123-ew.a.run.app", "https://fixlist-worker-abc123-ew.a.run.app/path",
+    "https://fixlist-worker-abc123-ew.a.run.app?query=value", "https://fixlist-worker-abc123-ew.a.run.app#fragment",
+    "https://user:pass@fixlist-worker-abc123-ew.a.run.app", "https://fixlist-worker-abc123-ew.a.run.app:443",
+])
+def test_tagged_candidate_rejects_unrelated_or_noncanonical_audience(audience):
+    with pytest.raises(RuntimeError):
+        StageTaskDispatcher(
+            "projects/project/locations/europe-west1/queues/stages",
+            "https://candidate---fixlist-worker-abc123-ew.a.run.app",
+            "invoker@project.iam.gserviceaccount.com", token_audience=audience,
+        )
+
+
+def test_tagged_target_requires_explicit_service_audience():
+    with pytest.raises(RuntimeError):
+        StageTaskDispatcher(
+            "projects/project/locations/europe-west1/queues/stages",
+            "https://candidate---fixlist-worker-abc123-ew.a.run.app",
+            "invoker@project.iam.gserviceaccount.com",
+        )
+
+
+def test_explicit_audience_for_custom_worker_must_use_same_origin():
+    StageTaskDispatcher("projects/project/locations/europe-west1/queues/stages", "https://worker.example", "invoker@project.iam.gserviceaccount.com", token_audience="https://worker.example/")
+    with pytest.raises(RuntimeError):
+        StageTaskDispatcher("projects/project/locations/europe-west1/queues/stages", "https://worker.example", "invoker@project.iam.gserviceaccount.com", token_audience="https://other.example")
+
+
+def test_candidate_environment_pins_target_and_canonical_audience(monkeypatch):
+    monkeypatch.setenv("SCAN_STAGE_TASKS_QUEUE_PATH", "projects/project/locations/europe-west1/queues/stages")
+    monkeypatch.setenv("SCAN_STAGE_TARGET_URL", "https://candidate---fixlist-worker-abc123-ew.a.run.app")
+    monkeypatch.setenv("SCAN_STAGE_TOKEN_AUDIENCE", "https://fixlist-worker-abc123-ew.a.run.app")
+    monkeypatch.setenv("TASKS_INVOKER_SERVICE_ACCOUNT", "invoker@project.iam.gserviceaccount.com")
+    configured = configured_dispatcher()
+    assert configured.worker_url == "https://candidate---fixlist-worker-abc123-ew.a.run.app"
+    assert configured.token_audience == "https://fixlist-worker-abc123-ew.a.run.app"

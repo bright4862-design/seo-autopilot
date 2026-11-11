@@ -354,6 +354,7 @@ The existing monolith/V8 contract remains the default. The staged candidate is d
 | `SCAN_TASKS_PROJECT`, `SCAN_TASKS_LOCATION`, `SCAN_STAGE_QUEUE` | Explicit project/location/queue for stage dispatch. |
 | `SCAN_STAGE_TASKS_QUEUE_PATH` | Full stage queue path; `SCAN_STAGE_QUEUE_PATH` is a worker compatibility alias. |
 | `SCAN_STAGE_TARGET_URL` | Pinned worker origin for stage tasks; `SCAN_STAGE_WORKER_URL` is a compatibility alias. |
+| `SCAN_STAGE_TOKEN_AUDIENCE` | Canonical Cloud Run service origin for OIDC. Required when the target is a tagged canary origin; stage tasks keep the canary destination while authenticating to the service. |
 | `VITE_SCAN_FUNCTION_GENERATION` | Frontend defaults to V8; V9 only after its packages and schema are verified. |
 | `VERIFY_STAGED_SCAN_PIPELINE` | Set to `1` to include the private bucket/stage queue verifier in post-deploy checks. |
 

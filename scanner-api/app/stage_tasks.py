@@ -14,6 +14,41 @@ from urllib.parse import urlparse
 STAGE_ROUTES = {"batch": "/scan-batch", "finalize": "/scan-finalize"}
 
 
+def _https_origin(value: str) -> str:
+    try:
+        parsed = urlparse(value)
+    except ValueError as exc:
+        raise RuntimeError("A valid pinned HTTPS origin is required") from exc
+    if (
+        parsed.scheme != "https" or not parsed.hostname
+        or parsed.netloc != parsed.hostname
+        or not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", parsed.hostname)
+        or parsed.path not in {"", "/"} or parsed.query or parsed.fragment
+        or value.rstrip("/") != "https://" + parsed.netloc
+    ):
+        raise RuntimeError("A pinned HTTPS origin without credentials or ports is required")
+    return "https://" + parsed.hostname
+
+
+def _validate_token_audience(worker_url: str, token_audience: str | None) -> str:
+    target_host = urlparse(worker_url).hostname
+    if not token_audience:
+        if target_host.endswith(".run.app") and "---" in target_host:
+            raise RuntimeError("A tagged Cloud Run target requires its canonical service token audience")
+        return worker_url
+    audience = _https_origin(token_audience)
+    if audience == worker_url:
+        if target_host.endswith(".run.app") and "---" in target_host:
+            raise RuntimeError("A tagged Cloud Run origin is not its canonical service token audience")
+        return audience
+    audience_host = urlparse(audience).hostname
+    suffix = "---" + audience_host
+    tag = target_host[:-len(suffix)] if target_host.endswith(suffix) else ""
+    if not audience_host.endswith(".run.app") or not re.fullmatch(r"[a-z][a-z0-9-]{0,62}", tag):
+        raise RuntimeError("The stage target must belong to its token audience's Cloud Run service")
+    return audience
+
+
 def stage_task_id(job: dict[str, Any], stage: str, batch: int) -> str:
     if stage not in STAGE_ROUTES or isinstance(batch, bool) or int(batch) < 0:
         raise ValueError("Invalid scan stage")
@@ -22,12 +57,11 @@ def stage_task_id(job: dict[str, Any], stage: str, batch: int) -> str:
 
 
 class StageTaskDispatcher:
-    def __init__(self, queue_path: str, worker_url: str, invoker: str, *, client: Any = None):
+    def __init__(self, queue_path: str, worker_url: str, invoker: str, *, token_audience: str | None = None, client: Any = None):
         if not re.fullmatch(r"projects/[A-Za-z0-9:._-]+/locations/[a-z0-9-]+/queues/[A-Za-z0-9_-]+", queue_path):
             raise RuntimeError("A stage queue path is required")
-        parsed = urlparse(worker_url)
-        if parsed.scheme != "https" or not parsed.netloc or parsed.path not in {"", "/"} or parsed.query or parsed.fragment or parsed.username:
-            raise RuntimeError("A pinned HTTPS worker origin is required")
+        worker_url = _https_origin(worker_url)
+        self.token_audience = _validate_token_audience(worker_url, token_audience)
         if not invoker or "@" not in invoker:
             raise RuntimeError("The task invoker service account is required")
         self.queue_path, self.worker_url, self.invoker = queue_path, worker_url.rstrip("/"), invoker
@@ -43,7 +77,7 @@ class StageTaskDispatcher:
                 "url": self.worker_url + STAGE_ROUTES[stage],
                 "headers": {"Content-Type": "application/json"},
                 "body": json.dumps({**job, "batch": int(batch), "limited": bool(limited)}, sort_keys=True).encode(),
-                "oidc_token": {"service_account_email": self.invoker, "audience": self.worker_url},
+                "oidc_token": {"service_account_email": self.invoker, "audience": self.token_audience},
             },
         }
         if not_before is not None:
@@ -67,4 +101,5 @@ def configured_dispatcher() -> StageTaskDispatcher:
         queue_path,
         str(os.getenv("SCAN_STAGE_TARGET_URL") or os.getenv("SCAN_STAGE_WORKER_URL") or ""),
         str(os.getenv("TASKS_INVOKER_SERVICE_ACCOUNT") or ""),
+        token_audience=str(os.getenv("SCAN_STAGE_TOKEN_AUDIENCE") or "") or None,
     )

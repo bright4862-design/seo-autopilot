@@ -61,14 +61,14 @@ def validate_queue(queue, expected_path, concurrency):
     require(not queue.get("httpTarget"), "Queue HTTP overrides must not replace pinned per-task OIDC/targets")
 
 
-def validate_task(task, worker_url, invoker_sa):
+def validate_task(task, worker_url, invoker_sa, token_audience=None):
     request = task.get("httpRequest") or {}
     require(request.get("url") in {f"{worker_url}/scan-batch", f"{worker_url}/scan-finalize"},
             "Stage task target must be a pinned worker stage endpoint")
     require(request.get("httpMethod") == "POST", "Stage task must use POST")
     oidc = request.get("oidcToken") or {}
     require(oidc.get("serviceAccountEmail") == invoker_sa, "Stage task OIDC identity differs from invoker")
-    require(oidc.get("audience") == worker_url, "Stage task OIDC audience must be the worker origin")
+    require(oidc.get("audience") == (token_audience or worker_url), "Stage task OIDC audience must be the canonical service origin")
     require(task.get("dispatchDeadline") == "480s", "Stage task dispatch deadline must remain 480s")
 
 
@@ -98,7 +98,7 @@ def main(argv=None):
     print("PASS: private workspace, lifecycle, queue retry policy and resource-scoped IAM")
     if extra.task:
         validate_task(describe(["tasks", "describe", extra.task, f"--queue={args.queue}", project, location]),
-                      args.worker_url, args.invoker_sa)
+                      args.worker_url, args.invoker_sa, args.token_audience)
         print("PASS: existing stage task target, OIDC identity/audience and 480s dispatch deadline")
     else:
         print("UNVERIFIED: per-task OIDC, target and dispatch deadline (supply --task with an existing task)")

@@ -35,11 +35,12 @@ const scenario=process.env.CANARY_TEST_SCENARIO;
 const track=(name,payload)=>appendFileSync(process.env.CANARY_TEST_TRACE,JSON.stringify({name,payload})+'\\n');
 track('cli_args',process.argv.slice(2));
 const owner='${ownerId}', project='${projectId}', request='${requestId}', url='https://norris.example/';
-const run={id:'scan_123456',owner_user_id:owner,project_id:project,request_id:request,idempotency_key:request,website_url:url,scan_mode:'standard_150',page_cap:150,pipeline_mode:'staged',status:scenario==='timeout'?'crawling':'complete',pages_crawled:150,pages_planned:150,last_committed_batch:2,started_at:'2026-11-11T12:00:00.000Z',completed_at:'2026-11-11T12:01:00.000Z',beta_revision_fingerprint:'${fingerprint}',authority_proof:'a'.repeat(64),authority_seal_version:'standard_review_snapshot_hmac_identity_v1'};
+const run={id:'scan_123456',owner_user_id:owner,project_id:project,request_id:request,idempotency_key:request,website_url:url,scan_mode:'standard_150',page_cap:150,pipeline_mode:'staged',fix_list_id:'fixlist_123456',status:scenario==='timeout'?'crawling':'complete',pages_crawled:150,pages_planned:150,last_committed_batch:2,started_at:'2026-11-11T12:00:00.000Z',completed_at:'2026-11-11T12:01:00.000Z',beta_revision_fingerprint:'${fingerprint}',authority_proof:'a'.repeat(64),authority_seal_version:'standard_review_snapshot_hmac_identity_v1'};
 if(scenario==='missingProgress') delete run.last_committed_batch;
 const projected={...run,advanced_scan_backend:'python_scanner_api',deno_fallback_used:false,ai_review_backend:'python_review_api',python_review_fallback_used:false,worker_peak_memory_bytes:123456789,email:'never-print@example.com',main_text:'private page body'};
 if(scenario==='missingMemory') delete projected.worker_peak_memory_bytes;
 if(scenario==='fingerprintMismatch') projected.beta_revision_fingerprint='b'.repeat(16);
+const customerFixList={id:run.fix_list_id,scan_run_id:run.id,project_id:project,is_authoritative:true};
 const grant={id:'access_123',owner_user_id:owner,user_email:'never-print@example.com',has_full_access:true,access_status:'active',plan_id:'standard150_lifetime',app_id:'6a498732ec779dfaaeab0e53',grant_source:'manual_grant',granted_at:'2026-11-01T00:00:00Z',page_cap:150};
 if(scenario==='legacyGrant') delete grant.page_cap;
 if(scenario==='grant500') grant.page_cap=500;
@@ -49,7 +50,15 @@ const base44={auth:{me:async()=>{track('auth.me');return{id:scenario==='wrongOwn
 BusinessProject:{get:async(id)=>{track('BusinessProject.get',id);return{id,owner_user_id:scenario==='wrongProject'?'other_123':owner,website_url:url};},create:denied,update:denied},
 Access:{filter:async(query)=>{track('Access.filter',query);return scenario==='duplicateGrant'?[grant,{...grant,id:'access_456'}]:[grant];},create:denied,update:denied},
 ScanRun:{get:async(id)=>{track('ScanRun.get',id);return run;},create:denied,update:denied}
-},functions:{invoke:async(name,payload)=>{track(name,payload);if(name==='startStandardScanJobV9')return{data:{success:true,accepted:true,scan_id:run.id,scan_mode:'standard_150',page_cap:150,pipeline_mode:scenario==='monolith'?'monolith':'staged'}};if(name==='getCustomerScanResultV9')return{data:{success:true,scan_id:run.id,authority_verified:true,release_contract_current:true,run:projected}};throw new Error('Unexpected function');}}};
+},functions:{invoke:async(name,payload)=>{track(name,payload);if(name==='startStandardScanJobV9')return{data:{success:true,accepted:true,scan_id:run.id,scan_mode:'standard_150',page_cap:150,pipeline_mode:scenario==='monolith'?'monolith':'staged'}};if(name==='getCustomerScanResultV9')return{data:{
+  success:true,scan_id:run.id,authority_verified:true,release_contract_current:true,run:projected,
+  fix_list_id:scenario==='missingCustomerFixList'?'':run.fix_list_id,
+  fixList:scenario==='missingCustomerFixList'?null:
+    scenario==='foreignCustomerFixList'?{...customerFixList,id:'foreign_fixlist_123'}:
+    scenario==='wrongCustomerScanLink'?{...customerFixList,scan_run_id:'foreign_scan_123'}:
+    customerFixList,
+  fixItems:[],
+}};throw new Error('Unexpected function');}}};
 const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
 await new AsyncFunction('base44',readFileSync(0,'utf8'))(base44);
 `);
@@ -132,6 +141,7 @@ test('one stable request produces a filtered verified staged-150 acceptance repo
   assert.equal(result.report.production_freeze,false);
   assert.equal(result.report.deployed_git_source_sha.state,'unverified');
   assert.equal(result.report.release_fingerprint,fingerprint);
+  assert.ok(!result.report.unverified.includes('customer_fix_list_readback'));
   assert.doesNotMatch(JSON.stringify(result.report),/never-print|private page body|authority_proof/);
   assert.doesNotMatch(result.stdout,/never-print|private page body/);
 });
@@ -148,6 +158,16 @@ for (const [scenario, missing] of [['missingProgress','batch_progress'],['missin
     assert.equal(result.status,1);
     assert.equal(result.report.acceptance_verified,false);
     assert.ok(result.report.unverified.includes(missing));
+    assert.equal(result.calls.filter(row=>row.name==='startStandardScanJobV9').length,1);
+  });
+}
+
+for (const scenario of ['missingCustomerFixList','foreignCustomerFixList','wrongCustomerScanLink']) {
+  test(`staged canary refuses ${scenario} despite an asserted reader authority flag`, t => {
+    const result=fixture(t).run(scenario);
+    assert.equal(result.status,1);
+    assert.equal(result.report.acceptance_verified,false);
+    assert.ok(result.report.unverified.includes('customer_fix_list_readback'));
     assert.equal(result.calls.filter(row=>row.name==='startStandardScanJobV9').length,1);
   });
 }

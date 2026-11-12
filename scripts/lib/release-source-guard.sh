@@ -7,13 +7,10 @@ fixlist_require_exact_main() {
   local expected_sha="${2:-}"
   local confirm="${3:-}"
 
-  local head remote event_sha
+  local head remote event_sha remote_row
   head="$(git -C "$repo_root" rev-parse HEAD)"
-  # A shallow actions/checkout of an exact SHA does not always materialize
-  # refs/remotes/origin/main. In GitHub Actions the immutable push identity is
-  # GITHUB_REF + GITHUB_SHA, so use that pair when the tracking ref is absent.
-  # This is fail-closed: only an exact main push whose event SHA equals HEAD is
-  # accepted. Local/manual release runs still refresh origin/main from GitHub.
+  # An Actions event SHA identifies its dispatched commit, not the current tip.
+  # A cached (or absent) origin/main in actions/checkout cannot prove freshness.
   if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
     if [[ "${GITHUB_REF:-}" != "refs/heads/main" ]]; then
       echo "Refusing: GitHub Actions release is not running from refs/heads/main." >&2
@@ -24,18 +21,18 @@ fixlist_require_exact_main() {
       echo "Refusing: GitHub event SHA does not equal the checked-out HEAD." >&2
       return 2
     fi
-    if git -C "$repo_root" rev-parse --verify refs/remotes/origin/main >/dev/null 2>&1; then
-      remote="$(git -C "$repo_root" rev-parse refs/remotes/origin/main)"
-      if [[ "$remote" != "$event_sha" ]]; then
-        echo "Refusing: fetched origin/main does not equal the GitHub event SHA." >&2
-        return 2
-      fi
-    else
-      remote="$event_sha"
-    fi
-  else
-    git -C "$repo_root" fetch origin main --quiet
-    remote="$(git -C "$repo_root" rev-parse origin/main)"
+  fi
+
+  # Read authoritative origin/main, not its locally cached tracking ref.
+  # This is a read-only remote request; network errors and missing refs refuse.
+  if ! remote_row="$(GIT_TERMINAL_PROMPT=0 git -C "$repo_root" ls-remote --exit-code origin refs/heads/main)"; then
+    echo "Refusing: cannot verify the current origin/main tip." >&2
+    return 2
+  fi
+  remote="${remote_row%%$'\t'*}"
+  if [[ ! "$remote" =~ ^[0-9a-f]{40}$ || "$remote_row" != "${remote}"$'\t'"refs/heads/main" ]]; then
+    echo "Refusing: origin/main did not return one exact branch SHA." >&2
+    return 2
   fi
 
   if ! printf '%s' "$head" | grep -Eq '^[0-9a-f]{40}$'; then

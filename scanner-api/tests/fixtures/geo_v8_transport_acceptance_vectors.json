@@ -1,0 +1,46 @@
+{
+  "version": "geo_v8_transport_acceptance_vectors_v1",
+  "canonicalization": "utf8_json_sort_keys_compact_ensure_ascii_false",
+  "vectors": [
+    {
+      "name": "assessed_full_pass",
+      "scenario": "full_pass",
+      "candidate_digest": "1a7b290e900bccdd13b0d6c286cf02423b043806e1a509188280b8f4678f2966",
+      "serialized_sha256": "cb8a062d7e51b9fa254e2c58e995723fae03dd63fa50e8f9bb9a1be84e9189fe",
+      "serialized_length": 3012,
+      "assessment_status": "assessed",
+      "score": 100,
+      "coverage": 1.0
+    },
+    {
+      "name": "all_unknown_insufficient_evidence",
+      "scenario": "all_unknown",
+      "candidate_digest": "29dfcc61657e1ee33df3db54dbf048471e9059e6917babd5349fc0ab83274ffa",
+      "serialized_sha256": "f8a124c1c947560e47113892675a2cb510e685bf80a3aced833f1f0978bd1288",
+      "serialized_length": 4407,
+      "assessment_status": "insufficient_evidence",
+      "score": null,
+      "coverage": 0.0
+    },
+    {
+      "name": "marketplace_support_not_applicable",
+      "scenario": "marketplace_support_not_applicable",
+      "candidate_digest": "fd451556f444083bb64351b4df9d3b588ca75ca9b4366721bcb3f3b1b9b0fc60",
+      "serialized_sha256": "600c3271974bd1196d76f680ae216cce891b9fc7db74372402687e4bb346a079",
+      "serialized_length": 3095,
+      "assessment_status": "insufficient_evidence",
+      "score": null,
+      "coverage": 0.75
+    },
+    {
+      "name": "access_limited",
+      "scenario": "access_limited",
+      "candidate_digest": "3da0d7c34f09efcc65ac1219ed7a693afd5c261b8d1e07bd6c897c7699be6d9a",
+      "serialized_sha256": "c60fd9a1b8775fe32452fe1874115ea739daaab102de9cea58e850cda35b399e",
+      "serialized_length": 1524,
+      "assessment_status": "access_limited",
+      "score": null,
+      "coverage": 0.0
+    }
+  ]
+}

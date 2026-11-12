@@ -1,0 +1,96 @@
+{
+  "version": "geo_v8_retained_source_acceptance_vectors_v1",
+  "vectors": [
+    {
+      "name": "named_robots_and_valid_llms",
+      "page_ids": [
+        "p_d4cd20a9501f784faf20b4f2"
+      ],
+      "robots_pages": [
+        {
+          "page_id": "https://example.com/product/1",
+          "robots_txt_rules_known": true,
+          "robots_txt_status": "available",
+          "robots_txt_status_code": 200,
+          "robots_txt_oai_searchbot_allowed": true,
+          "robots_txt_gptbot_allowed": false,
+          "robots_txt_googlebot_allowed": true
+        }
+      ],
+      "llms_txt_observation": {
+        "url": "https://example.com/llms.txt",
+        "status_code": 200,
+        "content_type": "text/plain",
+        "body": "# Example\n\n> Structural guide\n\n## Docs\n- [Guide](/guide)\n"
+      },
+      "expected": {
+        "named_robots": {
+          "oai_searchbot": {
+            "state": "observed",
+            "directive": "allow"
+          },
+          "gptbot": {
+            "state": "observed",
+            "directive": "disallow"
+          },
+          "googlebot": {
+            "state": "observed",
+            "directive": "allow"
+          }
+        },
+        "llms_txt": {
+          "presence": "present",
+          "format_status": "valid",
+          "title": "Example",
+          "has_summary": true,
+          "section_count": 1,
+          "linked_resource_count": 1
+        }
+      }
+    },
+    {
+      "name": "robots_unknown_and_llms_absent",
+      "page_ids": [
+        "p_d4cd20a9501f784faf20b4f2"
+      ],
+      "robots_pages": [
+        {
+          "page_id": "https://example.com/product/1",
+          "robots_txt_rules_known": false,
+          "robots_txt_status": "unavailable",
+          "robots_txt_status_code": 503
+        }
+      ],
+      "llms_txt_observation": {
+        "url": "https://example.com/llms.txt",
+        "status_code": 404,
+        "content_type": "text/plain",
+        "body": ""
+      },
+      "expected": {
+        "named_robots": {
+          "oai_searchbot": {
+            "state": "not_verified",
+            "directive": null
+          },
+          "gptbot": {
+            "state": "not_verified",
+            "directive": null
+          },
+          "googlebot": {
+            "state": "not_verified",
+            "directive": null
+          }
+        },
+        "llms_txt": {
+          "presence": "absent",
+          "format_status": "not_applicable",
+          "title": "",
+          "has_summary": false,
+          "section_count": 0,
+          "linked_resource_count": 0
+        }
+      }
+    }
+  ]
+}

@@ -45,17 +45,43 @@ def canonical_origin(service: dict) -> str:
     return url
 
 
+def traffic_percent(entry: dict) -> int:
+    """Exact JSON integer 0-100; an omitted field is the protobuf default 0.
+
+    int(x or 0) would read 0.9, False, "0", null and -0.9 as zero traffic,
+    which is the one value the 0%-traffic gate must not be fooled about.
+    """
+    percent = entry.get("percent", 0)
+    require(type(percent) is int and 0 <= percent <= 100, "Ambiguous traffic percentage in service status")
+    return percent
+
+
+def traffic_entries(service: dict) -> list[dict]:
+    traffic = (service.get("status") or {}).get("traffic")
+    require(isinstance(traffic, list) and all(isinstance(e, dict) for e in traffic),
+            "Service status has no traffic list")
+    # Validate every entry before any is filtered out, so a malformed serving
+    # percentage cannot disappear with the untagged 0% entries.
+    for entry in traffic:
+        traffic_percent(entry)
+    return traffic
+
+
+def serving_revision(service: dict) -> str:
+    serving = [e for e in traffic_entries(service) if traffic_percent(e) == 100]
+    require(len(serving) == 1 and bool(serving[0].get("revisionName")),
+            "Service has no single 100%-serving revision")
+    return str(serving[0]["revisionName"])
+
+
 def addressable_revisions(service: dict) -> dict[str, dict]:
     """Every revision that can receive a request: serving traffic or tagged."""
     out: dict[str, dict] = {}
-    for entry in (service.get("status") or {}).get("traffic") or []:
+    for entry in traffic_entries(service):
         name = str(entry.get("revisionName") or "")
         if not name:
             continue
-        try:
-            percent = int(entry.get("percent") or 0)
-        except (TypeError, ValueError) as exc:
-            raise GuardError("Ambiguous traffic percentage in service status") from exc
+        percent = traffic_percent(entry)
         if percent > 0 or entry.get("tag"):
             slot = out.setdefault(name, {"percent": 0, "tags": {}})
             slot["percent"] += percent
@@ -162,6 +188,8 @@ def main(argv: list[str]) -> int:
     command, *rest = argv
     if command == "origin":
         print(canonical_origin(_load(rest[0])))
+    elif command == "serving":
+        print(serving_revision(_load(rest[0])))
     elif command == "addressable":
         print("\n".join(sorted(addressable_revisions(_load(rest[0])))))
     elif command == "intake-disabled":

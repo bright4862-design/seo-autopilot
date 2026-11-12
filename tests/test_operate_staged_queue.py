@@ -112,6 +112,31 @@ def test_activation_refuses_traffic_wrong_tag_wrong_sa_and_other_admitters():
         guard.check_activation_candidate(service(), revisions(), "latest")
 
 
+@pytest.mark.parametrize("percent", [0.9, False, "0", None, -0.9, 101, -1, 0.0])
+def test_ambiguous_traffic_percentages_are_refused(percent):
+    for target in (CANDIDATE, SERVING):
+        svc = service()
+        entry = next(e for e in svc["status"]["traffic"] if e["revisionName"] == target)
+        entry["percent"] = percent
+        with pytest.raises(guard.GuardError, match="Ambiguous traffic percentage"):
+            guard.check_activation_candidate(svc, revisions(), CANDIDATE)
+        with pytest.raises(guard.GuardError, match="Ambiguous traffic percentage"):
+            guard.check_intake_disabled(svc, revisions(), {})
+
+
+def test_omitted_percent_is_the_protobuf_zero_and_untagged_zero_is_still_validated():
+    svc = service()
+    del next(e for e in svc["status"]["traffic"] if e["revisionName"] == CANDIDATE)["percent"]
+    assert guard.check_activation_candidate(svc, revisions(), CANDIDATE)["target"] == TARGET
+    svc = service()
+    svc["status"]["traffic"].append({"revisionName": "fixlist-standard150-worker-00001-old", "percent": "0"})
+    with pytest.raises(guard.GuardError, match="Ambiguous traffic percentage"):
+        guard.addressable_revisions(svc)
+    assert guard.serving_revision(service()) == SERVING
+    with pytest.raises(guard.GuardError, match="Ambiguous"):
+        guard.serving_revision({"status": {"traffic": [{"revisionName": "gw", "percent": 100.0}]}})
+
+
 def test_intake_disabled_checks_every_addressable_revision_and_gateway():
     off = candidate_env(SCAN_PIPELINE_MODE="monolith")
     assert guard.check_intake_disabled(service(), revisions(off), {}) == sorted([CANDIDATE, SERVING])
@@ -141,7 +166,12 @@ def out(value):
 def save():
     json.dump(state, open(state_path, "w"))
 if args[:3] == ["run", "services", "describe"]:
-    out(state["services"][args[3]])
+    svc = state["services"][args[3]]
+    if "FAKE_CANDIDATE_PERCENT" in os.environ:
+        for entry in svc["status"]["traffic"]:
+            if entry.get("tag"):
+                entry["percent"] = json.loads(os.environ["FAKE_CANDIDATE_PERCENT"])
+    out(svc)
 elif args[:3] == ["run", "revisions", "describe"]:
     out(state["revisions"][args[3]])
 elif args[:3] == ["tasks", "queues", "describe"]:
@@ -264,6 +294,16 @@ def test_activate_refuses_misconfigured_candidate_without_mutation(operator):
     result, calls, final = run("activate", f"ACTIVATE-STAGED-QUEUE:{sha}:fixlist-scan-stages:{CANDIDATE}",
                                STAGED_REVISION=CANDIDATE)
     assert result.returncode != 0 and "Wildcard" in result.stderr
+    assert mutations(calls) == [] and final["queues"]["fixlist-scan-stages"]["state"] == "PAUSED"
+
+
+@pytest.mark.parametrize("percent", [0.9, False, "0", None, -0.9])
+def test_activate_makes_no_mutation_on_ambiguous_candidate_traffic(operator, percent):
+    sha, write_state, run = operator
+    write_state()
+    result, calls, final = run("activate", f"ACTIVATE-STAGED-QUEUE:{sha}:fixlist-scan-stages:{CANDIDATE}",
+                               STAGED_REVISION=CANDIDATE, FAKE_CANDIDATE_PERCENT=json.dumps(percent))
+    assert result.returncode != 0 and "Ambiguous traffic percentage" in result.stderr
     assert mutations(calls) == [] and final["queues"]["fixlist-scan-stages"]["state"] == "PAUSED"
 
 

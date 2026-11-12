@@ -90,9 +90,7 @@ describe_worker() {
 describe_gateway() {
   local serving
   gcloud run services describe "$GATEWAY" --project="$PROJECT" --region="$REGION" --format=json > "$WORK/gateway-service.json"
-  serving="$(python3 -c 'import json,sys
-t=[e for e in json.load(open(sys.argv[1])).get("status",{}).get("traffic",[]) if int(e.get("percent") or 0)==100]
-print(t[0]["revisionName"] if len(t)==1 else "")' "$WORK/gateway-service.json")"
+  serving="$("${GUARD[@]}" serving "$WORK/gateway-service.json")"
   [[ -n "$serving" ]] || refuse "dispatch gateway has no single 100%-serving revision."
   gcloud run revisions describe "$serving" --project="$PROJECT" --region="$REGION" --format=json > "$WORK/gateway-revision.json"
 }

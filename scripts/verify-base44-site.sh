@@ -65,7 +65,7 @@ verify_url() {
     echo "SITE SCAN ROUTE GENERATION MISMATCH: $url$asset expected=V8" >&2
     return 1
   fi
-  printf 'SITE_SCAN_ROUTES_VERIFIED generation=V8 url=%s%s\\n' "$url" "$asset"
+  printf 'SITE_SCAN_ROUTES_VERIFIED generation=V8 url=%s%s\n' "$url" "$asset"
   printf 'SITE_SOURCE_SHA_VERIFIED %s%s\n' "$url" "$asset"
 }
 

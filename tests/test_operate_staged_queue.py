@@ -85,6 +85,8 @@ def test_inactive_candidate_with_no_cohort_can_activate():
     (dict(SCAN_STAGE_TASKS_QUEUE_PATH=QUEUE_PATH.replace("fixlist-scan-stages", "other")), "fixed stage queue"),
     (dict(TASKS_INVOKER_SERVICE_ACCOUNT="x@y.iam.gserviceaccount.com"), "invoker"),
     (dict(SCAN_WORKSPACE_BUCKET=None), "workspace bucket"),
+    (dict(SCAN_WORKSPACE_BUCKET="unverified-workspace-other-tenant"), "fixed workspace bucket"),
+    (dict(SCAN_WORKSPACE_BUCKET=""), "fixed workspace bucket"),
     (dict(FIXLIST_WORKER_SOURCE_SHA="abc"), "SOURCE_SHA"),
     (dict(SCAN_PIPELINE_MODE="hybrid"), "monolith or staged"),
 ])
@@ -349,6 +351,11 @@ def test_fixed_resources_and_exact_source_are_enforced(operator):
     assert result.returncode != 0 and calls == []
     result, calls, _ = run("delete")
     assert result.returncode == 2 and "unsupported operation" in result.stderr
+
+
+def test_shell_verifies_the_same_bucket_activation_requires():
+    text = (ROOT / "scripts/operate-staged-queue.sh").read_text()
+    assert f'BUCKET="{guard.WORKSPACE_BUCKET}"' in text
 
 
 def test_script_never_deletes_or_purges():

@@ -15,6 +15,9 @@ PROJECT = "seo-autopilot-501517"
 REGION = "europe-west1"
 STAGE_QUEUE = "fixlist-scan-stages"
 STAGE_QUEUE_PATH = f"projects/{PROJECT}/locations/{REGION}/queues/{STAGE_QUEUE}"
+# The worker opens the bucket its own environment names; activation must bind
+# that to the one bucket the infrastructure verifier checks.
+WORKSPACE_BUCKET = "fixlist-scan-workspaces-seo-autopilot-501517"
 WORKER_SA = f"fixlist-standard150-worker@{PROJECT}.iam.gserviceaccount.com"
 INVOKER_SA = f"fixlist-standard150-invoker@{PROJECT}.iam.gserviceaccount.com"
 REVISION_RE = re.compile(r"fixlist-standard150-worker-[0-9]{5}-[a-z0-9]{3}\Z")
@@ -121,7 +124,8 @@ def check_activation_candidate(service: dict, revisions: dict[str, dict], staged
     require(env.get("SCAN_STAGE_TOKEN_AUDIENCE", "").rstrip("/") == origin,
             "SCAN_STAGE_TOKEN_AUDIENCE must be the canonical service origin")
     require(env.get("TASKS_INVOKER_SERVICE_ACCOUNT") == INVOKER_SA, "Stage task invoker differs from the fixed invoker")
-    require(bool(env.get("SCAN_WORKSPACE_BUCKET")), "STAGED_REVISION has no workspace bucket; it cannot run stages")
+    require(env.get("SCAN_WORKSPACE_BUCKET") == WORKSPACE_BUCKET,
+            f"STAGED_REVISION must use the fixed workspace bucket {WORKSPACE_BUCKET}")
     mode = env.get("SCAN_PIPELINE_MODE", "monolith").lower()
     require(mode in {"monolith", "staged"}, "SCAN_PIPELINE_MODE must be monolith or staged")
     owners = owners_of(env)

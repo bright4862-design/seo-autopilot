@@ -19,11 +19,12 @@ if ! printf '%s' "$EXPECTED_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
   exit 2
 fi
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
 verify_url() {
   local url="$1"
-  local status html asset bundle
+  local status asset bundle
   # Read the HTTP status instead of letting --fail collapse every answer into
   # curl exit 22. A host that is not serving the app (a retired alias, an
   # unpublished site) is a different failure from a site serving the wrong
@@ -41,9 +42,10 @@ verify_url() {
     echo "This host is not serving the FixList app. That is a stale or unpublished site URL, not a source-SHA mismatch: compare it with the 'Visit your site at:' line printed by 'site deploy'." >&2
     return 3
   fi
-  html="$(<"$TMP/page.html")"
-  asset="$(grep -oE '/assets/index-[A-Za-z0-9_-]+\.js' <<<"$html" | head -1 || true)"
-  if [[ -z "$asset" ]]; then
+  # Follow the sole executable Vite module entry, not a filename appearing
+  # in a comment, modulepreload link, or unrelated/non-executable markup.
+  # Fail closed on missing/ambiguous entry scripts before fetching any bundle.
+  if ! asset="$(python3 "$REPO_ROOT/scripts/lib/find-vite-entry-script.py" "$TMP/page.html")"; then
     echo "SITE BUNDLE NOT FOUND: $url" >&2
     return 1
   fi
@@ -55,6 +57,15 @@ verify_url() {
     echo "SITE SOURCE SHA MISMATCH: $url$asset" >&2
     return 1
   fi
+  # A matching source SHA alone does not prove which Base44 function names
+  # the browser invokes. The executable entry exposes the exact selector
+  # shared by the invocation adapter; V9 must not pass a V8 release check.
+  if ! grep -Fq 'FIXLIST_SELECTED_SCAN_ROUTES_V8_V1' <<<"$bundle" || \
+     grep -Fq 'FIXLIST_SELECTED_SCAN_ROUTES_V9_V1' <<<"$bundle"; then
+    echo "SITE SCAN ROUTE GENERATION MISMATCH: $url$asset expected=V8" >&2
+    return 1
+  fi
+  printf 'SITE_SCAN_ROUTES_VERIFIED generation=V8 url=%s%s\n' "$url" "$asset"
   printf 'SITE_SOURCE_SHA_VERIFIED %s%s\n' "$url" "$asset"
 }
 

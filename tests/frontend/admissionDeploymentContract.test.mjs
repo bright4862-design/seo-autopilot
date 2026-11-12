@@ -9,6 +9,7 @@ const configureBase44 = read("scripts/configure-base44-beta-admission.sh");
 const deployFunctions = read("scripts/deploy-base44-beta-functions.sh");
 const deploySite = read("scripts/deploy-base44-beta-site.sh");
 const verifySite = read("scripts/verify-base44-site.sh");
+const viteEntryParser = read("scripts/lib/find-vite-entry-script.py");
 const mainEntry = read("src/main.jsx");
 const workerCandidate = read("scripts/build-worker-candidate.sh");
 const workerBuild = read("cloudbuild.durable-worker.yaml");
@@ -305,7 +306,9 @@ test("Base44 site publication restores the durable backend after the site deploy
   assert.doesNotMatch(deploySite, /\"\$FIXLIST_BASE44_CLI\" login/);
   assert.match(mainEntry, /import\.meta\.env\.VITE_FIXLIST_SOURCE_SHA/);
   assert.match(mainEntry, /__FIXLIST_SOURCE_SHA__/);
-  assert.match(verifySite, /\/assets\/index-/);
+  assert.match(verifySite, /find-vite-entry-script\.py/);
+  assert.match(viteEntryParser, /\/assets\/index-/);
+  assert.match(viteEntryParser, /HTMLParser/);
   assert.match(verifySite, /grep -Fq "\$EXPECTED_SOURCE_SHA"/);
   for (const required of [
     "startStandardScanJobV8",

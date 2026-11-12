@@ -1,6 +1,7 @@
 import { createClient } from '@base44/sdk';
 import { appParams } from '@/lib/app-params';
 import { resolveScanFunctionRoute } from '@/lib/scanFunctionRouting';
+import { SELECTED_SCAN_FUNCTION_GENERATION } from '@/lib/scanFunctionGeneration';
 
 const { appId, token, appBaseUrl } = appParams;
 
@@ -66,7 +67,7 @@ function decorateFunctionError(error) {
 
 function resolveInvokedFunctionName(functionName) {
   const legacyResolved = functionName === LEGACY_STANDARD_SCAN_FUNCTION ? STANDARD_SCAN_FUNCTION : functionName;
-  return resolveScanFunctionRoute(legacyResolved, import.meta.env?.VITE_SCAN_FUNCTION_GENERATION);
+  return resolveScanFunctionRoute(legacyResolved, SELECTED_SCAN_FUNCTION_GENERATION);
 }
 
 function sanitizeFunctionPayload(functionName, payload) {

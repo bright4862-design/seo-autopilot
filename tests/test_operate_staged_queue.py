@@ -351,6 +351,14 @@ def operator(tmp_path):
                  ("add", "."), ("commit", "-qm", "fixture")):
         subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    # The release guard now checks the live remote tip, not an Actions
+    # event SHA or a fabricated tracking ref. Keep this fixture fully offline.
+    remote = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=repo,
+                   check=True, capture_output=True)
+    subprocess.run(["git", "push", "origin", "HEAD:refs/heads/main"], cwd=repo,
+                   check=True, capture_output=True)
     state_path, log = tmp_path / "state.json", tmp_path / "calls.jsonl"
 
     def write_state(stage_state="PAUSED", candidate=None, serving=None, gateway=None,

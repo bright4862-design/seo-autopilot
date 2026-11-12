@@ -369,8 +369,9 @@ test("exact-source guard supports shallow GitHub main checkouts without weakenin
   assert.match(sourceGuard, /GITHUB_REF:-.*refs\/heads\/main/);
   assert.match(sourceGuard, /GITHUB_SHA/);
   assert.match(sourceGuard, /event_sha.*!=.*head/);
-  assert.match(sourceGuard, /refs\/remotes\/origin\/main/);
-  assert.match(sourceGuard, /remote="\$event_sha"/);
+  assert.match(sourceGuard, /ls-remote --exit-code origin refs\/heads\/main/);
+  assert.match(sourceGuard, /cannot verify the current origin\/main tip/);
+  assert.doesNotMatch(sourceGuard, /remote="\$event_sha"/);
   assert.match(sourceGuard, /CONFIRM must equal exact SOURCE_SHA/);
 });
 

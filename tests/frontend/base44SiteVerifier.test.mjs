@@ -227,7 +227,6 @@ test("modulepreload and classic-script decoys cannot substitute for the Vite mod
   const decoy = "/assets/index-decoy123.js";
   for (const decoyTag of [
     '<link rel="modulepreload" href="' + decoy + '">',
-    '<script src="' + decoy + '"></script>',
     '<template><script type="module" src="' + decoy + '"></script></template>',
   ]) {
     const html = '<!doctype html><head>' + decoyTag +
@@ -243,6 +242,63 @@ test("modulepreload and classic-script decoys cannot substitute for the Vite mod
     assert.ok(result.requests.some((url) => new URL(url).pathname === ASSET));
     assert.ok(!result.requests.some((url) => new URL(url).pathname === decoy));
   }
+});
+
+test("unattested scripts fail before any bundle fetch even with a correct SHA and V8 marker", (t) => {
+  for (const stray of [
+    '<script src="/assets/foreign.js"></script>',
+    '<script src="/assets/foreign.js" defer type="text/javascript"></script>',
+    '<script type="application/javascript">window.unverified=true</script>',
+    '<script>window.unverified=true</script>',
+    '<script type="importmap">{"imports":{"x":"/assets/foreign.js"}}</script>',
+  ]) {
+    for (const before of [true, false]) {
+      const html = '<!doctype html><head>' +
+        (before ? stray : '') + '<script type="module" src="' + ASSET + '"></script>' +
+        (before ? '' : stray) + '</head>';
+      const box = sandbox(t, [
+        ["200", PUBLIC + "/", html],
+        ["200", PUBLIC + ASSET, bundle(SHA)],
+        ...servingSite(BASE44),
+      ]);
+      const result = box.run();
+      assert.equal(result.status, 1, stray + ": " + result.stderr);
+      assert.match(result.stderr, /SITE_UNATTESTED_SCRIPT/);
+      assert.ok(!result.requests.some((url) => new URL(url).pathname.startsWith("/assets/")),
+        "unattested code must be rejected before any release-bundle probe");
+    }
+  }
+});
+
+test("one Base44 inline analytics module and non-executable structured data remain compatible", (t) => {
+  const html = '<!doctype html><script type="module" src="' + ASSET + '"></script>' +
+    '<script type="module">trackPageView()</script>' +
+    '<script type="application/ld+json">{"@context":"https://schema.org"}</script>' +
+    '<script type="application/json">{"page":"landing"}</script>' +
+    '<template><script src="/assets/inert.js"></script></template>';
+  const box = sandbox(t, [
+    ["200", PUBLIC + "/", html],
+    ["200", PUBLIC + ASSET, bundle(SHA)],
+    ...servingSite(BASE44),
+  ]);
+  const result = box.run();
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /BASE44_SITE_SOURCE_VERIFIED/);
+});
+
+test("an additional inline module is not silently exempted by Base44 analytics compatibility", (t) => {
+  const html = '<script type="module" src="' + ASSET + '"></script>' +
+    '<script type="module">trackPageView()</script>' +
+    '<script type="module">window.unverified=true</script>';
+  const box = sandbox(t, [
+    ["200", PUBLIC + "/", html],
+    ["200", PUBLIC + ASSET, bundle(SHA)],
+    ...servingSite(BASE44),
+  ]);
+  const result = box.run();
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /SITE_UNATTESTED_SCRIPT/);
+  assert.ok(!result.requests.some((url) => new URL(url).pathname.startsWith("/assets/")));
 });
 
 test("two executable module entries fail closed even when the first has the expected SHA", (t) => {

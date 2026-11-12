@@ -111,6 +111,10 @@ require_exact_main_owner_source() {
       exit 2
     fi
   fi
+  # The event and local tracking ref can both be stale after main advances.
+  # Reuse the live-remote exact-source guard before release mutations.
+  source "$REPO_ROOT/scripts/lib/release-source-guard.sh"
+  fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$SOURCE_SHA"
 }
 
 require_barrier_inputs() {

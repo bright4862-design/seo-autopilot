@@ -38,7 +38,7 @@ case "$1" in
   fetch) printf '%s\\n' "$*" >> "$TEST_FETCHES"; test "$TEST_FETCH_FAIL" = false;;
   ls-remote)
     test "$TEST_FETCH_FAIL" = false || exit 1
-    printf '%s\trefs/heads/main\n' "$TEST_REMOTE";;
+    printf '%s\\trefs/heads/main\\n' "$TEST_REMOTE";;
   status) if [ "$TEST_DIRTY" = true ]; then printf ' M changed.py\\n'; fi;;
   -C) shift 2; exec "$0" "$@";;
   *) exit 92;;

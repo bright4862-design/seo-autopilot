@@ -57,6 +57,15 @@ verify_url() {
     echo "SITE SOURCE SHA MISMATCH: $url$asset" >&2
     return 1
   fi
+  # A matching source SHA alone does not prove which Base44 function names
+  # the browser invokes. The executable entry exposes the exact selector
+  # shared by the invocation adapter; V9 must not pass a V8 release check.
+  if ! grep -Fq 'FIXLIST_SELECTED_SCAN_ROUTES_V8_V1' <<<"$bundle" || \
+     grep -Fq 'FIXLIST_SELECTED_SCAN_ROUTES_V9_V1' <<<"$bundle"; then
+    echo "SITE SCAN ROUTE GENERATION MISMATCH: $url$asset expected=V8" >&2
+    return 1
+  fi
+  printf 'SITE_SCAN_ROUTES_VERIFIED generation=V8 url=%s%s\n' "$url" "$asset"
   printf 'SITE_SOURCE_SHA_VERIFIED %s%s\n' "$url" "$asset"
 }
 

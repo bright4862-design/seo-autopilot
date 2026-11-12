@@ -94,8 +94,9 @@ generation, so a barrier reopened and closed again in between is refused.
 **Recovery needs only closed admissions.** A stranded scan keeps its pinned,
 source-tagged worker revision. That revision may still list the owner in its
 cohort, and `/scan-batch` and `/scan-finalize` drain regardless of the cohort.
-So `recover` checks neither worker intake nor tags. It requires only a closed
-barrier at the confirmed generation, then resumes the queue.
+So `recover` doesn't check worker intake or the current candidate's cohort.
+It requires a closed barrier at the confirmed generation, and it checks every
+pending task against that task's own pinned source tag (below).
 
 **Every recovered task is verified before resume.** `recover` lists the
 complete task inventory and describes every task. It refuses if any of these
@@ -132,10 +133,29 @@ operator identity token for the coordinator, and optionally `CHANGE_TICKET` and
 `CUTOVER_REASON` (defaults are supplied). If the signed snapshot cannot be
 verified, the tool refuses.
 
-**Not wired into the Cloud Operator workflow.** Adding an `operation` choice and
-an environment block is a separate, reviewable workflow change. Until then, an
-operator with queue pause/resume rights runs the tool at the exact `main`
-commit.
+**Cloud Operator workflow.** `fixlist-cloud-operator.yml` exposes the tool as
+four `operation` choices. Each runs at the dispatched exact `main` commit.
+
+| `operation` | Tool operation | Inputs used |
+|---|---|---|
+| `staged-queue-status` | `status` (read only) | `revision` = staged revision for candidate readback |
+| `staged-queue-activate` | `activate` | `revision`, `barrier_generation`, `confirm` |
+| `staged-queue-drain-pause` | `drain-pause` | `barrier_generation`, `confirm` |
+| `staged-queue-recover` | `recover` | `barrier_generation`, `confirm` |
+
+Queue, Cloud Run and task reads, plus the pause and resume calls, run as
+`fixlist-github-operator`. The signed barrier reads need
+`fixlist-admission-operator`, for coordinator metadata and the signing
+secret. The workflow mints that identity as a separate short-lived access
+token, and the tool passes it only to the barrier subprocess, via
+`CLOUDSDK_AUTH_ACCESS_TOKEN_FILE`. It never becomes the active gcloud account.
+`change_ticket` and `reason` are recorded with each barrier read.
+
+The `operate` job times out after 20 minutes, so keep `drain-pause` on its
+default 900-second drain bound. `fixlist-github-operator` needs
+`cloudtasks.queues.pause`/`resume`, plus task list and get rights, on
+`fixlist-scan-stages`. An operator with those rights can also run the tool
+directly at the exact `main` commit:
 
 ```bash
 SOURCE_SHA=$(git rev-parse HEAD) OPERATION=status STAGED_REVISION=fixlist-standard150-worker-NNNNN-xxx \

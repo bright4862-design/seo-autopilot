@@ -265,6 +265,17 @@ recover_command() {
   first="$("${GUARD[@]}" first-task "$WORK/tasks-$STAGE_QUEUE.json")"
   # Queue retry policy, bucket and resource-scoped IAM, still PAUSED.
   verify_infra PAUSED "$target" "$origin" "$first"
+  # An admitted scan may still enqueue while the checks above run, and the
+  # barrier may move. Re-read both last: the queue must still be PAUSED with
+  # exactly the validated task set, and the barrier closed at the same
+  # generation. Any change refuses; re-run recover to validate the new set.
+  # The final list-to-resume gap is not atomic.
+  [[ "$(queue_state "$STAGE_QUEUE")" == PAUSED ]] || refuse "the stage queue left PAUSED during recovery checks."
+  cp "$WORK/tasks-$STAGE_QUEUE.json" "$WORK/validated-tasks.json"
+  task_count "$STAGE_QUEUE" >/dev/null
+  [[ "$("${GUARD[@]}" names "$WORK/validated-tasks.json" | sort)" == "$("${GUARD[@]}" names "$WORK/tasks-$STAGE_QUEUE.json" | sort)" ]] \
+    || refuse "the pending task set changed during recovery checks; re-run recover to validate it."
+  proof="$(barrier_proof closed)" || exit 1
   if [[ "$count" == 0 ]]; then
     echo "STAGED_QUEUE_RECOVER_TASKS verified=0; no pending tasks, per-task identity unverified."
   else

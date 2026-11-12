@@ -116,7 +116,14 @@ because a stranded scan may belong to an earlier verified tag:
   to `/scan-batch` or `/scan-finalize`, the fixed invoker OIDC identity, the
   canonical audience and a 480s deadline.
 
-One bad task refuses the whole recovery, with no mutation. An empty queue stays
+One bad task refuses the whole recovery, with no mutation. A closed barrier
+blocks only new admissions, and already admitted scans may still enqueue. So
+after the slow checks, `recover` re-reads three things: the queue (still
+PAUSED), the complete task list (exactly the validated set) and the barrier
+(closed at the same generation). Any change refuses, and you re-run `recover`
+to validate the new set. Recovery never requires `drain_ready`. The final
+list-to-resume gap is not atomic, so an admitted producer could still add a
+task in it. An empty queue stays
 recoverable, because a committed frontier may not yet have enqueued its next
 task, and the tool reports `verified=0 … per-task identity unverified`.
 

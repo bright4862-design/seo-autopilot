@@ -633,6 +633,38 @@ def test_recover_resumes_a_stranded_scan_on_a_still_cohorted_tagged_worker(opera
     assert [t["id"] for t in final["queues"]["fixlist-scan-stages"]["tasks"]] == ["b1", "f1", "b2"]
 
 
+@pytest.mark.parametrize("during, message", [
+    ("late_task", "task set changed"),
+    ("drained_task", "task set changed"),
+    (dict(barrier=barrier_state(mode="open")), "barrier is open"),
+    (dict(barrier=barrier_state(generation=8)), "generation changed"),
+    (dict(barrier=None), "snapshot could not be read"),
+])
+def test_recover_rereads_tasks_and_barrier_after_the_slow_checks(operator, during, message):
+    sha, write_state, run = operator
+    valid = stage_task("b1", sha)
+    if during == "late_task":
+        # An already-admitted producer enqueues an unvalidated task meanwhile.
+        during = dict(stage_tasks=[valid, stage_task("late", sha, url="https://evil.example.com/scan-batch")])
+    elif during == "drained_task":
+        during = dict(stage_tasks=[])
+    write_state(stage_tasks=[valid], barrier=dict(ready="false", active=1), during_paused_verify=during)
+    result, calls, final = run("recover", RECOVER.format(sha=sha), BARRIER_EXPECTED_GENERATION="7")
+    assert result.returncode != 0 and message in result.stderr, result.stderr
+    assert mutations(calls) == [] and final["queues"]["fixlist-scan-stages"]["state"] == "PAUSED"
+
+
+def test_recover_rereads_barrier_and_inventory_after_verify_before_resume(operator):
+    sha, write_state, run = operator
+    write_state(stage_tasks=[stage_task("b1", sha)], barrier=dict(ready="false", active=1))
+    result, calls, _ = run("recover", RECOVER.format(sha=sha), BARRIER_EXPECTED_GENERATION="7")
+    assert result.returncode == 0, result.stderr
+    verify = next(i for i, c in enumerate(calls) if c[0] == "verify")
+    resume = next(i for i, c in enumerate(calls) if c[1:4] == ["tasks", "queues", "resume"])
+    assert any(verify < i < resume for i, c in enumerate(calls) if c[0] == "barrier")
+    assert any(verify < i < resume for i, c in enumerate(calls) if c[1:3] == ["tasks", "list"])
+
+
 def test_recover_with_no_pending_tasks_stays_possible_and_says_unverified(operator):
     sha, write_state, run = operator
     # An admitted frontier may be committed before its next task is enqueued.

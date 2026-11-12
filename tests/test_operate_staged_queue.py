@@ -168,6 +168,33 @@ def test_configuration_digest_and_drift_are_refused(change, message):
         guard.check_activation_candidate(service(), revisions(candidate_env(**change)), CANDIDATE, SOURCE)
 
 
+@pytest.mark.parametrize("change", [
+    dict(SCAN_STAGED_OWNER_IDS="", SCAN_PIPELINE_OWNER_IDS="owner_canary_01"),
+    dict(SCAN_STAGED_OWNER_IDS="owner_canary_01", SCAN_PIPELINE_OWNER_IDS="owner_other_02"),
+    dict(SCAN_STAGED_OWNER_IDS="owner_canary_01", SCAN_PIPELINE_OWNER_IDS="owner_canary_01"),
+])
+def test_legacy_cohort_alias_is_refused_so_worker_and_base44_cannot_disagree(change):
+    # The worker reads the alias when the primary is empty; Base44 V9 never does.
+    with pytest.raises(guard.GuardError, match="Legacy SCAN_PIPELINE_OWNER_IDS"):
+        guard.check_activation_candidate(service(), revisions(candidate_env(**change)), CANDIDATE, SOURCE)
+
+
+def test_primary_only_cohort_activates_and_an_empty_alias_is_tolerated():
+    for env in (candidate_env(), candidate_env(SCAN_PIPELINE_OWNER_IDS=""),
+                candidate_env(SCAN_PIPELINE_OWNER_IDS="  ")):
+        found = guard.check_activation_candidate(service(), revisions(env), CANDIDATE, SOURCE)
+        assert found["owner_count"] == "1"
+
+
+def test_activate_shell_refuses_a_candidate_carrying_the_legacy_alias(operator):
+    sha, write_state, run = operator
+    write_state(candidate=dict(SCAN_STAGED_OWNER_IDS="", SCAN_PIPELINE_OWNER_IDS="owner_canary_01"))
+    result, calls, final = run("activate", f"ACTIVATE-STAGED-QUEUE:{sha}:fixlist-scan-stages:{CANDIDATE}",
+                               STAGED_REVISION=CANDIDATE)
+    assert result.returncode != 0 and "Legacy SCAN_PIPELINE_OWNER_IDS" in result.stderr
+    assert mutations(calls) == [] and final["queues"]["fixlist-scan-stages"]["state"] == "PAUSED"
+
+
 def barrier_line(mode="closed", generation=7, ready="true", active=0, bound=0, live=0, snapshot="snap-1"):
     return (f"ADMISSION_BARRIER_STATUS mode={mode} generation={generation} drain_ready={ready} "
             f"active={active} bound={bound} expired_diagnostic=0 live_reconciliation={live} snapshot={snapshot}")

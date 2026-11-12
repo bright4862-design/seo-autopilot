@@ -171,6 +171,12 @@ def check_activation_candidate(service: dict, revisions: dict[str, dict], staged
     require(not drift, f"STAGED_REVISION staged configuration drifted from its reviewed build: {','.join(drift)}")
     mode = env.get("SCAN_PIPELINE_MODE", "monolith").lower()
     require(mode in {"monolith", "staged"}, "SCAN_PIPELINE_MODE must be monolith or staged")
+    # The worker falls back to the legacy alias when the primary cohort is
+    # empty; Base44 V9 and the gateway read only SCAN_STAGED_OWNER_IDS. Any
+    # alias value would let the two disagree on who is staged, so a candidate
+    # being activated must not carry one (historical revisions are untouched).
+    require(not env.get("SCAN_PIPELINE_OWNER_IDS", "").strip(),
+            "Legacy SCAN_PIPELINE_OWNER_IDS must be absent or empty; use SCAN_STAGED_OWNER_IDS only")
     owners = owners_of(env)
     require("*" not in owners, "Wildcard staged cohort refused; list exact owner IDs")
     require(len(owners) <= MAX_OWNERS and all(OWNER_RE.fullmatch(o) for o in owners),

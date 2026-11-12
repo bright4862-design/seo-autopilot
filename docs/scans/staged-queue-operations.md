@@ -57,6 +57,10 @@ live:
 - Its audience is the canonical service origin.
 - Its invoker is the fixed invoker, and it has a workspace bucket.
 - Its cohort is empty or lists at most five exact owner IDs, never `*`.
+- It carries no legacy `SCAN_PIPELINE_OWNER_IDS` value. The worker falls back
+  to that alias when the primary cohort is empty, but Base44 V9 and the gateway
+  read only `SCAN_STAGED_OWNER_IDS`, so an alias would let them disagree on who
+  is staged. Historical revisions are not touched.
 - No other addressable revision admits staged scans.
 - `verify_staged_scan_infra.py --expected-queue-state PAUSED` passes.
 

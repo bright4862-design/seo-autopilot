@@ -88,11 +88,11 @@ jobs:
           python -m pip install --upgrade pip pytest pytest-asyncio
           pip install -r scanner-api/requirements.txt
 
-      - name: Run root scanner regression tests
-        run: pytest tests/
-
       - name: Install gateway test dependencies
         run: pip install -r dispatch-gateway/requirements.txt
+
+      - name: Run root scanner regression tests
+        run: pytest tests/
 
       - name: Verify signed comparison gateway
         run: pytest dispatch-gateway/test_gateway.py

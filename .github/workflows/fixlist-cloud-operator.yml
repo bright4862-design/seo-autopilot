@@ -27,6 +27,10 @@ on:
           - build-worker-candidate
           - prepare-staged-scan-infra
           - verify-staged-scan-infra
+          - staged-queue-status
+          - staged-queue-activate
+          - staged-queue-drain-pause
+          - staged-queue-recover
           - promote-worker
           - rollback-worker
           - barrier-status
@@ -212,7 +216,7 @@ jobs:
       # step exists only to produce the token and must not replace the
       # credentials the gcloud steps below authenticate with.
       - name: Mint coordinator operator identity token
-        if: contains(fromJSON('["barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only"]'), inputs.operation)
+        if: contains(fromJSON('["barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only","staged-queue-activate","staged-queue-drain-pause","staged-queue-recover"]'), inputs.operation)
         id: operator-id-token
         uses: google-github-actions/auth@v3
         with:
@@ -398,7 +402,7 @@ jobs:
           OPERATION=verify-worker-runtime-revision bash ./scripts/fixlist-cloud-operator.sh
 
       - name: Run allowlisted worker operation
-        if: inputs.operation != 'deploy-dispatch-gateway' && inputs.operation != 'deploy-admission-coordinator' && inputs.operation != 'build-worker-candidate' && inputs.operation != 'prepare-staged-scan-infra' && inputs.operation != 'verify-staged-scan-infra' && inputs.operation != 'sync-base44-signing-key' && inputs.operation != 'verify-serving-worker-release' && inputs.operation != 'verify-staged-worker-release' && inputs.operation != 'verify-base44-v8-preflight' && inputs.operation != 'apply-scanrun-comparison-evidence' && inputs.operation != 'rollback-scanrun-comparison-evidence'
+        if: inputs.operation != 'deploy-dispatch-gateway' && inputs.operation != 'deploy-admission-coordinator' && inputs.operation != 'build-worker-candidate' && inputs.operation != 'prepare-staged-scan-infra' && inputs.operation != 'verify-staged-scan-infra' && !startsWith(inputs.operation, 'staged-queue-') && inputs.operation != 'sync-base44-signing-key' && inputs.operation != 'verify-serving-worker-release' && inputs.operation != 'verify-staged-worker-release' && inputs.operation != 'verify-base44-v8-preflight' && inputs.operation != 'apply-scanrun-comparison-evidence' && inputs.operation != 'rollback-scanrun-comparison-evidence'
         env:
           OPERATION: ${{ inputs.operation }}
           CONFIRM: ${{ inputs.confirm }}
@@ -440,6 +444,53 @@ jobs:
           SOURCE_SHA: ${{ github.sha }}
           CONFIRM: ${{ inputs.confirm }}
         run: /bin/bash scripts/operate-staged-scan-infra.sh
+
+      # Stage-queue control (scripts/operate-staged-queue.sh). Queue calls run
+      # as the GitHub operator; the signed barrier read needs the admission
+      # operator, so that identity is minted as a separate short-lived access
+      # token used only by the barrier subprocess. The tool enforces exact
+      # main, fixed resources and its own bounded confirmations.
+      - name: Mint admission access token for staged-queue barrier reads
+        if: contains(fromJSON('["staged-queue-activate","staged-queue-drain-pause","staged-queue-recover"]'), inputs.operation)
+        id: staged-barrier-auth
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT }}
+          token_format: access_token
+          create_credentials_file: false
+
+      - name: Operate staged scan queue
+        if: startsWith(inputs.operation, 'staged-queue-')
+        shell: bash
+        env:
+          QUEUE_OPERATION: ${{ inputs.operation }}
+          CONFIRM: ${{ inputs.confirm }}
+          SOURCE_SHA: ${{ github.sha }}
+          STAGED_REVISION: ${{ (inputs.operation == 'staged-queue-activate' || inputs.operation == 'staged-queue-status') && inputs.revision || '' }}
+          BARRIER_EXPECTED_GENERATION: ${{ inputs.barrier_generation }}
+          CHANGE_TICKET: ${{ inputs.change_ticket }}
+          CUTOVER_REASON: ${{ inputs.reason }}
+          FIXLIST_ADMISSION_ACCESS_TOKEN: ${{ steps.staged-barrier-auth.outputs.access_token }}
+          FIXLIST_OPERATOR_ID_TOKEN: ${{ steps.operator-id-token.outputs.id_token }}
+          FIXLIST_OPERATOR_TOKEN_AUDIENCE: ${{ env.ADMISSION_OPERATOR_AUDIENCE }}
+        run: |
+          set -euo pipefail
+          case "$QUEUE_OPERATION" in
+            staged-queue-status) export OPERATION=status ;;
+            staged-queue-activate) export OPERATION=activate ;;
+            staged-queue-drain-pause) export OPERATION=drain-pause ;;
+            staged-queue-recover) export OPERATION=recover ;;
+            *) echo "Unsupported staged queue operation" >&2; exit 2 ;;
+          esac
+          if [[ -n "$FIXLIST_ADMISSION_ACCESS_TOKEN" ]]; then
+            umask 077
+            printf '%s' "$FIXLIST_ADMISSION_ACCESS_TOKEN" > "$RUNNER_TEMP/staged-barrier-token"
+            export STAGED_BARRIER_ACCESS_TOKEN_FILE="$RUNNER_TEMP/staged-barrier-token"
+          fi
+          unset FIXLIST_ADMISSION_ACCESS_TOKEN
+          /bin/bash scripts/operate-staged-queue.sh
 
       - name: Deploy canonical dispatch gateway
         if: inputs.operation == 'deploy-dispatch-gateway'

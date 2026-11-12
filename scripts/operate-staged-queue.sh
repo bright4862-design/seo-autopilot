@@ -40,6 +40,7 @@ ENTRY_QUEUE="fixlist-standard150"
 DRAIN_QUEUE="fixlist-standard150-drain"
 BUCKET="fixlist-scan-workspaces-seo-autopilot-501517"
 WORKER_SA="fixlist-standard150-worker@seo-autopilot-501517.iam.gserviceaccount.com"
+ADMISSION_SA="fixlist-admission-operator@seo-autopilot-501517.iam.gserviceaccount.com"
 INVOKER_SA="fixlist-standard150-invoker@seo-autopilot-501517.iam.gserviceaccount.com"
 
 OPERATION="${OPERATION:-status}"
@@ -129,7 +130,16 @@ barrier_proof() {
   # snapshot; this tool only accepts its single status line. No proof, no pause.
   local mode="$1" ticket="${CHANGE_TICKET:-staged-queue-${OPERATION}}"
   local reason="${CUTOVER_REASON:-Staged queue ${OPERATION} admission proof}"
-  OPERATION=barrier-status CONFIRM="" SOURCE_SHA="$SOURCE_SHA" \
+  local identity=()
+  # In the Cloud Operator workflow the queue calls run as the GitHub operator,
+  # while the barrier read needs the admission operator (coordinator metadata
+  # and signing secret). That identity is passed to this subprocess only, as
+  # a short-lived access token file; it never becomes the active gcloud account.
+  if [[ -n "${STAGED_BARRIER_ACCESS_TOKEN_FILE:-}" ]]; then
+    [[ -s "$STAGED_BARRIER_ACCESS_TOKEN_FILE" ]] || { echo "Refusing: barrier access token file is empty." >&2; return 1; }
+    identity=(CLOUDSDK_AUTH_ACCESS_TOKEN_FILE="$STAGED_BARRIER_ACCESS_TOKEN_FILE" GCP_OPERATOR_SERVICE_ACCOUNT="$ADMISSION_SA")
+  fi
+  env "${identity[@]}" OPERATION=barrier-status CONFIRM="" SOURCE_SHA="$SOURCE_SHA" \
     BARRIER_EXPECTED_GENERATION="$BARRIER_EXPECTED_GENERATION" BARRIER_EXPECTED_PRIOR_MODE=closed \
     CHANGE_TICKET="$ticket" CUTOVER_REASON="$reason" \
     bash "$REPO_ROOT/scripts/fixlist-cloud-operator.sh" > "$WORK/barrier.out" 2> "$WORK/barrier.err" || {

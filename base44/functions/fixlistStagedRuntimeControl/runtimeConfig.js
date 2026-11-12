@@ -78,7 +78,8 @@ export function summarizeStagedRuntime({ readEnv, readSecret, expectedOwnerId })
     intake_gate: intakeGate,
     admission_gate: admissionGate,
     intake_disabled_verified: intakeDisabledVerified,
-    new_owner_intake_disabled: intakeDisabledVerified && !stagedOwnerEnabled,
+    // Intake is controlled independently of staged owner configuration.
+    new_owner_intake_disabled: intakeDisabledVerified,
     v9_runtime_attested: false,
   };
 }

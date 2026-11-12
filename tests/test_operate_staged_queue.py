@@ -12,6 +12,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import textwrap
 
 import pytest
 
@@ -243,6 +244,18 @@ elif args[:3] == ["tasks", "queues", "pause"]:
     save()
 elif args[:3] == ["tasks", "queues", "resume"]:
     state["queues"][args[3]]["state"] = "RUNNING"; save()
+elif args[:2] == ["tasks", "describe"]:
+    queue = [a.split("=", 1)[1] for a in args if a.startswith("--queue=")][0]
+    prefix = f"projects/seo-autopilot-501517/locations/europe-west1/queues/{queue}/tasks/"
+    for t in state["queues"][queue]["tasks"]:
+        task = t if isinstance(t, dict) else {"id": t}
+        if task["id"] == args[2]:
+            if state.get("describe_fails"):
+                sys.exit("ERROR: (gcloud.tasks.describe) PERMISSION_DENIED")
+            out({"name": prefix + task["id"], **{k: v for k, v in task.items() if k != "id"}})
+            break
+    else:
+        sys.exit("NOT_FOUND")
 elif args[:2] == ["tasks", "list"]:
     queue = [a.split("=", 1)[1] for a in args if a.startswith("--queue=")][0]
     tasks = state["queues"][queue]["tasks"]
@@ -252,7 +265,9 @@ elif args[:2] == ["tasks", "list"]:
         if drained <= 1:
             state["queues"][queue]["tasks"] = []
         save()
-    out([{"name": f"projects/seo-autopilot-501517/locations/europe-west1/queues/{queue}/tasks/{t}"} for t in tasks])
+    ids = [t["id"] if isinstance(t, dict) else t for t in tasks]
+    ids += state.get("phantom_listing", {}).get(queue, [])
+    out([{"name": f"projects/seo-autopilot-501517/locations/europe-west1/queues/{queue}/tasks/{t}"} for t in ids])
 else:
     sys.exit(f"unexpected gcloud {args}")
 '''
@@ -263,8 +278,11 @@ def operator(tmp_path):
     repo = tmp_path / "repo"
     (repo / "scripts/lib").mkdir(parents=True)
     for name in ("operate-staged-queue.sh", "staged_queue_guard.py", "staged_candidate_cloudbuild.py",
-                 "lib/release-source-guard.sh"):
+                 "prepare_staged_scan_infra.py", "lib/release-source-guard.sh"):
         shutil.copyfile(ROOT / "scripts" / name, repo / "scripts" / name)
+    # Keep the verifier's real per-task predicate (the guard imports it) and
+    # stub only its gcloud-reading main.
+    real_verifier = (ROOT / "scripts/verify_staged_scan_infra.py").read_text().split("\ndef describe(")[0]
     # Stands in for the operator's signed barrier-status readback.
     (repo / "scripts/fixlist-cloud-operator.sh").write_text(
         "#!/usr/bin/env bash\nset -euo pipefail\nexec python3 - <<'PY'\n"
@@ -278,12 +296,14 @@ def operator(tmp_path):
         "bound={bound} expired_diagnostic=0 live_reconciliation={live} snapshot=snap-{generation}'.format(**b))\n"
         "PY\n")
     (repo / "scripts/verify_staged_scan_infra.py").write_text(
+        real_verifier + "\n\nif __name__ == '__main__':\n" + textwrap.indent(
         "import json,os,sys\n"
         "with open(os.environ['TEST_CALL_LOG'],'a') as f: f.write(json.dumps(['verify',*sys.argv[1:]])+'\\n')\n"
         "state=json.load(open(os.environ['FAKE_STATE']))\n"
         "want=sys.argv[sys.argv.index('--expected-queue-state')+1]\n"
         "fail=os.environ.get('FAKE_VERIFY_FAIL')==want\n"
-        "sys.exit(0 if state['queues']['fixlist-scan-stages']['state']==want and not fail else 'FAIL: state')\n")
+        "sys.exit(0 if state['queues']['fixlist-scan-stages']['state']==want and not fail else 'FAIL: state')\n",
+        "    "))
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "gcloud").write_text(FAKE_GCLOUD)
@@ -297,7 +317,8 @@ def operator(tmp_path):
     state_path, log = tmp_path / "state.json", tmp_path / "calls.jsonl"
 
     def write_state(stage_state="PAUSED", candidate=None, serving=None, gateway=None,
-                    stage_tasks=(), entry_tasks=(), drain_tasks=(), barrier=None, source=None, **extra):
+                    stage_tasks=(), entry_tasks=(), drain_tasks=(), barrier=None, source=None,
+                    earlier_sources=(), **extra):
         gateway_env = gateway or {"SCAN_PIPELINE_MODE": "monolith"}
         source = source or sha
         state = {
@@ -313,6 +334,11 @@ def operator(tmp_path):
                        "fixlist-standard150-drain": {"state": "RUNNING", "tasks": list(drain_tasks)}},
             **extra,
         }
+        for index, earlier in enumerate(earlier_sources):
+            name = f"fixlist-standard150-worker-0009{index}-old"
+            state["services"]["fixlist-standard150-worker"]["status"]["traffic"].append(
+                {"revisionName": name, "percent": 0, "tag": f"staged-{earlier[:12]}", "url": target_for(earlier)})
+            state["revisions"][name] = revision(name, candidate_env(earlier))
         state_path.write_text(json.dumps(state))
 
     def run(operation, confirm="", **env_overrides):
@@ -329,6 +355,20 @@ def operator(tmp_path):
         return result, calls, final
 
     return sha, write_state, run
+
+
+def stage_task(task_id, source, path="/scan-batch", **change):
+    task = {"id": task_id, "dispatchDeadline": "480s", "httpRequest": {
+        "url": target_for(source) + path, "httpMethod": "POST",
+        "oidcToken": {"serviceAccountEmail": guard.INVOKER_SA, "audience": ORIGIN}}}
+    for key, value in change.items():
+        if key == "deadline":
+            task["dispatchDeadline"] = value
+        elif key in ("url", "httpMethod"):
+            task["httpRequest"][key] = value
+        else:
+            task["httpRequest"]["oidcToken"][key] = value
+    return task
 
 
 def barrier_state(mode="closed", generation=7, ready="true", active=0, bound=0, live=0):
@@ -506,13 +546,88 @@ def test_drain_pause_compensates_an_admission_that_races_the_pause(operator, aft
 def test_recover_resumes_a_stranded_scan_on_a_still_cohorted_tagged_worker(operator):
     sha, write_state, run = operator
     # The exact scan recovery exists for: admitted, obligations outstanding,
-    # its tagged worker revision still cohorted, new admissions closed.
-    write_state(stage_tasks=["b1", "f1"], barrier=dict(ready="false", active=1, bound=1))
+    # its tagged worker revision still cohorted, new admissions closed. Its
+    # tasks belong to an EARLIER verified tag, not the current main.
+    tasks = [stage_task("b1", OTHER_SOURCE), stage_task("f1", OTHER_SOURCE, "/scan-finalize"), stage_task("b2", sha)]
+    write_state(stage_tasks=tasks, earlier_sources=[OTHER_SOURCE], barrier=dict(ready="false", active=1, bound=1))
     result, calls, final = run("recover", RECOVER.format(sha=sha), BARRIER_EXPECTED_GENERATION="7")
     assert result.returncode == 0, result.stderr
-    assert "pending_tasks=2 generation=7" in result.stdout and "active=1" in result.stdout
+    assert f"verified=3 tags=staged-{OTHER_SOURCE[:12]}:2,staged-{sha[:12]}:1" in result.stdout
+    assert "pending_tasks=3 generation=7" in result.stdout and "active=1" in result.stdout
     assert [c[3] for c in mutations(calls)] == ["resume"]
-    assert final["queues"]["fixlist-scan-stages"]["tasks"] == ["b1", "f1"]
+    describes = [c for c in calls if c[1:3] == ["tasks", "describe"]]
+    assert sorted(c[3] for c in describes) == ["b1", "b2", "f1"]
+    verify = [c for c in calls if c[0] == "verify"][0]
+    assert verify[verify.index("--expected-queue-state") + 1] == "PAUSED"
+    assert verify[verify.index("--task") + 1] == "b1"
+    assert verify[verify.index("--worker-url") + 1] == target_for(OTHER_SOURCE)
+    assert calls.index(verify) < calls.index(mutations(calls)[0])
+    assert [t["id"] for t in final["queues"]["fixlist-scan-stages"]["tasks"]] == ["b1", "f1", "b2"]
+
+
+def test_recover_with_no_pending_tasks_stays_possible_and_says_unverified(operator):
+    sha, write_state, run = operator
+    # An admitted frontier may be committed before its next task is enqueued.
+    write_state(barrier=dict(ready="false", active=1))
+    result, calls, final = run("recover", RECOVER.format(sha=sha), BARRIER_EXPECTED_GENERATION="7")
+    assert result.returncode == 0, result.stderr
+    assert "verified=0; no pending tasks, per-task identity unverified" in result.stdout
+    assert [c[3] for c in mutations(calls)] == ["resume"]
+
+
+@pytest.mark.parametrize("bad, message", [
+    (dict(url="https://evil.example.com/scan-batch"), "source-tagged revision"),
+    (dict(url=target_for("f" * 40) + "/scan-batch"), "no longer an addressable tag"),
+    (dict(url=target_for(SOURCE) + "/scan-job"), "pinned worker stage endpoint"),
+    (dict(httpMethod="GET"), "POST"),
+    (dict(serviceAccountEmail="other@seo-autopilot-501517.iam.gserviceaccount.com"), "OIDC identity"),
+    (dict(audience=TARGET), "OIDC audience"),
+    (dict(deadline="30s"), "480s"),
+])
+def test_recover_refuses_any_task_with_a_wrong_delivery_identity(operator, bad, message):
+    sha, write_state, run = operator
+    url = bad.pop("url", None)
+    if url is not None:
+        bad["url"] = url.replace(target_for(SOURCE), target_for(sha))
+    # Mixed: one valid task does not excuse an invalid one.
+    write_state(stage_tasks=[stage_task("good", sha), stage_task("bad", sha, **bad)])
+    result, calls, final = run("recover", RECOVER.format(sha=sha), BARRIER_EXPECTED_GENERATION="7")
+    assert result.returncode != 0 and message in result.stderr, result.stderr
+    assert mutations(calls) == [] and final["queues"]["fixlist-scan-stages"]["state"] == "PAUSED"
+
+
+@pytest.mark.parametrize("state", [
+    dict(describe_fails=True),
+    dict(phantom_listing={"fixlist-scan-stages": ["vanished"]}),
+])
+def test_recover_refuses_an_unreadable_or_inconsistent_task_inventory(operator, state):
+    sha, write_state, run = operator
+    write_state(stage_tasks=[stage_task("b1", sha)], **state)
+    result, calls, final = run("recover", RECOVER.format(sha=sha), BARRIER_EXPECTED_GENERATION="7")
+    assert result.returncode != 0
+    assert mutations(calls) == [] and final["queues"]["fixlist-scan-stages"]["state"] == "PAUSED"
+
+
+def test_recover_refuses_a_possibly_truncated_inventory_and_a_retargeted_tag():
+    svc = service()
+    revs = revisions()
+    task = {"name": "projects/seo-autopilot-501517/locations/europe-west1/queues/fixlist-scan-stages/tasks/t",
+            **{k: v for k, v in stage_task("t", SOURCE).items() if k != "id"}}
+    listing = [{"name": task["name"]}]
+    assert guard.check_recoverable_tasks(svc, revs, listing, [task]) == {TAG: 1}
+    big = [{"name": task["name"][:-1] + f"t{i}"} for i in range(guard.TASK_LIST_LIMIT)]
+    with pytest.raises(guard.GuardError, match="truncated"):
+        guard.check_recoverable_tasks(svc, revs, big, [task])
+    with pytest.raises(guard.GuardError, match="complete task inventory"):
+        guard.check_recoverable_tasks(svc, revs, listing, [])
+    # A tag whose revision no longer declares the source the tag names.
+    moved = revisions(candidate_env(OTHER_SOURCE))
+    with pytest.raises(guard.GuardError, match="not built from the source its tag names"):
+        guard.check_recoverable_tasks(svc, moved, listing, [task])
+    with pytest.raises(guard.GuardError, match="unexpected service account"):
+        wrong = revisions()
+        wrong[CANDIDATE] = revision(CANDIDATE, candidate_env(), sa="x@y.iam.gserviceaccount.com")
+        guard.check_recoverable_tasks(svc, wrong, listing, [task])
 
 
 @pytest.mark.parametrize("barrier, message", [

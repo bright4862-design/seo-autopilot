@@ -34,7 +34,7 @@ HMAC-signed snapshot.
 | `status` | none | none (read only) | Reports the stage queue state and the task count in every queue. With `STAGED_REVISION`, also runs a full candidate readback plus `verify_staged_scan_infra.py`, using `--task` when a task exists so per-task OIDC is checked. |
 | `activate` | `ACTIVATE-STAGED-QUEUE:<sha>:fixlist-scan-stages:<revision>` | See the activation checks below. | `resume`, then the verifier again, which must report RUNNING. If that second verification fails, the tool prints `STAGED_QUEUE_PARTIAL_ACTIVATION observed_state=… tasks=…` and exits 3. It does not pause blindly. |
 | `drain-pause` | `DRAIN-PAUSE-STAGED-QUEUE:<sha>:fixlist-scan-stages:<generation>`, with `BARRIER_EXPECTED_GENERATION=<generation>` | Queue is RUNNING. The signed barrier is `closed` at that generation, with `drain_ready=true` and `active`, `bound` and `live_reconciliation` all 0. The stage, entry and drain queues are all empty for N consecutive reads. The barrier is then read again. | `pause`, then the barrier and all three queues are read again. If anything changed, the tool resumes the queue and fails (`STAGED_QUEUE_PAUSE_COMPENSATED`). On success it prints `STAGED_QUEUE_PAUSE_PROOF generation=… snapshot=…`. |
-| `recover` | `RECOVER-STAGED-QUEUE:<sha>:fixlist-scan-stages:<generation>`, with `BARRIER_EXPECTED_GENERATION=<generation>` | Queue is PAUSED. The signed barrier is `closed` at that generation. Outstanding obligations are allowed. | `resume`, so that admitted scans can finish. The tool never pauses during recovery. |
+| `recover` | `RECOVER-STAGED-QUEUE:<sha>:fixlist-scan-stages:<generation>`, with `BARRIER_EXPECTED_GENERATION=<generation>` | Queue is PAUSED. The signed barrier is `closed` at that generation; outstanding obligations are allowed. Every pending task passes the per-task identity check below. The verifier passes with the queue PAUSED. | `resume`, so that admitted scans can finish. The tool never pauses during recovery. |
 
 **Activation checks.** `activate` refuses unless all of the following read back
 live:
@@ -84,6 +84,29 @@ source-tagged worker revision. That revision may still list the owner in its
 cohort, and `/scan-batch` and `/scan-finalize` drain regardless of the cohort.
 So `recover` checks neither worker intake nor tags. It requires only a closed
 barrier at the confirmed generation, then resumes the queue.
+
+**Every recovered task is verified before resume.** `recover` lists the
+complete task inventory and describes every task. It refuses if any of these
+hold:
+
+- the listing reached the 1,000-task limit and may be truncated;
+- a task can't be read, or the described set differs from the listing;
+- any single task fails the checks below.
+
+Each task is checked against its *own* pinned tag, not today's candidate,
+because a stranded scan may belong to an earlier verified tag:
+
+- its URL host is `staged-<source12>---<canonical host>`;
+- that tag is still addressable and resolves to that URL;
+- the tagged revision runs as the worker service account and was built from
+  the source the tag names;
+- the task passes the existing `verify_staged_scan_infra.validate_task`: POST
+  to `/scan-batch` or `/scan-finalize`, the fixed invoker OIDC identity, the
+  canonical audience and a 480s deadline.
+
+One bad task refuses the whole recovery, with no mutation. An empty queue stays
+recoverable, because a committed frontier may not yet have enqueued its next
+task, and the tool reports `verified=0 … per-task identity unverified`.
 
 The barrier read needs the same inputs as the operator's `barrier-status`: an
 operator identity token for the coordinator, and optionally `CHANGE_TICKET` and

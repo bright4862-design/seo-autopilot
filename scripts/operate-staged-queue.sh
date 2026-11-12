@@ -223,13 +223,36 @@ drain_pause_command() {
 }
 
 recover_command() {
-  local count proof
+  local count proof verified target origin first task
   [[ "$(queue_state "$STAGE_QUEUE")" == PAUSED ]] || refuse "recover expects a PAUSED stage queue."
   # Only NEW admissions must be impossible. Outstanding obligations are the
   # scans this exists to save, and their tagged worker revisions keep running
   # with whatever cohort they had: stage endpoints drain regardless of it.
   proof="$(barrier_proof closed)" || exit 1
+  # Before anything is dispatched, every pending task must carry the delivery
+  # identity the worker would accept: its own pinned, still-addressable source
+  # tag, POST to /scan-batch or /scan-finalize, the fixed invoker OIDC identity,
+  # the canonical audience and the 480s deadline. One bad task refuses all.
+  describe_worker
   count="$(task_count "$STAGE_QUEUE")"
+  mkdir -p "$WORK/stage-tasks"
+  while read -r task; do
+    [[ -n "$task" ]] || continue
+    gcloud tasks describe "${task##*/}" --queue="$STAGE_QUEUE" --project="$PROJECT" --location="$REGION" \
+      --format=json > "$WORK/stage-tasks/$(printf '%s' "${task##*/}" | tr -c 'A-Za-z0-9_-' '_').json"
+  done < <("${GUARD[@]}" names "$WORK/tasks-$STAGE_QUEUE.json")
+  verified="$("${GUARD[@]}" recover-tasks "$WORK/service.json" "$WORK/tasks-$STAGE_QUEUE.json" \
+    "$WORK/stage-tasks" "$WORK"/revision-*.json)"
+  origin="$("${GUARD[@]}" origin "$WORK/service.json")"
+  target="$("${GUARD[@]}" first-tag-url "$WORK/service.json" "$WORK/tasks-$STAGE_QUEUE.json" "$WORK/stage-tasks")"
+  first="$("${GUARD[@]}" first-task "$WORK/tasks-$STAGE_QUEUE.json")"
+  # Queue retry policy, bucket and resource-scoped IAM, still PAUSED.
+  verify_infra PAUSED "$target" "$origin" "$first"
+  if [[ "$count" == 0 ]]; then
+    echo "STAGED_QUEUE_RECOVER_TASKS verified=0; no pending tasks, per-task identity unverified."
+  else
+    echo "STAGED_QUEUE_RECOVER_TASKS $verified"
+  fi
   gcloud tasks queues resume "$STAGE_QUEUE" --project="$PROJECT" --location="$REGION" >/dev/null
   [[ "$(queue_state "$STAGE_QUEUE")" == RUNNING ]] || { echo "Stage queue did not report RUNNING." >&2; exit 1; }
   echo "STAGED_QUEUE_RECOVERED queue=$STAGE_QUEUE pending_tasks=$count $proof; run drain-pause once admitted scans are terminal."

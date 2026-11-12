@@ -210,6 +210,57 @@ def check_barrier(output: str, expected_generation: str, require_drained: bool) 
     return f"generation={generation} snapshot={snapshot} active={active} bound={bound} live={live}"
 
 
+TAG_HOST_RE = re.compile(r"staged-([0-9a-f]{12})---([a-z0-9.-]+)\Z")
+TASK_LIST_LIMIT = 1000
+
+
+def check_recoverable_tasks(service: dict, revisions: dict[str, dict], listing: list,
+                            tasks: list[dict]) -> dict[str, int]:
+    """Every pending task must carry a delivery identity the worker would accept.
+
+    Each task is checked against its OWN pinned, still-addressable source tag,
+    not today's candidate: a stranded scan may belong to an earlier verified
+    tag. The predicate is the existing verifier's validate_task.
+    """
+    from verify_staged_scan_infra import VerificationError, validate_task
+
+    names = task_names(listing)
+    require(len(names) < TASK_LIST_LIMIT, "Task inventory may be truncated; refuse to recover blind")
+    described = [str((task or {}).get("name") or "") for task in tasks]
+    require(sorted(described) == sorted(names) and len(set(names)) == len(names),
+            "Task details do not match the complete task inventory")
+    origin = canonical_origin(service)
+    host = urlsplit(origin).hostname
+    by_tag: dict[str, tuple[str, str]] = {}
+    for revision_name, slot in addressable_revisions(service).items():
+        for tag, url in slot["tags"].items():
+            by_tag[tag] = (revision_name, url)
+    counts: dict[str, int] = {}
+    for task in tasks:
+        name = task["name"]
+        url = urlsplit(str(((task.get("httpRequest") or {}).get("url")) or ""))
+        match = TAG_HOST_RE.fullmatch(url.hostname or "")
+        require(url.scheme == "https" and match is not None and match[2] == host,
+                f"Task {name} does not target a source-tagged revision of the worker")
+        tag = f"staged-{match[1]}"
+        require(tag in by_tag, f"Task {name} targets {tag}, which is no longer an addressable tag")
+        revision_name, tag_url = by_tag[tag]
+        require(tag_url == f"https://{url.hostname}", f"Task {name} tag {tag} resolves to another URL")
+        revision = revisions.get(revision_name)
+        require(revision is not None, f"Missing revision readback for {revision_name}")
+        require(((revision.get("spec") or {}).get("serviceAccountName")) == WORKER_SA,
+                f"Tagged revision {revision_name} runs as an unexpected service account")
+        source = revision_env(revision).get("FIXLIST_WORKER_SOURCE_SHA", "")
+        require(bool(SHA_RE.fullmatch(source)) and source.startswith(match[1]),
+                f"Tagged revision {revision_name} was not built from the source its tag names")
+        try:
+            validate_task(task, tag_url, INVOKER_SA, origin)
+        except VerificationError as exc:
+            raise GuardError(f"Task {name}: {exc}") from exc
+        counts[tag] = counts.get(tag, 0) + 1
+    return counts
+
+
 def task_names(listing: list) -> list[str]:
     require(isinstance(listing, list), "Task listing is not a JSON list")
     names = []
@@ -250,6 +301,28 @@ def main(argv: list[str]) -> int:
         require(mode in {"drained", "closed"}, "Barrier mode must be drained or closed")
         with open(output_path, encoding="utf-8") as handle:
             print(check_barrier(handle.read(), expected_generation, mode == "drained"))
+    elif command == "recover-tasks":
+        service, listing, task_dir, *revision_paths = rest
+        revisions = {r.get("metadata", {}).get("name"): r for r in map(_load, revision_paths)}
+        from pathlib import Path
+        tasks = [_load(str(path)) for path in sorted(Path(task_dir).glob("*.json"))]
+        counts = check_recoverable_tasks(_load(service), revisions, _load(listing), tasks)
+        summary = ",".join(f"{tag}:{n}" for tag, n in sorted(counts.items())) or "none"
+        print(f"verified={sum(counts.values())} tags={summary}")
+    elif command == "first-tag-url":
+        # The tag URL of the listing's first task, which status/recover hand to
+        # the infrastructure verifier together with that same task.
+        service, listing, task_dir = rest
+        from pathlib import Path
+        names = task_names(_load(listing))
+        tasks = {t.get("name"): t for t in (_load(str(p)) for p in Path(task_dir).glob("*.json"))}
+        if names:
+            url = str(((tasks[names[0]].get("httpRequest") or {}).get("url")) or "")
+            print(url.rsplit("/", 1)[0])
+        else:
+            print(canonical_origin(_load(service)))
+    elif command == "names":
+        print("\n".join(task_names(_load(rest[0]))))
     elif command == "count":
         print(len(task_names(_load(rest[0]))))
     elif command == "first-task":

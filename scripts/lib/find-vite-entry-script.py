@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Print the sole executable Vite module entry in a served HTML document.
+"""Print the sole external Vite module entry from served HTML.
 
 The release verifier must check the asset actually referenced by the page,
 not a filename in an HTML comment, preload hint, or unrelated script.
@@ -30,7 +30,11 @@ class EntryParser(HTMLParser):
             return
         attr = dict(attrs)
         if (attr.get("type") or "").strip().lower() == "module":
-            self.module_scripts.append(attr.get("src"))
+            # Base44/Vite injects an inline page-view analytics module.
+            # That script is not an external bundle entry to source-attest.
+            # Additional external module entries still fail as ambiguous.
+            if "src" in attr:
+                self.module_scripts.append(attr["src"])
 
     def handle_endtag(self, tag):
         if tag in ("template", "noscript") and self.inert_depth:

@@ -110,11 +110,14 @@ class ValidateDispatchTests(unittest.TestCase):
                "pipeline_mode": "staged", "owner_user_id": "owner500"}
         self.assertFalse(main._valid_scan_mode(job))
         with patch.dict(os.environ, {"SCAN_PIPELINE_MODE": "staged", "SCAN_STAGED_OWNER_IDS": "owner500"}):
-            self.assertTrue(main._valid_scan_mode(job))
-            for override in ({"page_cap": True}, {"page_cap": 501},
-                             {"page_cap": "500"}, {"owner_user_id": "other"},
-                             {"pipeline_mode": "monolith"}):
-                self.assertFalse(main._valid_scan_mode({**job, **override}))
+            self.assertFalse(main._valid_scan_mode(job), "an unrouted cohort cannot admit 500")
+            with patch.object(main, "CANARY_WORKER_ORIGIN", "https://canary-00104-l79---fixlist-standard150-worker-tpucgyfewa-ew.a.run.app"), \
+                    patch.object(main, "CANARY_OWNER_USER_IDS", frozenset({"owner500"})):
+                self.assertTrue(main._valid_scan_mode(job))
+                for override in ({"page_cap": True}, {"page_cap": 501},
+                                 {"page_cap": "500"}, {"owner_user_id": "other"},
+                                 {"pipeline_mode": "monolith"}):
+                    self.assertFalse(main._valid_scan_mode({**job, **override}))
 
     def validate(self, value, *, queue_path=None):
         inferred_queue = main.DRAIN_QUEUE_PATH if "standard150-drain-" in str(value.get("name") or "") else main.QUEUE_PATH

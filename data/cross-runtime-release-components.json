@@ -21,7 +21,7 @@
     "sampling_disclosure_version": "sampling_disclosure_v5_selection_language",
     "scan_history_delete_version": "scan_history_delete_v2_drain_children",
     "scan_history_version": "scan_history_v3_focused_parent_children",
-    "staged_scan_pipeline_version": "staged_scan_pipeline_v1_sequential_workspace_cas"
+    "staged_scan_pipeline_version": "staged_scan_pipeline_v2_owner_shortlist_cached_rss_admission"
   },
   "note": "Canonical cross-runtime release components. Staged execution and the V9 150/500 cap contract are an offline candidate behind owner-cohort activation. Historical authority, preview, and limited-result domains remain readable.",
   "schema_version": "cross_runtime_release_components_v1"

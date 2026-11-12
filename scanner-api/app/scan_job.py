@@ -1129,11 +1129,18 @@ async def complete_authority(
     # Remove it regardless of whether review was supplied or computed here.
     reviewed = dict(reviewed)
     review_process_peak = reviewed.pop("_worker_peak_memory_bytes", None)
-    worker_peak_memory = (
-        measure_worker_peak_memory_bytes()
-        if supplied_review
-        else review_process_peak
-    )
+    worker_peak_memory = review_process_peak
+    if supplied_review:
+        parent_rss = measure_worker_peak_memory_bytes()
+        if type(review_process_peak) is int and review_process_peak > 0:
+            # The cached review sample already includes its concurrent parent
+            # and child. A resumed finalizer may have a higher parent RSS, but
+            # adding two samples from different times would invent a peak.
+            worker_peak_memory = max(review_process_peak, parent_rss or 0)
+        else:
+            # V9 acceptance requires the aggregate review measurement. A
+            # parent-only sample cannot replace missing cached evidence.
+            worker_peak_memory = parent_rss if _function_generation.get() != "V9" else None
     classification_integrity = build_classification_integrity(reviewed)
     if classification_integrity:
         reviewed["classification_integrity"] = classification_integrity

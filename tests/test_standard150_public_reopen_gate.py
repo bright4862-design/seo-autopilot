@@ -30,7 +30,7 @@ def test_public_open_metadata_guard_precedes_cloud_operations():
 
     # Admission-only acceptance and emergency rollback must not gain an
     # accidental frozen-release prerequisite.
-    acceptance = _function(source, "activate_acceptance_only", "case \"$OPERATION\" in")
+    acceptance = source.split("activate_acceptance_only() {", 1)[1].split("\n}\n\ncase", 1)[0]
     assert gate not in acceptance
     rollback = source.split('rollback-worker)', 1)[1].split(";;", 1)[0]
     assert gate not in rollback

@@ -704,6 +704,9 @@ tag_worker_candidate() {
     echo 'Refusing to reassign a reserved canary tag; use the verified canary preflight.' >&2
     exit 2
   fi
+  # Check freshness after harmless tag-name validation, before cloud mutation.
+  # Placing this in the function also protects future direct callers.
+  require_exact_main_owner_source
 
   # Tagging is a mutation of the live service, so it is confirmation-gated on
   # the exact revision name like every other traffic operation here.
@@ -1299,8 +1302,6 @@ case "$OPERATION" in
     ;;
 
   tag-worker-candidate)
-    # Tagging mutates the service even at 0% traffic; verify live main first.
-    require_exact_main_owner_source
     tag_worker_candidate "$TARGET_REVISION"
     ;;
 

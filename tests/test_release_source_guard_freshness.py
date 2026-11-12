@@ -126,8 +126,9 @@ def test_cloud_operator_reuses_live_remote_guard():
 
 def test_zero_traffic_tag_is_a_mutation_with_live_source_check():
     operator = (ROOT / "scripts/fixlist-cloud-operator.sh").read_text()
-    case = operator.split("  tag-worker-candidate)", 1)[1].split("    ;;", 1)[0]
-    assert case.index("require_exact_main_owner_source") < case.index("tag_worker_candidate \"$TARGET_REVISION\"")
+    tag = operator.split("tag_worker_candidate() {", 1)[1].split("\n}\n", 1)[0]
+    assert tag.index("reserved canary") < tag.index("require_exact_main_owner_source")
+    assert tag.index("require_exact_main_owner_source") < tag.index('gcloud run services update-traffic')
 
     workflow = (ROOT / ".github/workflows/fixlist-cloud-operator.yml").read_text()
     # Owner-comment promotion and direct operator dispatch are separate callers.

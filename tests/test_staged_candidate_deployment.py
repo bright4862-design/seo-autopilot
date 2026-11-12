@@ -88,7 +88,14 @@ def candidate(tmp_path):
     for args in (["init", "-b", "main"], ["config", "user.email", "test@example.invalid"], ["config", "user.name", "Fixture"], ["add", "."], ["commit", "-m", "fixture"]):
         subprocess.run(["git", *args], cwd=repo, capture_output=True, check=True)
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
-    subprocess.run(["git", "update-ref", "refs/remotes/origin/main", sha], cwd=repo, check=True)
+    # The release guard now checks the live remote tip, not an Actions
+    # event SHA or a fabricated tracking ref. Keep this fixture fully offline.
+    remote = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=repo,
+                   check=True, capture_output=True)
+    subprocess.run(["git", "push", "origin", "HEAD:refs/heads/main"], cwd=repo,
+                   check=True, capture_output=True)
     binaries = tmp_path / "bin"
     binaries.mkdir()
     executable = binaries / "gcloud"

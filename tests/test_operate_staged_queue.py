@@ -477,6 +477,24 @@ def mutations(calls):
             and c[3] in ("pause", "resume", "delete", "purge", "create", "update")]
 
 
+def test_activate_shell_refuses_secret_backed_serving_mode_without_queue_mutation(operator):
+    sha, write_state, run = operator
+    # Model an addressable old/serving revision whose intake mode is stored
+    # as a secret reference rather than a readable literal.
+    all_revisions = revisions(candidate=candidate_env(sha), source=sha)
+    all_revisions[SERVING]["spec"]["containers"][0]["env"] = [{
+        "name": "SCAN_PIPELINE_MODE",
+        "valueFrom": {"secretKeyRef": {"name": "intake-control-fixture", "key": "latest"}},
+    }]
+    all_revisions["gw-00009-abc"] = revision(
+        "gw-00009-abc", {"SCAN_PIPELINE_MODE": "monolith"}, sa="gw@x")
+    write_state(revisions=all_revisions)
+    result, calls, final = run("activate", ACTIVATE.format(sha=sha), **ACT)
+    assert result.returncode != 0 and "secret-backed" in result.stderr
+    assert mutations(calls) == []
+    assert final["queues"]["fixlist-scan-stages"]["state"] == "PAUSED"
+
+
 def test_activate_requires_exact_confirmation_bound_to_revision(operator):
     sha, write_state, run = operator
     write_state()

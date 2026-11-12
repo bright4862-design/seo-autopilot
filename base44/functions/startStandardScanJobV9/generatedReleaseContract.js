@@ -3,7 +3,7 @@
 // Run that generator after changing either input; CI fails on drift.
 
 export const RELEASE_CONTRACT_SCHEMA_VERSION = "beta_crawler_revision_v1";
-export const RELEASE_FINGERPRINT = "1470ccb6398a7f4f";
+export const RELEASE_FINGERPRINT = "118544dcf77d86cf";
 export const RELEASE_STATUS = "candidate";
 export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "acceptance_evidence_version": "standard150_acceptance_evidence_v2_aggregate_rss_fail_closed",
@@ -64,7 +64,7 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "review_version": "python_review_v2_structural_marketplace",
   "route_boundary_classifier_version": "route_boundary_classifier_v2_wordpress_author_archives",
   "sampling_disclosure_version": "sampling_disclosure_v5_selection_language",
-  "sampling_version": "balanced_sitemap_buckets_v8_importance_section_quotas",
+  "sampling_version": "balanced_sitemap_buckets_v9_feasible_ceiling_hub_reservations",
   "scan_history_delete_version": "scan_history_delete_v2_drain_children",
   "scan_history_version": "scan_history_v3_focused_parent_children",
   "scan_page_cap_contract_version": "server_scan_page_caps_v1_150_500",
@@ -73,7 +73,7 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "search_applicability_version": "search_applicability_v1_evidence_relevance",
   "sitemap_parser_version": "sitemap_parser_v3_exact_origin_lastmod_inventory_cap",
   "sitemap_time_reservation_version": "sitemap_time_reservation_v1_crawl_first",
-  "staged_scan_pipeline_version": "staged_scan_pipeline_v1_sequential_workspace_cas",
+  "staged_scan_pipeline_version": "staged_scan_pipeline_v2_owner_shortlist_cached_rss_admission",
   "title_evidence_version": "title_evidence_v1_contextual_duplicates",
   "trust_discovery_version": "trust_page_discovery_v1",
   "trust_finding_gate_version": "trust_page_finding_gate_v1",

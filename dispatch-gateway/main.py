@@ -114,6 +114,24 @@ def _validate_canary_config(origin: str, owners: frozenset[str]) -> None:
 _validate_canary_config(CANARY_WORKER_ORIGIN, CANARY_OWNER_USER_IDS)
 
 
+def _staged_configuration() -> tuple[str, frozenset[str]]:
+    mode = os.getenv("SCAN_PIPELINE_MODE", "monolith").strip() or "monolith"
+    raw = os.getenv("SCAN_STAGED_OWNER_IDS", "")
+    values = raw.split(",") if raw else []
+    owners = frozenset(values)
+    if mode == "monolith" and not owners:
+        return mode, owners
+    if (mode != "staged" or not 1 <= len(values) <= CANARY_MAX_OWNERS
+            or len(owners) != len(values)
+            or not all(CANARY_OWNER_ID_RE.fullmatch(owner) for owner in owners)
+            or not CANARY_WORKER_ORIGIN or owners != CANARY_OWNER_USER_IDS):
+        raise RuntimeError("staging requires the exact explicitly routed canary owner cohort")
+    return mode, owners
+
+
+_staged_configuration()
+
+
 def route_task(task: dict[str, Any], job: dict[str, Any], is_drain: bool) -> tuple[dict[str, Any], str]:
     """Re-target an already validated task to the canary only for allowlisted owners."""
     owner = str(job.get("owner_user_id") or "").strip()
@@ -210,12 +228,15 @@ def _valid_scan_mode(job: dict[str, Any]) -> bool:
     """
     if job.get("scan_mode") == "standard_150":
         return job.get("page_cap", 150) == 150
-    owners = {owner.strip() for owner in os.getenv("SCAN_STAGED_OWNER_IDS", "").split(",") if owner.strip()}
+    try:
+        mode, owners = _staged_configuration()
+    except RuntimeError:
+        return False
     return (
         job.get("scan_mode") == "standard_500"
         and type(job.get("page_cap")) is int and job["page_cap"] == 500
         and job.get("pipeline_mode") == "staged"
-        and os.getenv("SCAN_PIPELINE_MODE") == "staged"
+        and mode == "staged"
         and str(job.get("owner_user_id") or "") in owners
     )
 
@@ -302,6 +323,8 @@ def validate_dispatch(payload: Any) -> tuple[dict[str, Any] | None, str | None]:
 
 @app.get("/health")
 def health():
+    mode, owners = _staged_configuration()
+    cohort = json.dumps(sorted(owners), separators=(",", ":")).encode("utf-8")
     return jsonify({
         "ok": True,
         "service": "fixlist-dispatch-gateway",
@@ -313,6 +336,9 @@ def health():
         "worker_origin": WORKER_ORIGIN,
         "canary_worker_origin": CANARY_WORKER_ORIGIN or None,
         "canary_owner_count": len(CANARY_OWNER_USER_IDS),
+        "pipeline_mode": mode,
+        "staged_owner_count": len(owners),
+        "staged_owner_cohort_sha256": hashlib.sha256(cohort).hexdigest(),
     })
 
 

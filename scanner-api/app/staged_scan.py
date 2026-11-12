@@ -24,7 +24,7 @@ STAGE_LEASE_SECONDS = 450.0
 STAGE_WORK_SECONDS = 180.0
 SCAN_WALL_SECONDS = 600.0
 BATCH_SIZE = 50
-STAGED_SCAN_PIPELINE_VERSION = "staged_scan_pipeline_v1_sequential_workspace_cas"
+STAGED_SCAN_PIPELINE_VERSION = "staged_scan_pipeline_v2_owner_shortlist_cached_rss_admission"
 
 
 class StageRetry(RuntimeError):

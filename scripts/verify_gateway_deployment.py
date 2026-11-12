@@ -31,6 +31,7 @@ caller until a deadline rather than failed on first mismatch.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -188,6 +189,10 @@ def verify_runtime_health(
     worker_origin: str,
     canary_worker_origin: str | None = None,
     canary_owner_count: int | None = None,
+    pipeline_mode: str | None = None,
+    staged_owner_ids: str = "",
+    staged_owner_cohort_sha256: str | None = None,
+    staged_owner_count: int | None = None,
 ) -> dict[str, str]:
     def require(name: str, actual: Any, expected: Any) -> None:
         if actual != expected:
@@ -208,6 +213,15 @@ def verify_runtime_health(
         require("canary_worker_origin", health.get("canary_worker_origin"), canary_worker_origin or None)
         require("canary_owner_count", health.get("canary_owner_count"),
                 int(canary_owner_count or 0) if canary_worker_origin else 0)
+    if pipeline_mode is not None:
+        selected = sorted(staged_owner_ids.split(",")) if staged_owner_ids else []
+        expected_hash = staged_owner_cohort_sha256 or hashlib.sha256(
+            json.dumps(selected, separators=(",", ":")).encode()
+        ).hexdigest()
+        require("pipeline_mode", health.get("pipeline_mode"), pipeline_mode)
+        require("staged_owner_count", health.get("staged_owner_count"),
+                staged_owner_count if staged_owner_count is not None else len(selected))
+        require("staged_owner_cohort_sha256", health.get("staged_owner_cohort_sha256"), expected_hash)
     require("contract_version", health.get("contract_version"), expected_contract_version)
     require("source_sha", health.get("source_sha"), expected_source_sha)
     # The one field that distinguishes two revisions built from the same commit.
@@ -241,6 +255,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--worker-origin", default="")
     parser.add_argument("--canary-worker-origin", default=None)
     parser.add_argument("--canary-owner-count", type=int, default=None)
+    parser.add_argument("--pipeline-mode", choices=("monolith", "staged"), default=None)
+    parser.add_argument("--staged-owner-ids", default="")
     args = parser.parse_args(argv)
 
     if not args.plan_revision:
@@ -266,6 +282,8 @@ def main(argv: list[str] | None = None) -> int:
                 args.worker_origin,
                 args.canary_worker_origin,
                 args.canary_owner_count,
+                pipeline_mode=args.pipeline_mode,
+                staged_owner_ids=args.staged_owner_ids,
             )
         elif args.created_revision_json:
             proven = verify_created_revision(

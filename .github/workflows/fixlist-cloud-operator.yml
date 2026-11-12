@@ -111,6 +111,18 @@ on:
         options:
           - "off"
           - inactive
+      gateway_staged_config:
+        description: "deploy-dispatch-gateway only: explicitly enable staged validation for the exact canary cohort after a verified zero-owner deployment"
+        required: false
+        default: "off"
+        type: choice
+        options:
+          - "off"
+          - owner-canary
+      gateway_staged_confirm:
+        description: "Staged gateway only: ENABLE-STAGED-GATEWAY:<source-sha>:<sorted-cohort-sha256>"
+        required: false
+        type: string
   issue_comment:
     types: [created]
   push:
@@ -450,6 +462,9 @@ jobs:
           # clears any previous canary route.
           GATEWAY_CANARY_REVISION: ${{ inputs.gateway_canary == 'owner-canary' && inputs.revision || '' }}
           GATEWAY_CANARY_OWNER_USER_IDS: ${{ inputs.gateway_canary == 'owner-canary' && inputs.acceptance_owner_user_ids || '' }}
+          GATEWAY_STAGED_CONFIG: ${{ inputs.gateway_staged_config || 'off' }}
+          GATEWAY_STAGED_OWNER_IDS: ${{ inputs.gateway_staged_config == 'owner-canary' && inputs.acceptance_owner_user_ids || '' }}
+          GATEWAY_STAGED_CONFIRM: ${{ inputs.gateway_staged_confirm }}
           FIXLIST_WORKER_ID_TOKEN: ${{ steps.staged-worker-token.outputs.id_token }}
           FIXLIST_WORKER_TOKEN_AUDIENCE: ${{ steps.staged-worker-url.outputs.url }}
         shell: bash

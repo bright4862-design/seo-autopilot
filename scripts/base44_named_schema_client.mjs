@@ -13,8 +13,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { comparisonEvidenceIsEmpty } from "./base44_authority_schema.mjs";
 
-const ENTITY_NAME = "ScanRun";
 const AUTHORITY_ENTITIES = ["ScanRun", "FixList", "FixItem"];
+const STAGED_ENTITIES = [...AUTHORITY_ENTITIES, "Access"];
+const STAGED_WRITE_ENTITIES = ["ScanRun", "FixItem", "Access"];
 const PINNED_ORIGIN = "https://app.base44.com";
 
 function fail(message) {
@@ -93,7 +94,7 @@ function unwrapSchema(item) {
   return null;
 }
 
-export function inventoryFromList(payload) {
+export function inventoryFromList(payload, entities = AUTHORITY_ENTITIES) {
   const rows = Array.isArray(payload?.schemas)
     ? payload.schemas
     : Array.isArray(payload)
@@ -103,7 +104,10 @@ export function inventoryFromList(payload) {
   const schemas = {};
   for (const row of rows) {
     const unwrapped = unwrapSchema(row);
-    if (unwrapped && AUTHORITY_ENTITIES.includes(unwrapped.name)) schemas[unwrapped.name] = unwrapped.schema;
+    if (unwrapped && entities.includes(unwrapped.name)) {
+      if (schemas[unwrapped.name]) throw new Error(`Duplicate Base44 entity schema: ${unwrapped.name}`);
+      schemas[unwrapped.name] = unwrapped.schema;
+    }
   }
   return schemas;
 }
@@ -134,16 +138,16 @@ function statusFailure(action, status, parsed) {
   fail(`Base44 schema ${action} failed: HTTP ${status} (${code}).`);
 }
 
-async function fetchInventory(destination) {
+async function fetchInventory(destination, entities = AUTHORITY_ENTITIES) {
   const id = appId();
   const listed = await request("GET", `/api/apps/${id}/entity-schemas`);
-  let schemas = listed.status === 200 ? inventoryFromList(listed.parsed) : null;
+  let schemas = listed.status === 200 ? inventoryFromList(listed.parsed, entities) : null;
   if (!schemas) {
     if (listed.status !== 200 && listed.status !== 404 && listed.status !== 405) {
       statusFailure("list", listed.status, listed.parsed);
     }
     schemas = {};
-    for (const name of AUTHORITY_ENTITIES) {
+    for (const name of entities) {
       const one = await request("GET", `/api/apps/${id}/entity-schemas/${name}`);
       if (one.status !== 200) statusFailure(`read ${name}`, one.status, one.parsed);
       const unwrapped = unwrapSchema(one.parsed) || unwrapSchema({ entity_name: name, entity_schema: one.parsed });
@@ -151,11 +155,46 @@ async function fetchInventory(destination) {
       schemas[name] = unwrapped.schema;
     }
   }
-  for (const name of AUTHORITY_ENTITIES) {
+  for (const name of entities) {
     if (!schemas[name]) fail(`Base44 schema inventory is missing ${name}.`);
   }
   fs.writeFileSync(destination, `${JSON.stringify({ schemas })}\n`);
-  process.stdout.write(`SCHEMA_INVENTORY entities=${AUTHORITY_ENTITIES.join(",")}\n`);
+  process.stdout.write(`SCHEMA_INVENTORY entities=${entities.join(",")}\n`);
+}
+
+// Project metadata only. Missing/looping pagination is never proof of no rows.
+async function stagedRows(destination) {
+  const fields = {
+    ScanRun: "id,status,scan_mode,pipeline_mode,page_cap,pages_planned,last_committed_batch,workspace_cleanup_state,workspace_cleanup_completed_at",
+    FixItem: "id,affected_page_count,affected_page_count_is_lower_bound,template_impact_estimates",
+    Access: "id,page_cap",
+  };
+  const rows = {};
+  for (const [name, projection] of Object.entries(fields)) {
+    rows[name] = [];
+    const seen = new Set();
+    let cursor = "", complete = false;
+    for (let page = 0; page < EVIDENCE_PAGE_CAP; page++) {
+      const params = new URLSearchParams({fields: projection, limit: String(EVIDENCE_PAGE_LIMIT), sort: "created_date"});
+      if (cursor) params.set("cursor", cursor);
+      const result = await request("GET", `/api/apps/${appId()}/entities/${name}/v2/list?${params}`);
+      const body = result.parsed;
+      if (result.status !== 200 || !body || !Array.isArray(body.items) || typeof body.has_more !== "boolean"
+          || body.items.some(item => !item || typeof item !== "object" || Array.isArray(item) || typeof item.id !== "string" || !item.id)) {
+        throw new Error(`Staged rollback rows are unverified for ${name}`);
+      }
+      rows[name].push(...body.items);
+      if (!body.has_more) { complete = true; break; }
+      if (typeof body.next_cursor !== "string" || !body.next_cursor || body.next_cursor.length > 8000 || seen.has(body.next_cursor)) {
+        throw new Error(`Staged rollback pagination is unverified for ${name}`);
+      }
+      seen.add(body.next_cursor);
+      cursor = body.next_cursor;
+    }
+    if (!complete) throw new Error(`Staged rollback row bound reached for ${name}`);
+  }
+  fs.writeFileSync(destination, `${JSON.stringify({complete: true, rows})}\n`, {mode: 0o600, flag: "wx"});
+  process.stdout.write("STAGED_ROLLBACK_ROWS complete=true\n");
 }
 
 const EVIDENCE_PAGE_LIMIT = 500;
@@ -225,10 +264,11 @@ async function evidenceRows() {
   unverifiedEvidence("page_cap");
 }
 
-async function putScanRun(schemaFile) {
+async function putScanRun(schemaFile, ENTITY_NAME = "ScanRun") {
+  if (!STAGED_WRITE_ENTITIES.includes(ENTITY_NAME)) fail("Refusing schema update: entity is outside the staged write allowlist.");
   const schema = JSON.parse(fs.readFileSync(schemaFile, "utf8"));
   if (schema?.name !== ENTITY_NAME || !schema.properties || typeof schema.properties !== "object") {
-    fail("Refusing schema update: payload is not the ScanRun entity schema.");
+    fail(`Refusing schema update: payload is not the ${ENTITY_NAME} entity schema.`);
   }
   if (Object.hasOwn(schema, "entityNameToSchema")) {
     fail("Refusing schema update: bulk entity sync payload is prohibited.");
@@ -239,25 +279,32 @@ async function putScanRun(schemaFile) {
     `/api/apps/${id}/entity-schemas/${ENTITY_NAME}`,
     { entity_schema: schema },
   );
-  if (result.status !== 200) statusFailure("update ScanRun", result.status, result.parsed);
-  process.stdout.write("SCHEMA_PUT entity=ScanRun\n");
+  if (result.status !== 200) statusFailure(`update ${ENTITY_NAME}`, result.status, result.parsed);
+  process.stdout.write(`SCHEMA_PUT entity=${ENTITY_NAME}\n`);
 }
 
-const invoked = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+const invoked = process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
 if (invoked) {
   const command = process.argv[2] || "";
   const target = process.argv[3] || "";
   try {
     if (command === "evidence-rows") {
       await evidenceRows();
+    } else if (command === "put-named") {
+      if (!STAGED_WRITE_ENTITIES.includes(target) || !process.argv[4]) fail("Refusing named schema update: exact allowlisted entity and payload file required.");
+      await putScanRun(process.argv[4], target);
     } else if (!target || target.includes("\0")) {
       fail("Refusing schema request: destination is missing.");
     } else if (command === "fetch") {
       await fetchInventory(target);
+    } else if (command === "fetch-staged") {
+      await fetchInventory(target, STAGED_ENTITIES);
+    } else if (command === "staged-rows") {
+      await stagedRows(target);
     } else if (command === "put") {
       await putScanRun(target);
     } else {
-      fail("usage: fetch <inventory.json> | put <scanrun-schema.json> | evidence-rows");
+      fail("usage: fetch|fetch-staged <inventory.json> | put <scanrun-schema.json> | put-named <ScanRun|FixItem|Access> <schema.json> | staged-rows <rows.json> | evidence-rows");
     }
   } catch (error) {
     if (error && typeof error === "object" && error.code === "ERR_INVALID_URL") {

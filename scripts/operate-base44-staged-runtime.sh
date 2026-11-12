@@ -39,6 +39,31 @@ chmod 700 "$TMP"
 fixlist_install_base44_cli "$TMP/pinned-cli"
 fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TMP/whoami" "$APP_ID"
 
+verify_probe_package() {
+  # A runtime response without exact deployed package readback is not source evidence.
+  mkdir -p "$TMP/pulled/base44/functions" "$TMP/pulled/base44/entities"
+  cat > "$TMP/pulled/base44/config.jsonc" <<'JSON'
+{"name":"staged-runtime-operator-readback","functionsDir":"functions","entitiesDir":"entities"}
+JSON
+  if ! (cd "$TMP/pulled" && "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions pull fixlistStagedRuntimeControl) > "$TMP/pull.log" 2>&1; then
+    echo "BASE44_STAGED_OPERATOR_PACKAGE_UNVERIFIED: deployed function pull failed." >&2
+    return 1
+  fi
+  [[ -f "$TMP/pulled/base44/functions/fixlistStagedRuntimeControl/function.jsonc" ]] || return 1
+  node --input-type=module - "$REPO_ROOT" "$TMP/pulled/base44/functions" <<'NODE'
+import path from 'node:path';
+import {pathToFileURL} from 'node:url';
+const [root,remote] = process.argv.slice(2);
+const {buildManifest} = await import(pathToFileURL(path.join(root,'scripts/base44_release_manifest.mjs')));
+const names=['fixlistStagedRuntimeControl'];
+const local=buildManifest(names,path.join(root,'base44/functions'),[]);
+const deployed=buildManifest(names,remote,[]);
+if (local.functions[names[0]].packageDigest !== deployed.functions[names[0]].packageDigest)
+  throw Error('Base44 staged runtime operator bytes differ from source');
+console.log('BASE44_STAGED_OPERATOR_PACKAGE_MATCHED');
+NODE
+}
+
 readback() {
   cat > "$TMP/readback.js" <<'NODE'
 const me = await base44.auth.me();
@@ -73,6 +98,7 @@ NODE
 
 case "$OPERATION" in
   status)
+    verify_probe_package || refuse "deployed operator package mismatch"
     readback || refuse "runtime readback unavailable"
     node - "$TMP/verified.json" <<'NODE'
 const report = require(process.argv[2]);
@@ -84,10 +110,12 @@ NODE
     if ! "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions deploy fixlistStagedRuntimeControl > "$TMP/deploy.log" 2>&1; then
       refuse "probe deployment failed; no success claimed"
     fi
+    verify_probe_package || refuse "probe deployed but package readback failed"
     readback || refuse "probe deployed but runtime readback is unverified"
     echo "BASE44_STAGED_PROBE_DEPLOYED_READBACK_OBSERVED source_sha=$SOURCE_SHA v9_attested=false"
     ;;
   prepare-owner|disable)
+    verify_probe_package || refuse "deployed operator package mismatch"
     # Stop *new* Base44 intake first. Leave admission enabled so committed
     # scans can reconcile/release coordinator claims and finish persistence.
     if ! "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" secrets set "BETA_SCAN_INTAKE_ENABLED=false" > "$TMP/intake.log" 2>&1; then

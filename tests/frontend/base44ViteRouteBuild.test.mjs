@@ -46,9 +46,16 @@ test('actual Vite V8 and V9 entries contain only the selected route marker', { t
     });
 
     // Exercise the SAME HTML entry selector used for public-site acceptance.
-    const asset = run('python3', [
-      'scripts/lib/find-vite-entry-script.py', path.join(output, 'index.html'),
-    ]);
+    let asset;
+    try {
+      asset = run('python3', [
+        'scripts/lib/find-vite-entry-script.py', path.join(output, 'index.html'),
+      ]);
+    } catch (error) {
+      const html = fs.readFileSync(path.join(output, 'index.html'), 'utf8');
+      const scriptTags = [...html.matchAll(/<script\b[^>]*>/gi)].map((match) => match[0]);
+      assert.fail(`${generation}: emitted Vite HTML failed release entry selection; script_tags=${JSON.stringify(scriptTags)}; ${error.message}`);
+    }
     assert.match(asset, /^\/assets\/index-[A-Za-z0-9_-]+\.js$/);
     const bundle = fs.readFileSync(path.join(output, asset.slice(1)), 'utf8');
     assert.ok(bundle.includes(SOURCE_SHA), `${generation}: selected entry lacks source SHA`);

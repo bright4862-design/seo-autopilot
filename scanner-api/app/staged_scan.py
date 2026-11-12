@@ -39,7 +39,11 @@ def staged_pipeline_enabled(job: dict[str, Any]) -> bool:
     if str(os.getenv("SCAN_PIPELINE_MODE") or "monolith").lower() != "staged":
         return False
     owners = {item.strip() for item in str(os.getenv("SCAN_STAGED_OWNER_IDS") or os.getenv("SCAN_PIPELINE_OWNER_IDS") or "").split(",") if item.strip()}
-    return "*" in owners or str(job.get("owner_user_id") or "") in owners
+    # A wildcard is a configuration error, not permission to route every owner.
+    if "*" in owners:
+        return False
+    owner_id = job.get("owner_user_id")
+    return isinstance(owner_id, str) and bool(owner_id) and owner_id in owners
 
 
 @dataclass

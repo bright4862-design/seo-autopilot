@@ -94,7 +94,9 @@ function sandbox(t, routes) {
 }
 
 const page = `<!doctype html><html><head><script type="module" src="${ASSET}"></script></head><body></body></html>`;
-const bundle = (sha) => `(()=>{window.__FIXLIST_SOURCE_SHA__="${sha}";})();`;
+const ROUTE_V8 = 'FIXLIST_SELECTED_SCAN_ROUTES_V8_V1';
+const ROUTE_V9 = 'FIXLIST_SELECTED_SCAN_ROUTES_V9_V1';
+const bundle = (sha, markers = [ROUTE_V8]) => `(()=>{window.__FIXLIST_SOURCE_SHA__="${sha}";window.__FIXLIST_SCAN_ROUTE_MARKER__="${markers.join('|')}";})();`;
 const servingSite = (origin, sha = SHA) => [
   ["200", `${origin}/`, page],
   ["200", `${origin}${ASSET}`, bundle(sha)],
@@ -269,4 +271,40 @@ test("the parser accepts a sole real module entry with reordered attributes", (t
   const result = box.run();
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /BASE44_SITE_SOURCE_VERIFIED/);
+});
+
+test("correct source SHA with selected V9 routes is not V8 release acceptance", (t) => {
+  const box = sandbox(t, [
+    ...servingSite(PUBLIC).map(([status, url, body]) =>
+      url.endsWith(ASSET) ? [status, url, bundle(SHA, [ROUTE_V9])] : [status, url, body]),
+    ...servingSite(BASE44),
+  ]);
+  const result = box.run();
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /SITE SCAN ROUTE GENERATION MISMATCH.*expected=V8/);
+  assert.doesNotMatch(result.stdout, /BASE44_SITE_SOURCE_VERIFIED/);
+});
+
+test("missing or contradictory selected-route markers fail closed", (t) => {
+  for (const markers of [[], [ROUTE_V8, ROUTE_V9]]) {
+    const box = sandbox(t, [
+      ...servingSite(PUBLIC).map(([status, url, body]) =>
+        url.endsWith(ASSET) ? [status, url, bundle(SHA, markers)] : [status, url, body]),
+      ...servingSite(BASE44),
+    ]);
+    const result = box.run();
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /SITE SCAN ROUTE GENERATION MISMATCH/);
+    assert.ok(result.requests.every((url) => new URL(url).host === "getfixlist.com"));
+  }
+});
+
+test("the emitted route marker and SDK invocation share one build selector", () => {
+  const selector = fs.readFileSync("src/lib/scanFunctionGeneration.js", "utf8");
+  const client = fs.readFileSync("src/api/base44Client.js", "utf8");
+  const entry = fs.readFileSync("src/main.jsx", "utf8");
+  assert.match(selector, /VITE_SCAN_FUNCTION_GENERATION/);
+  assert.match(client, /resolveScanFunctionRoute\(legacyResolved, SELECTED_SCAN_FUNCTION_GENERATION\)/);
+  assert.doesNotMatch(client, /import\.meta\.env\?\.VITE_SCAN_FUNCTION_GENERATION/);
+  assert.match(entry, /value: SELECTED_SCAN_ROUTE_MARKER/);
 });

@@ -1259,6 +1259,12 @@ open_claim_barrier() {
   require_exact_main_owner_source
   require_barrier_inputs
   require_confirmation "OPEN-STANDARD150-CLAIMS:${SOURCE_SHA}:${BARRIER_EXPECTED_GENERATION}"
+  # Public reopening is a customer-serving mutation, not a drain-only operation.
+  # Require the existing accepted source/fingerprint/report predicate BEFORE
+  # touching the signed barrier or inspecting cloud resources. This is a
+  # necessary safeguard, not proof of serving worker/Base44 parity or a signed
+  # owner-canary read-back; those release-acceptance gates remain mandatory.
+  python3 "$REPO_ROOT/scripts/assert_standard150_promotion_record.py" --source-sha "$SOURCE_SHA"
   require_closed_drained_barrier
   require_drain_plane_live
   BARRIER_EXPECTED_PRIOR_MODE="closed"

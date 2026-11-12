@@ -69,8 +69,9 @@ done
 case "$OPERATION" in
   status) ;;
   activate)
-    [[ "$CONFIRM" == "ACTIVATE-STAGED-QUEUE:${SOURCE_SHA}:${STAGE_QUEUE}:${STAGED_REVISION}" ]] \
-      || refuse "exact ACTIVATE-STAGED-QUEUE:<source-sha>:${STAGE_QUEUE}:<staged-revision> confirmation required." ;;
+    [[ "$BARRIER_EXPECTED_GENERATION" =~ ^[0-9]+$ ]] || refuse "exact BARRIER_EXPECTED_GENERATION required."
+    [[ "$CONFIRM" == "ACTIVATE-STAGED-QUEUE:${SOURCE_SHA}:${STAGE_QUEUE}:${STAGED_REVISION}:${BARRIER_EXPECTED_GENERATION}" ]] \
+      || refuse "exact ACTIVATE-STAGED-QUEUE:<source-sha>:${STAGE_QUEUE}:<staged-revision>:<barrier-generation> confirmation required." ;;
   drain-pause|recover)
     [[ "$BARRIER_EXPECTED_GENERATION" =~ ^[0-9]+$ ]] || refuse "exact BARRIER_EXPECTED_GENERATION required."
     prefix="DRAIN-PAUSE"; [[ "$OPERATION" == recover ]] && prefix="RECOVER"
@@ -182,17 +183,33 @@ status_command() {
   fi
 }
 
-activate_command() {
-  local found target origin count
+require_paused_and_empty() {
+  local count
   [[ "$(queue_state "$STAGE_QUEUE")" == PAUSED ]] || refuse "activation expects a PAUSED stage queue; use status."
   count="$(task_count "$STAGE_QUEUE")"
-  [[ "$count" == 0 ]] || refuse "the paused queue already holds $count task(s); use recover, not activate."
+  [[ "$count" == 0 ]] || refuse "the paused queue holds $count task(s); use recover, not activate."
+}
+
+activate_command() {
+  local found target origin proof
+  # Activate before admissions open: with claims closed and every admitted
+  # scan terminal, no plan delivery exists that could enqueue a stage task
+  # behind these checks. The proof is re-read just before the resume.
+  barrier_proof drained || exit 1
+  require_paused_and_empty
   describe_worker
   found="$("${GUARD[@]}" activation "$WORK/service.json" "$STAGED_REVISION" "$SOURCE_SHA" "$WORK"/revision-*.json)"
   echo "STAGED_CANDIDATE_CONFIG $found"
   target="$(sed -n 's/.*target=\([^ ]*\).*/\1/p' <<< "$found")"
   origin="$(sed -n 's/.*audience=\([^ ]*\).*/\1/p' <<< "$found")"
   verify_infra PAUSED "$target" "$origin"
+  # The checks above take time. Re-read the queue and the barrier last, so a
+  # task or admission that appeared meanwhile refuses instead of dispatching
+  # uninspected. The read-to-resume gap remains; the closed, drained barrier
+  # is what leaves no producer to fill it.
+  require_paused_and_empty
+  proof="$(barrier_proof drained)" || exit 1
+  echo "STAGED_QUEUE_ACTIVATION_PROOF $proof"
   gcloud tasks queues resume "$STAGE_QUEUE" --project="$PROJECT" --location="$REGION" >/dev/null
   if ! verify_infra RUNNING "$target" "$origin"; then
     # The resume already happened. Report the observed state rather than let

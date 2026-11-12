@@ -189,8 +189,7 @@ def test_primary_only_cohort_activates_and_an_empty_alias_is_tolerated():
 def test_activate_shell_refuses_a_candidate_carrying_the_legacy_alias(operator):
     sha, write_state, run = operator
     write_state(candidate=dict(SCAN_STAGED_OWNER_IDS="", SCAN_PIPELINE_OWNER_IDS="owner_canary_01"))
-    result, calls, final = run("activate", f"ACTIVATE-STAGED-QUEUE:{sha}:fixlist-scan-stages:{CANDIDATE}",
-                               STAGED_REVISION=CANDIDATE)
+    result, calls, final = run("activate", ACTIVATE.format(sha=sha), **ACT)
     assert result.returncode != 0 and "Legacy SCAN_PIPELINE_OWNER_IDS" in result.stderr
     assert mutations(calls) == [] and final["queues"]["fixlist-scan-stages"]["state"] == "PAUSED"
 
@@ -238,6 +237,9 @@ def test_intake_disabled_checks_every_addressable_revision_and_gateway():
 
 
 # --- shell wrapper ------------------------------------------------------------
+
+ACTIVATE = "ACTIVATE-STAGED-QUEUE:{sha}:fixlist-scan-stages:" + CANDIDATE + ":7"
+ACT = {"STAGED_REVISION": CANDIDATE, "BARRIER_EXPECTED_GENERATION": "7"}
 
 FAKE_GCLOUD = r'''#!/usr/bin/env python3
 import json, os, sys
@@ -329,6 +331,13 @@ def operator(tmp_path):
         "state=json.load(open(os.environ['FAKE_STATE']))\n"
         "want=sys.argv[sys.argv.index('--expected-queue-state')+1]\n"
         "fail=os.environ.get('FAKE_VERIFY_FAIL')==want\n"
+        # Lets a test model a producer acting while the slow checks run.
+        "late=state.pop('during_paused_verify',None) if want=='PAUSED' else None\n"
+        "if late:\n"
+        "    for k,v in late.items():\n"
+        "        if k=='stage_tasks': state['queues']['fixlist-scan-stages']['tasks']=v\n"
+        "        else: state[k]=v\n"
+        "    json.dump(state,open(os.environ['FAKE_STATE'],'w'))\n"
         "sys.exit(0 if state['queues']['fixlist-scan-stages']['state']==want and not fail else 'FAIL: state')\n",
         "    "))
     bin_dir = tmp_path / "bin"
@@ -411,17 +420,49 @@ def test_activate_requires_exact_confirmation_bound_to_revision(operator):
     sha, write_state, run = operator
     write_state()
     for confirm in ("", f"ACTIVATE-STAGED-QUEUE:{sha}:fixlist-scan-stages",
-                    f"ACTIVATE-STAGED-QUEUE:{sha}:fixlist-scan-stages:{SERVING}"):
-        result, calls, final = run("activate", confirm, STAGED_REVISION=CANDIDATE)
+                    f"ACTIVATE-STAGED-QUEUE:{sha}:fixlist-scan-stages:{CANDIDATE}",
+                    f"ACTIVATE-STAGED-QUEUE:{sha}:fixlist-scan-stages:{SERVING}:7",
+                    f"ACTIVATE-STAGED-QUEUE:{sha}:fixlist-scan-stages:{CANDIDATE}:8"):
+        result, calls, final = run("activate", confirm, **ACT)
         assert result.returncode == 2 and "confirmation required" in result.stderr
         assert calls == [] and final["queues"]["fixlist-scan-stages"]["state"] == "PAUSED"
+    result, calls, _ = run("activate", ACTIVATE.format(sha=sha), STAGED_REVISION=CANDIDATE)
+    assert result.returncode == 2 and "BARRIER_EXPECTED_GENERATION" in result.stderr and calls == []
+
+
+@pytest.mark.parametrize("during, message", [
+    (dict(stage_tasks=["late-plan-batch"]), "use recover"),
+    (dict(barrier=barrier_state(mode="acceptance_only")), "barrier is acceptance_only"),
+    (dict(barrier=barrier_state(ready="false", active=1)), "not all terminal"),
+])
+def test_activate_rereads_queue_and_barrier_after_the_slow_checks(operator, during, message):
+    sha, write_state, run = operator
+    # A producer acts while the candidate and infrastructure checks run.
+    write_state(during_paused_verify=during)
+    result, calls, final = run("activate", ACTIVATE.format(sha=sha), **ACT)
+    assert result.returncode != 0 and message in result.stderr
+    assert mutations(calls) == [] and final["queues"]["fixlist-scan-stages"]["state"] == "PAUSED"
+
+
+@pytest.mark.parametrize("barrier, message", [
+    (dict(mode="acceptance_only"), "barrier is acceptance_only"),
+    (dict(mode="open"), "barrier is open"),
+    (dict(ready="false", active=1), "not all terminal"),
+    (dict(generation=8), "generation changed"),
+    (False, "snapshot could not be read"),
+])
+def test_activate_requires_closed_drained_admissions_first(operator, barrier, message):
+    sha, write_state, run = operator
+    write_state(barrier=barrier)
+    result, calls, final = run("activate", ACTIVATE.format(sha=sha), **ACT)
+    assert result.returncode != 0 and message in result.stderr
+    assert mutations(calls) == [] and not any(c[0] == "verify" for c in calls)
 
 
 def test_activate_resumes_only_after_full_readback(operator):
     sha, write_state, run = operator
     write_state()
-    result, calls, final = run("activate", f"ACTIVATE-STAGED-QUEUE:{sha}:fixlist-scan-stages:{CANDIDATE}",
-                               STAGED_REVISION=CANDIDATE)
+    result, calls, final = run("activate", ACTIVATE.format(sha=sha), **ACT)
     assert result.returncode == 0, result.stderr
     assert final["queues"]["fixlist-scan-stages"]["state"] == "RUNNING"
     verifies = [c for c in calls if c[0] == "verify"]
@@ -430,6 +471,12 @@ def test_activate_resumes_only_after_full_readback(operator):
     assert verifies[0][verifies[0].index("--token-audience") + 1] == ORIGIN
     resume = [i for i, c in enumerate(calls) if c[1:4] == ["tasks", "queues", "resume"]]
     assert len(resume) == 1 and calls.index(verifies[0]) < resume[0] < calls.index(verifies[1])
+    # Barrier and queue are re-read after the slow checks, right before resume.
+    barriers = [i for i, c in enumerate(calls) if c[0] == "barrier"]
+    lists = [i for i, c in enumerate(calls) if c[1:3] == ["tasks", "list"]]
+    assert len(barriers) == 2 and barriers[0] < calls.index(verifies[0]) < barriers[1] < resume[0]
+    assert any(calls.index(verifies[0]) < i < resume[0] for i in lists)
+    assert "STAGED_QUEUE_ACTIVATION_PROOF generation=7" in result.stdout
     assert [c[3] for c in mutations(calls)] == ["resume"]
     assert "STAGED_QUEUE_ACTIVATED" in result.stdout
 
@@ -437,8 +484,7 @@ def test_activate_resumes_only_after_full_readback(operator):
 def test_activate_refuses_misconfigured_candidate_without_mutation(operator):
     sha, write_state, run = operator
     write_state(candidate=dict(SCAN_STAGED_OWNER_IDS="*"))
-    result, calls, final = run("activate", f"ACTIVATE-STAGED-QUEUE:{sha}:fixlist-scan-stages:{CANDIDATE}",
-                               STAGED_REVISION=CANDIDATE)
+    result, calls, final = run("activate", ACTIVATE.format(sha=sha), **ACT)
     assert result.returncode != 0 and "Wildcard" in result.stderr
     assert mutations(calls) == [] and final["queues"]["fixlist-scan-stages"]["state"] == "PAUSED"
 
@@ -447,8 +493,7 @@ def test_activate_refuses_misconfigured_candidate_without_mutation(operator):
 def test_activate_makes_no_mutation_on_ambiguous_candidate_traffic(operator, percent):
     sha, write_state, run = operator
     write_state()
-    result, calls, final = run("activate", f"ACTIVATE-STAGED-QUEUE:{sha}:fixlist-scan-stages:{CANDIDATE}",
-                               STAGED_REVISION=CANDIDATE, FAKE_CANDIDATE_PERCENT=json.dumps(percent))
+    result, calls, final = run("activate", ACTIVATE.format(sha=sha), **ACT, FAKE_CANDIDATE_PERCENT=json.dumps(percent))
     assert result.returncode != 0 and "Ambiguous traffic percentage" in result.stderr
     assert mutations(calls) == [] and final["queues"]["fixlist-scan-stages"]["state"] == "PAUSED"
 
@@ -456,16 +501,14 @@ def test_activate_makes_no_mutation_on_ambiguous_candidate_traffic(operator, per
 def test_activate_refuses_paused_queue_holding_tasks(operator):
     sha, write_state, run = operator
     write_state(stage_tasks=["t1"])
-    result, calls, _ = run("activate", f"ACTIVATE-STAGED-QUEUE:{sha}:fixlist-scan-stages:{CANDIDATE}",
-                           STAGED_REVISION=CANDIDATE)
+    result, calls, _ = run("activate", ACTIVATE.format(sha=sha), **ACT)
     assert result.returncode == 2 and "use recover" in result.stderr and mutations(calls) == []
 
 
 def test_activate_refuses_a_valid_candidate_built_from_another_source(operator):
     sha, write_state, run = operator
     write_state(source=OTHER_SOURCE)
-    result, calls, final = run("activate", f"ACTIVATE-STAGED-QUEUE:{sha}:fixlist-scan-stages:{CANDIDATE}",
-                               STAGED_REVISION=CANDIDATE)
+    result, calls, final = run("activate", ACTIVATE.format(sha=sha), **ACT)
     assert result.returncode != 0 and "not the confirmed source" in result.stderr
     assert mutations(calls) == [] and final["queues"]["fixlist-scan-stages"]["state"] == "PAUSED"
 
@@ -473,16 +516,14 @@ def test_activate_refuses_a_valid_candidate_built_from_another_source(operator):
 def test_activate_refuses_configuration_drift(operator):
     sha, write_state, run = operator
     write_state(candidate=dict(SCAN_STAGE_QUEUE="fixlist-standard150"))
-    result, calls, final = run("activate", f"ACTIVATE-STAGED-QUEUE:{sha}:fixlist-scan-stages:{CANDIDATE}",
-                               STAGED_REVISION=CANDIDATE)
+    result, calls, final = run("activate", ACTIVATE.format(sha=sha), **ACT)
     assert result.returncode != 0 and "drifted" in result.stderr and mutations(calls) == []
 
 
 def test_activate_reports_partial_activation_when_post_resume_verification_fails(operator):
     sha, write_state, run = operator
     write_state()
-    result, calls, final = run("activate", f"ACTIVATE-STAGED-QUEUE:{sha}:fixlist-scan-stages:{CANDIDATE}",
-                               STAGED_REVISION=CANDIDATE, FAKE_VERIFY_FAIL="RUNNING")
+    result, calls, final = run("activate", ACTIVATE.format(sha=sha), **ACT, FAKE_VERIFY_FAIL="RUNNING")
     assert result.returncode == 3
     assert "STAGED_QUEUE_PARTIAL_ACTIVATION observed_state=RUNNING tasks=0" in result.stderr
     assert "STAGED_QUEUE_ACTIVATED" not in result.stdout

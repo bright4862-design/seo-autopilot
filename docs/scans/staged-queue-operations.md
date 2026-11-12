@@ -32,14 +32,22 @@ HMAC-signed snapshot.
 | Operation | Confirmation | Preconditions read live | Action |
 |---|---|---|---|
 | `status` | none | none (read only) | Reports the stage queue state and the task count in every queue. With `STAGED_REVISION`, also runs a full candidate readback plus `verify_staged_scan_infra.py`, using `--task` when a task exists so per-task OIDC is checked. |
-| `activate` | `ACTIVATE-STAGED-QUEUE:<sha>:fixlist-scan-stages:<revision>` | See the activation checks below. | `resume`, then the verifier again, which must report RUNNING. If that second verification fails, the tool prints `STAGED_QUEUE_PARTIAL_ACTIVATION observed_state=… tasks=…` and exits 3. It does not pause blindly. |
+| `activate` | `ACTIVATE-STAGED-QUEUE:<sha>:fixlist-scan-stages:<revision>:<generation>`, with `BARRIER_EXPECTED_GENERATION=<generation>` | The signed barrier is `closed` and drained at that generation. Also see the activation checks below. After the slow checks, the queue (PAUSED, zero tasks) and the barrier are read again just before the resume. | `resume`, then the verifier again, which must report RUNNING. If that second verification fails, the tool prints `STAGED_QUEUE_PARTIAL_ACTIVATION observed_state=… tasks=…` and exits 3. It does not pause blindly. |
 | `drain-pause` | `DRAIN-PAUSE-STAGED-QUEUE:<sha>:fixlist-scan-stages:<generation>`, with `BARRIER_EXPECTED_GENERATION=<generation>` | Queue is RUNNING. The signed barrier is `closed` at that generation, with `drain_ready=true` and `active`, `bound` and `live_reconciliation` all 0. The stage, entry and drain queues are all empty for N consecutive reads. The barrier is then read again. | `pause`, then the barrier and all three queues are read again. If anything changed, the tool resumes the queue and fails (`STAGED_QUEUE_PAUSE_COMPENSATED`). On success it prints `STAGED_QUEUE_PAUSE_PROOF generation=… snapshot=…`. |
 | `recover` | `RECOVER-STAGED-QUEUE:<sha>:fixlist-scan-stages:<generation>`, with `BARRIER_EXPECTED_GENERATION=<generation>` | Queue is PAUSED. The signed barrier is `closed` at that generation; outstanding obligations are allowed. Every pending task passes the per-task identity check below. The verifier passes with the queue PAUSED. | `resume`, so that admitted scans can finish. The tool never pauses during recovery. |
 
 **Activation checks.** `activate` refuses unless all of the following read back
 live:
 
+- The signed barrier is `closed` at the confirmed generation, with zero
+  `active`, `bound` and `live_reconciliation` obligations. That means no
+  admitted plan delivery exists that could enqueue a stage task behind the
+  checks.
 - The queue is PAUSED and holds no tasks. If it holds tasks, use `recover`.
+  This is checked first, and again after the candidate and infrastructure
+  checks, immediately before the resume, together with a fresh barrier read.
+  The gap between that last read and the resume is not atomic. The closed,
+  drained barrier is what leaves no producer to fill it.
 - `STAGED_REVISION` is an addressable revision receiving 0% of traffic.
 - That revision runs as the worker service account.
 - Its `FIXLIST_WORKER_SOURCE_SHA` equals the confirmed `SOURCE_SHA`, which is
@@ -156,11 +164,13 @@ authorized live action) or **[tool]** (an existing guarded operation).
 4. **[tool]** Build a worker candidate with `stage_config=inactive` from the
    merged SHA. The current `00104-l79` has no staged configuration. Then tag
    and verify it, and deploy the gateway with the staged contract.
-5. **[owner/GCP]** Admission: read a fresh `barrier-status`, resume the drain
-   plane (claims stay closed), open an acceptance-only cohort for one owner
-   with a budget of one, and enable Base44 V9 staged mode for that exact owner.
-6. **[tool, this PR]** `OPERATION=activate` with the exact staged revision,
-   from the same `main` the candidate was built from.
+5. **[tool, this PR]** While claims are still closed and drained, read
+   `barrier-status`. Then run `OPERATION=activate` with the exact staged
+   revision and that generation, from the same `main` the candidate was built
+   from.
+6. **[owner/GCP]** Admission: resume the drain plane (claims stay closed), open
+   an acceptance-only cohort for one owner with a budget of one, and enable
+   Base44 V9 staged mode for that exact owner.
 7. **[tool]** Run `scripts/run-staged-owner-canary.sh` once with
    `EXPECTED_PAGE_CAP=150`.
 8. **[tool, this PR]** After the result is verified, close the admission

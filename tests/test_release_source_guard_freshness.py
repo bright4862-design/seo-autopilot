@@ -123,3 +123,17 @@ def test_cloud_operator_reuses_live_remote_guard():
     body = content.split("require_exact_main_owner_source() {", 1)[1].split("\n}\n", 1)[0]
     assert 'source "$REPO_ROOT/scripts/lib/release-source-guard.sh"' in body
     assert 'fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$SOURCE_SHA"' in body
+
+def test_zero_traffic_tag_is_a_mutation_with_live_source_check():
+    operator = (ROOT / "scripts/fixlist-cloud-operator.sh").read_text()
+    case = operator.split("  tag-worker-candidate)", 1)[1].split("    ;;", 1)[0]
+    assert case.index("require_exact_main_owner_source") < case.index("tag_worker_candidate \"$TARGET_REVISION\"")
+
+    workflow = (ROOT / ".github/workflows/fixlist-cloud-operator.yml").read_text()
+    # Owner-comment promotion and direct operator dispatch are separate callers.
+    promotion = workflow.split("      - name: Tag the exact zero-traffic candidate", 1)[1].split(
+        "      - name: Resolve candidate token audience", 1)[0]
+    assert "SOURCE_SHA: ${{ steps.command.outputs.source_sha }}" in promotion
+    direct = workflow.split("      - name: Run allowlisted worker operation", 1)[1].split(
+        "      - name: Build isolated Standard 150 worker candidate", 1)[0]
+    assert "SOURCE_SHA: ${{ github.sha }}" in direct

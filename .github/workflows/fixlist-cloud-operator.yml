@@ -1360,6 +1360,7 @@ jobs:
           OPERATION: tag-worker-candidate
           TARGET_REVISION: ${{ steps.candidate.outputs.revision }}
           CONFIRM: ${{ steps.candidate.outputs.revision }}
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
         shell: bash
         run: |
           set -euo pipefail

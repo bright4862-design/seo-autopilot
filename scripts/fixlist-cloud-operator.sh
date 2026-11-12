@@ -1299,6 +1299,8 @@ case "$OPERATION" in
     ;;
 
   tag-worker-candidate)
+    # Tagging mutates the service even at 0% traffic; verify live main first.
+    require_exact_main_owner_source
     tag_worker_candidate "$TARGET_REVISION"
     ;;
 

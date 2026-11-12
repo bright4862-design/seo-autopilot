@@ -236,6 +236,67 @@ def test_intake_disabled_checks_every_addressable_revision_and_gateway():
     assert guard.check_intake_disabled(service(), revisions(empty), {})
 
 
+@pytest.mark.parametrize("control", [
+    "SCAN_PIPELINE_MODE", "SCAN_STAGED_OWNER_IDS", "SCAN_PIPELINE_OWNER_IDS",
+])
+@pytest.mark.parametrize("location", ["candidate", "serving"])
+def test_intake_disabled_refuses_secret_backed_admission_controls(control, location):
+    # A secret-backed control is a valueFrom reference in Cloud Run readback.
+    # Silently dropping it would turn an unknown staged cohort into false OFF.
+    off = candidate_env(SCAN_PIPELINE_MODE="monolith", SCAN_STAGED_OWNER_IDS="")
+    all_revisions = revisions(candidate=off)
+    name = CANDIDATE if location == "candidate" else SERVING
+    items = all_revisions[name]["spec"]["containers"][0]["env"]
+    items[:] = [item for item in items if item["name"] != control]
+    items.append({"name": control, "valueFrom": {
+        "secretKeyRef": {"name": "intake-control-fixture", "key": "latest"}
+    }})
+    with pytest.raises(guard.GuardError, match="secret-backed"):
+        guard.check_intake_disabled(service(), all_revisions, {})
+
+
+@pytest.mark.parametrize("control", [
+    "SCAN_PIPELINE_MODE", "SCAN_STAGED_OWNER_IDS", "SCAN_PIPELINE_OWNER_IDS",
+])
+def test_activation_refuses_secret_backed_control_on_other_addressable_revision(control):
+    all_revisions = revisions()
+    items = all_revisions[SERVING]["spec"]["containers"][0]["env"]
+    items[:] = [item for item in items if item["name"] != control]
+    items.append({"name": control, "valueFrom": {
+        "secretKeyRef": {"name": "intake-control-fixture", "key": "latest"}
+    }})
+    with pytest.raises(guard.GuardError, match="secret-backed"):
+        guard.check_activation_candidate(service(), all_revisions, CANDIDATE, SOURCE)
+
+
+def test_gateway_revision_secret_backed_intake_is_unverifiable():
+    gw = revision("gateway-serving", {"SCAN_PIPELINE_MODE": "monolith"})
+    gw["spec"]["containers"][0]["env"] = [{
+        "name": "SCAN_PIPELINE_MODE",
+        "valueFrom": {"secretKeyRef": {"name": "intake-control-fixture", "key": "latest"}},
+    }]
+    with pytest.raises(guard.GuardError, match="secret-backed"):
+        guard.revision_env(gw)
+
+
+def test_revision_readback_rejects_duplicate_admission_controls():
+    candidate = revision(CANDIDATE, {"SCAN_PIPELINE_MODE": "monolith"})
+    candidate["spec"]["containers"][0]["env"].append({
+        "name": "SCAN_PIPELINE_MODE", "value": "staged",
+    })
+    with pytest.raises(guard.GuardError, match="Duplicate staged intake control"):
+        guard.revision_env(candidate)
+
+
+def test_unrelated_secret_backed_env_remains_permitted():
+    candidate = revision(CANDIDATE, {"SCAN_PIPELINE_MODE": "monolith"})
+    candidate["spec"]["containers"][0]["env"].append({
+        "name": "SCAN_EVIDENCE_SIGNING_KEY",
+        "valueFrom": {"secretKeyRef": {"name": "fixture-non-intake-secret", "key": "latest"}},
+    })
+    assert guard.revision_env(candidate)["SCAN_PIPELINE_MODE"] == "monolith"
+
+
 # --- shell wrapper ------------------------------------------------------------
 
 ACTIVATE = "ACTIVATE-STAGED-QUEUE:{sha}:fixlist-scan-stages:" + CANDIDATE + ":7"

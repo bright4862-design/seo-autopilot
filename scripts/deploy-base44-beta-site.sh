@@ -25,7 +25,11 @@ BASE44_EXPECTED_OWNER="${BASE44_EXPECTED_OWNER:-}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$REPO_ROOT/scripts/lib/release-source-guard.sh"
 source "$REPO_ROOT/scripts/lib/base44-pinned-cli.sh"
+source "$REPO_ROOT/scripts/lib/v8-site-generation.sh"
 
+# This publisher attests V8 packages. A V9 browser bundle needs a separate
+# reviewed release path; an ambient Vite flag must not bypass that boundary.
+fixlist_require_v8_site_generation
 fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$CONFIRM"
 SOURCE_SHA="$FIXLIST_EXACT_SOURCE_SHA"
 # A site publish reconciles live Base44 scanner functions: it must not move

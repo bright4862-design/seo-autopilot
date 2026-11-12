@@ -7,8 +7,9 @@
 #
 #   status       read only: queue/IAM/config readback, task counts, cohort state
 #   activate     PAUSED -> RUNNING behind one exactly configured 0% revision
-#   drain-pause  RUNNING -> PAUSED only after intake is off and all queues drain
-#   recover      PAUSED with stranded tasks -> RUNNING so admitted scans finish
+#   drain-pause  RUNNING -> PAUSED only when the coordinator proves admissions are
+#                closed and every admitted scan is terminal, and all queues drain
+#   recover      PAUSED with stranded tasks -> RUNNING once admissions are closed
 #
 # Safety rules:
 # - Fixed project/region/service/queue; nothing is accepted from input except
@@ -17,9 +18,14 @@
 # - Never deletes or purges tasks, never deletes the queue, never touches the
 #   entry/drain queues, traffic, IAM, secrets, Base44 or the admission barrier.
 # - Pausing is the dangerous direction here: a paused stage queue strands
-#   admitted scans mid-pipeline. A pause therefore requires new staged intake to
-#   be off and every queue that can feed the stage queue to be empty; a task
-#   that appears after the pause is compensated by resuming, never by waiting.
+#   admitted scans mid-pipeline. Empty task lists alone cannot prove that: a
+#   frontier can be committed while its next task is not yet enqueued. A pause
+#   therefore requires the coordinator's signed barrier snapshot to show claims
+#   CLOSED with zero active/bound/live obligations (an admission is released
+#   only at a terminal state), before and after the pause, plus empty queues.
+#   Anything that appears after the pause is compensated by resuming.
+# - Worker revisions and their tags are never changed: an in-flight scan keeps
+#   its pinned tagged revision and OIDC route until it is terminal.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -40,6 +46,7 @@ OPERATION="${OPERATION:-status}"
 SOURCE_SHA="${SOURCE_SHA:-}"
 CONFIRM="${CONFIRM:-}"
 STAGED_REVISION="${STAGED_REVISION:-}"
+BARRIER_EXPECTED_GENERATION="${BARRIER_EXPECTED_GENERATION:-}"
 DRAIN_TIMEOUT_SECONDS="${STAGED_QUEUE_DRAIN_TIMEOUT_SECONDS:-900}"
 DRAIN_POLL_SECONDS="${STAGED_QUEUE_DRAIN_POLL_SECONDS:-30}"
 DRAIN_STABLE_READS="${STAGED_QUEUE_DRAIN_STABLE_READS:-3}"
@@ -64,12 +71,11 @@ case "$OPERATION" in
   activate)
     [[ "$CONFIRM" == "ACTIVATE-STAGED-QUEUE:${SOURCE_SHA}:${STAGE_QUEUE}:${STAGED_REVISION}" ]] \
       || refuse "exact ACTIVATE-STAGED-QUEUE:<source-sha>:${STAGE_QUEUE}:<staged-revision> confirmation required." ;;
-  drain-pause)
-    [[ "$CONFIRM" == "DRAIN-PAUSE-STAGED-QUEUE:${SOURCE_SHA}:${STAGE_QUEUE}:BASE44-STAGED-INTAKE-OFF" ]] \
-      || refuse "exact DRAIN-PAUSE-STAGED-QUEUE:<source-sha>:${STAGE_QUEUE}:BASE44-STAGED-INTAKE-OFF confirmation required." ;;
-  recover)
-    [[ "$CONFIRM" == "RECOVER-STAGED-QUEUE:${SOURCE_SHA}:${STAGE_QUEUE}:BASE44-STAGED-INTAKE-OFF" ]] \
-      || refuse "exact RECOVER-STAGED-QUEUE:<source-sha>:${STAGE_QUEUE}:BASE44-STAGED-INTAKE-OFF confirmation required." ;;
+  drain-pause|recover)
+    [[ "$BARRIER_EXPECTED_GENERATION" =~ ^[0-9]+$ ]] || refuse "exact BARRIER_EXPECTED_GENERATION required."
+    prefix="DRAIN-PAUSE"; [[ "$OPERATION" == recover ]] && prefix="RECOVER"
+    [[ "$CONFIRM" == "${prefix}-STAGED-QUEUE:${SOURCE_SHA}:${STAGE_QUEUE}:${BARRIER_EXPECTED_GENERATION}" ]] \
+      || refuse "exact ${prefix}-STAGED-QUEUE:<source-sha>:${STAGE_QUEUE}:<barrier-generation> confirmation required." ;;
   *) refuse "unsupported operation $OPERATION." ;;
 esac
 fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$SOURCE_SHA"
@@ -117,10 +123,20 @@ verify_infra() {
     --expected-queue-state "$state" "${extra[@]}"
 }
 
-require_intake_disabled() {
-  describe_worker
-  describe_gateway
-  "${GUARD[@]}" intake-disabled "$WORK/service.json" "$WORK/gateway-revision.json" "$WORK"/revision-*.json
+barrier_proof() {
+  # The existing operator verifies the coordinator's HMAC-signed drain
+  # snapshot; this tool only accepts its single status line. No proof, no pause.
+  local mode="$1" ticket="${CHANGE_TICKET:-staged-queue-${OPERATION}}"
+  local reason="${CUTOVER_REASON:-Staged queue ${OPERATION} admission proof}"
+  OPERATION=barrier-status CONFIRM="" SOURCE_SHA="$SOURCE_SHA" \
+    BARRIER_EXPECTED_GENERATION="$BARRIER_EXPECTED_GENERATION" BARRIER_EXPECTED_PRIOR_MODE=closed \
+    CHANGE_TICKET="$ticket" CUTOVER_REASON="$reason" \
+    bash "$REPO_ROOT/scripts/fixlist-cloud-operator.sh" > "$WORK/barrier.out" 2> "$WORK/barrier.err" || {
+      cat "$WORK/barrier.err" >&2
+      echo "Refusing: the signed admission barrier snapshot could not be read." >&2
+      return 1
+    }
+  "${GUARD[@]}" barrier "$WORK/barrier.out" "$BARRIER_EXPECTED_GENERATION" "$mode"
 }
 
 wait_for_empty_feeders() {
@@ -154,7 +170,7 @@ status_command() {
   first="$("${GUARD[@]}" first-task "$WORK/tasks-$STAGE_QUEUE.json")"
   echo "STAGED_QUEUE_STATE state=$state tasks=$count entry_tasks=$(task_count "$ENTRY_QUEUE") drain_tasks=$(task_count "$DRAIN_QUEUE")"
   if [[ -n "$STAGED_REVISION" ]]; then
-    found="$("${GUARD[@]}" activation "$WORK/service.json" "$STAGED_REVISION" "$WORK"/revision-*.json)"
+    found="$("${GUARD[@]}" activation "$WORK/service.json" "$STAGED_REVISION" "$SOURCE_SHA" "$WORK"/revision-*.json)"
     echo "STAGED_CANDIDATE_CONFIG $found"
     target="$(sed -n 's/.*target=\([^ ]*\).*/\1/p' <<< "$found")"
     verify_infra "$state" "$target" "$origin" "$first"
@@ -172,40 +188,51 @@ activate_command() {
   count="$(task_count "$STAGE_QUEUE")"
   [[ "$count" == 0 ]] || refuse "the paused queue already holds $count task(s); use recover, not activate."
   describe_worker
-  found="$("${GUARD[@]}" activation "$WORK/service.json" "$STAGED_REVISION" "$WORK"/revision-*.json)"
+  found="$("${GUARD[@]}" activation "$WORK/service.json" "$STAGED_REVISION" "$SOURCE_SHA" "$WORK"/revision-*.json)"
   echo "STAGED_CANDIDATE_CONFIG $found"
   target="$(sed -n 's/.*target=\([^ ]*\).*/\1/p' <<< "$found")"
   origin="$(sed -n 's/.*audience=\([^ ]*\).*/\1/p' <<< "$found")"
   verify_infra PAUSED "$target" "$origin"
   gcloud tasks queues resume "$STAGE_QUEUE" --project="$PROJECT" --location="$REGION" >/dev/null
-  verify_infra RUNNING "$target" "$origin"
+  if ! verify_infra RUNNING "$target" "$origin"; then
+    # The resume already happened. Report the observed state rather than let
+    # an operator assume the queue is still PAUSED; do not pause blindly.
+    echo "STAGED_QUEUE_PARTIAL_ACTIVATION observed_state=$(queue_state "$STAGE_QUEUE" || echo unknown) tasks=$(task_count "$STAGE_QUEUE" || echo unknown); post-resume verification failed." >&2
+    exit 3
+  fi
   echo "STAGED_QUEUE_ACTIVATED queue=$STAGE_QUEUE revision=$STAGED_REVISION target=$target"
 }
 
 drain_pause_command() {
+  local proof
   [[ "$(queue_state "$STAGE_QUEUE")" == RUNNING ]] || refuse "drain-pause expects a RUNNING stage queue."
-  require_intake_disabled
+  barrier_proof drained || exit 1
   wait_for_empty_feeders || exit 1
-  require_intake_disabled
+  proof="$(barrier_proof drained)" || exit 1
   gcloud tasks queues pause "$STAGE_QUEUE" --project="$PROJECT" --location="$REGION" >/dev/null
-  if [[ "$(task_count "$STAGE_QUEUE")" != 0 || "$(task_count "$ENTRY_QUEUE")" != 0 || "$(task_count "$DRAIN_QUEUE")" != 0 ]]; then
-    # A task raced the pause: resume rather than strand an admitted scan.
+  if ! barrier_proof drained >/dev/null \
+    || [[ "$(task_count "$STAGE_QUEUE")" != 0 || "$(task_count "$ENTRY_QUEUE")" != 0 || "$(task_count "$DRAIN_QUEUE")" != 0 ]]; then
+    # Work or an admission raced the pause: resume rather than strand a scan.
     gcloud tasks queues resume "$STAGE_QUEUE" --project="$PROJECT" --location="$REGION" >/dev/null
-    echo "STAGED_QUEUE_PAUSE_COMPENSATED: work appeared during pause; queue resumed." >&2
+    echo "STAGED_QUEUE_PAUSE_COMPENSATED: work or an admission appeared during pause; queue resumed." >&2
     exit 1
   fi
+  echo "STAGED_QUEUE_PAUSE_PROOF $proof"
   [[ "$(queue_state "$STAGE_QUEUE")" == PAUSED ]] || { echo "Stage queue did not report PAUSED." >&2; exit 1; }
   echo "STAGED_QUEUE_DRAINED_AND_PAUSED queue=$STAGE_QUEUE"
 }
 
 recover_command() {
-  local count
+  local count proof
   [[ "$(queue_state "$STAGE_QUEUE")" == PAUSED ]] || refuse "recover expects a PAUSED stage queue."
-  require_intake_disabled
+  # Only NEW admissions must be impossible. Outstanding obligations are the
+  # scans this exists to save, and their tagged worker revisions keep running
+  # with whatever cohort they had: stage endpoints drain regardless of it.
+  proof="$(barrier_proof closed)" || exit 1
   count="$(task_count "$STAGE_QUEUE")"
   gcloud tasks queues resume "$STAGE_QUEUE" --project="$PROJECT" --location="$REGION" >/dev/null
   [[ "$(queue_state "$STAGE_QUEUE")" == RUNNING ]] || { echo "Stage queue did not report RUNNING." >&2; exit 1; }
-  echo "STAGED_QUEUE_RECOVERED queue=$STAGE_QUEUE pending_tasks=$count; run drain-pause once admitted scans finish."
+  echo "STAGED_QUEUE_RECOVERED queue=$STAGE_QUEUE pending_tasks=$count $proof; run drain-pause once admitted scans are terminal."
 }
 
 case "$OPERATION" in

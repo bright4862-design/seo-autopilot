@@ -11,6 +11,8 @@ import re
 import sys
 from urllib.parse import urlsplit
 
+from staged_candidate_cloudbuild import digest_for, environment as inactive_environment
+
 PROJECT = "seo-autopilot-501517"
 REGION = "europe-west1"
 STAGE_QUEUE = "fixlist-scan-stages"
@@ -122,9 +124,14 @@ def check_intake_disabled(service: dict, revisions: dict[str, dict], gateway_env
     return sorted(addressable)
 
 
-def check_activation_candidate(service: dict, revisions: dict[str, dict], staged_revision: str) -> dict[str, str]:
+COHORT_KEYS = {"SCAN_PIPELINE_MODE", "SCAN_STAGED_OWNER_IDS"}
+
+
+def check_activation_candidate(service: dict, revisions: dict[str, dict], staged_revision: str,
+                               expected_source: str) -> dict[str, str]:
     """The one revision that will receive stage tasks must be exactly configured."""
     require(bool(REVISION_RE.fullmatch(staged_revision)), "STAGED_REVISION must be an exact worker revision name")
+    require(bool(SHA_RE.fullmatch(expected_source)), "An exact expected worker source SHA is required")
     origin = canonical_origin(service)
     addressable = addressable_revisions(service)
     require(staged_revision in addressable and staged_revision in revisions,
@@ -137,6 +144,8 @@ def check_activation_candidate(service: dict, revisions: dict[str, dict], staged
     env = revision_env(revision)
     source = env.get("FIXLIST_WORKER_SOURCE_SHA", "")
     require(bool(SHA_RE.fullmatch(source)), "STAGED_REVISION declares no exact FIXLIST_WORKER_SOURCE_SHA")
+    require(source == expected_source,
+            f"STAGED_REVISION was built from {source}, not the confirmed source {expected_source}")
     tag = f"staged-{source[:12]}"
     expected_target = f"https://{tag}---{origin.removeprefix('https://')}"
     require(slot["tags"].get(tag) == expected_target,
@@ -152,6 +161,14 @@ def check_activation_candidate(service: dict, revisions: dict[str, dict], staged
     require(env.get("TASKS_INVOKER_SERVICE_ACCOUNT") == INVOKER_SA, "Stage task invoker differs from the fixed invoker")
     require(env.get("SCAN_WORKSPACE_BUCKET") == WORKSPACE_BUCKET,
             f"STAGED_REVISION must use the fixed workspace bucket {WORKSPACE_BUCKET}")
+    # The reviewed inactive build stamps a digest over its exact staged
+    # environment. Recompute it here rather than trusting the stamp, and
+    # require every non-cohort value to still equal that reviewed build.
+    reviewed = inactive_environment(source, PROJECT, REGION, WORKSPACE_BUCKET, STAGE_QUEUE_PATH, origin)
+    require(env.get("FIXLIST_STAGED_CONFIG_SHA256") == digest_for(source, reviewed),
+            "STAGED_REVISION configuration digest does not match the reviewed inactive build")
+    drift = sorted(key for key in reviewed if key not in COHORT_KEYS and env.get(key) != reviewed[key])
+    require(not drift, f"STAGED_REVISION staged configuration drifted from its reviewed build: {','.join(drift)}")
     mode = env.get("SCAN_PIPELINE_MODE", "monolith").lower()
     require(mode in {"monolith", "staged"}, "SCAN_PIPELINE_MODE must be monolith or staged")
     owners = owners_of(env)
@@ -166,6 +183,31 @@ def check_activation_candidate(service: dict, revisions: dict[str, dict], staged
     require(not missing, f"Missing revision readback for {','.join(missing)}")
     return {"target": expected_target, "audience": origin, "source_sha": source,
             "mode": mode, "owner_count": str(len(owners))}
+
+
+BARRIER_LINE = re.compile(
+    r"ADMISSION_BARRIER_STATUS mode=(open|closed|acceptance_only) generation=([0-9]+) drain_ready=(true|false) "
+    r"active=([0-9]+) bound=([0-9]+) expired_diagnostic=([0-9]+) live_reconciliation=([0-9]+) snapshot=(\S+)\Z")
+
+
+def check_barrier(output: str, expected_generation: str, require_drained: bool) -> str:
+    """Read the coordinator's signed status line (verified by the operator script).
+
+    Closed means no new claim can be admitted anywhere, Base44 included. Zero
+    active/bound/live obligations means every admitted scan reached a terminal
+    state: the coordinator releases an admission only with a terminal status.
+    """
+    lines = [line for line in output.splitlines() if line.startswith("ADMISSION_BARRIER_STATUS ")]
+    require(len(lines) == 1, "No single signed admission barrier status was returned")
+    match = BARRIER_LINE.fullmatch(lines[0].strip())
+    require(match is not None, "Admission barrier status line is malformed")
+    mode, generation, ready, active, bound, _expired, live, snapshot = match.groups()
+    require(generation == expected_generation, "Admission barrier generation changed")
+    require(mode == "closed", f"Admission barrier is {mode}; new admissions are still possible")
+    if require_drained:
+        require(ready == "true" and active == "0" and bound == "0" and live == "0",
+                "Admitted scans are not all terminal (active/bound/live obligations remain)")
+    return f"generation={generation} snapshot={snapshot} active={active} bound={bound} live={live}"
 
 
 def task_names(listing: list) -> list[str]:
@@ -199,10 +241,15 @@ def main(argv: list[str]) -> int:
         names = check_intake_disabled(_load(service), revisions, gateway_env)
         print(f"STAGED_INTAKE_DISABLED revisions={','.join(names)}")
     elif command == "activation":
-        service, staged_revision, *revision_paths = rest
+        service, staged_revision, expected_source, *revision_paths = rest
         revisions = {r.get("metadata", {}).get("name"): r for r in map(_load, revision_paths)}
-        found = check_activation_candidate(_load(service), revisions, staged_revision)
+        found = check_activation_candidate(_load(service), revisions, staged_revision, expected_source)
         print(" ".join(f"{key}={value}" for key, value in found.items()))
+    elif command == "barrier":
+        output_path, expected_generation, mode = rest
+        require(mode in {"drained", "closed"}, "Barrier mode must be drained or closed")
+        with open(output_path, encoding="utf-8") as handle:
+            print(check_barrier(handle.read(), expected_generation, mode == "drained"))
     elif command == "count":
         print(len(task_names(_load(rest[0]))))
     elif command == "first-task":

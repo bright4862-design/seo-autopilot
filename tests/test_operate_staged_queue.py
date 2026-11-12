@@ -18,6 +18,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import staged_queue_guard as guard  # noqa: E402
+from staged_candidate_cloudbuild import digest_for, environment as inactive_environment  # noqa: E402
 
 ORIGIN = "https://fixlist-standard150-worker-tpucgyfewa-ew.a.run.app"
 SOURCE = "4274ac453e93fe2e161e01c88d31823bd5134795"
@@ -32,13 +33,17 @@ def env_list(values):
     return [{"name": k, "value": v} for k, v in values.items()]
 
 
-def candidate_env(**overrides):
+def target_for(source):
+    return f"https://staged-{source[:12]}---fixlist-standard150-worker-tpucgyfewa-ew.a.run.app"
+
+
+def candidate_env(source=SOURCE, **overrides):
+    """A revision built by the reviewed inactive Cloud Build path, then cohorted."""
+    reviewed = inactive_environment(source, guard.PROJECT, guard.REGION, guard.WORKSPACE_BUCKET, QUEUE_PATH, ORIGIN)
     values = {
-        "FIXLIST_WORKER_SOURCE_SHA": SOURCE,
-        "SCAN_WORKSPACE_BUCKET": "fixlist-scan-workspaces-seo-autopilot-501517",
-        "SCAN_STAGE_TASKS_QUEUE_PATH": QUEUE_PATH,
-        "SCAN_STAGE_TARGET_URL": TARGET,
-        "SCAN_STAGE_TOKEN_AUDIENCE": ORIGIN,
+        **reviewed,
+        "FIXLIST_STAGED_CONFIG_SHA256": digest_for(source, reviewed),
+        "FIXLIST_WORKER_SOURCE_SHA": source,
         "TASKS_INVOKER_SERVICE_ACCOUNT": guard.INVOKER_SA,
         "SCAN_PIPELINE_MODE": "staged",
         "SCAN_STAGED_OWNER_IDS": "owner_canary_01",
@@ -52,7 +57,9 @@ def revision(name, env, sa=guard.WORKER_SA):
             "spec": {"serviceAccountName": sa, "containers": [{"env": env_list(env)}]}}
 
 
-def service(candidate_percent=0, tag=TAG, url=TARGET):
+def service(candidate_percent=0, tag=None, url=None, source=SOURCE):
+    tag = f"staged-{source[:12]}" if tag is None else tag
+    url = target_for(source) if url is None else url
     return {"status": {"url": ORIGIN, "traffic": [
         {"revisionName": SERVING, "percent": 100 - candidate_percent},
         {"revisionName": CANDIDATE, "percent": candidate_percent, "tag": tag, "url": url},
@@ -61,19 +68,19 @@ def service(candidate_percent=0, tag=TAG, url=TARGET):
 
 # --- pure guard ---------------------------------------------------------------
 
-def revisions(candidate=None, serving=None):
-    return {CANDIDATE: revision(CANDIDATE, candidate or candidate_env()),
+def revisions(candidate=None, serving=None, source=SOURCE):
+    return {CANDIDATE: revision(CANDIDATE, candidate or candidate_env(source)),
             SERVING: revision(SERVING, serving or {"SCAN_PIPELINE_MODE": "monolith"})}
 
 
 def test_activation_accepts_exact_tagged_zero_traffic_candidate():
-    found = guard.check_activation_candidate(service(), revisions(), CANDIDATE)
+    found = guard.check_activation_candidate(service(), revisions(), CANDIDATE, SOURCE)
     assert found["target"] == TARGET and found["audience"] == ORIGIN and found["owner_count"] == "1"
 
 
 def test_inactive_candidate_with_no_cohort_can_activate():
     env = candidate_env(SCAN_PIPELINE_MODE="monolith", SCAN_STAGED_OWNER_IDS="")
-    assert guard.check_activation_candidate(service(), revisions(env), CANDIDATE)["owner_count"] == "0"
+    assert guard.check_activation_candidate(service(), revisions(env), CANDIDATE, SOURCE)["owner_count"] == "0"
 
 
 @pytest.mark.parametrize("change, message", [
@@ -92,24 +99,24 @@ def test_inactive_candidate_with_no_cohort_can_activate():
 ])
 def test_activation_refuses_misconfigured_candidate(change, message):
     with pytest.raises(guard.GuardError, match=message):
-        guard.check_activation_candidate(service(), revisions(candidate_env(**change)), CANDIDATE)
+        guard.check_activation_candidate(service(), revisions(candidate_env(**change)), CANDIDATE, SOURCE)
 
 
 def test_activation_refuses_traffic_wrong_tag_wrong_sa_and_other_admitters():
     with pytest.raises(guard.GuardError, match="production traffic"):
-        guard.check_activation_candidate(service(candidate_percent=10), revisions(), CANDIDATE)
+        guard.check_activation_candidate(service(candidate_percent=10), revisions(), CANDIDATE, SOURCE)
     with pytest.raises(guard.GuardError, match="source-bound tag"):
-        guard.check_activation_candidate(service(tag="candidate", url=TARGET), revisions(), CANDIDATE)
+        guard.check_activation_candidate(service(tag="candidate", url=TARGET), revisions(), CANDIDATE, SOURCE)
     bad_sa = revisions()
     bad_sa[CANDIDATE] = revision(CANDIDATE, candidate_env(), sa="other@x.iam.gserviceaccount.com")
     with pytest.raises(guard.GuardError, match="service account"):
-        guard.check_activation_candidate(service(), bad_sa, CANDIDATE)
+        guard.check_activation_candidate(service(), bad_sa, CANDIDATE, SOURCE)
     with pytest.raises(guard.GuardError, match="Other revision"):
         guard.check_activation_candidate(
             service(), revisions(serving={"SCAN_PIPELINE_MODE": "staged", "SCAN_STAGED_OWNER_IDS": "owner_canary_01"}),
-            CANDIDATE)
+            CANDIDATE, SOURCE)
     with pytest.raises(guard.GuardError, match="exact worker revision"):
-        guard.check_activation_candidate(service(), revisions(), "latest")
+        guard.check_activation_candidate(service(), revisions(), "latest", SOURCE)
 
 
 @pytest.mark.parametrize("percent", [0.9, False, "0", None, -0.9, 101, -1, 0.0])
@@ -119,7 +126,7 @@ def test_ambiguous_traffic_percentages_are_refused(percent):
         entry = next(e for e in svc["status"]["traffic"] if e["revisionName"] == target)
         entry["percent"] = percent
         with pytest.raises(guard.GuardError, match="Ambiguous traffic percentage"):
-            guard.check_activation_candidate(svc, revisions(), CANDIDATE)
+            guard.check_activation_candidate(svc, revisions(), CANDIDATE, SOURCE)
         with pytest.raises(guard.GuardError, match="Ambiguous traffic percentage"):
             guard.check_intake_disabled(svc, revisions(), {})
 
@@ -127,7 +134,7 @@ def test_ambiguous_traffic_percentages_are_refused(percent):
 def test_omitted_percent_is_the_protobuf_zero_and_untagged_zero_is_still_validated():
     svc = service()
     del next(e for e in svc["status"]["traffic"] if e["revisionName"] == CANDIDATE)["percent"]
-    assert guard.check_activation_candidate(svc, revisions(), CANDIDATE)["target"] == TARGET
+    assert guard.check_activation_candidate(svc, revisions(), CANDIDATE, SOURCE)["target"] == TARGET
     svc = service()
     svc["status"]["traffic"].append({"revisionName": "fixlist-standard150-worker-00001-old", "percent": "0"})
     with pytest.raises(guard.GuardError, match="Ambiguous traffic percentage"):
@@ -135,6 +142,56 @@ def test_omitted_percent_is_the_protobuf_zero_and_untagged_zero_is_still_validat
     assert guard.serving_revision(service()) == SERVING
     with pytest.raises(guard.GuardError, match="Ambiguous"):
         guard.serving_revision({"status": {"traffic": [{"revisionName": "gw", "percent": 100.0}]}})
+
+
+OTHER_SOURCE = "0123456789abcdef0123456789abcdef01234567"
+
+
+def test_valid_candidate_from_a_different_source_is_refused():
+    # Fully valid, tagged and digest-bound, but built from another commit.
+    other = service(source=OTHER_SOURCE)
+    assert guard.check_activation_candidate(other, revisions(source=OTHER_SOURCE), CANDIDATE, OTHER_SOURCE)
+    with pytest.raises(guard.GuardError, match="not the confirmed source"):
+        guard.check_activation_candidate(other, revisions(source=OTHER_SOURCE), CANDIDATE, SOURCE)
+
+
+@pytest.mark.parametrize("change, message", [
+    (dict(FIXLIST_STAGED_CONFIG_SHA256=None), "digest"),
+    (dict(FIXLIST_STAGED_CONFIG_SHA256="0" * 64), "digest"),
+    (dict(SCAN_TASKS_PROJECT="other-project"), "drifted.*SCAN_TASKS_PROJECT"),
+    (dict(SCAN_STAGE_QUEUE="fixlist-standard150"), "drifted.*SCAN_STAGE_QUEUE"),
+    (dict(SCAN_TASKS_LOCATION=None), "drifted.*SCAN_TASKS_LOCATION"),
+])
+def test_configuration_digest_and_drift_are_refused(change, message):
+    with pytest.raises(guard.GuardError, match=message):
+        guard.check_activation_candidate(service(), revisions(candidate_env(**change)), CANDIDATE, SOURCE)
+
+
+def barrier_line(mode="closed", generation=7, ready="true", active=0, bound=0, live=0, snapshot="snap-1"):
+    return (f"ADMISSION_BARRIER_STATUS mode={mode} generation={generation} drain_ready={ready} "
+            f"active={active} bound={bound} expired_diagnostic=0 live_reconciliation={live} snapshot={snapshot}")
+
+
+def test_barrier_proof_requires_closed_generation_and_terminal_obligations():
+    assert guard.check_barrier(barrier_line(), "7", True).startswith("generation=7 snapshot=snap-1")
+    # Recovery only needs new admissions closed: outstanding scans are the point.
+    assert "active=2" in guard.check_barrier(barrier_line(ready="false", active=2), "7", False)
+    for line, message in [
+        (barrier_line(mode="open"), "barrier is open"),
+        (barrier_line(mode="acceptance_only"), "barrier is acceptance_only"),
+        (barrier_line(generation=8), "generation changed"),
+        (barrier_line(ready="false"), "not all terminal"),
+        (barrier_line(active=1), "not all terminal"),
+        (barrier_line(bound=1), "not all terminal"),
+        (barrier_line(live=1), "not all terminal"),
+        ("", "No single"),
+        (barrier_line() + "\n" + barrier_line(), "No single"),
+        (barrier_line() + " extra=1", "malformed"),
+    ]:
+        with pytest.raises(guard.GuardError, match=message):
+            guard.check_barrier(line, "7", True)
+    with pytest.raises(guard.GuardError, match="barrier is open"):
+        guard.check_barrier(barrier_line(mode="open"), "7", False)
 
 
 def test_intake_disabled_checks_every_addressable_revision_and_gateway():
@@ -181,6 +238,8 @@ elif args[:3] == ["tasks", "queues", "pause"]:
     reads = state.get("tasks_after_pause")
     if reads:
         state["queues"][args[3]]["tasks"] = reads
+    if state.get("barrier_after_pause"):
+        state["barrier"] = state["barrier_after_pause"]
     save()
 elif args[:3] == ["tasks", "queues", "resume"]:
     state["queues"][args[3]]["state"] = "RUNNING"; save()
@@ -203,14 +262,28 @@ else:
 def operator(tmp_path):
     repo = tmp_path / "repo"
     (repo / "scripts/lib").mkdir(parents=True)
-    for name in ("operate-staged-queue.sh", "staged_queue_guard.py", "lib/release-source-guard.sh"):
+    for name in ("operate-staged-queue.sh", "staged_queue_guard.py", "staged_candidate_cloudbuild.py",
+                 "lib/release-source-guard.sh"):
         shutil.copyfile(ROOT / "scripts" / name, repo / "scripts" / name)
+    # Stands in for the operator's signed barrier-status readback.
+    (repo / "scripts/fixlist-cloud-operator.sh").write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\nexec python3 - <<'PY'\n"
+        "import json,os,sys\n"
+        "with open(os.environ['TEST_CALL_LOG'],'a') as f: f.write(json.dumps(['barrier',os.environ['OPERATION'],"
+        "os.environ['SOURCE_SHA'],os.environ['BARRIER_EXPECTED_GENERATION'],os.environ['BARRIER_EXPECTED_PRIOR_MODE'],"
+        "os.environ['CHANGE_TICKET']])+'\\n')\n"
+        "b=json.load(open(os.environ['FAKE_STATE']))['barrier']\n"
+        "if b is None: sys.exit('Refusing: barrier snapshot signature invalid')\n"
+        "print('ADMISSION_BARRIER_STATUS mode={mode} generation={generation} drain_ready={ready} active={active} "
+        "bound={bound} expired_diagnostic=0 live_reconciliation={live} snapshot=snap-{generation}'.format(**b))\n"
+        "PY\n")
     (repo / "scripts/verify_staged_scan_infra.py").write_text(
         "import json,os,sys\n"
         "with open(os.environ['TEST_CALL_LOG'],'a') as f: f.write(json.dumps(['verify',*sys.argv[1:]])+'\\n')\n"
         "state=json.load(open(os.environ['FAKE_STATE']))\n"
         "want=sys.argv[sys.argv.index('--expected-queue-state')+1]\n"
-        "sys.exit(0 if state['queues']['fixlist-scan-stages']['state']==want else 'FAIL: state')\n")
+        "fail=os.environ.get('FAKE_VERIFY_FAIL')==want\n"
+        "sys.exit(0 if state['queues']['fixlist-scan-stages']['state']==want and not fail else 'FAIL: state')\n")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "gcloud").write_text(FAKE_GCLOUD)
@@ -224,14 +297,16 @@ def operator(tmp_path):
     state_path, log = tmp_path / "state.json", tmp_path / "calls.jsonl"
 
     def write_state(stage_state="PAUSED", candidate=None, serving=None, gateway=None,
-                    stage_tasks=(), entry_tasks=(), drain_tasks=(), **extra):
+                    stage_tasks=(), entry_tasks=(), drain_tasks=(), barrier=None, source=None, **extra):
         gateway_env = gateway or {"SCAN_PIPELINE_MODE": "monolith"}
+        source = source or sha
         state = {
+            "barrier": barrier_state(**(barrier or {})) if barrier is not False else None,
             "services": {
-                "fixlist-standard150-worker": service(),
+                "fixlist-standard150-worker": service(source=source),
                 "fixlist-dispatch-gateway": {"status": {"traffic": [{"revisionName": "gw-00009-abc", "percent": 100}]}},
             },
-            "revisions": {**revisions(candidate, serving),
+            "revisions": {**revisions(candidate_env(source, **(candidate or {})), serving, source),
                           "gw-00009-abc": revision("gw-00009-abc", gateway_env, sa="gw@x")},
             "queues": {"fixlist-scan-stages": {"state": stage_state, "tasks": list(stage_tasks)},
                        "fixlist-standard150": {"state": "RUNNING", "tasks": list(entry_tasks)},
@@ -254,6 +329,10 @@ def operator(tmp_path):
         return result, calls, final
 
     return sha, write_state, run
+
+
+def barrier_state(mode="closed", generation=7, ready="true", active=0, bound=0, live=0):
+    return dict(mode=mode, generation=generation, ready=ready, active=active, bound=bound, live=live)
 
 
 def mutations(calls):
@@ -280,7 +359,7 @@ def test_activate_resumes_only_after_full_readback(operator):
     assert final["queues"]["fixlist-scan-stages"]["state"] == "RUNNING"
     verifies = [c for c in calls if c[0] == "verify"]
     assert [v[v.index("--expected-queue-state") + 1] for v in verifies] == ["PAUSED", "RUNNING"]
-    assert verifies[0][verifies[0].index("--worker-url") + 1] == TARGET
+    assert verifies[0][verifies[0].index("--worker-url") + 1] == target_for(sha)
     assert verifies[0][verifies[0].index("--token-audience") + 1] == ORIGIN
     resume = [i for i, c in enumerate(calls) if c[1:4] == ["tasks", "queues", "resume"]]
     assert len(resume) == 1 and calls.index(verifies[0]) < resume[0] < calls.index(verifies[1])
@@ -290,7 +369,7 @@ def test_activate_resumes_only_after_full_readback(operator):
 
 def test_activate_refuses_misconfigured_candidate_without_mutation(operator):
     sha, write_state, run = operator
-    write_state(candidate=candidate_env(SCAN_STAGED_OWNER_IDS="*"))
+    write_state(candidate=dict(SCAN_STAGED_OWNER_IDS="*"))
     result, calls, final = run("activate", f"ACTIVATE-STAGED-QUEUE:{sha}:fixlist-scan-stages:{CANDIDATE}",
                                STAGED_REVISION=CANDIDATE)
     assert result.returncode != 0 and "Wildcard" in result.stderr
@@ -315,32 +394,91 @@ def test_activate_refuses_paused_queue_holding_tasks(operator):
     assert result.returncode == 2 and "use recover" in result.stderr and mutations(calls) == []
 
 
-def test_drain_pause_refuses_while_intake_is_enabled(operator):
+def test_activate_refuses_a_valid_candidate_built_from_another_source(operator):
+    sha, write_state, run = operator
+    write_state(source=OTHER_SOURCE)
+    result, calls, final = run("activate", f"ACTIVATE-STAGED-QUEUE:{sha}:fixlist-scan-stages:{CANDIDATE}",
+                               STAGED_REVISION=CANDIDATE)
+    assert result.returncode != 0 and "not the confirmed source" in result.stderr
+    assert mutations(calls) == [] and final["queues"]["fixlist-scan-stages"]["state"] == "PAUSED"
+
+
+def test_activate_refuses_configuration_drift(operator):
+    sha, write_state, run = operator
+    write_state(candidate=dict(SCAN_STAGE_QUEUE="fixlist-standard150"))
+    result, calls, final = run("activate", f"ACTIVATE-STAGED-QUEUE:{sha}:fixlist-scan-stages:{CANDIDATE}",
+                               STAGED_REVISION=CANDIDATE)
+    assert result.returncode != 0 and "drifted" in result.stderr and mutations(calls) == []
+
+
+def test_activate_reports_partial_activation_when_post_resume_verification_fails(operator):
+    sha, write_state, run = operator
+    write_state()
+    result, calls, final = run("activate", f"ACTIVATE-STAGED-QUEUE:{sha}:fixlist-scan-stages:{CANDIDATE}",
+                               STAGED_REVISION=CANDIDATE, FAKE_VERIFY_FAIL="RUNNING")
+    assert result.returncode == 3
+    assert "STAGED_QUEUE_PARTIAL_ACTIVATION observed_state=RUNNING tasks=0" in result.stderr
+    assert "STAGED_QUEUE_ACTIVATED" not in result.stdout
+    # Reported, not blindly paused: a scan may already depend on the queue.
+    assert [c[3] for c in mutations(calls)] == ["resume"]
+
+
+DRAIN = "DRAIN-PAUSE-STAGED-QUEUE:{sha}:fixlist-scan-stages:7"
+RECOVER = "RECOVER-STAGED-QUEUE:{sha}:fixlist-scan-stages:7"
+
+
+def test_drain_pause_and_recover_confirmations_bind_the_barrier_generation(operator):
     sha, write_state, run = operator
     write_state(stage_state="RUNNING")
-    result, calls, final = run("drain-pause", f"DRAIN-PAUSE-STAGED-QUEUE:{sha}:fixlist-scan-stages:BASE44-STAGED-INTAKE-OFF")
-    assert result.returncode != 0 and "Staged intake still enabled" in result.stderr
+    for confirm in (f"DRAIN-PAUSE-STAGED-QUEUE:{sha}:fixlist-scan-stages:BASE44-STAGED-INTAKE-OFF",
+                    f"DRAIN-PAUSE-STAGED-QUEUE:{sha}:fixlist-scan-stages:8"):
+        result, calls, _ = run("drain-pause", confirm, BARRIER_EXPECTED_GENERATION="7")
+        assert result.returncode == 2 and "confirmation required" in result.stderr and calls == []
+    result, calls, _ = run("drain-pause", DRAIN.format(sha=sha))
+    assert result.returncode == 2 and "BARRIER_EXPECTED_GENERATION" in result.stderr and calls == []
+
+
+@pytest.mark.parametrize("barrier, message", [
+    (dict(mode="open"), "barrier is open"),
+    (dict(mode="acceptance_only"), "barrier is acceptance_only"),
+    (dict(generation=8), "generation changed"),
+    (dict(ready="false", active=1), "not all terminal"),
+    (dict(bound=1), "not all terminal"),
+    (dict(live=1), "not all terminal"),
+    (False, "snapshot could not be read"),
+])
+def test_drain_pause_refuses_without_a_closed_drained_barrier_even_with_empty_queues(operator, barrier, message):
+    sha, write_state, run = operator
+    write_state(stage_state="RUNNING", barrier=barrier)
+    result, calls, final = run("drain-pause", DRAIN.format(sha=sha), BARRIER_EXPECTED_GENERATION="7")
+    assert result.returncode != 0 and message in result.stderr
     assert mutations(calls) == [] and final["queues"]["fixlist-scan-stages"]["state"] == "RUNNING"
 
 
-def test_drain_pause_waits_for_every_feeder_then_pauses(operator):
+def test_drain_pause_needs_the_barrier_proof_then_empty_feeders_then_pauses(operator):
     sha, write_state, run = operator
-    write_state(stage_state="RUNNING", candidate=candidate_env(SCAN_PIPELINE_MODE="monolith"),
-                stage_tasks=["b1"], drain_tasks=["w1"],
+    # A still-cohorted worker no longer blocks: the barrier is the intake proof.
+    write_state(stage_state="RUNNING", stage_tasks=["b1"], drain_tasks=["w1"],
                 drain_after_reads={"fixlist-scan-stages": 2, "fixlist-standard150-drain": 3})
-    result, calls, final = run("drain-pause", f"DRAIN-PAUSE-STAGED-QUEUE:{sha}:fixlist-scan-stages:BASE44-STAGED-INTAKE-OFF")
+    result, calls, final = run("drain-pause", DRAIN.format(sha=sha), BARRIER_EXPECTED_GENERATION="7")
     assert result.returncode == 0, result.stderr
     assert final["queues"]["fixlist-scan-stages"]["state"] == "PAUSED"
     reads = [line for line in result.stdout.splitlines() if line.startswith("STAGED_QUEUE_DRAIN_READ")]
     assert reads[-2:] == ["STAGED_QUEUE_DRAIN_READ stage=0 entry=0 drain=0"] * 2
     assert "stage=1" in reads[0]
+    assert "STAGED_QUEUE_PAUSE_PROOF generation=7 snapshot=snap-7" in result.stdout
+    barriers = [i for i, c in enumerate(calls) if c[0] == "barrier"]
+    pause = [i for i, c in enumerate(calls) if c[1:4] == ["tasks", "queues", "pause"]][0]
+    assert len(barriers) == 3 and barriers[1] < pause < barriers[2]
+    assert all(calls[i][1] == "barrier-status" and calls[i][2] == sha and calls[i][3:5] == ["7", "closed"]
+               for i in barriers)
     assert [c[3] for c in mutations(calls)] == ["pause"]
 
 
 def test_drain_pause_times_out_and_leaves_queue_running(operator):
     sha, write_state, run = operator
-    write_state(stage_state="RUNNING", candidate=candidate_env(SCAN_PIPELINE_MODE="monolith"), entry_tasks=["e1"])
-    result, calls, final = run("drain-pause", f"DRAIN-PAUSE-STAGED-QUEUE:{sha}:fixlist-scan-stages:BASE44-STAGED-INTAKE-OFF",
+    write_state(stage_state="RUNNING", entry_tasks=["e1"])
+    result, calls, final = run("drain-pause", DRAIN.format(sha=sha), BARRIER_EXPECTED_GENERATION="7",
                                STAGED_QUEUE_DRAIN_TIMEOUT_SECONDS="0")
     assert result.returncode == 1 and "STAGED_QUEUE_DRAIN_INCOMPLETE" in result.stderr
     assert mutations(calls) == [] and final["queues"]["fixlist-scan-stages"]["state"] == "RUNNING"
@@ -348,26 +486,47 @@ def test_drain_pause_times_out_and_leaves_queue_running(operator):
 
 def test_drain_pause_compensates_a_task_that_races_the_pause(operator):
     sha, write_state, run = operator
-    write_state(stage_state="RUNNING", candidate=candidate_env(SCAN_PIPELINE_MODE="monolith"),
-                tasks_after_pause=["late"])
-    result, calls, final = run("drain-pause", f"DRAIN-PAUSE-STAGED-QUEUE:{sha}:fixlist-scan-stages:BASE44-STAGED-INTAKE-OFF")
+    write_state(stage_state="RUNNING", tasks_after_pause=["late"])
+    result, calls, final = run("drain-pause", DRAIN.format(sha=sha), BARRIER_EXPECTED_GENERATION="7")
     assert result.returncode == 1 and "COMPENSATED" in result.stderr
     assert [c[3] for c in mutations(calls)] == ["pause", "resume"]
     assert final["queues"]["fixlist-scan-stages"]["state"] == "RUNNING"
 
 
-def test_recover_resumes_stranded_tasks_only_after_intake_is_off(operator):
+@pytest.mark.parametrize("after", [dict(active=1, ready="false"), dict(mode="open"), dict(generation=8)])
+def test_drain_pause_compensates_an_admission_that_races_the_pause(operator, after):
     sha, write_state, run = operator
-    confirm = f"RECOVER-STAGED-QUEUE:{sha}:fixlist-scan-stages:BASE44-STAGED-INTAKE-OFF"
-    write_state(stage_tasks=["b1", "f1"])
-    result, calls, final = run("recover", confirm)
-    assert result.returncode != 0 and mutations(calls) == []
-    write_state(stage_tasks=["b1", "f1"], candidate=candidate_env(SCAN_STAGED_OWNER_IDS=""))
-    result, calls, final = run("recover", confirm)
+    write_state(stage_state="RUNNING", barrier_after_pause=barrier_state(**after))
+    result, calls, final = run("drain-pause", DRAIN.format(sha=sha), BARRIER_EXPECTED_GENERATION="7")
+    assert result.returncode == 1 and "COMPENSATED" in result.stderr
+    assert [c[3] for c in mutations(calls)] == ["pause", "resume"]
+    assert final["queues"]["fixlist-scan-stages"]["state"] == "RUNNING"
+
+
+def test_recover_resumes_a_stranded_scan_on_a_still_cohorted_tagged_worker(operator):
+    sha, write_state, run = operator
+    # The exact scan recovery exists for: admitted, obligations outstanding,
+    # its tagged worker revision still cohorted, new admissions closed.
+    write_state(stage_tasks=["b1", "f1"], barrier=dict(ready="false", active=1, bound=1))
+    result, calls, final = run("recover", RECOVER.format(sha=sha), BARRIER_EXPECTED_GENERATION="7")
     assert result.returncode == 0, result.stderr
-    assert "pending_tasks=2" in result.stdout
+    assert "pending_tasks=2 generation=7" in result.stdout and "active=1" in result.stdout
     assert [c[3] for c in mutations(calls)] == ["resume"]
     assert final["queues"]["fixlist-scan-stages"]["tasks"] == ["b1", "f1"]
+
+
+@pytest.mark.parametrize("barrier, message", [
+    (dict(mode="open"), "barrier is open"),
+    (dict(mode="acceptance_only"), "barrier is acceptance_only"),
+    (dict(generation=6), "generation changed"),
+    (False, "snapshot could not be read"),
+])
+def test_recover_refuses_while_new_admissions_are_possible(operator, barrier, message):
+    sha, write_state, run = operator
+    write_state(stage_tasks=["b1"], barrier=barrier)
+    result, calls, final = run("recover", RECOVER.format(sha=sha), BARRIER_EXPECTED_GENERATION="7")
+    assert result.returncode != 0 and message in result.stderr
+    assert mutations(calls) == [] and final["queues"]["fixlist-scan-stages"]["state"] == "PAUSED"
 
 
 def test_status_is_read_only_and_verifies_an_existing_task(operator):

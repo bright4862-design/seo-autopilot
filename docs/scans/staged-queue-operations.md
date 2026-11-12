@@ -24,14 +24,17 @@ Every operation pins the project, region, worker, gateway, bucket, both service
 accounts and the stage queue. It refuses any override. Every operation requires
 the exact current `main` (`release-source-guard.sh`). It never deletes or purges
 tasks, never deletes the queue, and never touches the entry or drain queues,
-traffic, IAM, secrets, Base44 or the admission barrier.
+traffic, IAM, secrets, Base44, worker revisions or tags, or the admission
+barrier. It only *reads* the barrier, through the existing
+`fixlist-cloud-operator.sh barrier-status`, which verifies the coordinator's
+HMAC-signed snapshot.
 
 | Operation | Confirmation | Preconditions read live | Action |
 |---|---|---|---|
 | `status` | none | none (read only) | Reports the stage queue state and the task count in every queue. With `STAGED_REVISION`, also runs a full candidate readback plus `verify_staged_scan_infra.py`, using `--task` when a task exists so per-task OIDC is checked. |
-| `activate` | `ACTIVATE-STAGED-QUEUE:<sha>:fixlist-scan-stages:<revision>` | See the activation checks below. | `resume`, then the verifier again, which must report RUNNING. |
-| `drain-pause` | `DRAIN-PAUSE-STAGED-QUEUE:<sha>:fixlist-scan-stages:BASE44-STAGED-INTAKE-OFF` | Queue is RUNNING. Staged intake is off on every addressable worker revision and on the serving gateway. The stage, entry and drain queues are all empty for N consecutive reads. | `pause`. If any task appears afterwards, the tool resumes the queue and fails. |
-| `recover` | `RECOVER-STAGED-QUEUE:<sha>:fixlist-scan-stages:BASE44-STAGED-INTAKE-OFF` | Queue is PAUSED. Staged intake is off. | `resume`, so that admitted scans can finish. The tool never pauses during recovery. |
+| `activate` | `ACTIVATE-STAGED-QUEUE:<sha>:fixlist-scan-stages:<revision>` | See the activation checks below. | `resume`, then the verifier again, which must report RUNNING. If that second verification fails, the tool prints `STAGED_QUEUE_PARTIAL_ACTIVATION observed_state=… tasks=…` and exits 3. It does not pause blindly. |
+| `drain-pause` | `DRAIN-PAUSE-STAGED-QUEUE:<sha>:fixlist-scan-stages:<generation>`, with `BARRIER_EXPECTED_GENERATION=<generation>` | Queue is RUNNING. The signed barrier is `closed` at that generation, with `drain_ready=true` and `active`, `bound` and `live_reconciliation` all 0. The stage, entry and drain queues are all empty for N consecutive reads. The barrier is then read again. | `pause`, then the barrier and all three queues are read again. If anything changed, the tool resumes the queue and fails (`STAGED_QUEUE_PAUSE_COMPENSATED`). On success it prints `STAGED_QUEUE_PAUSE_PROOF generation=… snapshot=…`. |
+| `recover` | `RECOVER-STAGED-QUEUE:<sha>:fixlist-scan-stages:<generation>`, with `BARRIER_EXPECTED_GENERATION=<generation>` | Queue is PAUSED. The signed barrier is `closed` at that generation. Outstanding obligations are allowed. | `resume`, so that admitted scans can finish. The tool never pauses during recovery. |
 
 **Activation checks.** `activate` refuses unless all of the following read back
 live:
@@ -39,7 +42,15 @@ live:
 - The queue is PAUSED and holds no tasks. If it holds tasks, use `recover`.
 - `STAGED_REVISION` is an addressable revision receiving 0% of traffic.
 - That revision runs as the worker service account.
-- It declares an exact `FIXLIST_WORKER_SOURCE_SHA`.
+- Its `FIXLIST_WORKER_SOURCE_SHA` equals the confirmed `SOURCE_SHA`, which is
+  the exact `main` the tool runs from. A valid candidate tagged for another
+  commit is refused, so build the candidate from the `main` you will activate
+  from.
+- Its `FIXLIST_STAGED_CONFIG_SHA256` equals the digest the tool recomputes
+  (`staged_candidate_cloudbuild.digest_for`) over the reviewed inactive
+  environment for that source, project, region, bucket, queue and origin.
+- Every staged key except the two cohort keys (`SCAN_PIPELINE_MODE` and
+  `SCAN_STAGED_OWNER_IDS`) still equals that reviewed build.
 - It carries the tag `staged-<source12>`.
 - It enqueues to the fixed queue path.
 - Its target URL is that tag's own URL.
@@ -50,19 +61,34 @@ live:
 - `verify_staged_scan_infra.py --expected-queue-state PAUSED` passes.
 
 **Pausing is the dangerous direction.** A paused stage queue strands admitted
-scans in the middle of their pipeline. The tool therefore requires new intake
-to be off *first*. It then requires all three queues that can create stage
-tasks to stay empty (entry for plan, stage for batches, drain for the watchdog
-finalize), and only then pauses. If the drain does not finish within
-`STAGED_QUEUE_DRAIN_TIMEOUT_SECONDS` (default 900, maximum 3600), the queue is
-left RUNNING.
+scans in the middle of their pipeline. Empty task lists cannot prove that every
+scan is finished, because a frontier can be committed before its next task is
+enqueued. The tool therefore relies on the coordinator's admission barrier:
 
-**Base44 can't be checked from here.** GCP cannot read Base44's
-`SCAN_PIPELINE_MODE` or `SCAN_STAGED_OWNER_IDS`. The drain and recover
-confirmations therefore make the operator attest
-`BASE44-STAGED-INTAKE-OFF`. Do that only after Base44 staged intake is off, or
-after the admission barrier is verified closed with zero obligations
-(`barrier-status`).
+- `closed` means no new claim can be admitted from any entry point, Base44
+  included.
+- The coordinator releases an admission only at a terminal status (`complete`,
+  `limited`, `failed` or `cancelled`). So zero `active`, `bound` and
+  `live_reconciliation` obligations mean every admitted scan is terminal.
+
+`drain-pause` requires that proof, then all three queues that can create stage
+tasks to stay empty (entry for plan, stage for batches, drain for the watchdog
+finalize), then the same proof again. Only then does it pause. Afterwards it
+revalidates everything, and resumes on any change. If the drain does not finish
+within `STAGED_QUEUE_DRAIN_TIMEOUT_SECONDS` (default 900, maximum 3600), the
+queue is left RUNNING. Every barrier read is bound to the confirmed
+generation, so a barrier reopened and closed again in between is refused.
+
+**Recovery needs only closed admissions.** A stranded scan keeps its pinned,
+source-tagged worker revision. That revision may still list the owner in its
+cohort, and `/scan-batch` and `/scan-finalize` drain regardless of the cohort.
+So `recover` checks neither worker intake nor tags. It requires only a closed
+barrier at the confirmed generation, then resumes the queue.
+
+The barrier read needs the same inputs as the operator's `barrier-status`: an
+operator identity token for the coordinator, and optionally `CHANGE_TICKET` and
+`CUTOVER_REASON` (defaults are supplied). If the signed snapshot cannot be
+verified, the tool refuses.
 
 **Not wired into the Cloud Operator workflow.** Adding an `operation` choice and
 an environment block is a separate, reviewable workflow change. Until then, an
@@ -106,12 +132,16 @@ authorized live action) or **[tool]** (an existing guarded operation).
 5. **[owner/GCP]** Admission: read a fresh `barrier-status`, resume the drain
    plane (claims stay closed), open an acceptance-only cohort for one owner
    with a budget of one, and enable Base44 V9 staged mode for that exact owner.
-6. **[tool, this PR]** `OPERATION=activate` with the exact staged revision.
+6. **[tool, this PR]** `OPERATION=activate` with the exact staged revision,
+   from the same `main` the candidate was built from.
 7. **[tool]** Run `scripts/run-staged-owner-canary.sh` once with
    `EXPECTED_PAGE_CAP=150`.
-8. **[tool, this PR]** After the result is verified, turn staged intake off
-   (Base44, gateway and worker cohort). Then run `drain-pause`, close admission,
-   and restore the gateway.
+8. **[tool, this PR]** After the result is verified, close the admission
+   barrier and read its generation with `barrier-status`. Once it reports zero
+   obligations, run `drain-pause` at that generation. Then turn staged intake
+   off (Base44, gateway and worker cohort) and restore the gateway. If a scan
+   is ever stranded in a paused queue, close admission and run `recover` at
+   that generation.
 
 Steps 1, 2 and 5 are external, owner-authorized actions. No code change
 removes them.

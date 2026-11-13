@@ -74,7 +74,7 @@ const RECORDED = {
   component_versions: COMPONENTS,
 };
 
-function compare(live, recorded = RECORDED, expectedSha = "") {
+function compare(live, recorded = RECORDED, expectedSha = "a".repeat(40)) {
   return withFixtures({ live, recorded }, (paths) =>
     runPython(COMPARATOR, [paths.live, paths.recorded, expectedSha]),
   );
@@ -152,9 +152,34 @@ test("a missing fingerprint is a failure, never a pass by absence", () => {
 test("a non-JSON or non-object body is a failure", () => {
   for (const body of ["<html>403 Forbidden</html>", "", '["5d94e93c54a9efb6"]', '"5d94e93c54a9efb6"']) {
     const result = withFixtures({ live: body, recorded: RECORDED }, (paths) =>
-      runPython(COMPARATOR, [paths.live, paths.recorded, ""]),
+      runPython(COMPARATOR, [paths.live, paths.recorded, "a".repeat(40)]),
     );
     assert.equal(result.status, 1, `${body.slice(0, 20)} must not pass as a revision answer`);
+  }
+});
+
+test("missing or malformed expected SHA fails even when every runtime marker matches", () => {
+  const live = {
+    component_versions: COMPONENTS,
+    fingerprint: RECORDED.fingerprint,
+    source_sha: "a".repeat(40),
+  };
+  for (const expected of ["", "a".repeat(39), "A".repeat(40), "g".repeat(40), "a".repeat(41)]) {
+    const result = compare(live, RECORDED, expected);
+    assert.equal(result.status, 1, `invalid expected SHA must fail: ${JSON.stringify(expected)}`);
+    assert.match(result.stdout, /expected source SHA must be an exact lowercase 40-hex commit/);
+  }
+});
+
+test("malformed runtime SHA fails even when fingerprint and components match", () => {
+  for (const source_sha of ["a".repeat(39), "A".repeat(40), "g".repeat(40)]) {
+    const result = compare({
+      component_versions: COMPONENTS,
+      fingerprint: RECORDED.fingerprint,
+      source_sha,
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /runtime source_sha is not an exact lowercase 40-hex commit/);
   }
 });
 
@@ -176,7 +201,7 @@ test("an unstamped container is a hard failure, not a warning", () => {
   // Tying running bytes to a reviewed commit is the whole point of the gate, so
   // a container that cannot say what it was built from is unpromotable even
   // when every marker it does carry matches.
-  for (const expected of ["a".repeat(40), ""]) {
+  for (const expected of ["a".repeat(40)]) {
     const result = compare(
       { component_versions: COMPONENTS, fingerprint: "5d94e93c54a9efb6" },
       RECORDED,
@@ -273,7 +298,7 @@ test("an untagged revision that does not hold all traffic yields no probe URL", 
 // Running the real operation end to end against stubbed gcloud/curl is the only
 // way to prove the refusal paths refuse. Asserting on their prose would pass a
 // guard that printed INDETERMINATE and then fell through to PASS.
-function runGuard({ service, revision = "", body, code = "200", token = "stub-token", audience = "", probeUrl = "", sourceSha = "" }) {
+function runGuard({ service, revision = "", body, code = "200", token = "stub-token", audience = "", probeUrl = "", sourceSha = "a".repeat(40) }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-revision-e2e-"));
   const bin = path.join(dir, "bin");
   fs.mkdirSync(bin);
@@ -359,6 +384,21 @@ test("end to end: a worker serving the recorded identity passes", () => {
   assert.match(result.stdout, /PASS: the running worker computes/);
   assert.match(result.curl, new RegExp(`${SERVICE_URL}/revision`));
   assert.match(result.curl, /authorization: Bearer stub-token/);
+});
+
+test("end to end: absent or malformed expected SHA refuses before probing Cloud Run", () => {
+  for (const sourceSha of ["", "a".repeat(39), "g".repeat(40), "A".repeat(40)]) {
+    const result = runGuard({
+      service: serving("worker-00054-trs"),
+      revision: "worker-00054-trs",
+      body: LIVE_MATCHING,
+      sourceSha,
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stdout, /an exact lowercase 40-hex expected source SHA is required/);
+    assert.equal(result.curl, "", "an invalid expected commit must not spend a worker token");
+    assert.doesNotMatch(result.stdout, /PASS:/);
+  }
 });
 
 test("end to end: a worker serving a different identity fails and is diagnosed", () => {

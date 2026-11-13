@@ -464,6 +464,13 @@ verify_worker_runtime_revision() {
   local revision="${1:-$TARGET_REVISION}" expected_sha="${2:-}"
   local service_json recorded response probe_url token code compare_status=0
 
+  # Without an exact expected commit, matching release markers cannot prove
+  # which source built the runtime. Refuse before any Cloud Run or token call.
+  if [[ ! "$expected_sha" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "INDETERMINATE: an exact lowercase 40-hex expected source SHA is required."
+    return 1
+  fi
+
   echo
   echo "=== Runtime revision fingerprint ==="
 
@@ -602,9 +609,12 @@ PY
 
   python3 - "$response" "$recorded" "$expected_sha" <<'PY' || compare_status=$?
 # runtime-revision-comparator
-import json, sys
+import json, re, sys
 
 response_path, recorded_path, expected_sha = sys.argv[1:4]
+if not re.fullmatch(r"[0-9a-f]{40}", expected_sha):
+    print("FAIL: expected source SHA must be an exact lowercase 40-hex commit.")
+    raise SystemExit(1)
 try:
     live = json.load(open(response_path, encoding="utf-8"))
 except Exception:
@@ -671,7 +681,10 @@ if not live_sha:
     failed = True
     print("FAIL: the container declares no FIXLIST_WORKER_SOURCE_SHA, so its")
     print("running bytes cannot be tied to any reviewed commit.")
-elif expected_sha and live_sha != expected_sha:
+elif not re.fullmatch(r"[0-9a-f]{40}", live_sha):
+    failed = True
+    print("FAIL: runtime source_sha is not an exact lowercase 40-hex commit.")
+elif live_sha != expected_sha:
     failed = True
     print("FAIL: the container says it was built from %s, but the release being" % live_sha)
     print("promoted is %s." % expected_sha)

@@ -181,6 +181,28 @@ test("every individually future-dated customer observation is rejected by the as
   }
 });
 
+test("Stage-4 CI receipt uses this repository and exactly the declared run id", () => {
+  const baseline = evaluateStage4ReleaseAcceptance(validRecord());
+  assert.equal(baseline.pass, true);
+
+  const cases = [
+    ["foreign repository", "https://github.com/example/other-repo/actions/runs/123456", 123456, "canonical repository"],
+    ["wrong run id", "https://github.com/bright4862-design/seo-autopilot/actions/runs/654321", 123456, "declared run id"],
+    ["ambiguous leading zero", "https://github.com/bright4862-design/seo-autopilot/actions/runs/0123456", 123456, "declared run id"],
+    ["run URL with query", "https://github.com/bright4862-design/seo-autopilot/actions/runs/123456?attempt=2", 123456, "canonical repository"],
+    ["non-numeric CI id", "https://github.com/bright4862-design/seo-autopilot/actions/runs/123456", "123456", "CI run id missing"],
+    ["unsafe CI id", "https://github.com/bright4862-design/seo-autopilot/actions/runs/9007199254740992", 9007199254740992, "CI run id missing"],
+  ];
+  for (const [label, url, id, expected] of cases) {
+    const record = validRecord();
+    record.ci.run_url = url;
+    record.ci.run_id = id;
+    const result = evaluateStage4ReleaseAcceptance(record);
+    assert.equal(result.pass, false, label);
+    assert.ok(result.failures.some((failure) => failure.includes(expected)), label);
+  }
+});
+
 test("source release manifest supplies all six scanner roles at one route generation", () => {
   assert.equal(EXPECTED_SCANNER_FUNCTIONS.length, SCANNER_RUNTIME_ROLES.length);
   assert.equal(SCANNER_RUNTIME_ROLES.length, 6);

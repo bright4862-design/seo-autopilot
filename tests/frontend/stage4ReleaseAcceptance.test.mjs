@@ -18,7 +18,7 @@ function validRecord(overrides = {}) {
   const record = {
     version: STAGE4_RELEASE_RECORD_VERSION,
     provenance: "live_authorized",
-    observed_at: "2026-09-19T20:00:00Z",
+    observed_at: "2026-09-19T20:30:00Z",
     source: { merged_sha: SHA },
     review: { status: "approved", evidence_reference: RECEIPT },
     ci: {
@@ -142,6 +142,42 @@ test("a historical observation cannot be relabeled as a post-scan customer proof
     assert.equal(result.pass, false, field);
     assert.equal(result.status, "failed", field);
     assert.ok(result.failures.includes(message), field);
+  }
+});
+
+test("a final as-of release record cannot predate the scan it includes", () => {
+  const record = validRecord();
+  record.observed_at = "2026-09-19T20:09:59Z";
+  const result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.status, "failed");
+  assert.equal(result.pass, false);
+  assert.ok(result.failures.includes("release record observed before scan evidence"));
+});
+
+test("a release record after reload and history but before rescan still fails", () => {
+  const record = validRecord();
+  record.observed_at = "2026-09-19T20:19:59Z";
+  const result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.status, "failed");
+  assert.ok(result.failures.includes("release record observed before rescan evidence"));
+  assert.ok(!result.failures.includes("release record observed before reload evidence"));
+  assert.ok(!result.failures.includes("release record observed before history evidence"));
+});
+
+test("as-of equality is permitted for coarse-resolution observation clocks", () => {
+  const record = validRecord();
+  record.observed_at = record.acceptance.rescan.observed_at;
+  const result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.pass, true);
+});
+
+test("every individually future-dated customer observation is rejected by the as-of guard", () => {
+  for (const key of ["scan", "reload", "history", "rescan"]) {
+    const record = validRecord();
+    record.acceptance[key].observed_at = "2026-09-19T20:31:00Z";
+    const result = evaluateStage4ReleaseAcceptance(record);
+    assert.equal(result.pass, false, key);
+    assert.ok(result.failures.includes(`release record observed before ${key} evidence`), key);
   }
 });
 

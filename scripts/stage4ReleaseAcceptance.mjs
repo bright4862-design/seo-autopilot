@@ -184,6 +184,20 @@ export function evaluateStage4ReleaseAcceptance(record) {
   add(failures, observedNotBefore(scan.observed_at, rescan.observed_at),
     "customer rescan was observed before its acceptance scan");
 
+  // The final operator record is an as-of snapshot, not a time machine.
+  // It must not claim observations from after its own timestamp. This only
+  // establishes chronology of reported observations; receipt authenticity
+  // still requires independent operator/runtime verification.
+  for (const [label, observedAt] of [
+    ["scan", scan.observed_at],
+    ["reload", reload.observed_at],
+    ["history", history.observed_at],
+    ["rescan", rescan.observed_at],
+  ]) {
+    add(failures, observedNotBefore(observedAt, record.observed_at),
+      `release record observed before ${label} evidence`);
+  }
+
   add(failures, record.acceptance?.closed_and_drained === true, "acceptance cohort was not closed and drained after verification");
   add(failures, hasReceipt(record.acceptance?.close_drain_reference), "acceptance close/drain receipt missing");
   add(failures, record.public_release?.opened_after_acceptance === true, "public opening was not verified to occur after acceptance");

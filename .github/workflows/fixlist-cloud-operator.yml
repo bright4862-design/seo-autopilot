@@ -31,7 +31,6 @@ on:
           - staged-queue-activate
           - staged-queue-drain-pause
           - staged-queue-recover
-          - promote-worker
           - rollback-worker
           - barrier-status
           - verify-zero-admission-obligations
@@ -435,7 +434,16 @@ jobs:
           FIXLIST_OPERATOR_ID_TOKEN: ${{ steps.operator-id-token.outputs.id_token }}
           FIXLIST_OPERATOR_TOKEN_AUDIENCE: ${{ env.ADMISSION_OPERATOR_AUDIENCE }}
         shell: bash
-        run: bash ./scripts/fixlist-cloud-operator.sh
+        run: |
+          set -euo pipefail
+          # Only the owner-comment promotion job attests the candidate before
+          # traffic and verifies/rolls back after traffic. Refuse the older
+          # workflow_dispatch shortcut even for a forged/legacy input value.
+          if [[ "$OPERATION" == "promote-worker" ]]; then
+            echo "Refusing direct promotion: use the guarded owner-comment release path." >&2
+            exit 2
+          fi
+          bash ./scripts/fixlist-cloud-operator.sh
 
       - name: Build isolated Standard 150 worker candidate
         if: inputs.operation == 'build-worker-candidate'

@@ -203,6 +203,19 @@ test("Stage-4 CI receipt uses this repository and exactly the declared run id", 
   }
 });
 
+test("matching CI run reference cannot override failed CI or changed source SHA", () => {
+  for (const [field, value, fragment] of [
+    ["conclusion", "failure", "exact-source CI is not successful"],
+    ["sha", "f".repeat(40), "CI SHA does not match"],
+  ]) {
+    const record = validRecord();
+    record.ci[field] = value;
+    const result = evaluateStage4ReleaseAcceptance(record);
+    assert.equal(result.pass, false, field);
+    assert.ok(result.failures.some((failure) => failure.includes(fragment)), field);
+  }
+});
+
 test("source release manifest supplies all six scanner roles at one route generation", () => {
   assert.equal(EXPECTED_SCANNER_FUNCTIONS.length, SCANNER_RUNTIME_ROLES.length);
   assert.equal(SCANNER_RUNTIME_ROLES.length, 6);

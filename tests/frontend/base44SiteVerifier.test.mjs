@@ -188,3 +188,85 @@ test("both release paths still rely on the verifier's canonical defaults", () =>
     assert.doesNotMatch(source, /BASE44_URL|rich-rank-pilot-flow/, "a caller override would bring the stale-alias failure back");
   }
 });
+
+
+test("an HTML comment carrying a matching old bundle cannot certify the executing entry", (t) => {
+  const decoy = "/assets/index-decoy123.js";
+  const html = '<!doctype html><html><head><!-- ' + decoy + ' -->' +
+    '<script type="module" src="' + ASSET + '"></script></head></html>';
+  const box = sandbox(t, [
+    ["200", PUBLIC + "/", html],
+    ["200", PUBLIC + decoy, bundle(SHA)],
+    ["200", PUBLIC + ASSET, bundle(OTHER_SHA)],
+    ...servingSite(BASE44),
+  ]);
+  const result = box.run();
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /SITE SOURCE SHA MISMATCH/);
+  assert.ok(result.requests.some((url) => new URL(url).pathname === ASSET));
+  assert.ok(!result.requests.some((url) => new URL(url).pathname === decoy));
+});
+
+test("a comment-only index filename cannot certify a page with no executable module", (t) => {
+  const html = '<!doctype html><html><!-- <script type="module" src="' +
+    ASSET + '"></script> --></html>';
+  const box = sandbox(t, [
+    ["200", PUBLIC + "/", html],
+    ["200", PUBLIC + ASSET, bundle(SHA)],
+    ...servingSite(BASE44),
+  ]);
+  const result = box.run();
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /SITE_ENTRY_AMBIGUOUS_OR_MISSING/);
+  assert.ok(!result.requests.some((url) => url.includes("/assets/")));
+});
+
+test("modulepreload and classic-script decoys cannot substitute for the Vite module entry", (t) => {
+  const decoy = "/assets/index-decoy123.js";
+  for (const decoyTag of [
+    '<link rel="modulepreload" href="' + decoy + '">',
+    '<script src="' + decoy + '"></script>',
+    '<template><script type="module" src="' + decoy + '"></script></template>',
+  ]) {
+    const html = '<!doctype html><head>' + decoyTag +
+      '<script src="' + ASSET + '" crossorigin type="module"></script></head>';
+    const box = sandbox(t, [
+      ["200", PUBLIC + "/", html],
+      ["200", PUBLIC + decoy, bundle(SHA)],
+      ["200", PUBLIC + ASSET, bundle(OTHER_SHA)],
+      ...servingSite(BASE44),
+    ]);
+    const result = box.run();
+    assert.equal(result.status, 1, decoyTag + " " + result.stderr);
+    assert.ok(result.requests.some((url) => new URL(url).pathname === ASSET));
+    assert.ok(!result.requests.some((url) => new URL(url).pathname === decoy));
+  }
+});
+
+test("two executable module entries fail closed even when the first has the expected SHA", (t) => {
+  const other = "/assets/index-second123.js";
+  const html = '<!doctype html><script type="module" src="' + ASSET + '"></script>' +
+    '<script type="module" src="' + other + '"></script>';
+  const box = sandbox(t, [
+    ["200", PUBLIC + "/", html],
+    ["200", PUBLIC + ASSET, bundle(SHA)],
+    ["200", PUBLIC + other, bundle(OTHER_SHA)],
+    ...servingSite(BASE44),
+  ]);
+  const result = box.run();
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /SITE_ENTRY_AMBIGUOUS_OR_MISSING/);
+  assert.ok(!result.requests.some((url) => url.includes("/assets/")));
+});
+
+test("the parser accepts a sole real module entry with reordered attributes", (t) => {
+  const html = '<!doctype html><script src="' + ASSET + '" crossorigin type="module"></script>';
+  const box = sandbox(t, [
+    ["200", PUBLIC + "/", html],
+    ["200", PUBLIC + ASSET, bundle(SHA)],
+    ...servingSite(BASE44),
+  ]);
+  const result = box.run();
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /BASE44_SITE_SOURCE_VERIFIED/);
+});

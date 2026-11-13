@@ -237,7 +237,7 @@ test('changed live readback refuses success and preserves evidence without overw
 });
 
 test('rollback removes only this receipt additions after full paginated row proof', async t => {
-  const f = await fixture(t, {rows: {ScanRun: [[{id: 'old', status: 'complete', pipeline_mode: 'monolith', scan_mode: 'standard_150'}], [{id: 'old2', status: 'failed'}]]}});
+  const f = await fixture(t, {rows: {ScanRun: [[{id: 'old', status: 'complete', scan_mode: 'standard_150'}], [{id: 'old2', status: 'failed'}]]}});
   const applied = await f.command('apply'); assert.equal(applied.status, 0, applied.stderr);
   const {receiptDigest} = await moduleUnderTest();
   const result = await f.command('rollback', ['--generation', '77', '--receipt', applied.report, '--confirm', `ROLLBACK-STAGED-SCHEMA:${sourceSha}:77:${receiptDigest(applied.data)}`]);

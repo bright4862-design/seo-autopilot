@@ -88,8 +88,15 @@ export function evaluateStage4ReleaseAcceptance(record) {
   add(failures, hasReceipt(record.review?.evidence_reference), "independent review evidence reference missing");
   add(failures, clean(record.ci?.conclusion) === "success", "exact-source CI is not successful");
   add(failures, clean(record.ci?.sha) === sha, "CI SHA does not match merged source SHA");
-  add(failures, Number.isInteger(record.ci?.run_id) && record.ci.run_id > 0, "exact-source CI run id missing");
-  add(failures, /^https:\/\/github\.com\/[^/]+\/[^/]+\/actions\/runs\/\d+$/.test(clean(record.ci?.run_url)), "exact-source CI run URL invalid");
+  // The run URL is a reference, not independently authenticated CI proof.
+  // Still require it to describe this repository and the same run as run_id,
+  // so an unrelated successful job cannot be substituted within the record.
+  const ciRunId = record.ci?.run_id;
+  const ciRunUrlMatch = /^https:\/\/github\.com\/bright4862-design\/seo-autopilot\/actions\/runs\/([1-9]\d*)$/.exec(clean(record.ci?.run_url));
+  add(failures, Number.isSafeInteger(ciRunId) && ciRunId > 0, "exact-source CI run id missing");
+  add(failures, Boolean(ciRunUrlMatch), "exact-source CI run URL invalid or outside the canonical repository");
+  add(failures, Boolean(ciRunUrlMatch) && Number.isSafeInteger(ciRunId) && ciRunUrlMatch[1] === String(ciRunId),
+    "exact-source CI run URL does not identify the declared run id");
   add(failures, record.schema?.named_schema_parity === true, "named schema parity is not verified");
   add(failures, hasReceipt(record.schema?.evidence_reference), "named schema parity evidence reference missing");
 

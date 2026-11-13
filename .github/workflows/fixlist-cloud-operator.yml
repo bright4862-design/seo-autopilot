@@ -1341,6 +1341,38 @@ jobs:
           rollback = live[0][1]
           if rollback == name:
               raise SystemExit('Rollback revision unexpectedly equals candidate')
+          # A 100%-serving status does not prove the desired route has converged.
+          # While a prior traffic edit is reconciling, its observed traffic may
+          # still point at the old revision. A fixed-revision rollback can also
+          # silently destroy a latestRevision auto-follow policy.
+          metadata = service.get('metadata') or {}
+          state = service.get('status') or {}
+          try:
+              generation = int(metadata.get('generation'))
+              observed = int(state.get('observedGeneration'))
+          except (ValueError, TypeError):
+              raise SystemExit('Rollback preflight requires reconciled Ready Cloud Run service')
+          ready = next((c for c in (state.get('conditions') or [])
+                        if c.get('type') == 'Ready'), {})
+          if (generation <= 0 or observed != generation
+                  or str(ready.get('status') or '').lower() != 'true'):
+              raise SystemExit('Rollback preflight requires reconciled Ready Cloud Run service')
+          desired = (service.get('spec') or {}).get('traffic')
+          if not isinstance(desired, list) or not desired:
+              raise SystemExit('Rollback preflight requires exact pinned desired traffic')
+          desired_live = []
+          for item in desired:
+              if (not isinstance(item, dict) or item.get('latestRevision')
+                      or item.get('configurationName')):
+                  raise SystemExit('Rollback preflight requires exact pinned desired traffic')
+              percent = item.get('percent', 0)
+              if type(percent) is not int or percent < 0 or percent > 100:
+                  raise SystemExit('Rollback preflight requires exact pinned desired traffic')
+              if percent:
+                  desired_live.append((percent, item.get('revisionName')))
+          if (desired_live != [(100, rollback)]
+                  or any(item.get('latestRevision') for item in traffic)):
+              raise SystemExit('Rollback preflight requires exact pinned desired traffic')
           print(name)
           print(rollback)
           PY

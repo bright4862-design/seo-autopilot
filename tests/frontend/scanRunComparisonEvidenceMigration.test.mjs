@@ -149,6 +149,27 @@ test("function inventory and source HMAC contract cover the V8 release", () => {
   assert.deepEqual(hmacContractProblems(), []);
 });
 
+test("Base44 inventory entries must be standalone lines, not mentions in CLI diagnostics", () => {
+  const names = [
+    "startStandardScanJobV8",
+    "durableScanWorkerControlV8",
+    "persistDurableScanAuthorityV8",
+    "persistLimitedScanResultV8",
+    "getCustomerScanResultV8",
+    "deleteCustomerScanDataV8",
+  ];
+  assert.deepEqual(functionInventoryProblems(names.map((name) => `  ${name}`).join("\n")), []);
+  assert.equal(functionInventoryProblems(`Warning: ${names.join(", ")}`).length, 6);
+  assert.equal(functionInventoryProblems(names.map((name) => `not deployed: ${name}`).join("\n")).length, 6);
+  assert.deepEqual(
+    functionInventoryProblems(`  \u001b[32m${names[0]}\u001b[0m\n${names.slice(1).join("\n")}`),
+    [],
+  );
+  assert.equal(signingSecretPresence("Warning: SCAN_EVIDENCE_SIGNING_KEY is missing").present, false);
+  assert.equal(signingSecretPresence("  \u001b[32mSCAN_EVIDENCE_SIGNING_KEY\u001b[0m  \n").present, true);
+  assert.equal(signingSecretPresence("SCAN_EVIDENCE_SIGNING_KEY=hidden\n").present, false);
+});
+
 function run(command, args, options) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, options);

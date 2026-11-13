@@ -1451,11 +1451,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # set -e exits on unguarded post-promotion read failures.
+          # Restore traffic for those failures too, not only explicit checks.
+          rollback_attempted=0
+          promotion_started=0
           rollback() {
+            rollback_attempted=1
             echo "Rolling worker traffic back to $ROLLBACK_REVISION" >&2
             gcloud run services update-traffic "$CLOUD_RUN_SERVICE" --region="$GCP_REGION" --project="$GCP_PROJECT" --to-revisions="$ROLLBACK_REVISION=100" >/dev/null
           }
+          rollback_on_unhandled_exit() {
+            local result=$?
+            trap - EXIT
+            if (( result != 0 && promotion_started == 1 && rollback_attempted == 0 )); then
+              echo "Unhandled promotion/post-check failure; attempting traffic restore." >&2
+              if ! rollback; then
+                echo "ROLLBACK_UNVERIFIED: traffic restore failed; inspect serving revision before further action." >&2
+              fi
+            fi
+            exit "$result"
+          }
+          trap rollback_on_unhandled_exit EXIT
           export OPERATION=promote-worker TARGET_REVISION="$REVISION" CONFIRM="$REVISION"
+          promotion_started=1
           if ! bash ./scripts/fixlist-cloud-operator.sh; then
             rollback || true
             exit 1
@@ -1503,6 +1521,7 @@ jobs:
           fi
           echo "queue_state_unchanged=$queue_state_after"
           echo "promoted_revision=$REVISION"
+          promotion_started=0
 
       - name: Publish exact promotion status
         if: always()

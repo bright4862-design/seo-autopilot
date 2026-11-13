@@ -24,6 +24,41 @@ class PromotionRecordError(ValueError):
     """Release record cannot authorize promotion."""
 
 
+def require_unchanged_accepted_source(root: Path, accepted_sha: str, source_sha: str) -> None:
+    """Permit release-record/docs commits but refuse changed executable trees.
+
+    The frozen record normally lands *after* its accepted git_commit. Git
+    ancestry alone would also authorize arbitrary subsequent source changes.
+    Compare the endpoint trees, not the commit subjects or intermediate history;
+    a reverted edit is safe only if the final tracked bytes match the accepted
+    source. This check is a metadata precondition, not live deployment proof.
+    """
+    try:
+        delta = subprocess.run(
+            ["git", "-C", str(root), "diff", "--name-only", "-z",
+             "--no-renames", "--no-ext-diff", "--no-textconv",
+             "--ignore-submodules=none", accepted_sha, source_sha, "--"],
+            check=False, capture_output=True, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PromotionRecordError("accepted_source_tree_unavailable") from exc
+    changed = getattr(delta, "stdout", None)
+    if delta.returncode != 0 or not isinstance(changed, bytes) or (changed and not changed.endswith(b"\0")):
+        raise PromotionRecordError("accepted_source_tree_unverifiable")
+    for raw in changed.split(b"\0"):
+        if not raw:
+            continue
+        path = raw.decode("utf-8", "surrogateescape")
+        if path == "data/beta-crawler-revision.json":
+            continue
+        # A post-acceptance report or narrative documentation is legitimate;
+        # scripts, workflow YAML, configs and executable docs files are not.
+        if (path.startswith("docs/") and path.endswith(".md")
+                and all(part not in (".", "..", "") for part in path.split("/"))):
+            continue
+        raise PromotionRecordError("accepted_source_tree_drift")
+
+
 def verify_promotion_record(root: Path, source_sha: str) -> str:
     """Check frozen metadata and ancestry, without trusting runtime claims."""
     if not SHA40.fullmatch(source_sha):
@@ -48,6 +83,7 @@ def verify_promotion_record(root: Path, source_sha: str) -> str:
         raise PromotionRecordError("accepted_source_ancestry_unavailable") from exc
     if ancestry.returncode != 0:
         raise PromotionRecordError("accepted_git_commit_not_ancestor")
+    require_unchanged_accepted_source(root, accepted_sha, source_sha)
     report = record.get("acceptance_report")
     if not isinstance(report, str) or not report:
         raise PromotionRecordError("acceptance_report_missing")

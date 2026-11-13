@@ -1494,7 +1494,21 @@ jobs:
           rollback() {
             rollback_attempted=1
             echo "Rolling worker traffic back to $ROLLBACK_REVISION" >&2
-            gcloud run services update-traffic "$CLOUD_RUN_SERVICE" --region="$GCP_REGION" --project="$GCP_PROJECT" --to-revisions="$ROLLBACK_REVISION=100" >/dev/null
+            if ! gcloud run services update-traffic "$CLOUD_RUN_SERVICE" --region="$GCP_REGION" --project="$GCP_PROJECT" --to-revisions="$ROLLBACK_REVISION=100" >/dev/null; then
+              echo "ROLLBACK_UNVERIFIED: traffic update command failed" >&2
+              return 1
+            fi
+            # A zero-exit update command is not proof that the desired revision
+            # has converged into the Ready, actually serving traffic topology.
+            local readback_json="$RUNNER_TEMP/fixlist-standard150-rollback-readback.json"
+            if ! gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > "$readback_json"; then
+              echo "ROLLBACK_UNVERIFIED: cannot read worker traffic state" >&2
+              return 1
+            fi
+            if ! python3 scripts/assert_standard150_rollback_readback.py --expected-revision "$ROLLBACK_REVISION" --service-json "$readback_json"; then
+              echo "ROLLBACK_UNVERIFIED: traffic restore was not independently confirmed" >&2
+              return 1
+            fi
           }
           rollback_on_unhandled_exit() {
             local result=$?

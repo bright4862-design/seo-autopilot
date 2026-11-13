@@ -37,7 +37,10 @@ def discovery_python() -> str:
     return textwrap.dedent(body) + "\n"
 
 
-def resolve(tmp_path: Path, traffic: list[dict]):
+def resolve(tmp_path: Path, traffic: list[dict], *, desired=None,
+            generation=7, observed=7, ready="True"):
+    if desired is None:
+        desired = [{"revisionName": PRIOR, "percent": 100}]
     revisions = [{
         "metadata": {"name": CANDIDATE, "creationTimestamp": "2026-11-13T00:00:00Z"},
         "spec": {
@@ -52,7 +55,16 @@ def resolve(tmp_path: Path, traffic: list[dict]):
     revisions_path = tmp_path / "revisions.json"
     service_path = tmp_path / "service.json"
     revisions_path.write_text(json.dumps(revisions), encoding="utf-8")
-    service_path.write_text(json.dumps({"status": {"traffic": traffic}}), encoding="utf-8")
+    service = {
+        "metadata": {"generation": generation},
+        "spec": {"traffic": desired},
+        "status": {
+            "observedGeneration": observed,
+            "conditions": [{"type": "Ready", "status": ready}],
+            "traffic": traffic,
+        },
+    }
+    service_path.write_text(json.dumps(service), encoding="utf-8")
     return subprocess.run(
         [sys.executable, "-c", discovery_python(), SOURCE_SHA,
          str(revisions_path), str(service_path)],
@@ -105,3 +117,47 @@ def test_preflight_is_before_first_candidate_tag_mutation():
     assert source.index("Rollback preflight requires one named revision at exactly 100% traffic") < (
         source.index("      - name: Tag the exact zero-traffic candidate")
     )
+
+
+@pytest.mark.parametrize("kwargs,expected", [
+    ({"generation": 8, "observed": 7}, "reconciled Ready"),
+    ({"generation": 7, "observed": 8}, "reconciled Ready"),
+    ({"generation": None}, "reconciled Ready"),
+    ({"observed": None}, "reconciled Ready"),
+    ({"ready": "Unknown"}, "reconciled Ready"),
+    ({"ready": "False"}, "reconciled Ready"),
+    ({"desired": [{"revisionName": "worker-other", "percent": 100}]}, "exact pinned"),
+    ({"desired": [{"revisionName": PRIOR, "percent": 60},
+                  {"revisionName": "worker-other", "percent": 40}]}, "exact pinned"),
+    ({"desired": [{"latestRevision": True, "percent": 100}]}, "exact pinned"),
+    ({"desired": [{"revisionName": PRIOR, "percent": True}]}, "exact pinned"),
+    ({"desired": []}, "exact pinned"),
+])
+def test_observed_100_percent_is_not_sufficient(tmp_path, kwargs, expected):
+    # The v1 status may still report old 100%-serving traffic while
+    # metadata/spec already describe a different or incomplete desired state.
+    result = resolve(tmp_path, [{"revisionName": PRIOR, "percent": 100}], **kwargs)
+    assert result.returncode != 0
+    assert expected in result.stderr
+    assert result.stdout.strip() == ""
+
+
+def test_exact_pinned_100_percent_with_zero_percent_tag_is_allowed(tmp_path):
+    desired = [
+        {"revisionName": PRIOR, "percent": 100},
+        {"revisionName": CANDIDATE, "percent": 0, "tag": "candidate"},
+    ]
+    observed = [
+        {"revisionName": PRIOR, "percent": 100},
+        {"revisionName": CANDIDATE, "percent": 0, "tag": "candidate"},
+    ]
+    result = resolve(tmp_path, observed, desired=desired)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().splitlines() == [CANDIDATE, PRIOR]
+
+
+def test_preflight_checks_desired_and_generation_before_first_tag():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    tag = workflow.index("      - name: Tag the exact zero-traffic candidate")
+    assert workflow.index("Rollback preflight requires reconciled Ready Cloud Run service") < tag
+    assert workflow.index("Rollback preflight requires exact pinned desired traffic") < tag

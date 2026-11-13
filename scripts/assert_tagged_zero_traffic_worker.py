@@ -41,10 +41,13 @@ def verify_tagged_zero_traffic(service: dict, revision: str, tag: str = "candida
         raise CandidateNotIsolated("candidate_not_addressable")
     urls: set[str] = set()
     for entry in candidates:
-        try:
-            percent = int(entry.get("percent") or 0)
-        except (ValueError, TypeError) as exc:
-            raise CandidateNotIsolated("candidate_percent_invalid") from exc
+        # Cloud Run JSON encodes traffic percentages as integers. A missing
+        # field is the protobuf default (0), but explicit null, boolean, float
+        # or string values are not proof of zero traffic. In particular,
+        # int(0.9) == 0 and int(False) == 0 would silently pass this gate.
+        percent = entry.get("percent", 0)
+        if type(percent) is not int or not 0 <= percent <= 100:
+            raise CandidateNotIsolated("candidate_percent_invalid")
         if percent != 0:
             raise CandidateNotIsolated("candidate_receives_traffic")
         if entry.get("tag") == tag:

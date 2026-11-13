@@ -77,6 +77,23 @@ def test_wrong_or_unaddressable_candidate_fails(modifier, failure):
         verify_tagged_zero_traffic(service, REVISION)
 
 
+@pytest.mark.parametrize("bad_percent", [
+    0.9, -0.9, 0.0, False, True, None, "", "0", "0.0", -1, 101, [], {},
+])
+def test_ambiguous_or_noncanonical_zero_percent_fails_closed(bad_percent):
+    service = tagged_candidate()
+    service["status"]["traffic"][1]["percent"] = bad_percent
+    with pytest.raises(CandidateNotIsolated, match="candidate_percent_invalid"):
+        verify_tagged_zero_traffic(service, REVISION)
+
+
+def test_explicit_integer_zero_or_omitted_protobuf_default_is_allowed():
+    service = tagged_candidate()
+    assert verify_tagged_zero_traffic(service, REVISION) == TAG_URL
+    del service["status"]["traffic"][1]["percent"]
+    assert verify_tagged_zero_traffic(service, REVISION) == TAG_URL
+
+
 def test_stale_default_revision_fails_even_if_it_matches_a_tag():
     with pytest.raises(CandidateNotIsolated, match="candidate_not_addressable"):
         verify_tagged_zero_traffic(tagged_candidate(), "fixlist-standard150-worker-00011-v7m")

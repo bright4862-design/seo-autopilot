@@ -237,7 +237,7 @@ test('changed live readback refuses success and preserves evidence without overw
 });
 
 test('rollback removes only this receipt additions after full paginated row proof', async t => {
-  const f = await fixture(t, {rows: {ScanRun: [[{id: 'old', status: 'complete', pipeline_mode: 'monolith', scan_mode: 'standard_150'}], [{id: 'old2', status: 'failed'}]]}});
+  const f = await fixture(t, {rows: {ScanRun: [[{id: 'old', status: 'complete', scan_mode: 'standard_150'}], [{id: 'old2', status: 'failed'}]]}});
   const applied = await f.command('apply'); assert.equal(applied.status, 0, applied.stderr);
   const {receiptDigest} = await moduleUnderTest();
   const result = await f.command('rollback', ['--generation', '77', '--receipt', applied.report, '--confirm', `ROLLBACK-STAGED-SCHEMA:${sourceSha}:77:${receiptDigest(applied.data)}`]);
@@ -251,7 +251,7 @@ test('rollback removes only this receipt additions after full paginated row proo
 
 test('rollback preserves staged properties that were already present before this apply receipt', async t => {
   const before = baseline(); before.Access.properties.page_cap = local().Access.properties.page_cap;
-  const f = await fixture(t, {schemas: before});
+  const f = await fixture(t, {schemas: before, rows: {Access: [[{id: 'old-150-grant', page_cap: 150}]]}});
   const applied = await f.command('apply'); assert.equal(applied.status, 0, applied.stderr);
   assert.equal(applied.data.operations.some(operation => operation.entity === 'Access'), false);
   const {receiptDigest} = await moduleUnderTest();
@@ -277,6 +277,9 @@ for (const [label, rows, rowsMalformed] of [
   ['terminal staged scan', {ScanRun: [[{id: 'staged', status: 'complete', pipeline_mode: 'staged'}]]}, false],
   ['later-page staged scan', {ScanRun: [[{id: 'old', status: 'complete'}], [{id: 'staged', status: 'limited', pipeline_mode: 'staged'}]]}, false],
   ['500 entitlement', {Access: [[{id: 'grant', page_cap: 500}]]}, false],
+  ['retained Standard 150 page cap', {ScanRun: [[{id: 'completed-150', status: 'complete', scan_mode: 'standard_150', page_cap: 150}]]}, false],
+  ['retained monolith pipeline marker', {ScanRun: [[{id: 'completed-monolith', status: 'complete', scan_mode: 'standard_150', pipeline_mode: 'monolith'}]]}, false],
+  ['retained 150 Access entitlement', {Access: [[{id: 'active-150-grant', page_cap: 150}]]}, false],
   ['retained FixItem evidence', {FixItem: [[{id: 'fix', affected_page_count: 20}]]}, false],
   ['unverifiable rows', {}, true],
 ]) test(`rollback refuses ${label} without a destructive PUT`, async t => {

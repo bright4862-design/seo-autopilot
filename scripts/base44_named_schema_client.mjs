@@ -173,6 +173,7 @@ async function stagedRows(destination) {
   for (const [name, projection] of Object.entries(fields)) {
     rows[name] = [];
     const seen = new Set();
+    const seenIds = new Set();
     let cursor = "", complete = false;
     for (let page = 0; page < EVIDENCE_PAGE_CAP; page++) {
       const params = new URLSearchParams({fields: projection, limit: String(EVIDENCE_PAGE_LIMIT), sort: "created_date"});
@@ -182,6 +183,12 @@ async function stagedRows(destination) {
       if (result.status !== 200 || !body || !Array.isArray(body.items) || typeof body.has_more !== "boolean"
           || body.items.some(item => !item || typeof item !== "object" || Array.isArray(item) || typeof item.id !== "string" || !item.id)) {
         throw new Error(`Staged rollback rows are unverified for ${name}`);
+      }
+      // A repeated row ID means the paginated inventory is not a trustworthy
+      // complete set. Never interpret an overlapping cursor page as clearance.
+      for (const item of body.items) {
+        if (seenIds.has(item.id)) throw new Error(`Staged rollback rows duplicated ${name} ID`);
+        seenIds.add(item.id);
       }
       rows[name].push(...body.items);
       if (!body.has_more) { complete = true; break; }

@@ -308,7 +308,7 @@ for (const [label, rows] of [
   const {receiptDigest} = await moduleUnderTest();
   const result = await f.command('rollback', ['--generation', '77', '--receipt', applied.report, '--confirm', `ROLLBACK-STAGED-SCHEMA:${sourceSha}:77:${receiptDigest(applied.data)}`]);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /Staged schema prerequisite failed: node \\(exit 2\\)/);
+  assert.equal(result.stderr.trim(), 'Staged schema prerequisite failed: node (exit 2)');
   assert.equal(result.data.failure, result.stderr.trim());
   assert.equal(f.requests.filter(row => row.method === 'PUT').length, putCount);
 });

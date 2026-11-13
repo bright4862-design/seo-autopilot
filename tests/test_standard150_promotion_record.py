@@ -17,7 +17,7 @@ from scripts import assert_standard150_promotion_record as gate
 @pytest.fixture
 def frozen_record(tmp_path, monkeypatch):
     # A successful ancestry result stands in for an accepted ancestor.
-    monkeypatch.setattr(gate.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(gate.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0, stdout=b""))
     (tmp_path / "data").mkdir()
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs/accepted.md").write_text("Accepted by the release gate\n")

@@ -1330,10 +1330,14 @@ jobs:
           candidate_percent = sum(int(item.get('percent') or 0) for item in traffic if item.get('revisionName') == name)
           if candidate_percent != 0:
               raise SystemExit(f'Candidate already receives {candidate_percent}% traffic')
-          live = [(int(item.get('percent') or 0), item.get('revisionName', '')) for item in traffic if int(item.get('percent') or 0) > 0 and item.get('revisionName')]
-          if not live:
-              raise SystemExit('No current live revision found for rollback')
-          live.sort(reverse=True)
+          # A single-revision rollback preserves the prior traffic topology
+          # only when one named revision owns exactly 100%. Never silently turn
+          # an existing traffic split or ambiguous status into 100% on one leg.
+          observed_traffic = [(int(item.get('percent') or 0), item.get('revisionName', '')) for item in traffic]
+          live = [(percent, revision) for percent, revision in observed_traffic if percent > 0]
+          if (len(live) != 1 or live[0][0] != 100 or not live[0][1]
+                  or any(percent < 0 or percent > 100 for percent, _ in observed_traffic)):
+              raise SystemExit('Rollback preflight requires one named revision at exactly 100% traffic')
           rollback = live[0][1]
           if rollback == name:
               raise SystemExit('Rollback revision unexpectedly equals candidate')

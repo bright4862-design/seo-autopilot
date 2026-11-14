@@ -85,9 +85,9 @@ elif args[:3] == ['run','services','update-traffic']:
     state['service']['spec']['traffic'].append({'tag':tag,'revisionName':revision,'percent':0})
     # Model a completed gcloud traffic update by default. The adversarial
     # variant keeps its old observed generation despite matching traffic arrays.
-    state['service']['metadata']['generation'] += 1
+    state['service']['metadata']['generation'] = int(state['service']['metadata']['generation']) + 1
     if os.environ.get('FAKE_TAG_RECONCILING') != '1':
-        state['service']['status']['observedGeneration'] += 1
+        state['service']['status']['observedGeneration'] = int(state['service']['status']['observedGeneration']) + 1
     save(); print(json.dumps(state['service']))
 else: raise SystemExit('Unexpected cloud command '+repr(args))
 '''
@@ -650,3 +650,17 @@ def test_staged_tag_requires_reconciled_generation_after_tag_write(candidate):
                for line in calls.read_text().splitlines())
     # A tag may already have been created, so this error must never be
     # interpreted as automatic rollback or as a successful candidate release.
+
+
+
+def test_staged_tag_accepts_equal_canonical_decimal_generation_strings(candidate):
+    """Do not mistake a JSON client encoding of positive generations for drift."""
+    run, state, calls, sha = candidate
+    saved = json.loads(state.read_text())
+    saved["service"]["metadata"]["generation"] = "7"
+    saved["service"]["status"]["observedGeneration"] = "7"
+    state.write_text(json.dumps(saved))
+    result = run(**inactive())
+    assert result.returncode == 0, result.stderr
+    served = json.loads(state.read_text())["service"]
+    assert served["metadata"]["generation"] == served["status"]["observedGeneration"] == 8

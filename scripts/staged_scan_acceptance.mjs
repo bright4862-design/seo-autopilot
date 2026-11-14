@@ -19,7 +19,7 @@ import { buildManifest, STAGED_RELEASE_FUNCTIONS, STAGED_RELEASE_ENTITIES } from
 import { diffEntity } from "./base44_authority_schema.mjs";
 
 export const APP_ID = "6a498732ec779dfaaeab0e53";
-export const MISSING_PRODUCERS = ["deployed_runtime_readbacks", "live_stage_task_observation"];
+const REQUIRED_OBSERVATIONS = ["base44", "schema_readback", "base44_configuration", "worker", "gateway", "infrastructure", "stage_task"];
 const sha256 = value => createHash("sha256").update(value).digest("hex");
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
 const digest = value => sha256(JSON.stringify(canonical(value)));
@@ -158,7 +158,7 @@ export function validatePrerequisites(packet, expected) {
     && sample?.dispatch_deadline_seconds === 480 && sample?.method === "POST"
     && sample?.oidc_invoker === invokerAccount && sample?.oidc_audience === workerEnv.SCAN_STAGE_TOKEN_AUDIENCE,
   "stage_task_contract_mismatch");
-  return { ready: failures.length === 0, failures: [...new Set(failures)], missing_producers: MISSING_PRODUCERS, provenance: failures.length ? null : {
+  return { ready: failures.length === 0, failures: [...new Set(failures)], provenance: failures.length ? null : {
     source_sha: expected.sourceSha, release_fingerprint: expected.fingerprint, observed_at: packet.observed_at, expires_at: packet.expires_at,
     worker_revision: worker.revision.metadata.name, gateway_revision: gateway.revision.metadata.name,
     worker_config_sha256: configDigest, staged_owner_cohort_sha256: cohort,
@@ -342,7 +342,7 @@ export function writeNewArtifact(output, value, root) {
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   try {
     const mode = process.argv[2];
-    if (mode === "describe-prerequisites") console.log(JSON.stringify({ schema_version: "staged_scan_acceptance_prerequisites_v1", missing_producers: MISSING_PRODUCERS, required_observations: ["base44", "schema_readback", "base44_configuration", "worker", "gateway", "infrastructure"], freshness_seconds: 900 }, null, 2));
+    if (mode === "describe-prerequisites") console.log(JSON.stringify({ schema_version: "staged_scan_acceptance_prerequisites_v1", required_observations: REQUIRED_OBSERVATIONS, freshness_seconds: 900, stage_task_max_age_seconds: taskSampleLifetimeMs / 1000 }, null, 2));
     else if (mode === "assemble-prerequisites") {
       if (process.argv.length !== 9) throw new Error("expected six paths: package schema intake cloud task output");
       const [base44File, schemaFile, intakeFile, cloudFile, taskFile, output] = process.argv.slice(3);

@@ -163,6 +163,12 @@ export function evaluateStage4ReleaseAcceptance(record) {
   add(failures, clean(rescan.normalized_domain) === clean(scan.normalized_domain) && Boolean(clean(scan.normalized_domain)),
     "rescan domain does not match acceptance baseline");
   add(failures, clean(rescan.status) === "complete", "rescan did not complete");
+  add(failures, clean(rescan.mode) === "standard_150", "rescan was not Standard 150");
+  add(failures, Number.isInteger(rescan.pages_crawled) && rescan.pages_crawled > 0 && rescan.pages_crawled <= 150,
+    "rescan pages_crawled is outside Standard 150 bounds");
+  add(failures, isSha(rescan.authority_proof, 64), "rescan authority proof missing or invalid");
+  add(failures, Boolean(clean(rescan.fix_list_id)), "rescan FixList id missing");
+  add(failures, clean(rescan.source_sha) === sha, "rescan source does not match merged SHA");
   add(failures, ["improved", "unchanged", "regressed"].includes(clean(rescan.comparison)), "rescan comparison result missing");
   add(failures, rescan.comparison_evidence_verified === true, "rescan comparison evidence is not verified");
 

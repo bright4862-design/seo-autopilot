@@ -463,6 +463,7 @@ for b in builds:
 verify_worker_runtime_revision() {
   local revision="${1:-$TARGET_REVISION}" expected_sha="${2:-}"
   local service_json recorded response probe_url token code compare_status=0
+  local serving_topology_baseline="" post_service_json
 
   echo
   echo "=== Runtime revision fingerprint ==="
@@ -496,13 +497,12 @@ PY
   fi
 
   if [ -z "$revision" ]; then
-    revision="$(python3 - "$service_json" <<'PY'
-import json, sys
-status = json.load(open(sys.argv[1], encoding="utf-8")).get("status") or {}
-traffic = status.get("traffic") or []
-print(next((str(t.get("revisionName") or "") for t in traffic if int(t.get("percent") or 0) == 100), ""))
-PY
-)"
+    # Serving diagnostics may not certify an old observed worker while Cloud Run
+    # is reconciling a different desired 100% revision. Staged exact-revision
+    # probes retain their independent tag-based attribution.
+    revision="$(python3 "$REPO_ROOT/scripts/assert_standard150_serving_topology.py" \
+      "$service_json" --service "$CLOUD_RUN_SERVICE")" || return 1
+    serving_topology_baseline="$service_json"
   fi
   if [ -z "$revision" ]; then
     echo "INDETERMINATE: no revision was named and none serves 100% of traffic."
@@ -681,6 +681,16 @@ PY
 
   if [ "$compare_status" -ne 0 ]; then
     return 1
+  fi
+  if [ -n "$serving_topology_baseline" ]; then
+    # A PASS also requires a second independent read: desired and observed
+    # traffic must still be reconciled to the exact revision probed above.
+    post_service_json="$RUNTIME_PROBE_TMP/service-after.json"
+    gcloud run services describe "$CLOUD_RUN_SERVICE" \
+      --region="$GCP_REGION" --project="$GCP_PROJECT" --format=json > "$post_service_json"
+    python3 "$REPO_ROOT/scripts/assert_standard150_serving_topology.py" \
+      "$post_service_json" --service "$CLOUD_RUN_SERVICE" \
+      --baseline "$serving_topology_baseline" --expect-revision "$revision" || return 1
   fi
   echo "PASS: the running worker computes the release identity this commit records."
 }

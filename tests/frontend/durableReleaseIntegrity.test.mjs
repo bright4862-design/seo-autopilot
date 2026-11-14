@@ -570,6 +570,11 @@ elif [[ " $* " == *" get-iam-policy "* ]]; then
     malformed) printf '{' ;;
     missing) printf '%s' '{"bindings":[]}' ;;
     public) printf '%s' '{"bindings":[{"role":"roles/run.invoker","members":["allUsers","serviceAccount:invoker@test.iam.gserviceaccount.com"]}]}' ;;
+    public_service_invoker) printf '%s' '{"bindings":[{"role":"roles/run.invoker","members":["serviceAccount:invoker@test.iam.gserviceaccount.com"]},{"role":"roles/run.servicesInvoker","members":["allUsers"]}]}' ;;
+    authenticated_service_invoker) printf '%s' '{"bindings":[{"role":"roles/run.invoker","members":["serviceAccount:invoker@test.iam.gserviceaccount.com"]},{"role":"roles/run.servicesInvoker","members":["allAuthenticatedUsers"]}]}' ;;
+    public_custom_role) printf '%s' '{"bindings":[{"role":"roles/run.invoker","members":["serviceAccount:invoker@test.iam.gserviceaccount.com"]},{"role":"projects/test/roles/routeInvoker","members":["allUsers"]}]}' ;;
+    public_viewer) printf '%s' '{"bindings":[{"role":"roles/run.invoker","members":["serviceAccount:invoker@test.iam.gserviceaccount.com"]},{"role":"roles/run.viewer","members":["allUsers"]}]}' ;;
+    private_viewer) printf '%s' '{"bindings":[{"role":"roles/run.invoker","members":["serviceAccount:invoker@test.iam.gserviceaccount.com"]},{"role":"roles/run.viewer","members":["user:auditor@test.example"]}]}' ;;
     valid) printf '%s' '{"bindings":[{"role":"roles/run.invoker","members":["serviceAccount:invoker@test.iam.gserviceaccount.com"]}]}' ;;
     *) exit 9 ;;
   esac
@@ -626,6 +631,28 @@ test("post-deploy verifier requires the exact private invoker binding", () => {
   assert.equal(valid.status, 0, valid.output);
   assert.match(valid.output, /exact invoker holds roles\/run\.invoker/);
   assert.match(valid.output, /POST-DEPLOY VERIFICATION PASSED/);
+});
+
+test("post-deploy refuses public principals outside the legacy run.invoker role", () => {
+  // roles/run.servicesInvoker also provides run.routes.invoke. A custom
+  // role can contain it too; the private-worker policy forbids every
+  // allUsers/allAuthenticatedUsers service binding, regardless of label.
+  for (const mode of [
+    "public_service_invoker",
+    "authenticated_service_invoker",
+    "public_custom_role",
+    "public_viewer",
+  ]) {
+    const result = runPostDeployVerifier(mode);
+    assert.equal(result.status, 1, `${mode} must fail despite a valid Tasks invoker binding:\n${result.output}`);
+    assert.match(result.output, /worker service IAM has a public principal/);
+    assert.match(result.output, /POST-DEPLOY VERIFICATION FAILED/);
+  }
+  for (const mode of ["valid", "private_viewer"]) {
+    const clean = runPostDeployVerifier(mode);
+    assert.equal(clean.status, 0, clean.output);
+    assert.match(clean.output, /POST-DEPLOY VERIFICATION PASSED/);
+  }
 });
 
 test("post-deploy privacy check rejects disabled invoker IAM despite a private-looking policy", () => {

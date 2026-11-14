@@ -359,6 +359,28 @@ const serving = (revisionName, extra = {}) => ({
   },
 });
 
+// Composition test: topology can be fully reconciled while the authenticated
+// response itself remains ambiguous. Neither independent proof is sufficient.
+test("end to end: stable serving topology still rejects duplicate runtime fingerprint", () => {
+  const rev = "worker-00054-trs";
+  const service = {
+    metadata: { name: "fixlist-standard150-worker", generation: 77 },
+    spec: { traffic: [{ revisionName: rev, percent: 100 }] },
+    status: {
+      url: SERVICE_URL,
+      observedGeneration: 77,
+      conditions: [{ type: "Ready", status: "True" }],
+      traffic: [{ revisionName: rev, percent: 100 }],
+    },
+  };
+  const ambiguous = `{"fingerprint":"foreign","fingerprint":${JSON.stringify(FREEZE.fingerprint)},"component_versions":${JSON.stringify(FREEZE.component_versions)},"source_sha":${JSON.stringify(PROMOTED_SHA)}}`;
+  const result = runGuard({ service, body: ambiguous });
+  assert.notEqual(result.status, 0, "a stable Cloud Run service cannot rescue contradictory /revision bytes");
+  assert.match(result.curl, /\\/revision/, "the failure must occur after an authenticated identity probe");
+  assert.match(result.stdout, /ambiguous JSON/);
+  assert.doesNotMatch(result.stdout, /PASS:/);
+});
+
 test("end to end: a worker serving the recorded identity passes", () => {
   const result = runGuard({ service: serving("worker-00054-trs"), revision: "worker-00054-trs", body: LIVE_MATCHING });
   assert.equal(result.status, 0, result.stdout);

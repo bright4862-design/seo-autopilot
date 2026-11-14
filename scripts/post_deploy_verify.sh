@@ -88,7 +88,17 @@ fi
 jqq() { printf "%s" "$DESCRIBE" | python3 -c "import sys,json;d=json.load(sys.stdin);print($1)" 2>/dev/null; }
 
 echo "=== 1. Worker privacy ==="
-# IAM policy is authoritative: allUsers/allAuthenticatedUsers must not hold run.invoker.
+# The Cloud Run v1 service can disable IAM invocation checks entirely, even
+# when its own IAM policy contains no public run.invoker binding. Do not infer
+# privacy from role bindings alone. The metadata-only checker also rejects
+# ambiguous JSON, and never reads or prints secrets.
+if printf "%s" "$DESCRIBE" | python3 scripts/verify_worker_invoker_iam.py >/dev/null 2>&1; then
+  pass "Cloud Run invoker IAM check is enabled"
+else
+  fail "Cloud Run invoker IAM check is disabled or metadata is ambiguous"
+fi
+# Service-level IAM bindings are one additional privacy signal; effective
+# inherited grants and request-path behavior require separate verification.
 if ! POLICY=$(gcloud run services get-iam-policy "$WORKER_SERVICE" \
   --region="$REGION" --project="$PROJECT" --format=json 2>/dev/null); then
   echo "Could not read the worker IAM policy; privacy and invoker identity are unverified."

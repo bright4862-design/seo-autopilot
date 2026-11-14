@@ -47,7 +47,7 @@ function evaluate(raw) {
 test("unambiguous /revision response remains accepted", () => {
   const result = evaluate(JSON.stringify(matching));
   assert.equal(result.status, 0, result.stdout);
-  assert.match(result.stdout, /PASS:/);
+  assert.match(result.stdout, /runtime fingerprint:/);
 });
 
 test("two contradictory fingerprint members fail, even if the last is correct", () => {

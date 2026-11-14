@@ -106,7 +106,7 @@ test('real V9 plan and offline CLI classify a committed-but-unacknowledged Acces
     assert.equal(child.status,2,child.stderr);
     const result=JSON.parse(child.stdout);
     assert.equal(result.classification.Access,'matches_intended');
-    assert.equal(result.classification.FixItem,'unchanged');
+    assert.equal(result.classification.FixItem,'matches_original');
     assert.deepEqual(result.uncertain_put_entities,['Access']);
     assert.equal(result.recovery_authorized,false);
   });

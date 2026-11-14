@@ -194,3 +194,17 @@ def test_runtime_resolver_accepts_valid_serving_and_revision_specific_canary(tmp
     assert resolve_authenticated_probe_destination(tmp_path, service, REVISION, url) == url
     assert resolve_authenticated_probe_destination(tmp_path, service, REVISION, TAG_URL) == ""
 
+
+
+def test_runtime_resolver_cannot_attest_serving_worker_as_zero_traffic_candidate(tmp_path):
+    """A fake tag URL that equals the canonical origin must not change revision identity."""
+    service = tagged_candidate()
+    service["status"]["traffic"][1]["url"] = service["status"]["url"]
+    assert resolve_authenticated_probe_destination(
+        tmp_path, service, REVISION, service["status"]["url"]
+    ) == ""
+    # The same service's genuinely serving revision must remain addressable.
+    assert resolve_authenticated_probe_destination(
+        tmp_path, service, SERVING, service["status"]["url"]
+    ) == service["status"]["url"]
+

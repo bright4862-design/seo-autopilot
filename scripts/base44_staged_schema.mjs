@@ -87,6 +87,9 @@ export function assertRollbackRows(evidence, operations) {
     const rows = evidence.rows[name];
     requireCondition(Array.isArray(rows), `${name} rollback rows missing`);
     counts[name] = rows.length;
+    // A rollback must not drop a field that still holds persisted evidence.
+    // Fields already present before this apply receipt are not being removed.
+    const removed = operations.filter(operation => operation.entity === name && operation.kind === 'add_property');
     for (const row of rows) {
       requireCondition(object(row) && typeof row.id === 'string' && row.id, `${name} rollback row is malformed`);
       if (name === 'ScanRun') {
@@ -94,10 +97,12 @@ export function assertRollbackRows(evidence, operations) {
         requireCondition(!row.pipeline_mode || row.pipeline_mode === 'monolith', 'staged ScanRun blocks rollback');
         requireCondition(row.scan_mode !== 'standard_500' && (row.page_cap == null || row.page_cap === 150), 'large-cap ScanRun blocks rollback');
         requireCondition(['pages_planned', 'last_committed_batch', 'workspace_cleanup_state', 'workspace_cleanup_completed_at'].every(key => row[key] == null || row[key] === ''), 'retained staged ScanRun evidence blocks rollback');
+        requireCondition(removed.every(({property}) => property !== 'page_cap' || row.page_cap == null), 'retained ScanRun page_cap blocks rollback');
+        requireCondition(removed.every(({property}) => property !== 'pipeline_mode' || row.pipeline_mode == null || row.pipeline_mode === ''), 'retained ScanRun pipeline_mode blocks rollback');
       } else if (name === 'Access') {
         requireCondition(row.page_cap == null || row.page_cap === 150, '500 or unknown Access entitlement blocks rollback');
+        requireCondition(removed.every(({property}) => property !== 'page_cap' || row.page_cap == null), 'retained Access page_cap blocks rollback');
       } else {
-        const removed = operations.filter(operation => operation.entity === name && operation.kind === 'add_property');
         requireCondition(removed.every(({property}) => row[property] == null || (Array.isArray(row[property]) && row[property].length === 0)), 'retained FixItem evidence blocks rollback');
       }
     }
@@ -176,12 +181,27 @@ async function main(argv) {
   // Reserve the evidence destination before any remote operation. In
   // particular, a dangling symlink must fail before the first schema PUT.
   const reportDescriptor = fs.openSync(config.report, 'wx', 0o600);
+  // Append-only, fsynced evidence survives a killed orchestrator. A pre-PUT
+  // entry is an intent, NOT proof of a successful provider mutation.
+  const journalPath = config.report + '.journal.ndjson';
+  const journalDescriptor = ['apply', 'rollback'].includes(config.action)
+    ? fs.openSync(journalPath, 'wx', 0o600) : null;
+  let journalSequence = 0;
+  const journal = (event, details = {}) => {
+    if (journalDescriptor === null) return;
+    const entry = {version: 'fixlist_staged_schema_mutation_journal_v1',
+      sequence: ++journalSequence, action: config.action, source_sha: config['source-sha'],
+      app_id: APP_ID, event, ...details};
+    fs.writeSync(journalDescriptor, JSON.stringify(entry) + '\n');
+    fs.fsyncSync(journalDescriptor);
+  };
   const environment = ['plan', 'compare'].includes(config.action) ? 'offline_inventory'
     : process.env.BASE44_SCHEMA_API_FIXTURE ? 'localhost_fixture' : 'production';
   const report = {schema_version: 'fixlist_staged_schema_v1', action: config.action, source_sha: config['source-sha'],
     app_id: APP_ID, contract_sha256: digest(local), observed_at: new Date().toISOString(),
     execution_environment: environment, readback_verified: false, live_verified: false,
-    local_source_verified: false, status: 'failed', operations: [], completed_entities: []};
+    local_source_verified: false, status: 'failed', operations: [], completed_entities: [],
+    mutation_journal: journalDescriptor === null ? null : journalPath};
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'fixlist-staged-schema-'));
   let sequence = 0;
   const fetchSchemas = () => {
@@ -191,6 +211,7 @@ async function main(argv) {
   };
   let status = 0;
   try {
+    journal('started', {execution_environment: environment});
     if (['plan', 'compare'].includes(config.action)) {
       const input = JSON.parse(fs.readFileSync(config.inventory, 'utf8'));
       const schemas = input.schemas || input;
@@ -221,6 +242,10 @@ async function main(argv) {
           report.apply_receipt_sha256 = receiptDigest(config.receiptDocument);
           report.apply_source_sha = config.receiptDocument.source_sha;
         }
+        // Preserve the original complete four-entity baseline before ANY
+        // schema PUT. A later retry must not infer that baseline from a partial state.
+        journal('planned', {before_schemas: before, operations: plan.operations,
+          intended_after_sha256: digest(plan.after), barrier_generation: Number(config.generation)});
         let expected = structuredClone(before);
         const touched = [...new Set(plan.operations.map(operation => operation.entity))].sort();
         for (const name of touched) {
@@ -229,10 +254,14 @@ async function main(argv) {
           requireCondition(matchesExpected(expected, fresh, plan.operations), 'inventory changed before named PUT');
           const schema = path.join(temporary, `${name}.json`);
           fs.writeFileSync(schema, JSON.stringify(plan.after[name]), {mode: 0o600});
+          journal('put_started', {entity: name, before_sha256: digest(expected[name]),
+            intended_sha256: digest(plan.after[name])});
           invoke(process.execPath, [path.join(ROOT, 'scripts/base44_named_schema_client.mjs'), 'put-named', name, schema]);
+          journal('put_returned', {entity: name});
           expected[name] = structuredClone(plan.after[name]);
           const readback = fetchSchemas(); report.after_schemas = readback;
           requireCondition(matchesExpected(expected, readback, config.action === 'apply' ? plan.operations : []), 'fresh readback changed more than the intended additions');
+          journal('readback_verified', {entity: name, schema_sha256: digest(readback[name])});
           expected = readback;
           report.completed_entities.push(name);
         }
@@ -247,11 +276,20 @@ async function main(argv) {
   } catch (error) {
     status = 2;
     report.failure = error instanceof Error ? error.message : 'staged schema operation failed';
+    journal('failed', {failure: report.failure});
     process.stderr.write(`${report.failure}\n`);
   } finally {
     fs.rmSync(temporary, {recursive: true, force: true});
-    try { fs.writeFileSync(reportDescriptor, JSON.stringify(report, null, 2) + '\n'); }
-    finally { fs.closeSync(reportDescriptor); }
+    try {
+      fs.writeFileSync(reportDescriptor, JSON.stringify(report, null, 2) + '\n');
+      fs.fsyncSync(reportDescriptor);
+      // Only the persisted JSON report is an apply/rollback receipt. Do not
+      // call a crash-interrupted postflight an accepted terminal result.
+      journal('report_fsynced', {status: report.status, report_sha256: digest(report)});
+    } finally {
+      fs.closeSync(reportDescriptor);
+      if (journalDescriptor !== null) fs.closeSync(journalDescriptor);
+    }
   }
   process.stdout.write(`STAGED_SCHEMA_REPORT status=${report.status} source_sha=${report.source_sha} live_verified=${report.live_verified}\n`);
   return status;

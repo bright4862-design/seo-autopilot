@@ -24,7 +24,7 @@ function fixture() {
   const curl=join(bin,"curl");
   writeFileSync(curl,`#!${process.execPath}\nconst fs=require('node:fs');const crypto=require('node:crypto');\nconst args=process.argv.slice(2);const name=args.at(-1).split('/').at(-1);\nfs.appendFileSync(process.env.TEST_EVENTS,'probe:'+name+'\\n');\nconst body={build_id:crypto.createHash('sha256').update(name).digest('hex'),runtime_activation_id:'staged-'+name,unexpected_secret:'do-not-copy'};\nif(process.env.TEST_PROBE_MODE==='stale')body.build_id='f'.repeat(64);\nif(process.env.TEST_PROBE_MODE==='activation')body.runtime_activation_id='old-activation';\nfs.writeFileSync(args[args.indexOf('-o')+1],process.env.TEST_PROBE_MODE==='malformed'?'not-json':JSON.stringify(body));\nprocess.stdout.write(process.env.TEST_PROBE_MODE==='success200'?'200':process.env.TEST_PROBE_MODE==='redirect'?'302':'405');\n`);chmodSync(curl,0o755);
   const readiness=join(tmpdir(),`${root.split('/').at(-1)}-readiness.json`);
-  const run=(extra={})=>spawnSync("bash",[join(root,publisher)],{cwd:root,encoding:"utf8",env:{...process.env,PATH:`${bin}:${process.env.PATH}`,SOURCE_SHA:sourceSha,CONFIRM:`PUBLISH-BASE44-STAGED-V9:${sourceSha}`,BASE44_APP_ID:appId,BASE44_EXPECTED_OWNER:"owner@example.com",BASE44_API_KEY:"",READINESS_OUTPUT:readiness,PROBE_ATTEMPTS:"1",PROBE_DELAY_SECONDS:"0",TEST_CLI_CALLS:calls,TEST_EVENTS:events,TEST_FAKE_CLI:cli,TEST_PACKAGES_ROOT:join(root,"base44/functions"),...extra}});
+  const run=(extra={},args=[])=>spawnSync("bash",[join(root,publisher),...args],{cwd:root,encoding:"utf8",env:{...process.env,PATH:`${bin}:${process.env.PATH}`,SOURCE_SHA:sourceSha,CONFIRM:`PUBLISH-BASE44-STAGED-V9:${sourceSha}`,BASE44_APP_ID:appId,BASE44_EXPECTED_OWNER:"owner@example.com",BASE44_API_KEY:"",READINESS_OUTPUT:readiness,PROBE_ATTEMPTS:"1",PROBE_DELAY_SECONDS:"0",TEST_CLI_CALLS:calls,TEST_EVENTS:events,TEST_FAKE_CLI:cli,TEST_PACKAGES_ROOT:join(root,"base44/functions"),...extra}});
   return {root,calls,events,readiness,run,cleanup(){rmSync(root,{recursive:true,force:true});rmSync(readiness,{force:true});}};
 }
 
@@ -68,4 +68,21 @@ for(const mode of ["v8_alias","already_active","missing_candidate"] )test(`V9 ca
 
 test("existing readiness files are protected before any function is deployed",()=>{
   const f=fixture();try{writeFileSync(f.readiness,"existing evidence\n");const result=f.run();assert.notEqual(result.status,0);assert.equal(text(f.calls),"");assert.equal(text(f.readiness),"existing evidence\n");}finally{f.cleanup();}
+});
+
+
+test("read-only V9 verification refreshes package and runtime evidence without publication", () => {
+  const f = fixture();
+  try {
+    assert.notEqual(f.run({}, ["verify"]).status, 0);
+    assert.equal(text(f.calls), "");
+    const result = f.run({ CONFIRM: `VERIFY-BASE44-STAGED-V9:${sourceSha}` }, ["verify"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(text(f.calls).trim().split("\n"), names.map(name => `--app-id ${appId} functions pull ${name}`));
+    const readiness = JSON.parse(text(f.readiness));
+    assert.equal(readiness.functions.length, names.length);
+    assert.equal(readiness.production_activation, false);
+  } finally {
+    f.cleanup();
+  }
 });

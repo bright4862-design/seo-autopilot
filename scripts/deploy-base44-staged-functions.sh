@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Publish only the isolated V9 candidate packages. This never promotes V8,
+# Publish or verify only the isolated V9 candidate packages. This never promotes V8,
 # publishes the site, updates entities/secrets, or changes the release-source stamp.
 set -euo pipefail
 umask 077
@@ -9,6 +9,7 @@ APP_ID="${BASE44_APP_ID:-6a498732ec779dfaaeab0e53}"
 SOURCE_SHA="${SOURCE_SHA:-}"
 CONFIRM="${CONFIRM:-}"
 BASE44_EXPECTED_OWNER="${BASE44_EXPECTED_OWNER:-}"
+OPERATION="${1:-publish}"
 source "$REPO_ROOT/scripts/lib/release-source-guard.sh"
 source "$REPO_ROOT/scripts/lib/base44-pinned-cli.sh"
 
@@ -16,8 +17,17 @@ if [[ "$APP_ID" != "6a498732ec779dfaaeab0e53" || ! "$SOURCE_SHA" =~ ^[0-9a-f]{40
   echo "Refusing V9 candidate publication: exact repository app identity and SOURCE_SHA are required." >&2
   exit 2
 fi
-if [[ "$CONFIRM" != "PUBLISH-BASE44-STAGED-V9:$SOURCE_SHA" ]]; then
-  echo "Refusing V9 candidate publication: CONFIRM must equal PUBLISH-BASE44-STAGED-V9:<SOURCE_SHA>." >&2
+if (( $# > 1 )); then
+  echo 'Usage: deploy-base44-staged-functions.sh [verify]' >&2
+  exit 2
+fi
+case "$OPERATION" in
+  publish) EXPECTED_CONFIRM="PUBLISH-BASE44-STAGED-V9:$SOURCE_SHA" ;;
+  verify) EXPECTED_CONFIRM="VERIFY-BASE44-STAGED-V9:$SOURCE_SHA" ;;
+  *) echo 'Unsupported staged V9 operation.' >&2; exit 2 ;;
+esac
+if [[ "$CONFIRM" != "$EXPECTED_CONFIRM" ]]; then
+  echo "Refusing V9 candidate operation: exact $EXPECTED_CONFIRM required." >&2
   exit 2
 fi
 fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$SOURCE_SHA"
@@ -67,10 +77,12 @@ fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TASK_TMP/whoami" "$APP_I
 
 # Naming every function is essential: an empty list means "all", and --force
 # would prune other generations. Neither operation belongs in this lane.
-"$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions deploy "${FUNCTIONS[@]}" > "$TASK_TMP/deploy.log" 2>&1 || {
-  echo "V9 candidate function publication failed. No readiness artifact was issued." >&2
-  exit 1
-}
+if [[ "$OPERATION" == publish ]]; then
+  "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions deploy "${FUNCTIONS[@]}" > "$TASK_TMP/deploy.log" 2>&1 || {
+    echo "V9 candidate function publication failed. No readiness artifact was issued." >&2
+    exit 1
+  }
+fi
 
 # The pinned CLI supports one name per pull. Pull into a fresh temporary
 # project so a missing route (which can return exit 0) cannot match stale files.

@@ -510,7 +510,7 @@ test("post-deploy verification fails closed without a fresh Base44 package pull"
   assert.doesNotMatch(verify, /no read-only CLI check exists/);
 });
 
-function runPostDeployVerifier(policyMode) {
+function runPostDeployVerifier(policyMode, mutateReadyRevision = null) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "durable-release-verify-"));
   const gcloudPath = path.join(tempDir, "gcloud");
   const describePath = path.join(tempDir, "describe.json");
@@ -550,10 +550,12 @@ function runPostDeployVerifier(policyMode) {
     } } },
   };
   fs.writeFileSync(describePath, JSON.stringify(describe));
-  fs.writeFileSync(revisionDescribePath, JSON.stringify({
+  const revisionDescribe = {
     metadata: { name: describe.status.latestReadyRevisionName },
-    spec: { containers: describe.spec.template.spec.containers },
-  }));
+    spec: JSON.parse(JSON.stringify(describe.spec.template.spec)),
+  };
+  mutateReadyRevision?.(revisionDescribe);
+  fs.writeFileSync(revisionDescribePath, JSON.stringify(revisionDescribe));
   const scanQueuePath = path.join(tempDir, "scan-queue.json");
   const drainQueuePath = path.join(tempDir, "drain-queue.json");
   fs.writeFileSync(scanQueuePath, JSON.stringify({
@@ -634,6 +636,25 @@ test("post-deploy verifier requires the exact private invoker binding", () => {
   assert.equal(valid.status, 0, valid.output);
   assert.match(valid.output, /exact invoker holds roles\/run\.invoker/);
   assert.match(valid.output, /POST-DEPLOY VERIFICATION PASSED/);
+});
+
+test("post-deploy verifier rejects an old Ready image hidden by a correct desired service template", () => {
+  const result = runPostDeployVerifier("valid", (revision) => {
+    revision.spec.containers[0].image = "older-worker-image";
+  });
+  assert.equal(result.status, 1, result.output);
+  assert.match(result.output, /Ready revision core identity is unverified/);
+  assert.doesNotMatch(result.output, /POST-DEPLOY VERIFICATION PASSED/);
+});
+
+test("post-deploy verifier rejects an old Ready signer hidden by a correct desired service template", () => {
+  const result = runPostDeployVerifier("valid", (revision) => {
+    const signing = revision.spec.containers[0].env.find((e) => e.name === "SCAN_EVIDENCE_SIGNING_KEY");
+    signing.valueFrom.secretKeyRef.key = "2";
+  });
+  assert.equal(result.status, 1, result.output);
+  assert.match(result.output, /Ready revision core identity is unverified/);
+  assert.doesNotMatch(result.output, /POST-DEPLOY VERIFICATION PASSED/);
 });
 
 test("the release path never publishes signing-key material or fingerprints", () => {

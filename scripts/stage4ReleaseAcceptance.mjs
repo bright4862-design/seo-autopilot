@@ -5,6 +5,7 @@
 // when exact-source, rollback, authority, reload/history, or rescan evidence is
 // absent. Every live gate also carries a traceable receipt/reference; a claimed
 // state with no observable receipt is not enough to establish release evidence.
+import { readFileSync } from "node:fs";
 import { RELEASE_FUNCTIONS } from "./base44_release_manifest.mjs";
 import { RELEASE_FINGERPRINT, RELEASE_COMPONENT_VERSIONS } from "../src/lib/generatedReleaseContract.js";
 
@@ -36,6 +37,22 @@ function scannerRuntimeContract(functionNames) {
 const SOURCE_RUNTIME_CONTRACT = scannerRuntimeContract(RELEASE_FUNCTIONS);
 export const EXPECTED_SCANNER_FUNCTIONS = Object.freeze(SOURCE_RUNTIME_CONTRACT.functions);
 export const EXPECTED_SCANNER_ROUTE_GENERATION = SOURCE_RUNTIME_CONTRACT.route_generation;
+
+// Each routed Base44 package already carries a source-generated SHA-256 build ID.
+// A nonempty runtime label is not evidence that the deployed package matches.
+function sourcePackageBuildId(name) {
+  if (!/^[A-Za-z][A-Za-z0-9]*$/.test(name)) return "";
+  try {
+    const source = readFileSync(new URL(`../base44/functions/${name}/generatedBuildId.js`, import.meta.url), "utf8");
+    return source.match(/^export const FUNCTION_BUILD_ID = "([0-9a-f]{64})";$/m)?.[1] || "";
+  } catch {
+    return "";
+  }
+}
+
+export const EXPECTED_SCANNER_BUILD_IDS = Object.freeze(Object.fromEntries(
+  EXPECTED_SCANNER_FUNCTIONS.map((name) => [name, sourcePackageBuildId(name)]),
+));
 
 function clean(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -112,6 +129,10 @@ export function evaluateStage4ReleaseAcceptance(record) {
     add(failures, fn.verified === true, `${name} runtime is not verified`);
     add(failures, clean(fn.source_sha) === sha, `${name} source does not match merged SHA`);
     add(failures, Boolean(clean(fn.runtime_build_id)), `${name} runtime_build_id missing`);
+    const expectedBuildId = EXPECTED_SCANNER_BUILD_IDS[name];
+    add(failures, /^[a-f0-9]{64}$/.test(expectedBuildId || ""), `${name} source package build ID missing or invalid`);
+    add(failures, clean(fn.runtime_build_id) === expectedBuildId,
+      `${name} runtime package build ID does not match frozen source`);
     add(failures, hasReceipt(fn.verification_reference), `${name} verification receipt missing`);
   }
 

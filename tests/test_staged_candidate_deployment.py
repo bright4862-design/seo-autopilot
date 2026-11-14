@@ -54,16 +54,29 @@ elif args[:2] == ['builds','submit']:
     if '_EGRESS_NETWORK' in values:
         current['FIXLIST_EGRESS_MODE']='static-canary'
     if os.environ.get('FAKE_FAILURE')=='environment': current.pop('SCAN_WORKSPACE_BUCKET',None)
-    revision = {'metadata':{'name':'fixlist-standard150-worker-00105-abc','creationTimestamp':'2026-11-11T12:00:00Z'},'spec':{'containerConcurrency':1,'timeoutSeconds':480,'containers':[{'env':[{'name':key,'value':value} for key,value in current.items()]}]},'status':{'conditions':[{'type':'Ready','status':'True'}]}}
+    if os.environ.get('FAKE_FAILURE')=='alias': current['SCAN_PIPELINE_OWNER_IDS']='owner_canary_01'
+    if os.environ.get('FAKE_FAILURE')=='bucket_drift': current['SCAN_WORKSPACE_BUCKET']='other-tenant-workspaces'
+    image = values['_IMAGE'] + ':' + values['_RELEASE_SHA']
+    digest = 'sha256:' + 'd' * 64
+    deployed = values['_IMAGE'] + '@' + ('sha256:' + 'e' * 64 if os.environ.get('FAKE_FAILURE') == 'digest_mismatch' else digest)
+    revision = {'metadata':{'name':'fixlist-standard150-worker-00105-abc','creationTimestamp':'2026-11-11T12:00:00Z'},'spec':{'containerConcurrency':1,'timeoutSeconds':480,'containers':[{'image':image,'env':[{'name':key,'value':value} for key,value in current.items()]}]},'status':{'imageDigest':deployed,'conditions':[{'type':'Ready','status':'True'}]}}
     if '_EGRESS_NETWORK' in values:
         revision['metadata']['annotations']={'run.googleapis.com/network-interfaces':json.dumps([{'network':values['_EGRESS_NETWORK'],'subnetwork':values['_EGRESS_SUBNET']}]),'run.googleapis.com/vpc-access-egress':'all-traffic'}
-    state.update({'revision':revision,'substitutions':substitutions}); save()
-    step = next(step for step in manifest['steps'] if step['id']=='tag-staged-worker-candidate')
-    command = [sys.executable, *[render(arg) for arg in step['args']]]
-    tagged = subprocess.run(command,cwd=context,text=True,capture_output=True)
-    if tagged.returncode:
-        print(tagged.stderr,file=sys.stderr); sys.exit(tagged.returncode)
-elif args[:3] == ['run','revisions','list']: print(json.dumps([state['revision']]))
+    # Cloud Build rejects a user substitution the config never references.
+    unused = [key for key in substitutions if '${'+key+'}' not in pathlib.Path(option('--config')).read_text()]
+    if unused: raise SystemExit('Unused Cloud Build substitutions: '+repr(unused))
+    state.update({'revision':revision,'substitutions':substitutions})
+    if os.environ.get('FAKE_FAILURE') == 'ambiguous_revision':
+        twin = json.loads(json.dumps(revision)); twin['metadata']['name'] = 'fixlist-standard150-worker-00106-abd'
+        state['twin'] = twin
+    save()
+    record = {'id': '7e3157ff-0913-4a6d-9aaf-bf476015c2b2', 'status': 'SUCCESS', 'results': {'images': [{'name': image, 'digest': digest}]}}
+    failure = os.environ.get('FAKE_FAILURE')
+    if failure == 'digest_missing': record['results'] = {'images': []}
+    if failure == 'build_not_success': record['status'] = 'FAILURE'
+    if failure == 'digest_malformed': record['results']['images'][0]['digest'] = 'latest'
+    if '--format=json' in args and '--suppress-logs' in args: print(json.dumps(record))
+elif args[:3] == ['run','revisions','list']: print(json.dumps([state['revision'], *([state['twin']] if 'twin' in state else [])]))
 elif args[:3] == ['run','revisions','describe']: print(json.dumps(state['revision']))
 elif args[:3] == ['run','services','update-traffic']:
     tag, revision = option('--update-tags').split('=',1)
@@ -175,10 +188,20 @@ def test_existing_source_tag_cannot_be_rebound_even_if_source_is_unchanged(candi
     assert state.read_text() == before
 
 
-def test_postdeploy_rejects_missing_staged_environment(candidate):
+@pytest.mark.parametrize("mode", ["inactive", "owner-canary"])
+@pytest.mark.parametrize("failure,reason", [
+    ("environment", "environment does not match"),
+    ("bucket_drift", "environment does not match"),
+    ("alias", "legacy SCAN_PIPELINE_OWNER_IDS"),
+])
+def test_drifted_candidate_is_refused_before_any_immutable_tag_exists(candidate, mode, failure, reason):
     run, state, calls, sha = candidate
-    result = run(**inactive(), FAKE_FAILURE="environment")
-    assert result.returncode != 0 and "environment does not match" in result.stderr
+    options = inactive() if mode == "inactive" else owner_canary(sha)
+    result = run(**options, FAKE_FAILURE=failure)
+    assert result.returncode != 0 and reason in result.stderr, result.stderr
+    made = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert not any(args[:3] == ["run", "services", "update-traffic"] for args in made)
+    assert all(item.get("tag") != "staged-" + sha[:12] for item in json.loads(state.read_text())["service"]["status"]["traffic"])
 
 
 def test_source_tag_must_fit_real_dns_labels(candidate):
@@ -271,7 +294,9 @@ def test_owner_canary_build_stages_one_owner_on_the_reviewed_configuration(candi
     assert traffic[0] == {"revisionName": "serving", "percent": 100}
     assert traffic[2]["tag"] == "staged-" + sha[:12] and traffic[2]["percent"] == 0
     assert saved["substitutions"]["_STAGED_SCAN_MODE"] == "owner-canary"
-    assert saved["substitutions"]["_STAGED_OWNER_IDS"] == OWNER
+    assert "_STAGED_OWNER_IDS" not in saved["substitutions"]
+    tags = [args for args in map(json.loads, calls.read_text().splitlines()) if args[:3] == ["run", "services", "update-traffic"]]
+    assert len(tags) == 1 and "--update-tags=staged-" + sha[:12] + "=fixlist-standard150-worker-00105-abc" in tags[0]
     assert "WORKER_CANDIDATE_STAGE_MODE=owner-canary" in result.stdout
 
 
@@ -369,3 +394,142 @@ def test_workflow_routes_owner_canary_inputs_only_for_that_mode():
     assert step["env"]["STAGED_COHORT_CONFIRM"] == "${{ inputs.stage_config == 'owner-canary' && inputs.worker_cohort_confirm || '' }}"
     for key in ("SCAN_WORKSPACE_BUCKET", "SCAN_STAGE_TASKS_QUEUE_PATH"):
         assert "inputs.stage_config == 'owner-canary'" in step["env"][key]
+
+
+BUILD_CONFIGS = ("cloudbuild.durable-worker.yaml", "cloudbuild.durable-worker-static-egress-canary.yaml")
+
+
+@pytest.mark.parametrize("config", BUILD_CONFIGS)
+def test_cloud_build_steps_use_only_tools_their_images_provide(config):
+    """No step may depend on python3 in the unpinned Cloud SDK image.
+
+    Build 7e3157ff deployed, then failed tagging: that image no longer puts
+    python3 on PATH. Tagging now runs in the preflighted wrapper. python3 is
+    used only by the gcr.io/cloud-builders/gcloud substitution check, which
+    verifies its tools before using them.
+    """
+    manifest = yaml.safe_load((ROOT / config).read_text())
+    text = (ROOT / config).read_text()
+    assert not any(step["id"] == "tag-staged-worker-candidate" for step in manifest["steps"])
+    assert "staged_candidate_cloudbuild.py tag" not in text and '"tag",' not in text
+    for step in manifest["steps"]:
+        body = " ".join(map(str, step.get("args", [])))
+        uses_python = step.get("entrypoint") == "python3" or "python3 " in body
+        if uses_python:
+            assert step["name"] == "gcr.io/cloud-builders/gcloud", (step["id"], step["name"])
+            assert 'for tool in python3 gcloud; do' in body and body.index("command -v") < body.index("python3 scripts/")
+        if step["name"].startswith("gcr.io/google.com/cloudsdktool/cloud-sdk"):
+            assert step.get("entrypoint") == "gcloud", step["id"]
+    # Every user substitution is referenced, or Cloud Build rejects the submit.
+    for key in manifest["substitutions"]:
+        assert "${" + key + "}" in text, key
+
+
+def test_wrapper_refuses_before_any_cloud_call_when_a_required_tool_is_missing(candidate, tmp_path):
+    run, state, calls, sha = candidate
+    tools = tmp_path / "only-some-tools"
+    tools.mkdir()
+    for name in ("bash", "git", "env", "dirname", "cat", "mktemp", "rm", "tar", "printf"):
+        found = shutil.which(name)
+        if found:
+            (tools / name).symlink_to(found)
+    (tools / "gcloud").symlink_to(tmp_path / "bin" / "gcloud")
+    result = run(**owner_canary(sha), PATH=str(tools))
+    assert result.returncode == 2 and "required tool python3 is not on PATH" in result.stderr
+    assert not calls.exists() and "revision" not in json.loads(state.read_text())
+
+
+def test_wrapper_tags_after_build_with_the_same_guarded_helper(candidate):
+    run, state, calls, sha = candidate
+    result = run(**inactive())
+    assert result.returncode == 0, result.stderr
+    made = [json.loads(line) for line in calls.read_text().splitlines()]
+    submit = next(i for i, args in enumerate(made) if args[:2] == ["builds", "submit"])
+    tag = next(i for i, args in enumerate(made) if args[:3] == ["run", "services", "update-traffic"])
+    assert submit < tag
+    assert "_STAGED_OWNER_IDS" not in json.loads(state.read_text())["substitutions"]
+
+
+@pytest.mark.parametrize("failure,reason", [
+    ("digest_missing", "no single exact digest"),
+    ("digest_malformed", "no single exact digest"),
+    ("build_not_success", "not an exact successful build"),
+    ("digest_mismatch", "exactly one revision of this source running the built image digest, found 0"),
+    ("ambiguous_revision", "found 2"),
+])
+def test_no_tag_is_created_unless_one_ready_revision_runs_the_built_digest(candidate, failure, reason):
+    run, state, calls, sha = candidate
+    result = run(**owner_canary(sha), FAKE_FAILURE=failure)
+    assert result.returncode != 0 and reason in result.stderr, result.stderr
+    made = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert not any(args[:3] == ["run", "services", "update-traffic"] for args in made)
+    assert all(item.get("tag") != "staged-" + sha[:12] for item in json.loads(state.read_text())["service"]["status"]["traffic"])
+
+
+def test_build_record_digest_is_bound_and_reported(candidate):
+    run, state, calls, sha = candidate
+    result = run(**owner_canary(sha))
+    assert result.returncode == 0, result.stderr
+    assert "WORKER_CANDIDATE_IMAGE_DIGEST=sha256:" + "d" * 64 in result.stdout
+    assert "WORKER_CANDIDATE_BUILD_ID=7e3157ff-0913-4a6d-9aaf-bf476015c2b2" in result.stdout
+    submit = next(json.loads(line) for line in calls.read_text().splitlines() if json.loads(line)[:2] == ["builds", "submit"])
+    assert "--suppress-logs" in submit and "--format=json" in submit
+
+
+def test_tag_helper_refuses_a_revision_other_than_the_digest_bound_one(tmp_path):
+    helper = load_script("staged_candidate_cloudbuild")
+    sha = "c" * 40
+    env = [{"name": "FIXLIST_WORKER_SOURCE_SHA", "value": sha}, {"name": "FIXLIST_STAGED_CONFIG_SHA256", "value": "f" * 64},
+           {"name": "SCAN_PIPELINE_MODE", "value": "staged"}, {"name": "SCAN_STAGED_OWNER_IDS", "value": OWNER}]
+    image = "europe-west1-docker.pkg.dev/example-project/workers/scanner@sha256:"
+    rows = [{"metadata": {"name": "fixlist-standard150-worker-00107-aaa", "creationTimestamp": "2026-11-14T00:00:00Z"},
+             "spec": {"containers": [{"env": env}]},
+             "status": {"imageDigest": image + "1" * 64, "conditions": [{"type": "Ready", "status": "True"}]}}]
+    calls = []
+    def cloud(*arguments):
+        calls.append(arguments)
+        if arguments[:3] == ("run", "revisions", "list"):
+            return rows
+        raise AssertionError("no service read or tag update may happen")
+    helper.cloud = cloud
+    args = helper.argparse.Namespace(mode="owner-canary", source_sha=sha, tag=helper.source_tag(sha), digest="f" * 64,
+                                     owners=OWNER, revision="fixlist-standard150-worker-00108-bbb",
+                                     image_ref=image + "1" * 64, worker_service="w", region=REGION, project=PROJECT)
+    with pytest.raises(ValueError, match="exact revision bound to the built image digest"):
+        helper.tag_candidate(args)
+    args.revision, args.image_ref = "fixlist-standard150-worker-00107-aaa", image + "2" * 64
+    with pytest.raises(ValueError, match="No exact source/configuration"):
+        helper.tag_candidate(args)
+    # The bound revision exists but is not Ready: nothing is tagged.
+    args.image_ref = image + "1" * 64
+    rows[0]["status"]["conditions"] = [{"type": "Ready", "status": "False"}]
+    with pytest.raises(ValueError, match="not Ready"):
+        helper.tag_candidate(args)
+    assert all(call[:3] == ("run", "revisions", "list") for call in calls)
+    # Without both bindings the helper refuses before any cloud call.
+    calls.clear()
+    for missing in ("revision", "image_ref"):
+        unbound = helper.argparse.Namespace(**{**vars(args), missing: ""})
+        with pytest.raises(ValueError, match="exact digest-bound --revision|exact --image-ref"):
+            helper.tag_candidate(unbound)
+    unbound = helper.argparse.Namespace(**{**vars(args), "image_ref": "scanner:latest"})
+    with pytest.raises(ValueError, match="exact --image-ref"):
+        helper.tag_candidate(unbound)
+    assert calls == []
+
+
+def test_tag_cli_requires_both_bindings_for_staged_modes(tmp_path):
+    base = [sys.executable, str(ROOT / "scripts/staged_candidate_cloudbuild.py"), "tag", "--mode=inactive",
+            "--source-sha=" + "a" * 40, "--tag=staged-" + "a" * 12, "--digest=" + "f" * 64,
+            "--worker-service=w", "--region=" + REGION, "--project=" + PROJECT]
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "gcloud").write_text("#!/bin/sh\necho called >> \"$0.calls\"\nexit 1\n")
+    (bin_dir / "gcloud").chmod(0o755)
+    env = {**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]}
+    for extra in ([], ["--revision=fixlist-standard150-worker-00107-aaa"], ["--image-ref=reg.example/scanner@sha256:" + "1" * 64]):
+        checked = subprocess.run(base + extra, env=env, capture_output=True, text=True)
+        assert checked.returncode != 0 and "STAGED_CANDIDATE_BLOCKED" in checked.stderr
+    assert not (bin_dir / "gcloud.calls").exists()
+    off = subprocess.run([*base[:3], "--mode=off", *base[4:]], env=env, capture_output=True, text=True)
+    assert off.returncode == 0

@@ -7,7 +7,6 @@ substitutions:
   _STAGED_ENV_SUFFIX: ""
   _STAGED_TAG: ""
   _STAGED_CONFIG_SHA256: ""
-  _STAGED_OWNER_IDS: ""
   _RELEASE_SHA: ""
   _WORKER_SERVICE: ""
   _REGION: ""
@@ -35,6 +34,9 @@ steps:
       - -c
       - |
         set -euo pipefail
+        for tool in python3 gcloud; do
+          command -v "$tool" >/dev/null || { echo "Refusing to build: $tool is not on PATH in this builder image."; exit 1; }
+        done
         missing=0
         for pair in \
           "_RELEASE_SHA=${_RELEASE_SHA}" \
@@ -135,10 +137,9 @@ steps:
       - --set-env-vars=TASKS_INVOKER_SERVICE_ACCOUNT=${_INVOKER_SA},BASE44_APP_ID=${_BASE44_APP_ID},BASE44_API_URL=${_BASE44_API_URL},GROK_PROXY_ENABLED=false,FIXLIST_WORKER_SOURCE_SHA=${_RELEASE_SHA}${_STAGED_ENV_SUFFIX}
       - --set-secrets=SCAN_EVIDENCE_SIGNING_KEY=${_SIGNING_KEY_SECRET}:${_SIGNING_KEY_VERSION}
 
-  - id: tag-staged-worker-candidate
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: python3
-    args: ["scripts/staged_candidate_cloudbuild.py", "tag", "--mode=${_STAGED_SCAN_MODE}", "--source-sha=${_RELEASE_SHA}", "--tag=${_STAGED_TAG}", "--digest=${_STAGED_CONFIG_SHA256}", "--owners=${_STAGED_OWNER_IDS}", "--worker-service=${_WORKER_SERVICE}", "--region=${_REGION}", "--project=${PROJECT_ID}"]
+  # The immutable staged source tag is created by build-worker-candidate.sh
+  # after this build, with its preflighted python3 and gcloud. No step here
+  # depends on a tool the unpinned SDK images may stop shipping.
 
 images:
   - ${_IMAGE}:${_RELEASE_SHA}

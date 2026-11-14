@@ -125,6 +125,10 @@ def tag_candidate(args):
     if args.mode == "off":
         return
     require(args.mode in {"inactive", "owner-canary"} and args.tag == source_tag(args.source_sha), "Only inactive or owner-canary source-bound candidates may be tagged")
+    # Only the guarded wrapper calls this, after binding one revision to the
+    # build's image digest. Both are mandatory: there is no "newest match".
+    require(bool(re.fullmatch(r"fixlist-standard150-worker-[0-9]{5}-[a-z0-9]{3}", args.revision or "")), "An exact digest-bound --revision is required")
+    require(bool(re.fullmatch(r"[a-z0-9.-]+(/[a-z0-9._-]+)+@sha256:[0-9a-f]{64}", args.image_ref or "")), "An exact --image-ref <image>@sha256:<digest> is required")
     owner = owner_cohort(args.owners) if args.mode == "owner-canary" else ""
     expected_mode = "staged" if owner else "monolith"
     require(bool(re.fullmatch(r"[0-9a-f]{64}", args.digest)), "Staged configuration digest is required")
@@ -135,10 +139,15 @@ def tag_candidate(args):
         env = {item.get("name"): item.get("value", "") for item in (revision.get("spec", {}).get("containers") or [{}])[0].get("env", [])}
         if (env.get("FIXLIST_WORKER_SOURCE_SHA") == args.source_sha and env.get("FIXLIST_STAGED_CONFIG_SHA256") == args.digest
                 and env.get("SCAN_PIPELINE_MODE") == expected_mode and env.get("SCAN_STAGED_OWNER_IDS", "") == owner
-                and not env.get("SCAN_PIPELINE_OWNER_IDS")):
-            matches.append((revision.get("metadata", {}).get("creationTimestamp", ""), revision.get("metadata", {}).get("name", "")))
+                and not env.get("SCAN_PIPELINE_OWNER_IDS")
+                and (revision.get("status") or {}).get("imageDigest") == args.image_ref):
+            matches.append(revision)
     require(bool(matches), "No exact source/configuration staged revision exists")
-    candidate = sorted(matches)[-1][1]
+    require([item.get("metadata", {}).get("name") for item in matches] == [args.revision], "Staged candidate is not the exact revision bound to the built image digest")
+    conditions = (matches[0].get("status") or {}).get("conditions") or []
+    ready = next((item for item in conditions if item.get("type") == "Ready"), {})
+    require(str(ready.get("status") or "").lower() == "true", "Digest-bound staged candidate is not Ready")
+    candidate = args.revision
     before = cloud("run", "services", "describe", args.worker_service, *scope)
     weights, tags = traffic_state(before)
     require(args.tag not in tags, "Refusing to rebind an existing immutable staged source tag")
@@ -164,6 +173,8 @@ def main(argv=None):
     for name in ("mode", "source-sha", "tag", "digest", "worker-service", "region", "project"):
         item.add_argument("--" + name, required=True)
     item.add_argument("--owners", default="")
+    item.add_argument("--revision", default="")
+    item.add_argument("--image-ref", default="")
     args = parser.parse_args(argv)
     {"prepare": prepare, "validate": validate, "tag": tag_candidate}[args.command](args)
 

@@ -278,6 +278,11 @@ test("a valid source SHA does not authorize foreign or placeholder Base44 packag
   result = evaluateStage4ReleaseAcceptance(record);
   assert.equal(result.pass, false, "V9 digest cannot masquerade as a V8 runtime package");
 
+  record.deployment.functions[0].runtime_build_id = "";
+  result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.pass, false, "missing package identity cannot pass");
+  assert.ok(result.failures.some((failure) => failure.includes("runtime_build_id missing")));
+
   record.deployment.functions[0].runtime_build_id = EXPECTED_SCANNER_BUILD_IDS.startStandardScanJobV8;
   assert.equal(evaluateStage4ReleaseAcceptance(record).pass, true, "exact package restored");
 });

@@ -157,6 +157,21 @@ IMG=$(jqq "d['spec']['template']['spec']['containers'][0].get('image','')")
   && pass "image matches EXPECTED_IMAGE" \
   || fail "image mismatch: expected $EXPECTED_IMAGE"
 
+# Bind the *Ready revision*, not only the service's desired template, to the
+# exact Base44 customer authority origin. A correct source SHA/fingerprint can
+# still persist nowhere if BASE44_APP_ID or BASE44_API_URL is misconfigured.
+# Metadata only; no secret payloads, traffic changes or customer requests.
+if [ -z "$REV" ]; then
+  fail "cannot attest Base44 routing without an exact Ready revision"
+elif ! REVISION_JSON=$(gcloud run revisions describe "$REV" \
+    --region="$REGION" --project="$PROJECT" --format=json 2>/dev/null) || [ -z "$REVISION_JSON" ]; then
+  fail "cannot independently describe the exact Ready revision for Base44 routing"
+elif printf "%s" "$REVISION_JSON" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_worker_base44_routing.py" --revision "$REV" >/dev/null; then
+  pass "Ready revision Base44 app and origin match the pinned Standard 150 route"
+else
+  fail "Ready revision Base44 routing is unverified or points at a foreign app/origin"
+fi
+
 echo
 echo "=== 3. Runtime configuration ==="
 SA=$(jqq "d['spec']['template']['spec'].get('serviceAccountName','')")

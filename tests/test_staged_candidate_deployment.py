@@ -156,7 +156,7 @@ def test_inactive_build_uses_immutable_tag_preserves_empty_owners_and_serving_tr
     ({"SCAN_STAGE_TASKS_QUEUE_PATH": QUEUE.replace(REGION, "us-central1")}, "selected project"),
     ({"SCAN_STAGED_OWNER_IDS": "owner-id"}, "empty owner cohort"),
     ({"SCAN_PIPELINE_MODE": "staged"}, "empty owner cohort"),
-    ({"FIXLIST_STAGED_SCAN_MODE": "owner-canary"}, "V9 runtime acceptance"),
+    ({"FIXLIST_STAGED_SCAN_MODE": "owner-canary"}, "exactly one exact owner ID"),
 ])
 def test_invalid_or_active_configuration_fails_before_build(candidate, overrides, reason):
     run, state, calls, sha = candidate
@@ -241,3 +241,131 @@ def test_inactive_infrastructure_verification_requires_paused_queue_explicitly()
     queue["state"] = "RUNNING"
     with pytest.raises(verify.VerificationError, match="PAUSED"):
         verify.validate_queue(queue, QUEUE, 40, "PAUSED")
+
+
+OWNER = "owner_canary_01"
+
+
+def owner_canary(sha, owner=OWNER, **extra):
+    helper = load_script("staged_candidate_cloudbuild")
+    confirm = f"STAGE-WORKER-OWNER-CANARY:{sha}:{helper.cohort_sha256(owner)}"
+    return {**inactive(), "FIXLIST_STAGED_SCAN_MODE": "owner-canary", "SCAN_STAGED_OWNER_IDS": owner,
+            "STAGED_COHORT_CONFIRM": confirm, **extra}
+
+
+def test_owner_canary_build_stages_one_owner_on_the_reviewed_configuration(candidate):
+    run, state, calls, sha = candidate
+    result = run(**owner_canary(sha))
+    assert result.returncode == 0, result.stderr
+    saved = json.loads(state.read_text())
+    env = {item["name"]: item["value"] for item in saved["revision"]["spec"]["containers"][0]["env"]}
+    assert env["SCAN_PIPELINE_MODE"] == "staged" and env["SCAN_STAGED_OWNER_IDS"] == OWNER
+    assert "SCAN_PIPELINE_OWNER_IDS" not in env
+    # The digest is the reviewed inactive configuration's: the cohort is the only difference.
+    helper = load_script("staged_candidate_cloudbuild")
+    reviewed = helper.environment(sha, PROJECT, REGION, "example-workspaces", QUEUE, CANONICAL)
+    assert env["FIXLIST_STAGED_CONFIG_SHA256"] == helper.digest_for(sha, reviewed)
+    assert {k: v for k, v in env.items() if k in reviewed and k not in helper.COHORT_KEYS} == \
+        {k: v for k, v in reviewed.items() if k not in helper.COHORT_KEYS}
+    traffic = saved["service"]["status"]["traffic"]
+    assert traffic[0] == {"revisionName": "serving", "percent": 100}
+    assert traffic[2]["tag"] == "staged-" + sha[:12] and traffic[2]["percent"] == 0
+    assert saved["substitutions"]["_STAGED_SCAN_MODE"] == "owner-canary"
+    assert saved["substitutions"]["_STAGED_OWNER_IDS"] == OWNER
+    assert "WORKER_CANDIDATE_STAGE_MODE=owner-canary" in result.stdout
+
+
+@pytest.mark.parametrize("change,reason", [
+    (dict(STAGED_COHORT_CONFIRM=""), "STAGE-WORKER-OWNER-CANARY"),
+    (dict(STAGED_COHORT_CONFIRM="STAGE-WORKER-OWNER-CANARY:{sha}:" + "0" * 64), "STAGE-WORKER-OWNER-CANARY"),
+    (dict(SCAN_STAGED_OWNER_IDS="owner_canary_01,owner_canary_02"), "exactly one exact owner ID"),
+    (dict(SCAN_STAGED_OWNER_IDS="*"), "exactly one exact owner ID"),
+    (dict(SCAN_STAGED_OWNER_IDS="short"), "exactly one exact owner ID"),
+    (dict(SCAN_PIPELINE_OWNER_IDS=OWNER), "legacy aliases"),
+    (dict(SCAN_PIPELINE_MODE="staged"), "legacy aliases"),
+])
+def test_owner_canary_refuses_unbound_or_ambiguous_cohorts_before_build(candidate, change, reason):
+    run, state, calls, sha = candidate
+    options = owner_canary(sha)
+    options.update({k: v.format(sha=sha) for k, v in change.items()})
+    result = run(**options)
+    assert result.returncode != 0 and reason in result.stderr, result.stderr
+    assert "revision" not in json.loads(state.read_text())
+    made = calls.read_text().splitlines() if calls.exists() else []
+    assert not any(args[:2] == ["builds", "submit"] for args in map(json.loads, made))
+
+
+def test_owner_canary_confirmation_is_bound_to_the_exact_owner(candidate):
+    run, state, calls, sha = candidate
+    helper = load_script("staged_candidate_cloudbuild")
+    other = f"STAGE-WORKER-OWNER-CANARY:{sha}:{helper.cohort_sha256('owner_canary_02')}"
+    result = run(**owner_canary(sha, STAGED_COHORT_CONFIRM=other))
+    assert result.returncode != 0 and "STAGE-WORKER-OWNER-CANARY" in result.stderr
+
+
+def validate(tmp_path, mode, env, digest=None, sha="a" * 40):
+    helper = load_script("staged_candidate_cloudbuild")
+    stamp = tmp_path / "source-sha"
+    stamp.write_text(sha)
+    reviewed = helper.environment(sha, PROJECT, REGION, "example-workspaces", QUEUE, CANONICAL)
+    digest = digest or helper.digest_for(sha, reviewed)
+    env = {**env, "FIXLIST_STAGED_CONFIG_SHA256": digest}
+    execution_env = {**os.environ, "STAGED_SCAN_MODE": mode,
+                     "STAGED_ENV_SUFFIX": "," + ",".join(key + "=" + value for key, value in sorted(env.items())),
+                     "STAGED_TAG": helper.source_tag(sha), "STAGED_CONFIG_SHA256": digest, "STAGED_SOURCE_SHA": sha,
+                     "STAGED_PROJECT": PROJECT, "STAGED_REGION": REGION}
+    return subprocess.run([sys.executable, str(ROOT / "scripts/staged_candidate_cloudbuild.py"), "validate", "--source-stamp", str(stamp)],
+                          env=execution_env, capture_output=True, text=True), helper, reviewed
+
+
+def test_cloudbuild_accepts_owner_canary_only_as_reviewed_config_plus_one_owner(tmp_path):
+    helper = load_script("staged_candidate_cloudbuild")
+    reviewed = helper.environment("a" * 40, PROJECT, REGION, "example-workspaces", QUEUE, CANONICAL)
+    checked, _, _ = validate(tmp_path, "owner-canary", helper.cohorted(reviewed, OWNER))
+    assert checked.returncode == 0, checked.stderr
+    for env in (
+        {**helper.cohorted(reviewed, OWNER), "SCAN_STAGE_QUEUE": "fixlist-standard150"},
+        {**reviewed, "SCAN_STAGED_OWNER_IDS": OWNER},
+        {**helper.cohorted(reviewed, OWNER), "SCAN_STAGED_OWNER_IDS": "*"},
+        {**helper.cohorted(reviewed, OWNER), "SCAN_PIPELINE_OWNER_IDS": OWNER},
+    ):
+        checked, _, _ = validate(tmp_path, "owner-canary", env)
+        assert checked.returncode != 0 and "STAGED_CANDIDATE_BLOCKED" in checked.stderr
+    # The inactive mode still refuses any cohort.
+    checked, _, _ = validate(tmp_path, "inactive", helper.cohorted(reviewed, OWNER))
+    assert checked.returncode != 0 and "monolith mode" in checked.stderr
+
+
+def test_owner_canary_build_satisfies_the_stage_queue_activation_guard():
+    """The cohorted build must pass the merged activation guard without edits."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import staged_queue_guard as guard
+    helper = load_script("staged_candidate_cloudbuild")
+    sha = "b" * 40
+    origin = "https://fixlist-standard150-worker-tpucgyfewa-ew.a.run.app"
+    reviewed = helper.environment(sha, guard.PROJECT, guard.REGION, guard.WORKSPACE_BUCKET, guard.STAGE_QUEUE_PATH, origin)
+    env = {**helper.cohorted(reviewed, OWNER), "FIXLIST_STAGED_CONFIG_SHA256": helper.digest_for(sha, reviewed),
+           "FIXLIST_WORKER_SOURCE_SHA": sha, "TASKS_INVOKER_SERVICE_ACCOUNT": guard.INVOKER_SA}
+    name = "fixlist-standard150-worker-00110-abc"
+    service = {"status": {"url": origin, "traffic": [
+        {"revisionName": "fixlist-standard150-worker-00097-lvl", "percent": 100},
+        {"revisionName": name, "percent": 0, "tag": helper.source_tag(sha), "url": reviewed["SCAN_STAGE_TARGET_URL"]}]}}
+    revisions = {name: {"metadata": {"name": name}, "spec": {"serviceAccountName": guard.WORKER_SA,
+                 "containers": [{"env": [{"name": k, "value": v} for k, v in env.items()]}]}},
+                 "fixlist-standard150-worker-00097-lvl": {"metadata": {"name": "fixlist-standard150-worker-00097-lvl"},
+                 "spec": {"containers": [{"env": [{"name": "SCAN_PIPELINE_MODE", "value": "monolith"}]}]}}}
+    found = guard.check_activation_candidate(service, revisions, name, sha)
+    assert found["mode"] == "staged" and found["owner_count"] == "1"
+    assert helper.cohort_sha256(OWNER) == __import__("hashlib").sha256(json.dumps(sorted([OWNER]), separators=(",", ":")).encode()).hexdigest()
+
+
+def test_workflow_routes_owner_canary_inputs_only_for_that_mode():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/fixlist-cloud-operator.yml").read_text())
+    inputs = workflow[True]["workflow_dispatch"]["inputs"]
+    assert inputs["stage_config"]["options"] == ["off", "inactive", "owner-canary"]
+    assert "worker_cohort_confirm" in inputs and len(inputs) <= 25
+    step = next(s for s in workflow["jobs"]["operate"]["steps"] if s.get("name") == "Build isolated Standard 150 worker candidate")
+    assert step["env"]["SCAN_STAGED_OWNER_IDS"] == "${{ inputs.stage_config == 'owner-canary' && inputs.acceptance_owner_user_ids || '' }}"
+    assert step["env"]["STAGED_COHORT_CONFIRM"] == "${{ inputs.stage_config == 'owner-canary' && inputs.worker_cohort_confirm || '' }}"
+    for key in ("SCAN_WORKSPACE_BUCKET", "SCAN_STAGE_TASKS_QUEUE_PATH"):
+        assert "inputs.stage_config == 'owner-canary'" in step["env"][key]

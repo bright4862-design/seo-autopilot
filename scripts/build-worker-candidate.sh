@@ -11,11 +11,18 @@ EGRESS_MODE="${FIXLIST_EGRESS_MODE:-none}"
 EGRESS_NETWORK="${FIXLIST_EGRESS_NETWORK:-}"
 EGRESS_SUBNET="${FIXLIST_EGRESS_SUBNET:-}"
 STAGED_SCAN_MODE="${FIXLIST_STAGED_SCAN_MODE:-off}"
+STAGED_OWNER_IDS=""
 case "$STAGED_SCAN_MODE" in
   off|inactive) ;;
   owner-canary)
-    echo "Refusing: staged owner cohorts require verified deployed V9 runtime acceptance and a separately reviewed activation." >&2
-    exit 2
+    # One exact owner, bound to the source and cohort by a separate
+    # confirmation. Base44 V9, the gateway and this worker must name the same
+    # owner. Stage queue activation stays a separate, barrier-gated operation.
+    STAGED_OWNER_IDS="${SCAN_STAGED_OWNER_IDS:-}"
+    if [[ -n "${SCAN_PIPELINE_OWNER_IDS:-}" || -n "${SCAN_PIPELINE_MODE:-}" ]]; then
+      echo "Refusing: owner-canary takes only SCAN_STAGED_OWNER_IDS; legacy aliases and mode overrides are refused." >&2
+      exit 2
+    fi
     ;;
   *) echo "Refusing unsupported FIXLIST_STAGED_SCAN_MODE=$STAGED_SCAN_MODE." >&2; exit 2 ;;
 esac
@@ -27,6 +34,17 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$REPO_ROOT/scripts/lib/release-source-guard.sh"
 fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$CONFIRM"
 SOURCE_SHA="$FIXLIST_EXACT_SOURCE_SHA"
+if [[ "$STAGED_SCAN_MODE" == owner-canary ]]; then
+  COHORT_SHA256="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import staged_candidate_cloudbuild as c
+try:
+    print(c.cohort_sha256(c.owner_cohort(sys.argv[2])))
+except ValueError as exc:
+    raise SystemExit(f"Refusing: {exc}")' "$REPO_ROOT/scripts" "$STAGED_OWNER_IDS")"
+  [[ "${STAGED_COHORT_CONFIRM:-}" == "STAGE-WORKER-OWNER-CANARY:${SOURCE_SHA}:${COHORT_SHA256}" ]] || {
+    echo "Refusing: exact STAGE-WORKER-OWNER-CANARY:<source-sha>:<sorted-cohort-sha256> confirmation required." >&2
+    exit 2
+  }
+fi
 
 case "$EGRESS_MODE" in
   none)
@@ -87,8 +105,9 @@ PY
 IMAGE="${VALUES[0]}"; RUNTIME_SA="${VALUES[1]}"; INVOKER_SA="${VALUES[2]}"; BASE44_APP="${VALUES[3]}"; BASE44_API="${VALUES[4]}"; SIGNING_SECRET="${VALUES[5]}"; SIGNING_VERSION="${VALUES[6]}"
 
 STAGED_TAG=""; STAGED_CONFIG_SHA256=""; STAGED_ENV_SUFFIX=""
-if [[ "$STAGED_SCAN_MODE" == inactive ]]; then
+if [[ "$STAGED_SCAN_MODE" == inactive || "$STAGED_SCAN_MODE" == owner-canary ]]; then
   python3 "$REPO_ROOT/scripts/staged_candidate_cloudbuild.py" prepare \
+    --mode="$STAGED_SCAN_MODE" --owners="$STAGED_OWNER_IDS" \
     --worker-json="$WORKER_JSON" --source-sha="$SOURCE_SHA" --project="$PROJECT" --region="$REGION" \
     --bucket="${SCAN_WORKSPACE_BUCKET:-}" --queue-path="${SCAN_STAGE_TASKS_QUEUE_PATH:-}" > "$STAGED_CONFIG_JSON"
   readarray -t STAGED_VALUES < <(python3 - "$STAGED_CONFIG_JSON" <<'PY'
@@ -133,10 +152,10 @@ case "$EGRESS_MODE" in
     ;;
 esac
 test -f "$BUILD_CONFIG" || { echo "Worker build config missing: $BUILD_CONFIG" >&2; exit 2; }
-if [[ "$STAGED_SCAN_MODE" == inactive ]]; then
+if [[ "$STAGED_SCAN_MODE" == inactive || "$STAGED_SCAN_MODE" == owner-canary ]]; then
   # The suffix contains environment commas. A separate substitutions delimiter
   # preserves those commas and the intentionally empty owner list verbatim.
-  BUILD_SUBSTITUTIONS="^|^${BUILD_SUBSTITUTIONS//,/|}|_STAGED_SCAN_MODE=inactive|_STAGED_ENV_SUFFIX=$STAGED_ENV_SUFFIX|_STAGED_TAG=$STAGED_TAG|_STAGED_CONFIG_SHA256=$STAGED_CONFIG_SHA256"
+  BUILD_SUBSTITUTIONS="^|^${BUILD_SUBSTITUTIONS//,/|}|_STAGED_SCAN_MODE=$STAGED_SCAN_MODE|_STAGED_ENV_SUFFIX=$STAGED_ENV_SUFFIX|_STAGED_TAG=$STAGED_TAG|_STAGED_CONFIG_SHA256=$STAGED_CONFIG_SHA256|_STAGED_OWNER_IDS=$STAGED_OWNER_IDS"
 fi
 
 gcloud builds submit "$BUILD_CONTEXT" \
@@ -156,7 +175,7 @@ for r in rows:
   env={i.get('name'):i.get('value','') for i in c.get('env',[])}
   if env.get('FIXLIST_WORKER_SOURCE_SHA') != sha or env.get('FIXLIST_EGRESS_MODE','none') != mode:
     continue
-  if staged == 'inactive' and env.get('FIXLIST_STAGED_CONFIG_SHA256') != digest:
+  if staged in ('inactive', 'owner-canary') and env.get('FIXLIST_STAGED_CONFIG_SHA256') != digest:
     continue
   annotations=r.get('metadata',{}).get('annotations',{}) or {}
   raw=annotations.get('run.googleapis.com/network-interfaces','')
@@ -216,11 +235,13 @@ v=json.load(open(sys.argv[1])); candidate, staged, config_path, revision_path, s
 for item in v.get('status',{}).get('traffic',[]) or []:
   if item.get('revisionName')==candidate and int(item.get('percent') or 0)>0:
     raise SystemExit('candidate unexpectedly receives traffic')
-if staged == 'inactive':
+if staged in ('inactive', 'owner-canary'):
   config=json.load(open(config_path)); revision=json.load(open(revision_path))
   env={item.get('name'):item.get('value','') for item in (revision.get('spec',{}).get('containers') or [{}])[0].get('env',[])}
   if env.get('FIXLIST_WORKER_SOURCE_SHA') != sha or any(env.get(key) != value for key,value in config['environment'].items()):
-    raise SystemExit('Refusing: inactive candidate environment does not match its exact source-bound configuration.')
+    raise SystemExit('Refusing: staged candidate environment does not match its exact source-bound configuration.')
+  if env.get('SCAN_PIPELINE_OWNER_IDS'):
+    raise SystemExit('Refusing: staged candidate carries the legacy SCAN_PIPELINE_OWNER_IDS alias.')
   tags=[item for item in v.get('status',{}).get('traffic',[]) if item.get('tag') == config['tag']]
   if len(tags) != 1 or tags[0].get('revisionName') != candidate or tags[0].get('url','').rstrip('/') != config['environment']['SCAN_STAGE_TARGET_URL']:
     raise SystemExit('Refusing: immutable staged tag does not resolve to the exact configured candidate.')

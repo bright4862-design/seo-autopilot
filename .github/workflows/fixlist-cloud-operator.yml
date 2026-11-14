@@ -108,13 +108,18 @@ on:
           - "off"
           - owner-canary
       stage_config:
-        description: "build-worker-candidate only: optional inactive staged storage/queue configuration at 0% traffic"
+        description: "build-worker-candidate only: inactive staged storage/queue configuration at 0% traffic, or owner-canary for the same reviewed configuration staged for one exact acceptance owner"
         required: false
         default: "off"
         type: choice
         options:
           - "off"
           - inactive
+          - owner-canary
+      worker_cohort_confirm:
+        description: "build-worker-candidate owner-canary only: STAGE-WORKER-OWNER-CANARY:<source-sha>:<sorted-cohort-sha256>"
+        required: false
+        type: string
       gateway_staged_config:
         description: "deploy-dispatch-gateway only: explicitly enable staged validation for the exact canary cohort after a verified zero-owner deployment"
         required: false
@@ -443,8 +448,12 @@ jobs:
           CONFIRM: ${{ inputs.confirm }}
           SOURCE_SHA: ${{ github.sha }}
           FIXLIST_STAGED_SCAN_MODE: ${{ inputs.stage_config || 'off' }}
-          SCAN_WORKSPACE_BUCKET: ${{ inputs.stage_config == 'inactive' && 'fixlist-scan-workspaces-seo-autopilot-501517' || '' }}
-          SCAN_STAGE_TASKS_QUEUE_PATH: ${{ inputs.stage_config == 'inactive' && 'projects/seo-autopilot-501517/locations/europe-west1/queues/fixlist-scan-stages' || '' }}
+          SCAN_WORKSPACE_BUCKET: ${{ (inputs.stage_config == 'inactive' || inputs.stage_config == 'owner-canary') && 'fixlist-scan-workspaces-seo-autopilot-501517' || '' }}
+          SCAN_STAGE_TASKS_QUEUE_PATH: ${{ (inputs.stage_config == 'inactive' || inputs.stage_config == 'owner-canary') && 'projects/seo-autopilot-501517/locations/europe-west1/queues/fixlist-scan-stages' || '' }}
+          # Empty unless owner-canary is chosen explicitly. The build accepts
+          # exactly one owner and the cohort-bound confirmation below.
+          SCAN_STAGED_OWNER_IDS: ${{ inputs.stage_config == 'owner-canary' && inputs.acceptance_owner_user_ids || '' }}
+          STAGED_COHORT_CONFIRM: ${{ inputs.stage_config == 'owner-canary' && inputs.worker_cohort_confirm || '' }}
         shell: bash
         run: ./scripts/build-worker-candidate.sh
 

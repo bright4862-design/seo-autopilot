@@ -83,6 +83,11 @@ elif args[:3] == ['run','services','update-traffic']:
     canonical = state['service']['status']['url']
     state['service']['status']['traffic'].append({'tag':tag,'revisionName':revision,'percent':0,'url':'https://'+tag+'---'+canonical.removeprefix('https://')})
     state['service']['spec']['traffic'].append({'tag':tag,'revisionName':revision,'percent':0})
+    # Model a completed gcloud traffic update by default. The adversarial
+    # variant keeps its old observed generation despite matching traffic arrays.
+    state['service']['metadata']['generation'] += 1
+    if os.environ.get('FAKE_TAG_RECONCILING') != '1':
+        state['service']['status']['observedGeneration'] += 1
     save(); print(json.dumps(state['service']))
 else: raise SystemExit('Unexpected cloud command '+repr(args))
 '''
@@ -114,6 +119,11 @@ def candidate(tmp_path):
         {"name": "BASE44_APP_ID", "value": "app-test"}, {"name": "BASE44_API_URL", "value": "https://base44.app"},
         {"name": "SCAN_EVIDENCE_SIGNING_KEY", "valueFrom": {"secretKeyRef": {"name": "scan-evidence", "key": "7"}}}]}]}}},
         "status": {"url": CANONICAL, "traffic": [{"revisionName": "serving", "percent": 100}, {"tag": "candidate", "revisionName": "older-candidate", "percent": 0, "url": "https://candidate---worker-abc-ew.a.run.app"}]}}
+    # A matching traffic split alone is not a completed Cloud Run rollout.
+    # Test an explicitly Ready service with matching observed generations.
+    worker["metadata"] = {"generation": 7}
+    worker["status"]["observedGeneration"] = 7
+    worker["status"]["conditions"] = [{"type": "Ready", "status": "True"}]
     # Cloud Run v1 desired and observed traffic must both be stable before an
     # immutable staged source tag is installed.
     worker["spec"]["traffic"] = [
@@ -592,3 +602,51 @@ def test_staged_tag_refuses_duplicate_traffic_tag_and_floating_revision(candidat
     assert result.returncode != 0 and "floating latest revision" in result.stderr
     made = [json.loads(line) for line in calls.read_text().splitlines()]
     assert not any(args[:3] == ["run", "services", "update-traffic"] for args in made)
+
+
+
+@pytest.mark.parametrize("case,expected", [
+    ("stale_generation", "generation has not reconciled"),
+    ("missing_generation", "generation is missing or ambiguous"),
+    ("missing_observed", "generation is missing or ambiguous"),
+    ("boolean_generation", "generation is missing or ambiguous"),
+    ("not_ready", "not Ready"),
+    ("duplicate_ready", "not Ready"),
+])
+def test_staged_tag_refuses_unreconciled_service_even_when_traffic_matches(candidate, case, expected):
+    """Equal desired/observed traffic does not prove a Ready generation."""
+    run, state, calls, sha = candidate
+    saved = json.loads(state.read_text())
+    service = saved["service"]
+    if case == "stale_generation":
+        service["metadata"]["generation"] = 8
+    elif case == "missing_generation":
+        service["metadata"].pop("generation")
+    elif case == "missing_observed":
+        service["status"].pop("observedGeneration")
+    elif case == "boolean_generation":
+        service["metadata"]["generation"] = True
+    elif case == "not_ready":
+        service["status"]["conditions"][0]["status"] = "False"
+    else:
+        service["status"]["conditions"].append({"type": "Ready", "status": "True"})
+    assert service["spec"]["traffic"][0]["revisionName"] == service["status"]["traffic"][0]["revisionName"]
+    state.write_text(json.dumps(saved))
+    result = run(**inactive())
+    assert result.returncode != 0 and expected in result.stderr, result.stderr
+    made = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert not any(args[:3] == ["run", "services", "update-traffic"] for args in made)
+
+
+def test_staged_tag_requires_reconciled_generation_after_tag_write(candidate):
+    """A successful tag API response may precede Cloud Run status convergence."""
+    run, state, calls, sha = candidate
+    result = run(**{**inactive(), "FAKE_TAG_RECONCILING": "1"})
+    assert result.returncode != 0 and "generation has not reconciled" in result.stderr, result.stderr
+    saved = json.loads(state.read_text())["service"]
+    assert saved["metadata"]["generation"] == 8
+    assert saved["status"]["observedGeneration"] == 7
+    assert any(json.loads(line)[:3] == ["run", "services", "update-traffic"]
+               for line in calls.read_text().splitlines())
+    # A tag may already have been created, so this error must never be
+    # interpreted as automatic rollback or as a successful candidate release.

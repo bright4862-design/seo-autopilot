@@ -286,3 +286,47 @@ test("a valid source SHA does not authorize foreign or placeholder Base44 packag
   record.deployment.functions[0].runtime_build_id = EXPECTED_SCANNER_BUILD_IDS.startStandardScanJobV8;
   assert.equal(evaluateStage4ReleaseAcceptance(record).pass, true, "exact package restored");
 });
+
+test("a matching final row must not hide a conflicting duplicate Base44 runtime identity", () => {
+  const record = validRecord();
+  const correct = record.deployment.functions[0];
+  const foreign = {
+    ...correct,
+    verified: false,
+    runtime_build_id: V9_START_BUILD_ID,
+    verification_reference: "receipt:foreign-runtime-observation",
+  };
+  // The old Map lookup would keep only the final matching row and report PASS.
+  record.deployment.functions.unshift(foreign);
+  assert.equal(new Map(record.deployment.functions.map((fn) => [fn.name, fn])).get(correct.name), correct);
+  const result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.pass, false);
+  assert.ok(result.failures.some((failure) => failure.includes("distinct source-declared functions")));
+
+  // Changing row order must not turn contradictory evidence into acceptance.
+  record.deployment.functions.reverse();
+  const reversed = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(reversed.pass, false);
+  assert.ok(reversed.failures.some((failure) => failure.includes("distinct source-declared functions")));
+});
+
+test("a mixed V8/V9 roster is refused, but a reordered exact V8 roster remains valid", () => {
+  const record = validRecord();
+  record.deployment.functions.reverse();
+  assert.equal(evaluateStage4ReleaseAcceptance(record).pass, true, "function evidence ordering is immaterial");
+
+  record.deployment.functions.push({
+    ...record.deployment.functions[0],
+    name: "startStandardScanJobV9",
+    runtime_build_id: V9_START_BUILD_ID,
+  });
+  let result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.pass, false);
+  assert.ok(result.failures.some((failure) => failure.includes("distinct source-declared functions")));
+
+  record.deployment.functions.pop();
+  record.deployment.functions.push({ ...record.deployment.functions[0] });
+  result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.pass, false, "even identical duplicate rows are ambiguous evidence");
+  assert.ok(result.failures.some((failure) => failure.includes("distinct source-declared functions")));
+});

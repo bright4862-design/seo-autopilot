@@ -265,7 +265,7 @@ test('killed schema apply preserves a fsynced baseline and labels the first PUT 
   assert.equal(journal[1].operations.length, 11);
   assert.equal(journal[2].entity, 'Access');
   assert.match(journal[2].intended_sha256, /^[a-f0-9]{64}$/);
-  assert.ok(!journal.some(entry => entry.event === 'put_returned' || entry.event === 'terminal_verified'));
+  assert.ok(!journal.some(entry => entry.event === 'put_returned' || entry.event === 'report_fsynced'));
 });
 
 test('successful schema apply journals every independently verified entity', async t => {
@@ -279,7 +279,7 @@ test('successful schema apply journals every independently verified entity', asy
   assert.deepEqual(stages, ['Access:put_started', 'Access:put_returned', 'Access:readback_verified',
     'FixItem:put_started', 'FixItem:put_returned', 'FixItem:readback_verified',
     'ScanRun:put_started', 'ScanRun:put_returned', 'ScanRun:readback_verified']);
-  assert.equal(journal.at(-1).event, 'terminal_verified');
+  assert.equal(journal.at(-1).event, 'report_fsynced');
   assert.equal(journal.at(-1).status, 'applied_verified');
   assert.equal(result.data.mutation_journal, result.report + '.journal.ndjson');
 });

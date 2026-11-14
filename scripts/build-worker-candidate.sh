@@ -260,6 +260,17 @@ if str(ready.get('status') or '').lower()!='true': raise SystemExit('candidate r
 PY
 
 if [[ "$STAGED_SCAN_MODE" == inactive || "$STAGED_SCAN_MODE" == owner-canary ]]; then
+  # Everything that can refuse the candidate runs BEFORE the immutable tag
+  # exists: a tag created on a drifted revision could never be rebound.
+  python3 - "$REVISIONS_JSON" "$STAGED_CONFIG_JSON" "$SOURCE_SHA" <<'PY'
+import json, sys
+revision = json.load(open(sys.argv[1])); config = json.load(open(sys.argv[2])); sha = sys.argv[3]
+env = {item.get('name'): item.get('value', '') for item in (revision.get('spec', {}).get('containers') or [{}])[0].get('env', [])}
+if env.get('FIXLIST_WORKER_SOURCE_SHA') != sha or any(env.get(key) != value for key, value in config['environment'].items()):
+    raise SystemExit('Refusing: staged candidate environment does not match its exact source-bound configuration.')
+if env.get('SCAN_PIPELINE_OWNER_IDS'):
+    raise SystemExit('Refusing: staged candidate carries the legacy SCAN_PIPELINE_OWNER_IDS alias.')
+PY
   # Create the immutable source tag here, not in a Cloud Build step: the
   # unpinned SDK image stopped shipping python3. Only the exact Ready revision
   # running this build's image digest may be tagged; the helper re-checks that,

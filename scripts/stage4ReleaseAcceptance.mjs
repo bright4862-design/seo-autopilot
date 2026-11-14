@@ -119,8 +119,13 @@ export function evaluateStage4ReleaseAcceptance(record) {
 
   const cohort = record.acceptance?.cohort || {};
   add(failures, clean(cohort.mode) === "acceptance_only", "acceptance cohort was not acceptance_only");
-  add(failures, Number.isInteger(cohort.total_claim_budget) && cohort.total_claim_budget > 0 && cohort.total_claim_budget <= 3,
-    "acceptance cohort claim budget is missing or unbounded");
+  // Initial scan and its distinct linked rescan require two fresh owner claims.
+  // Admission quotas count fresh claims permanently; terminal release does not refund them.
+  add(failures, Number.isInteger(cohort.total_claim_budget) && cohort.total_claim_budget >= 2 && cohort.total_claim_budget <= 3,
+    "acceptance cohort total claim budget cannot cover baseline and rescan");
+  add(failures, Number.isInteger(cohort.per_owner_claim_budget) && cohort.per_owner_claim_budget >= 2
+    && cohort.per_owner_claim_budget <= cohort.total_claim_budget,
+    "acceptance cohort per-owner claim budget cannot cover baseline and rescan");
   add(failures, cohort.public_claims_closed === true, "public claims were not closed during bounded acceptance");
   add(failures, hasReceipt(cohort.activation_reference), "acceptance-only activation receipt missing");
 

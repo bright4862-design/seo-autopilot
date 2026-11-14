@@ -379,6 +379,20 @@ test("end to end: stable serving topology still rejects duplicate runtime finger
   assert.match(result.curl, /\\/revision/, "the failure must occur after an authenticated identity probe");
   assert.match(result.stdout, /ambiguous JSON/);
   assert.doesNotMatch(result.stdout, /PASS:/);
+
+  // A nested duplicate component marker must also survive the entire bash
+  // diagnostic path; JSON parsing must not erase the contradictory first value.
+  const [marker] = Object.keys(FREEZE.component_versions);
+  const nested = JSON.stringify(FREEZE.component_versions).replace(
+    /^\\{/,
+    `{${JSON.stringify(marker)}:"foreign",`,
+  );
+  const ambiguousComponent = `{"fingerprint":${JSON.stringify(FREEZE.fingerprint)},"component_versions":${nested},"source_sha":${JSON.stringify(PROMOTED_SHA)}}`;
+  const second = runGuard({ service, body: ambiguousComponent });
+  assert.notEqual(second.status, 0, "a duplicate nested marker must fail the integrated operator");
+  assert.match(second.curl, /\\/revision/);
+  assert.match(second.stdout, /ambiguous JSON/);
+  assert.doesNotMatch(second.stdout, /PASS:/);
 });
 
 test("end to end: a worker serving the recorded identity passes", () => {

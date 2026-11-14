@@ -10,6 +10,13 @@ BUILD_SA_INPUT="${CLOUD_BUILD_SERVICE_ACCOUNT:-}"
 EGRESS_MODE="${FIXLIST_EGRESS_MODE:-none}"
 EGRESS_NETWORK="${FIXLIST_EGRESS_NETWORK:-}"
 EGRESS_SUBNET="${FIXLIST_EGRESS_SUBNET:-}"
+# Every later step, including the staged source tag, runs here with these
+# exact tools. Refuse before any cloud call rather than after a deployment.
+for tool in python3 gcloud git; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "Refusing: required tool $tool is not on PATH." >&2; exit 2; }
+done
+python3 -c 'import hashlib, json, re, subprocess' || { echo "Refusing: python3 lacks the standard modules this build needs." >&2; exit 2; }
+
 STAGED_SCAN_MODE="${FIXLIST_STAGED_SCAN_MODE:-off}"
 STAGED_OWNER_IDS=""
 case "$STAGED_SCAN_MODE" in
@@ -76,9 +83,10 @@ WORKER_JSON="$(mktemp)"
 REVISIONS_JSON="$(mktemp)"
 SERVICE_JSON="$(mktemp)"
 STAGED_CONFIG_JSON="$(mktemp)"
+BUILD_RECORD_JSON="$(mktemp)"
 BUILD_CONTEXT="$(mktemp -d)"
 cleanup() {
-  rm -f "$WORKER_JSON" "$REVISIONS_JSON" "$SERVICE_JSON" "$STAGED_CONFIG_JSON"
+  rm -f "$WORKER_JSON" "$REVISIONS_JSON" "$SERVICE_JSON" "$STAGED_CONFIG_JSON" "$BUILD_RECORD_JSON"
   rm -rf "$BUILD_CONTEXT"
 }
 trap cleanup EXIT
@@ -155,7 +163,7 @@ test -f "$BUILD_CONFIG" || { echo "Worker build config missing: $BUILD_CONFIG" >
 if [[ "$STAGED_SCAN_MODE" == inactive || "$STAGED_SCAN_MODE" == owner-canary ]]; then
   # The suffix contains environment commas. A separate substitutions delimiter
   # preserves those commas and the intentionally empty owner list verbatim.
-  BUILD_SUBSTITUTIONS="^|^${BUILD_SUBSTITUTIONS//,/|}|_STAGED_SCAN_MODE=$STAGED_SCAN_MODE|_STAGED_ENV_SUFFIX=$STAGED_ENV_SUFFIX|_STAGED_TAG=$STAGED_TAG|_STAGED_CONFIG_SHA256=$STAGED_CONFIG_SHA256|_STAGED_OWNER_IDS=$STAGED_OWNER_IDS"
+  BUILD_SUBSTITUTIONS="^|^${BUILD_SUBSTITUTIONS//,/|}|_STAGED_SCAN_MODE=$STAGED_SCAN_MODE|_STAGED_ENV_SUFFIX=$STAGED_ENV_SUFFIX|_STAGED_TAG=$STAGED_TAG|_STAGED_CONFIG_SHA256=$STAGED_CONFIG_SHA256"
 fi
 
 gcloud builds submit "$BUILD_CONTEXT" \
@@ -163,14 +171,35 @@ gcloud builds submit "$BUILD_CONTEXT" \
   --region="$REGION" \
   --config="$BUILD_CONFIG" \
   --service-account="$BUILD_SA_RESOURCE" \
-  --substitutions="$BUILD_SUBSTITUTIONS"
+  --substitutions="$BUILD_SUBSTITUTIONS" \
+  --suppress-logs --format=json > "$BUILD_RECORD_JSON"
+
+# The final build record names the exact image digest this build pushed and
+# deployed. Bind the candidate to it before any tag is created.
+readarray -t BUILD_VALUES < <(python3 - "$BUILD_RECORD_JSON" "$IMAGE:$SOURCE_SHA" <<'PY'
+import json, re, sys
+record = json.load(open(sys.argv[1])); expected = sys.argv[2]
+if record.get('status') != 'SUCCESS' or not re.fullmatch(r'[0-9a-f-]{8,64}', str(record.get('id') or '')):
+    raise SystemExit('Refusing: the build record is not an exact successful build.')
+images = [item for item in (record.get('results') or {}).get('images') or [] if item.get('name') == expected]
+digests = {str(item.get('digest') or '') for item in images}
+if len(digests) != 1 or not re.fullmatch(r'sha256:[0-9a-f]{64}', next(iter(digests))):
+    raise SystemExit('Refusing: the build record has no single exact digest for ' + expected + '.')
+print(record['id']); print(next(iter(digests)))
+PY
+)
+BUILD_ID="${BUILD_VALUES[0]:-}"; IMAGE_DIGEST="${BUILD_VALUES[1]:-}"
+[[ -n "$BUILD_ID" && -n "$IMAGE_DIGEST" ]] || { echo "Refusing: build image digest unavailable." >&2; exit 2; }
+printf 'build_id=%s\nimage_digest=%s\n' "$BUILD_ID" "$IMAGE_DIGEST"
 
 gcloud run revisions list --service="$WORKER" --project="$PROJECT" --region="$REGION" --format=json > "$REVISIONS_JSON"
-CANDIDATE="$(python3 - "$REVISIONS_JSON" "$SOURCE_SHA" "$EGRESS_MODE" "$EGRESS_NETWORK" "$EGRESS_SUBNET" "$STAGED_SCAN_MODE" "$STAGED_CONFIG_SHA256" <<'PY'
+CANDIDATE="$(python3 - "$REVISIONS_JSON" "$SOURCE_SHA" "$EGRESS_MODE" "$EGRESS_NETWORK" "$EGRESS_SUBNET" "$STAGED_SCAN_MODE" "$STAGED_CONFIG_SHA256" "$IMAGE@$IMAGE_DIGEST" <<'PY'
 import json, sys
-rows=json.load(open(sys.argv[1])); sha, mode, network, subnet, staged, digest = sys.argv[2:]
+rows=json.load(open(sys.argv[1])); sha, mode, network, subnet, staged, digest, image_ref = sys.argv[2:]
 matches=[]
 for r in rows:
+  if (r.get('status') or {}).get('imageDigest') != image_ref:
+    continue
   spec=r.get('spec',{}); c=(spec.get('containers') or [{}])[0]
   env={i.get('name'):i.get('value','') for i in c.get('env',[])}
   if env.get('FIXLIST_WORKER_SOURCE_SHA') != sha or env.get('FIXLIST_EGRESS_MODE','none') != mode:
@@ -195,16 +224,18 @@ for r in rows:
     if raw:
       continue
   matches.append((r.get('metadata',{}).get('creationTimestamp',''), r.get('metadata',{}).get('name','')))
-matches.sort()
-print(matches[-1][1] if matches else '')
+if len(matches) != 1:
+  raise SystemExit('Refusing: expected exactly one revision of this source running the built image digest, found %d.' % len(matches))
+print(matches[0][1])
 PY
 )"
-[[ -n "$CANDIDATE" ]] || { echo "No worker revision carries FIXLIST_WORKER_SOURCE_SHA=$SOURCE_SHA" >&2; exit 2; }
+[[ -n "$CANDIDATE" ]] || { echo "No worker revision carries FIXLIST_WORKER_SOURCE_SHA=$SOURCE_SHA with the built image digest" >&2; exit 2; }
 
 gcloud run revisions describe "$CANDIDATE" --project="$PROJECT" --region="$REGION" --format=json > "$REVISIONS_JSON"
-python3 - "$REVISIONS_JSON" "$SOURCE_SHA" "$EGRESS_MODE" "$EGRESS_NETWORK" "$EGRESS_SUBNET" <<'PY'
+python3 - "$REVISIONS_JSON" "$SOURCE_SHA" "$EGRESS_MODE" "$EGRESS_NETWORK" "$EGRESS_SUBNET" "$IMAGE@$IMAGE_DIGEST" <<'PY'
 import json, sys
-v=json.load(open(sys.argv[1])); sha, mode, network, subnet = sys.argv[2:]
+v=json.load(open(sys.argv[1])); sha, mode, network, subnet, image_ref = sys.argv[2:]
+if (v.get('status') or {}).get('imageDigest') != image_ref: raise SystemExit('candidate does not run the image digest this build produced')
 spec=v.get('spec',{}); c=(spec.get('containers') or [{}])[0]
 env={i.get('name'):i.get('value','') for i in c.get('env',[])}
 if env.get('FIXLIST_WORKER_SOURCE_SHA')!=sha: raise SystemExit('candidate source SHA mismatch')
@@ -228,6 +259,29 @@ ready=next((x for x in conds if x.get('type')=='Ready'),{})
 if str(ready.get('status') or '').lower()!='true': raise SystemExit('candidate revision is not Ready')
 PY
 
+if [[ "$STAGED_SCAN_MODE" == inactive || "$STAGED_SCAN_MODE" == owner-canary ]]; then
+  # Everything that can refuse the candidate runs BEFORE the immutable tag
+  # exists: a tag created on a drifted revision could never be rebound.
+  python3 - "$REVISIONS_JSON" "$STAGED_CONFIG_JSON" "$SOURCE_SHA" <<'PY'
+import json, sys
+revision = json.load(open(sys.argv[1])); config = json.load(open(sys.argv[2])); sha = sys.argv[3]
+env = {item.get('name'): item.get('value', '') for item in (revision.get('spec', {}).get('containers') or [{}])[0].get('env', [])}
+if env.get('FIXLIST_WORKER_SOURCE_SHA') != sha or any(env.get(key) != value for key, value in config['environment'].items()):
+    raise SystemExit('Refusing: staged candidate environment does not match its exact source-bound configuration.')
+if env.get('SCAN_PIPELINE_OWNER_IDS'):
+    raise SystemExit('Refusing: staged candidate carries the legacy SCAN_PIPELINE_OWNER_IDS alias.')
+PY
+  # Create the immutable source tag here, not in a Cloud Build step: the
+  # unpinned SDK image stopped shipping python3. Only the exact Ready revision
+  # running this build's image digest may be tagged; the helper re-checks that,
+  # refuses to rebind an existing tag and verifies the serving split unchanged.
+  python3 "$REPO_ROOT/scripts/staged_candidate_cloudbuild.py" tag \
+    --mode="$STAGED_SCAN_MODE" --source-sha="$SOURCE_SHA" --tag="$STAGED_TAG" \
+    --digest="$STAGED_CONFIG_SHA256" --owners="$STAGED_OWNER_IDS" \
+    --revision="$CANDIDATE" --image-ref="$IMAGE@$IMAGE_DIGEST" \
+    --worker-service="$WORKER" --region="$REGION" --project="$PROJECT"
+fi
+
 gcloud run services describe "$WORKER" --project="$PROJECT" --region="$REGION" --format=json > "$SERVICE_JSON"
 python3 - "$SERVICE_JSON" "$CANDIDATE" "$STAGED_SCAN_MODE" "$STAGED_CONFIG_JSON" "$REVISIONS_JSON" "$SOURCE_SHA" <<'PY'
 import json,sys
@@ -248,5 +302,6 @@ if staged in ('inactive', 'owner-canary'):
 print('Candidate traffic verified at 0%.')
 PY
 printf 'WORKER_CANDIDATE_READY=%s\nWORKER_CANDIDATE_SOURCE_SHA=%s\nWORKER_CANDIDATE_EGRESS_MODE=%s\n' "$CANDIDATE" "$SOURCE_SHA" "$EGRESS_MODE"
+printf 'WORKER_CANDIDATE_BUILD_ID=%s\nWORKER_CANDIDATE_IMAGE_DIGEST=%s\n' "$BUILD_ID" "$IMAGE_DIGEST"
 printf 'WORKER_CANDIDATE_STAGE_MODE=%s\n' "$STAGED_SCAN_MODE"
 if [[ "$STAGED_SCAN_MODE" == inactive ]]; then printf 'WORKER_CANDIDATE_STAGE_TAG=%s\n' "$STAGED_TAG"; fi

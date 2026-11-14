@@ -120,6 +120,29 @@ the same source first. Build the owner-canary candidate once, from the exact
 `main` you will activate from. Stage-queue activation stays a separate
 barrier-gated operation (`staged-queue-activate`).
 
+**Tagging runs in the wrapper, bound to the built image.**
+`build-worker-candidate.sh` refuses before any cloud call unless `python3`,
+`gcloud` and `git` are on `PATH`. Cloud Build no longer has a tag step,
+because the unpinned Cloud SDK image stopped shipping `python3` (build
+`7e3157ff` deployed its revision, then failed to tag it).
+
+The wrapper then:
+
+- reads the final build record (`--format=json --suppress-logs`) and requires
+  `SUCCESS` with exactly one `sha256:` digest for `<image>:<source-sha>`;
+- selects the single Ready revision of that source whose
+  `status.imageDigest` is `<image>@<that digest>`;
+- only then creates the `staged-<sha12>` tag through
+  `staged_candidate_cloudbuild.py tag --revision=<it> --image-ref=<image@digest>`.
+  The helper re-checks the same revision and digest, refuses an existing tag,
+  and checks that the serving split and every other tag are unchanged.
+
+A missing, malformed or mismatched digest, a failed build or two matching
+revisions leave every tag untouched. The output reports
+`WORKER_CANDIDATE_BUILD_ID` and `WORKER_CANDIDATE_IMAGE_DIGEST`. If tagging
+fails after a deploy, the revision stays untagged at 0% traffic. Rebuild from
+the repaired exact `main` rather than tagging it by hand.
+
 Use the **same explicit owner IDs** in Base44, gateway and worker:
 
 ```text

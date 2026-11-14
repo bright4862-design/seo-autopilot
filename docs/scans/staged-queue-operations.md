@@ -188,9 +188,12 @@ authorized live action) or **[tool]** (an existing guarded operation).
 3. **[code]** Land the explicit worker cohort (PR #411; not duplicated here) and
    the Codex `codex/fable-architecture-completion` fixes the owner considers
    required for 150. Staged 150 does not need the 500 path.
-4. **[tool]** Build a worker candidate with `stage_config=inactive` from the
-   merged SHA. The current `00104-l79` has no staged configuration. Then tag
-   and verify it, and deploy the gateway with the staged contract.
+4. **[tool]** Build the worker candidate with `stage_config=owner-canary` for
+   the one acceptance owner, from the exact `main` you will activate from. Do
+   not build an `inactive` baseline from that source first, because its
+   immutable `staged-<sha12>` tag cannot be rebound. The current `00104-l79`
+   has no staged configuration. Verify the candidate, then deploy the gateway
+   with the staged contract for the same owner.
 5. **[tool, this PR]** While claims are still closed and drained, read
    `barrier-status`. Then run `OPERATION=activate` with the exact staged
    revision and that generation, from the same `main` the candidate was built

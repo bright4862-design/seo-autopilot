@@ -1,4 +1,4 @@
-import { resolveServerScanContract, trustedScanContract } from "./scanLimits.js";
+import { readStagedScanSettings, resolveServerScanContract, stagedScanOwnerEnabled, trustedScanContract } from "./scanLimits.js";
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 import { secrets } from "base44:runtime";
 import {
@@ -21,7 +21,10 @@ import {
 } from "./admissionClient.js";
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "startStandardScanJobV9-staged-runtime-20261111-v1";
+const BASE44_RUNTIME_ACTIVATION_ID = "startStandardScanJobV9-staged-runtime-20261111-v2";
+const STAGED_RUNTIME_ACTION = "staged_runtime_status";
+const STAGED_RUNTIME_OWNER_ID = "6a498da58ef5cec1f5cd4486";
+const STAGED_RUNTIME_OWNER_EMAIL = "bright4862@gmail.com";
 
 const CORS_HEADERS = Object.freeze({
   "Access-Control-Allow-Origin": "*",
@@ -66,6 +69,64 @@ function mutableScanAdmissionEnv(name) {
     return mutableScanAdmissionSecret(name);
   }
   return String(Deno.env.get(name) || "");
+}
+
+function stagedScanEnv(name: string) {
+  return Deno.env.get(name);
+}
+
+function reportedGate(value: unknown) {
+  if (value === "true") return "enabled";
+  if (value === "false") return "disabled";
+  return "unavailable";
+}
+
+async function stagedRuntimeStatus(user, raw) {
+  function response(payload: Record<string, unknown>, status = 200) {
+    return Response.json(payload, { status, headers: { ...corsHeaders(), "Cache-Control": "no-store" } });
+  }
+  if (user.id !== STAGED_RUNTIME_OWNER_ID || String(user.email).trim().toLowerCase() !== STAGED_RUNTIME_OWNER_EMAIL
+      || String(user.role || "").trim().toLowerCase() !== "admin") {
+    return response({ success: false, error_code: "owner_only" }, 403);
+  }
+  const input = Object.keys(raw).length === 1 && Object.hasOwn(raw, "data") ? raw.data : raw;
+  if (input?.action !== STAGED_RUNTIME_ACTION || Object.keys(input).length !== 1) {
+    return response({ success: false, error_code: "invalid_action" }, 400);
+  }
+  try {
+    const settings = readStagedScanSettings(stagedScanEnv);
+    const { cohort, ownerIds } = settings;
+    // The launcher accepts trimmed owner IDs. Attest a cohort only when the
+    // configured list also meets the strict deployment format.
+    const explicit = cohort === ownerIds.join(",") && ownerIds.length > 0 && ownerIds.length <= 5
+      && ownerIds.every(id => /^[A-Za-z0-9_-]{6,64}$/.test(id)) && new Set(ownerIds).size === ownerIds.length;
+    const cohortState = explicit ? "explicit" : cohort === "" ? "empty" : cohort === undefined ? "absent" : "invalid";
+    let cohortHash: string | null = null;
+    if (explicit || cohortState === "empty") {
+      const canonicalCohort = JSON.stringify([...ownerIds].sort());
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalCohort));
+      cohortHash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+    }
+    const enabled = stagedScanOwnerEnabled(settings, user.id);
+    return response({
+      success: true,
+      schema_version: "fixlist_staged_v9_intake_readback_v1",
+      observed_at: new Date().toISOString(),
+      build_id: FUNCTION_BUILD_ID,
+      runtime_activation_id: BASE44_RUNTIME_ACTIVATION_ID,
+      release_fingerprint: RELEASE_FINGERPRINT,
+      configured_pipeline_mode: settings.pipelineMode,
+      pipeline_mode: enabled ? "staged" : "monolith",
+      staged_owner_cohort_state: cohortState,
+      staged_owner_count: cohortHash === null ? null : ownerIds.length,
+      staged_owner_cohort_sha256: cohortHash,
+      staged_owner_enabled: enabled,
+      intake_gate: reportedGate(mutableScanIntakeValue()),
+      admission_gate: reportedGate(mutableScanAdmissionValue()),
+    });
+  } catch {
+    return response({ success: false, error_code: "runtime_unavailable" }, 503);
+  }
 }
 
 const BASE44_HANDLER_RELEASE_FINGERPRINT = "118544dcf77d86cf";
@@ -119,7 +180,11 @@ export default async function (req: Request): Promise<Response> {
       return jsonResponse({ success: false, version: VERSION, error: "Unauthorized." }, 401);
     }
 
-    const body = unwrapRequestBody(await safeReadJson(req));
+    const raw = await safeReadJson(req);
+    const body = unwrapRequestBody(raw);
+    if (raw?.action === STAGED_RUNTIME_ACTION || body.action === STAGED_RUNTIME_ACTION) {
+      return stagedRuntimeStatus(user, raw);
+    }
     const identity = resolveRequestIdentity(body);
     if (identity.conflict) {
       return jsonResponse({
@@ -936,7 +1001,7 @@ async function recoverOrCreateServerScan({
       requested_path_prefix: scope?.pathPrefix || "",
       discovered_from: scope?.focused ? scope.discoveredFrom : "",
       user_confirmed: scope?.focused === true,
-      ...resolveServerScanContract({ access, ownerUserId: user.id, env: (name) => Deno.env.get(name) || "" }),
+      ...resolveServerScanContract({ access, ownerUserId: user.id, env: stagedScanEnv }),
       scan_source: String(body.source || "scan_website_page"),
       status: "queued",
       previous_scan_id: String(previousScanId),

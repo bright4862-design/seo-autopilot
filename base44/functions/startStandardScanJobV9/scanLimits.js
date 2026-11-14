@@ -11,9 +11,20 @@ export function trustedScanContract(scan = {}) {
   return {scan_mode: mode, page_cap: cap, pipeline_mode: scan.pipeline_mode === "staged" ? "staged" : "monolith"};
 }
 
+export function readStagedScanSettings(env) {
+  const cohort = env("SCAN_STAGED_OWNER_IDS");
+  const mode = env("SCAN_PIPELINE_MODE");
+  const pipelineMode = mode === "staged" || mode === "monolith" ? mode : mode ? "invalid" : "absent";
+  const ownerIds = String(cohort || "").split(",").map(value => value.trim()).filter(Boolean);
+  return {pipelineMode, cohort, ownerIds};
+}
+
+export function stagedScanOwnerEnabled(settings, ownerUserId) {
+  return settings.pipelineMode === "staged" && settings.ownerIds.includes(String(ownerUserId || ""));
+}
+
 export function resolveServerScanContract({access, ownerUserId, env = () => ""} = {}) {
-  const owners = String(env("SCAN_STAGED_OWNER_IDS") || "").split(",").map(v => v.trim()).filter(Boolean);
-  const staged = env("SCAN_PIPELINE_MODE") === "staged" && owners.includes(String(ownerUserId || ""));
+  const staged = stagedScanOwnerEnabled(readStagedScanSettings(env), ownerUserId);
   const largeGrant = access?.has_full_access === true && access?.access_status === "active" && access?.page_cap === 500;
   return {scan_mode: staged && largeGrant ? "standard_500" : "standard_150", page_cap: staged && largeGrant ? 500 : 150, pipeline_mode: staged ? "staged" : "monolith"};
 }

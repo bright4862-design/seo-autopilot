@@ -302,6 +302,12 @@ test("a matching final row must not hide a conflicting duplicate Base44 runtime 
   const result = evaluateStage4ReleaseAcceptance(record);
   assert.equal(result.pass, false);
   assert.ok(result.failures.some((failure) => failure.includes("distinct source-declared functions")));
+
+  // Changing row order must not turn contradictory evidence into acceptance.
+  record.deployment.functions.reverse();
+  const reversed = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(reversed.pass, false);
+  assert.ok(reversed.failures.some((failure) => failure.includes("distinct source-declared functions")));
 });
 
 test("a mixed V8/V9 roster is refused, but a reordered exact V8 roster remains valid", () => {

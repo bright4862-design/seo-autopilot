@@ -100,7 +100,7 @@ function validRecord(overrides = {}) {
         status: "complete",
         mode: "standard_150",
         pages_crawled: 150,
-        authority_proof: PROOF,
+        authority_proof: "d".repeat(64),
         fix_list_id: "fix-list-2",
         source_sha: SHA,
         comparison: "improved",
@@ -236,6 +236,7 @@ test("independently persisted rescan identity is required even if comparison is 
     ["pages_crawled", 2.5, "rescan pages_crawled"],
     ["authority_proof", "", "rescan authority proof"],
     ["authority_proof", "not-a-proof", "rescan authority proof"],
+    ["authority_proof", PROOF, "rescan reused baseline authority proof"],
     ["fix_list_id", "", "rescan FixList id"],
     ["source_sha", "9".repeat(40), "rescan source"],
   ];

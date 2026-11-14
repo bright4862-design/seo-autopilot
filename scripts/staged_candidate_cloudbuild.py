@@ -114,11 +114,38 @@ def cloud(*arguments):
     return json.loads(done.stdout)
 
 
+def _traffic_projection(rows, name):
+    """Compare pinned Cloud Run desired and observed traffic without coercion."""
+    require(isinstance(rows, list) and bool(rows), f"{name} traffic inventory is missing")
+    weights, tags = [], {}
+    total = 0
+    for row in rows:
+        require(isinstance(row, dict), f"{name} traffic entry is malformed")
+        percent = row.get("percent", 0)
+        # bool, fractional and string percentages must not disappear as 0%
+        # through int(value or 0). A candidate can be addressable via a tag.
+        require(type(percent) is int and 0 <= percent <= 100, f"{name} traffic percentage is ambiguous")
+        require(row.get("latestRevision") is not True, f"{name} traffic uses a floating latest revision")
+        revision = row.get("revisionName")
+        require(isinstance(revision, str) and bool(revision), f"{name} traffic revision is unpinned")
+        total += percent
+        if percent:
+            weights.append((revision, percent))
+        tag = row.get("tag")
+        if tag is not None and tag != "":
+            require(isinstance(tag, str) and tag not in tags, f"{name} traffic tag is ambiguous")
+            tags[tag] = revision
+    require(total == 100, f"{name} serving traffic does not total 100%")
+    return sorted(weights), tags
+
+
 def traffic_state(service):
-    rows = service.get("status", {}).get("traffic", [])
-    weights = sorted((row.get("revisionName"), int(row.get("percent") or 0)) for row in rows if int(row.get("percent") or 0))
-    tags = {row["tag"]: row.get("revisionName") for row in rows if row.get("tag")}
-    return weights, tags
+    """Refuse to tag while desired and observed Cloud Run routing disagree."""
+    require(isinstance(service, dict), "Worker service readback is invalid")
+    desired = _traffic_projection((service.get("spec") or {}).get("traffic"), "desired")
+    observed = _traffic_projection((service.get("status") or {}).get("traffic"), "observed")
+    require(desired == observed, "Worker desired/observed traffic is reconciling")
+    return observed
 
 
 def tag_candidate(args):

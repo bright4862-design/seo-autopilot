@@ -288,3 +288,27 @@ for (const [label, rows, rowsMalformed] of [
   assert.notEqual(result.status, 0);
   assert.equal(f.requests.filter(row => row.method === 'PUT').length, putCount);
 });
+
+// Cursor pagination may overlap if the backing collection changes or a provider
+// cursor is buggy. Repeated IDs cannot certify an exhaustive rollback inventory.
+for (const [label, rows] of [
+  ['same-page Access ID', {Access: [[{id: 'same-grant'}, {id: 'same-grant'}]]}],
+  ['cross-page ScanRun ID', {ScanRun: [[{id: 'same-scan', status: 'complete'}], [{id: 'same-scan', status: 'failed'}]]}],
+]) test(`rollback refuses duplicate ${label} before destructive PUT`, async t => {
+  const f = await fixture(t, {rows});
+  const applied = await f.command('apply'); assert.equal(applied.status, 0, applied.stderr);
+  const putCount = f.requests.filter(row => row.method === 'PUT').length;
+  // The outer schema orchestrator deliberately sanitizes child-process stderr.
+  // Verify the exact duplicate reason at the underlying read-only client boundary.
+  const inventory = join(f.root, 'duplicated-inventory.json');
+  const direct = await run(join(f.root, 'scripts/base44_named_schema_client.mjs'), ['staged-rows', inventory], {cwd: f.root, env: f.env});
+  assert.notEqual(direct.status, 0);
+  assert.match(direct.stderr, /Staged rollback rows duplicated (Access|ScanRun) ID/);
+  assert.equal(existsSync(inventory), false);
+  const {receiptDigest} = await moduleUnderTest();
+  const result = await f.command('rollback', ['--generation', '77', '--receipt', applied.report, '--confirm', `ROLLBACK-STAGED-SCHEMA:${sourceSha}:77:${receiptDigest(applied.data)}`]);
+  assert.notEqual(result.status, 0);
+  assert.equal(result.stderr.trim(), 'Staged schema prerequisite failed: node (exit 2)');
+  assert.equal(result.data.failure, result.stderr.trim());
+  assert.equal(f.requests.filter(row => row.method === 'PUT').length, putCount);
+});

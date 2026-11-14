@@ -109,3 +109,49 @@ def test_workflow_separates_tag_mutation_from_read_only_candidate_probe():
     for forbidden in ["update-traffic", "--update-tags", "promote-worker", "queues pause", "queues resume"]:
         assert forbidden not in probe
     assert "inputs.operation != 'verify-staged-worker-release'" in workflow
+
+
+@pytest.mark.parametrize(("bad_url", "expected"), [
+    ("https://foreign-service.a.run.app", "candidate_tag_url_mismatch"),
+    ("https://candidate---unrelated-service.a.run.app", "candidate_tag_url_mismatch"),
+    ("https://candidate---fixlist-standard150-worker.example.a.run.app/path", "candidate_tag_url_mismatch"),
+    ("https://candidate---fixlist-standard150-worker.example.a.run.app?token=1", "candidate_tag_url_mismatch"),
+])
+def test_candidate_tag_cannot_redirect_authenticated_probe(bad_url, expected):
+    """A valid-looking tag entry must route to this service, not arbitrary HTTPS."""
+    service = tagged_candidate()
+    service["status"]["traffic"][1]["url"] = bad_url
+    with pytest.raises(CandidateNotIsolated, match=expected):
+        verify_tagged_zero_traffic(service, REVISION)
+
+
+def test_shared_candidate_tag_conflicting_revision_is_rejected():
+    service = tagged_candidate()
+    service["status"]["traffic"].append({
+        "revisionName": "fixlist-standard150-worker-00103-abc",
+        "percent": 0, "tag": "candidate",
+        "url": "https://candidate---another-worker.example.a.run.app",
+    })
+    with pytest.raises(CandidateNotIsolated, match="candidate_tag_reassigned"):
+        verify_tagged_zero_traffic(service, REVISION)
+
+
+def test_duplicate_identical_tag_rows_are_not_unique_evidence():
+    service = tagged_candidate()
+    service["status"]["traffic"].append(dict(service["status"]["traffic"][1]))
+    with pytest.raises(CandidateNotIsolated, match="candidate_tag_missing_or_ambiguous"):
+        verify_tagged_zero_traffic(service, REVISION)
+
+
+@pytest.mark.parametrize("origin", [
+    "https://foreign.example.org",
+    "http://fixlist-standard150-worker.example.a.run.app",
+    "https://fixlist-standard150-worker.example.a.run.app/path",
+    "https://fixlist-standard150-worker.example.a.run.app:8443",
+])
+def test_tag_cannot_be_derived_from_noncanonical_service_origin(origin):
+    service = tagged_candidate()
+    service["status"]["url"] = origin
+    with pytest.raises(CandidateNotIsolated, match="service_origin_invalid"):
+        verify_tagged_zero_traffic(service, REVISION)
+

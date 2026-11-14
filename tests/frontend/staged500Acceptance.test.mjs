@@ -215,6 +215,46 @@ test("complete500 requires ten committed batches and retains truthful measuremen
   assert.doesNotMatch(JSON.stringify(report), /private@example|never-print-private|authority_proof/);
 });
 
+test("the current signed result carries a private digest of planned sections and a separate checked-page count", async () => {
+  const fake = fakeSdk();
+  const sampling = {
+    sampling_version: "balanced_sitemap_buckets_v9_feasible_ceiling_hub_reservations",
+    inventory_capped: true,
+    sitemap_urls_discovered: 505, sitemap_urls_selected: 499, pages_checked: 500,
+    sections_discovered: { "/set": 502, "/private-section": 3 },
+    sections_selected: { "/private-section": 0, "/set": 497 },
+    sections_never_selected: ["/private-section"],
+  };
+  fake.projection.run.sampling_evidence = sampling;
+  const report = await executeStaged500Canary(fake.sdk, config(), () => now);
+  assert.equal(report.terminal_outcome_verified, true);
+  assert.deepEqual(report.selection_coverage, {
+    sampling_version: sampling.sampling_version, inventory_capped: true,
+    inventory_urls: 505, selected_urls: 499, selected_inventory_urls: 497, pages_checked: 500,
+    sections_discovered: 2, sections_never_selected: 1,
+    sections_sha256: hash(JSON.stringify([[hash("/set"), 502, 497], [hash("/private-section"), 3, 0]]
+      .sort(([left], [right]) => left.localeCompare(right)))),
+  });
+  assert.doesNotMatch(JSON.stringify(report), /private-section/);
+
+  for (const invalid of [
+    { sections_never_selected: ["/set"] }, { pages_checked: 499 },
+    { sections_selected: { "/private-section": 0, "/set": 500 } },
+    { inventory_capped: 1 },
+  ]) {
+    fake.projection.run.sampling_evidence = { ...sampling, ...invalid };
+    const rejected = await executeStaged500Canary(fake.sdk, config(), () => now);
+    assert.equal(rejected.terminal_outcome_verified, true);
+    assert.equal(rejected.selection_coverage, null);
+    assert.ok(rejected.unverified.includes("signed_selection_coverage"));
+  }
+  fake.projection.run.sampling_evidence = sampling;
+  fake.run.authority_seal_version = "standard_review_snapshot_hmac_v1";
+  const historical = await executeStaged500Canary(fake.sdk, config(), () => now);
+  assert.equal(historical.terminal_outcome_verified, true);
+  assert.equal(historical.selection_coverage, null);
+});
+
 test("terminal receipt identity comes from the persisted scan row without coercion or projection fallback", async () => {
   const valid = fakeSdk();
   valid.run.started_at = "2026-11-12T10:59:35+01:00";
@@ -272,6 +312,33 @@ test("integrity-verified limited evidence is classified separately and cannot pa
   for (const scenario of ["limitedUnsigned", "limitedNoReason", "limitedNoPriorities"]) {
     assert.equal((await executeStaged500Canary(fakeSdk(scenario).sdk, config(), () => now)).terminal_outcome_verified, false);
   }
+});
+
+test("verified throttling needs its causal reason, ranked fixes and exact worker receipt", async () => {
+  const fake = fakeSdk("limited");
+  for (const key of ["advanced_scan_backend", "ai_review_backend", "python_review_fallback_used"]) delete fake.projection.run[key];
+  fake.projection.run.coverage_reasons = ["staged_rate_limit"];
+  fake.projection.fixItems = [{ fix_id: "low", priority: "low" }, { fix_id: "high", priority: "high" }];
+  fake.projection.top_fix_ids = ["high", "low"];
+  const report = await executeStaged500Canary(fake.sdk, config(), () => now);
+  assert.equal(report.terminal_outcome_verified, true);
+  assert.equal(report.outcome, "limited_throttled");
+  assert.equal(report.durable_worker_owned, false);
+  assert.equal(report.durable_worker_receipt_required, true);
+  assert.deepEqual(report.throttled_priority_summary, ["high", "low"]);
+  fake.projection.top_fix_ids.reverse();
+  assert.equal((await executeStaged500Canary(fake.sdk, config(), () => now)).failure_code, "throttled_priorities_unverified");
+  fake.projection.top_fix_ids.reverse();
+  fake.run.result_integrity_version = "standard_limited_result_integrity_v1";
+  assert.equal((await executeStaged500Canary(fake.sdk, config(), () => now)).failure_code, "throttled_proof_version_unverified");
+  fake.projection.run.coverage_reasons = ["rate_limited"];
+  assert.equal((await executeStaged500Canary(fake.sdk, config(), () => now)).failure_code, "limited_termination_reason_missing");
+
+  const input = manifest();
+  const result = await runCorpus(input, { execute: true, now, executeSite: async site => ({ exitCode: 0,
+    report: { ...corpusScan(site), durable_worker_receipt_required: site.expectation === "throttled_limited" } }) });
+  assert.ok(result.failures.includes("limited_worker_receipt_unverified:site_49"));
+  assert.equal(result.corpus_completed, false);
 });
 
 test("queued progress can precede the first committed batch without being mistaken for terminal evidence", async () => {
@@ -354,6 +421,7 @@ function corpusScan(site, index = Number(site.site_id.split("_").at(-1))) {
     schema_version: "staged_500_canary_v1", source_sha: sha, release_fingerprint: fingerprint,
     expected_owner_user_id: site.owner_user_id, project_id: site.project_id, request_id: site.request_id,
     target_url: site.target_url, scan_id: `scan_${index}`, terminal_outcome_verified: true,
+    observed_at: stamp.observed_at,
     functional_500_verified: site.expectation === "complete_500", full_500_gate: false,
     outcome: site.expectation === "throttled_limited" ? "limited_throttled" : "complete", acceptance_verified: false,
     provenance: { prerequisite_sha256: "d".repeat(64) },
@@ -410,6 +478,73 @@ function measuredCorpusScan(site) {
   };
   return { exitCode: 0, report, reportDigest, receipt };
 }
+
+test("completed coverage verification joins exact receipt attempts to signed section plans without submitting", async () => {
+  const input = manifest();
+  input.sites[0].expectation = "complete_below_cap";
+  const manifestDigest = hash(JSON.stringify(input));
+  const samplingVersion = "balanced_sitemap_buckets_v9_feasible_ceiling_hub_reservations";
+  const results = new Map();
+  const sites = input.sites.map(site => {
+    const original = measuredCorpusScan(site);
+    const section = (name, discovered, v7, sameCap, larger) => ({ section_sha256: hash(name), discovered,
+      v7_selected_150: v7, candidate_selected_150: sameCap, candidate_selected_500: larger });
+    const small = site.expectation === "complete_below_cap";
+    const sections = [section("/first", small ? 19 : 502, 1, 1, small ? 19 : 497), section("/second", 3, 0, 1, 2)];
+    const receipt = { ...original.receipt };
+    const [first, second] = sections;
+    const rows = sections.map(row => [row.section_sha256, row.discovered, row.candidate_selected_500])
+      .sort(([left], [right]) => left.localeCompare(right));
+    const report = { ...original.report, page_cap: 500, pages_crawled: small ? 22 : 500, pages_planned: small ? 22 : 500,
+      selection_coverage: site.expectation === "throttled_limited" ? null : {
+        sampling_version: samplingVersion, inventory_capped: false, pages_checked: small ? 22 : 500,
+        inventory_urls: first.discovered + second.discovered, selected_urls: first.candidate_selected_500 + second.candidate_selected_500,
+        selected_inventory_urls: first.candidate_selected_500 + second.candidate_selected_500,
+        sections_discovered: 2, sections_never_selected: 0, sections_sha256: hash(JSON.stringify(rows)),
+      } };
+    if (small) {
+      report.committed_batch_count = 1;
+      receipt.committed_delivery_count = 3;
+    }
+    const reportDigest = hash(JSON.stringify(report));
+    receipt.canary_report_sha256 = reportDigest;
+    results.set(site.site_id, { ...original, report, receipt, reportDigest });
+    return { site_id: site.site_id, reference_marker: site.reference_marker, capture_sha256: "d".repeat(64), inventory_capped: false,
+      inventory_urls: first.discovered + second.discovered, candidate_selected_urls_500: first.candidate_selected_500 + second.candidate_selected_500, sections,
+      claimed_terminal_anchor: { scan_id: report.scan_id, attempt_count: report.attempt_count,
+        frontier_generation: receipt.frontier_generation, receipt_snapshot_sha256: receipt.receipt_snapshot_sha256 } };
+  });
+  const comparison = { schema_version: "staged_scan_selection_comparison_v1", evidence_scope: "offline_replay_of_captured_sitemap_selection",
+    baseline_source_sha: "689a7fb43825f322af70188e7426730552daebd9", candidate_source_sha: sha,
+    candidate_sampling_version: samplingVersion, release_fingerprint: fingerprint, corpus_manifest_sha256: manifestDigest,
+    captures_sha256: "c".repeat(64), site_count: 50, selection_comparison_verified: true, live_terminal_evidence_verified: false, sites };
+  let submissions = 0;
+  const options = { now, manifestDigest, verifyOnly: true, readPrior: site => results.get(site.site_id),
+    executeSite: async () => { submissions++; } };
+  const validated = await runCorpus(input, { ...options, compareCompleted: () => comparison });
+  assert.equal(validated.corpus_resource_evidence_verified, true);
+  assert.equal(validated.corpus_selection_evidence_verified, true);
+  assert.deepEqual(validated.coverage, { baseline_source_sha: comparison.baseline_source_sha,
+    captures_sha256: comparison.captures_sha256, v7_sections_omitted_at_150: 50, candidate_sections_omitted_at_150: 0,
+    signed_candidate_500_matches: 49, receipt_bound_plan_matches: 50 });
+  assert.equal(validated.acceptance_verified, false);
+  const historical = await runCorpus(input, { ...options, now: now + 60 * 60 * 1000, compareCompleted: () => comparison });
+  assert.equal(historical.corpus_selection_evidence_verified, true);
+  for (const alter of [
+    value => { value.sites[0].sections[0].candidate_selected_150 = 0; },
+    value => { value.sites[1].sections[1].candidate_selected_500 = 0; },
+    value => { value.sites.at(-1).claimed_terminal_anchor.frontier_generation = "158"; },
+    value => { value.corpus_manifest_sha256 = "0".repeat(64); },
+  ]) {
+    const invalid = structuredClone(comparison); alter(invalid);
+    const rejected = await runCorpus(input, { ...options, compareCompleted: () => invalid });
+    assert.equal(rejected.corpus_selection_evidence_verified, false);
+    assert.ok(rejected.failures.includes("corpus_selection_evidence_unverified"));
+  }
+  const missing = await runCorpus(input, { ...options, compareCompleted: () => comparison, readPrior: site => site === input.sites.at(-1) ? null : results.get(site.site_id) });
+  assert.ok(missing.failures.includes("corpus_incomplete"));
+  assert.equal(submissions, 0);
+});
 
 test("the corpus counts receipt evidence only when the trusted collector binds the exact terminal report", async () => {
   const input = manifest();

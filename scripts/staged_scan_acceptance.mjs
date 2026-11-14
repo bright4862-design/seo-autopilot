@@ -174,7 +174,8 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
     release_fingerprint: null, provenance: config.provenance, observed_at: new Date(now()).toISOString(), scan_id: null,
     attempt_count: null, scan_started_at: null, scan_completed_at: null,
     terminal_outcome_verified: false, functional_500_verified: false, full_500_gate: false, acceptance_verified: false,
-    outcome: "unverified", progress: [], payload_bytes: { customer_projection: null, completion_request: null },
+    outcome: "unverified", progress: [], selection_coverage: null, durable_worker_owned: false, durable_worker_receipt_required: false,
+    payload_bytes: { customer_projection: null, completion_request: null },
     memory: { finalize_peak_bytes: null, scope: "finalize_only", all_stages_verified: false }, unverified: ["completion_request_byte_measurement", "all_stage_memory_measurement", "per_scan_runtime_revision_receipt"], failure_code: null };
   const deadline = now() + config.maxWait * 1000;
   class CanaryCheckError extends Error {}
@@ -189,6 +190,45 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
     const date = new Date(`${match[1]}T00:00:00Z`);
     if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== match[1]) return NaN;
     return Date.parse(value);
+  }
+  async function signedSelectionCoverage(sampling, crawled) {
+    const record = value => Boolean(value && typeof value === "object" && !Array.isArray(value));
+    const discovered = sampling?.sections_discovered;
+    const selected = sampling?.sections_selected;
+    if (!record(discovered) || !record(selected)
+        || !/^[a-z0-9_]{5,120}$/.test(sampling.sampling_version || "")
+        || typeof sampling.inventory_capped !== "boolean" || sampling.pages_checked !== crawled
+        || !integer(sampling.sitemap_urls_discovered) || sampling.sitemap_urls_discovered > 5000
+        || !integer(sampling.sitemap_urls_selected) || sampling.sitemap_urls_selected > 499) return null;
+
+    const names = Object.keys(discovered);
+    if (names.length > sampling.sitemap_urls_discovered || Object.keys(selected).length !== names.length) return null;
+    const omitted = [];
+    let totalDiscovered = 0, totalSelected = 0;
+    for (const section of names) {
+      const count = discovered[section], chosen = selected[section];
+      if (!section || section.length > 2000 || !integer(count) || count === 0
+          || !Object.hasOwn(selected, section) || !integer(chosen) || chosen > count) return null;
+      totalDiscovered += count;
+      totalSelected += chosen;
+      if (chosen === 0) omitted.push(section);
+    }
+    if (totalDiscovered !== sampling.sitemap_urls_discovered || totalSelected > sampling.sitemap_urls_selected
+        || !Array.isArray(sampling.sections_never_selected) || sampling.sections_never_selected.length !== omitted.length) return null;
+    const reportedOmissions = new Set(sampling.sections_never_selected);
+    if (reportedOmissions.size !== omitted.length || omitted.some(section => !reportedOmissions.has(section))) return null;
+
+    // Commit to section identities and counts without placing inventory paths
+    // in CLI output. The offline replay uses the same sorted tuple encoding.
+    const encode = new TextEncoder();
+    const hash = async value => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", encode.encode(value))),
+      byte => byte.toString(16).padStart(2, "0")).join("");
+    const rows = await Promise.all(names.map(async section => [await hash(section), discovered[section], selected[section]]));
+    rows.sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+    return { sampling_version: sampling.sampling_version, inventory_capped: sampling.inventory_capped,
+      inventory_urls: totalDiscovered, selected_urls: sampling.sitemap_urls_selected,
+      selected_inventory_urls: totalSelected, pages_checked: crawled,
+      sections_discovered: rows.length, sections_never_selected: omitted.length, sections_sha256: await hash(JSON.stringify(rows)) };
   }
   async function bounded(operation) {
     const remaining = Math.min(30000, deadline - now()); require(remaining > 0, "scan_timeout");
@@ -241,7 +281,6 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
     require(report.committed_batch_count > 0 && run.pages_crawled > 0 && run.pages_crawled <= report.committed_batch_count * 50, "committed_evidence_missing");
     require(projection.release_contract_current === true && projection.run.beta_revision_fingerprint === config.expectedFingerprint && run.beta_revision_fingerprint === config.expectedFingerprint, "release_fingerprint_mismatch");
     report.release_fingerprint = projection.run.beta_revision_fingerprint;
-    require(projection.run.advanced_scan_backend === "python_scanner_api" && projection.run.deno_fallback_used === false && projection.run.ai_review_backend === "python_review_api" && projection.run.python_review_fallback_used === false, "durable_worker_evidence_missing");
     report.payload_bytes.customer_projection = new TextEncoder().encode(JSON.stringify(projection)).byteLength;
     const memory = projection.run.worker_peak_memory_bytes ?? projection.run.peak_memory_bytes;
     report.memory.finalize_peak_bytes = typeof memory === "number" && Number.isFinite(memory) && memory > 0 ? memory : null;
@@ -255,27 +294,49 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
     report.scan_completed_at = run.completed_at;
     if (run.status === "complete") {
       require(projection.authority_verified === true && /^[a-f0-9]{64}$/.test(run.authority_proof || "") && Boolean(run.authority_seal_version), "complete_authority_unverified");
+      require(projection.run.advanced_scan_backend === "python_scanner_api" && projection.run.deno_fallback_used === false
+        && projection.run.ai_review_backend === "python_review_api" && projection.run.python_review_fallback_used === false, "durable_worker_evidence_missing");
+      report.durable_worker_owned = true;
       // Slow batches may end at the stage work fuse before retaining 50 pages.
       // Such a terminal result is valid, but does not prove the ten-batch case.
       require(run.pages_crawled === run.pages_planned && report.committed_batch_count >= Math.ceil(run.pages_crawled / 50), "completed_batch_count_mismatch");
       report.outcome = "complete";
       report.functional_500_verified = run.pages_crawled === 500 && report.committed_batch_count === 10;
+      // The verified current complete-result seal covers sampling_evidence.
+      // Historical v1 and limited seals do not attest this field.
+      if (run.authority_seal_version === "standard_review_snapshot_hmac_identity_v1") {
+        report.selection_coverage = await signedSelectionCoverage(projection.run.sampling_evidence, run.pages_crawled);
+      }
+      if (!report.selection_coverage) report.unverified.push("signed_selection_coverage");
     } else {
       require(projection.result_integrity_verified === true && /^[a-f0-9]{64}$/.test(run.result_integrity_proof || "") && Boolean(run.result_integrity_version), "limited_integrity_unverified");
       require(projection.authority_verified !== true && projection.run.score_is_provisional === true && projection.run.release_gate_eligible === false && ["limited_coverage", "access_limited", "inventory_unproven"].includes(projection.run.coverage_state) && Boolean(projection.run.limitation) && Array.isArray(projection.fixItems) && projection.fixItems.length > 0, "limited_coverage_untruthful");
       const fixIds = new Set(projection.fixItems.map(fix => String(fix?.fix_id || fix?.issue_id || fix?.id || "")).filter(Boolean));
       require(Array.isArray(projection.top_fix_ids) && projection.top_fix_ids.length >= 1 && projection.top_fix_ids.length <= 3 && new Set(projection.top_fix_ids).size === projection.top_fix_ids.length && projection.top_fix_ids.every(id => typeof id === "string" && fixIds.has(id)), "limited_priorities_missing_or_invalid");
       const reasons = Array.isArray(projection.run.coverage_reasons) ? projection.run.coverage_reasons : [];
-      const throttled = reasons.some(reason => ["rate_limit", "rate_limited", "throttled", "staged_rate_limit"].includes(reason));
+      const throttled = reasons.includes("staged_rate_limit");
+      if (throttled) {
+        require(run.result_integrity_version === "standard_limited_result_integrity_v5_report_evidence", "throttled_proof_version_unverified");
+        const levels = ["critical", "high", "medium", "low"];
+        const byId = new Map(projection.fixItems.map(fix => [fix?.fix_id, levels.indexOf(fix?.priority)]));
+        const ranks = projection.top_fix_ids.map(id => byId.get(id));
+        require(byId.size === projection.fixItems.length && ![...byId.values()].includes(-1)
+          && ranks[0] === Math.min(...byId.values()) && ranks.every((rank, index) => rank >= 0 && (index === 0 || rank >= ranks[index - 1])),
+        "throttled_priorities_unverified");
+        report.throttled_priority_summary = ranks.map(rank => levels[rank]);
+      }
       const budget = reasons.includes("staged_wall_budget");
       require(throttled || budget || reasons.includes("staged_partial_evidence"), "limited_termination_reason_missing");
       report.termination_reasons = reasons.filter(reason => ["rate_limit", "rate_limited", "throttled", "staged_rate_limit", "staged_wall_budget", "staged_partial_evidence"].includes(reason));
       report.outcome = throttled ? "limited_throttled" : budget ? "limited_budget" : "limited_partial";
+      // Limited seals do not attest the scan/review backend fields. The
+      // independent receipt must bind this result to the exact worker.
+      report.durable_worker_receipt_required = true;
     }
-    report.durable_worker_owned = true; report.terminal_outcome_verified = true;
+    report.terminal_outcome_verified = true;
     if (!report.memory.finalize_peak_bytes) report.unverified.push("finalize_memory_measurement");
-    // These producers do not exist yet. A finalize metric or response size must
-    // never be relabelled as all-stage memory or completion request evidence.
+    // The private workspace receipt collector measures the completion request
+    // and per-stage memory separately from this customer readback.
   } catch (error) {
     // SDK errors may contain credentials or private evidence even when their
     // text looks like a lowercase error code. Only our own checks are public.

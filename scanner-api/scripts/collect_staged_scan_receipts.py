@@ -117,7 +117,8 @@ def canary_identity(report: dict) -> Canary:
     require(report.get("schema_version") == CANARY_REPORT_VERSION
             and report.get("production_freeze") is False
             and report.get("terminal_outcome_verified") is True
-            and report.get("durable_worker_owned") is True
+            and (report.get("durable_worker_owned") is True
+                 or (status == "limited" and report.get("durable_worker_receipt_required") is True))
             and isinstance(status, str) and status in COMPLETION and report.get("page_cap") == 500
             and matches(ID, scan_id) and matches(ID, request_id)
             and positive(attempt) and attempt < 2**31, "terminal_canary_identity_missing")

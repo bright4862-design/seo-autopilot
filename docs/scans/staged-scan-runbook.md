@@ -163,6 +163,17 @@ Before expanding the cohort, verify:
 - Deleting terminal scan history writes a scan-wide tombstone, drains active leases for 450 seconds, and completes workspace cleanup across every attempt before deleting the customer record; transient cleanup failure remains retryable and does not claim deletion succeeded.
 - Review wall time and aggregate worker memory fit the current limits on representative 500-page evidence. Run the 50-site selection/coverage corpus before enabling the 500 tier broadly.
 
+After the reviewed 500-cap corpus reaches terminal outcomes, run the read-only verification from the exact source checkout with full Git history and read access to its private GCS workspace. Use a new output path outside the checkout.
+
+```sh
+node scripts/run-staged-scan-corpus.mjs --verify-completed \
+  --manifest /absolute/reviewed-corpus.json \
+  --evidence-dir /absolute/private-corpus-journal \
+  --output /absolute/corpus-verification.json
+```
+
+The verifier matches each saved plan to its scan attempt and verified receipt. It replays v7 and current selection at the same 150-page cap against each frozen inventory. It requires fewer omitted sections overall and preserves every section v7 selected on Funbooker, Pretto, Center Street Lending, and Norris Wines. The current 500-page selection is also compared against the signed selection readback for complete results. For throttled results, the signed limitation and priority order, completion receipt, and matched saved plan provide the evidence.
+
 Phase 7 (5,000-page scans), adaptive sampling, weekly monitoring and the separate signed targeted-verification product are future extensions. The 30-day lifecycle must be revisited before introducing a longer-lived monitoring baseline.
 
 ## Rollback and recovery

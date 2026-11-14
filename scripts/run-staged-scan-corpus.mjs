@@ -17,6 +17,7 @@ const sha256 = value => createHash("sha256").update(value).digest("hex");
 const sha256Pattern = /^[a-f0-9]{64}$/;
 const workerMemoryLimit = 1024 ** 3;
 const workspaceBucket = "fixlist-scan-workspaces-seo-autopilot-501517";
+const selectionBaseline = "689a7fb43825f322af70188e7426730552daebd9";
 
 export function verifyReceiptSummary(evidence, report, reportDigest) {
   const provenance = report?.provenance;
@@ -48,12 +49,13 @@ export function verifyReceiptSummary(evidence, report, reportDigest) {
 }
 const targetUrl = value => { try { const url = new URL(value); return url.protocol === "https:" && !url.username && !url.password && !url.hash ? url.href : ""; } catch { return ""; } };
 
-export function validateCorpusManifest(manifest, now = Date.now()) {
+export function validateCorpusManifest(manifest, now = Date.now(), { historical = false } = {}) {
   const failures = [], add = (ok, code) => { if (!ok) failures.push(code); };
   add(manifest?.schema_version === "staged_scan_corpus_v1", "corpus_schema_invalid");
   add(/^[a-f0-9]{40}$/.test(manifest?.source_sha || "") && /^[a-f0-9]{16}$/.test(manifest?.release_fingerprint || ""), "corpus_source_invalid");
   const reviewed = Date.parse(manifest?.reviewed_at), expires = Date.parse(manifest?.expires_at);
-  add(typeof manifest?.reviewed_by === "string" && Boolean(manifest.reviewed_by.trim()) && Number.isFinite(reviewed) && reviewed <= now && expires > now && expires - reviewed <= 86400000, "corpus_review_missing_or_expired");
+  add(typeof manifest?.reviewed_by === "string" && Boolean(manifest.reviewed_by.trim()) && Number.isFinite(reviewed)
+    && reviewed <= now && expires > reviewed && (historical || expires > now) && expires - reviewed <= 86400000, "corpus_review_missing_or_expired");
   const sites = Array.isArray(manifest?.sites) ? manifest.sites : [];
   add(sites.length === 50, "corpus_requires_50_sites");
   for (const [key, code] of [["site_id", "duplicate_site_id"], ["request_id", "duplicate_request_id"], ["project_id", "duplicate_project_id"]]) add(new Set(sites.map(row => row?.[key])).size === sites.length, code);
@@ -64,24 +66,109 @@ export function validateCorpusManifest(manifest, now = Date.now()) {
     add(Boolean(target) && site.target_url === target, "corpus_target_invalid");
     if (target) hosts.add(new URL(target).hostname.replace(/^www\./, ""));
     add(["ecommerce", "content", "local", "mixed"].includes(site?.site_class), "corpus_site_class_invalid");
-    add(["complete_500", "throttled_limited"].includes(site?.expectation), "corpus_expected_outcome_invalid");
+    add(["complete_500", "complete_below_cap", "throttled_limited"].includes(site?.expectation), "corpus_expected_outcome_invalid");
     add(site?.reference_marker === null || ["funbooker", "pretto", "center_street_lending", "norris_wines"].includes(site?.reference_marker), "corpus_reference_invalid");
   }
   add(hosts.size === sites.length, "corpus_hosts_not_distinct");
   for (const marker of ["funbooker", "pretto", "center_street_lending", "norris_wines"]) add(sites.filter(site => site?.reference_marker === marker).length === 1, `corpus_reference_missing_or_duplicate:${marker}`);
   for (const siteClass of ["ecommerce", "content", "local", "mixed"]) add(sites.some(site => site?.site_class === siteClass), `corpus_class_missing:${siteClass}`);
   add(sites.some(site => site?.expectation === "throttled_limited"), "corpus_throttling_case_missing");
+  add(sites.some(site => site?.expectation === "complete_500"), "corpus_full_cap_case_missing");
   return [...new Set(failures)];
 }
 
-export async function runCorpus(manifest, { now = Date.now(), execute = false, executeSite, siteId, readPrior } = {}) {
+export function verifyCorpusSelection(comparison, manifest, manifestDigest, observations) {
+  const sites = comparison?.sites;
+  if (comparison?.schema_version !== "staged_scan_selection_comparison_v1"
+      || comparison.baseline_source_sha !== selectionBaseline || comparison.candidate_source_sha !== manifest.source_sha
+      || comparison.release_fingerprint !== manifest.release_fingerprint
+      || comparison.evidence_scope !== "offline_replay_of_captured_sitemap_selection" || comparison.live_terminal_evidence_verified !== false
+      || !sha256Pattern.test(manifestDigest || "") || comparison.corpus_manifest_sha256 !== manifestDigest
+      || !sha256Pattern.test(comparison.captures_sha256 || "") || comparison.selection_comparison_verified !== true
+      || !/^[a-z0-9_]{5,120}$/.test(comparison.candidate_sampling_version || "")
+      || comparison.site_count !== 50 || !Array.isArray(sites) || sites.length !== 50
+      || !Array.isArray(observations) || observations.length !== 50) return null;
+
+  const byId = new Map(sites.map(site => [site?.site_id, site]));
+  const observedById = new Map(observations.map(site => [site?.site_id, site]));
+  let baselineOmitted = 0, candidateOmitted = 0, signedComparisons = 0;
+  for (const site of manifest.sites) {
+    const evidence = byId.get(site.site_id), observation = observedById.get(site.site_id);
+    const anchor = evidence?.claimed_terminal_anchor, scan = observation?.report, receipt = observation?.receipt;
+    const sections = evidence?.sections;
+    if (!evidence || evidence.reference_marker !== site.reference_marker || !sha256Pattern.test(evidence.capture_sha256 || "")
+        || typeof evidence.inventory_capped !== "boolean" || !observation?.resource_evidence_verified
+        || !anchor || anchor.scan_id !== scan?.scan_id || anchor.attempt_count !== scan?.attempt_count
+        || anchor.frontier_generation !== receipt?.frontier_generation
+        || anchor.receipt_snapshot_sha256 !== receipt?.receipt_snapshot_sha256
+        || !Array.isArray(sections) || sections.length > 5000) return null;
+
+    const rows = [], hashes = new Set();
+    let discovered = 0, chosenV7 = 0, chosen150 = 0, chosen500 = 0, omitted500 = 0;
+    for (const row of sections) {
+      const { section_sha256: hash, discovered: count, v7_selected_150: v7,
+        candidate_selected_150: sameCap, candidate_selected_500: larger } = row || {};
+      const selectedCounts = [v7, sameCap, larger];
+      if (!sha256Pattern.test(hash || "") || hashes.has(hash) || !Number.isInteger(count) || count < 1 || count > 5000
+          || selectedCounts.some(value => !Number.isInteger(value) || value < 0 || value > count)
+          || (site.reference_marker && v7 > 0 && sameCap === 0)) return null;
+      hashes.add(hash);
+      discovered += count;
+      chosenV7 += v7;
+      chosen150 += sameCap;
+      chosen500 += larger;
+      baselineOmitted += Number(v7 === 0);
+      candidateOmitted += Number(sameCap === 0);
+      omitted500 += Number(larger === 0);
+      rows.push([hash, count, larger]);
+    }
+    if (discovered > 5000 || chosenV7 > 149 || chosen150 > 149 || chosen500 > 499
+        || evidence.inventory_urls !== discovered || !Number.isInteger(evidence.candidate_selected_urls_500)
+        || evidence.candidate_selected_urls_500 < chosen500 || evidence.candidate_selected_urls_500 > 499) return null;
+    if (site.expectation !== "throttled_limited") {
+      rows.sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+      const live = scan?.selection_coverage;
+      if (live?.sampling_version !== comparison.candidate_sampling_version || live.inventory_capped !== evidence.inventory_capped
+          || live.pages_checked !== scan.pages_crawled || live.inventory_urls !== discovered
+          || live.selected_urls !== evidence.candidate_selected_urls_500
+          || live.selected_inventory_urls !== chosen500 || live.sections_discovered !== rows.length
+          || live.sections_never_selected !== omitted500 || live.sections_sha256 !== sha256(JSON.stringify(rows))) return null;
+      signedComparisons++;
+    }
+  }
+  if (candidateOmitted >= baselineOmitted) return null;
+  return { baseline_source_sha: selectionBaseline, captures_sha256: comparison.captures_sha256,
+    v7_sections_omitted_at_150: baselineOmitted, candidate_sections_omitted_at_150: candidateOmitted,
+    signed_candidate_500_matches: signedComparisons, receipt_bound_plan_matches: observations.length };
+}
+
+function matchesExpectedOutcome(scan, expectation) {
+  if (scan.terminal_outcome_verified !== true) return false;
+  if (expectation === "throttled_limited") return scan.outcome === "limited_throttled";
+  if (scan.outcome !== "complete") return false;
+  if (expectation === "complete_500") return scan.functional_500_verified === true;
+  const planned = scan.pages_planned, sampling = scan.selection_coverage;
+  return scan.page_cap === 500 && scan.functional_500_verified === false
+    && Number.isSafeInteger(planned) && planned > 0 && planned < scan.page_cap && scan.pages_crawled === planned
+    && sampling?.pages_checked === planned && sampling.inventory_capped === false
+    && Number.isSafeInteger(sampling.inventory_urls) && sampling.inventory_urls >= 0 && sampling.inventory_urls < scan.page_cap
+    && sha256Pattern.test(sampling.sections_sha256 || "");
+}
+
+export async function runCorpus(manifest, { now = Date.now(), execute = false, executeSite, siteId, readPrior,
+  verifyOnly = false, compareCompleted, manifestDigest } = {}) {
   const report = { schema_version: "staged_scan_corpus_report_v1", source_sha: manifest?.source_sha, release_fingerprint: manifest?.release_fingerprint,
-    dry_run: execute !== true, expected_site_count: 50, supplied_site_count: Array.isArray(manifest?.sites) ? manifest.sites.length : 0,
+    dry_run: execute !== true && verifyOnly !== true, verification_only: verifyOnly === true,
+    expected_site_count: 50, supplied_site_count: Array.isArray(manifest?.sites) ? manifest.sites.length : 0,
     requested_site_id: siteId ?? null, requested_site_completed: false, corpus_completed: false,
-    resource_verified_sites: 0, corpus_resource_evidence_verified: false,
-    production_freeze: false, acceptance_verified: false, full_500_gate: false, scans: [], failures: validateCorpusManifest(manifest, now) };
-  if (report.failures.length || !execute) return report;
-  if (typeof executeSite !== "function") { report.failures.push("corpus_executor_missing"); return report; }
+    resource_verified_sites: 0, corpus_resource_evidence_verified: false, corpus_selection_evidence_verified: false, coverage: null,
+    production_freeze: false, acceptance_verified: false, full_500_gate: false, scans: [],
+    failures: validateCorpusManifest(manifest, now, { historical: verifyOnly }) };
+  if (report.failures.length || (!execute && !verifyOnly)) return report;
+  if ((verifyOnly && (execute || siteId || typeof readPrior !== "function")) || (execute && typeof executeSite !== "function")) {
+    report.failures.push("corpus_execution_mode_invalid");
+    return report;
+  }
   if (siteId && !manifest.sites.some(site => site.site_id === siteId)) { report.failures.push("selected_site_not_in_manifest"); return report; }
   const pending = [];
   const scanIds = new Set();
@@ -93,14 +180,26 @@ export async function runCorpus(manifest, { now = Date.now(), execute = false, e
     if (result?.exitCode !== 0 || result.exitSignal) { report.failures.push(`canary_execution_failed:${site.site_id}`); return false; }
     if (scan?.schema_version !== "staged_500_canary_v1" || scan.source_sha !== manifest.source_sha || scan.release_fingerprint !== manifest.release_fingerprint || scan.expected_owner_user_id !== site.owner_user_id || scan.project_id !== site.project_id || scan.request_id !== site.request_id || scan.target_url !== site.target_url || !identifier(scan.scan_id) || scanIds.has(scan.scan_id)) { report.failures.push("scan_report_identity_mismatch"); return false; }
     scanIds.add(scan.scan_id);
-    if (scan.terminal_outcome_verified !== true || (site.expectation === "complete_500" ? scan.functional_500_verified !== true || scan.outcome !== "complete" : scan.outcome !== "limited_throttled")) { report.failures.push(`scan_outcome_mismatch:${site.site_id}`); return false; }
+    if (verifyOnly) {
+      const observed = Date.parse(scan.observed_at);
+      if (!Number.isFinite(observed) || observed < Date.parse(manifest.reviewed_at) || observed >= Date.parse(manifest.expires_at)) {
+        report.failures.push(`scan_outside_corpus_review:${site.site_id}`);
+        return false;
+      }
+    }
+    if (!matchesExpectedOutcome(scan, site.expectation)) { report.failures.push(`scan_outcome_mismatch:${site.site_id}`); return false; }
     const verified = verifyReceiptSummary(result.receipt, scan, result.reportDigest);
     const observation = report.scans.at(-1);
     observation.resource_evidence_verified = verified;
+    if (scan.durable_worker_receipt_required === true && !verified) {
+      report.failures.push(`limited_worker_receipt_unverified:${site.site_id}`);
+      return false;
+    }
     if (verified) {
       const receipt = result.receipt;
       observation.receipt = {
         worker_revision: receipt.worker_revision,
+        frontier_generation: receipt.frontier_generation,
         receipt_snapshot_sha256: receipt.receipt_snapshot_sha256,
         completion_request_bytes: receipt.completion_request.body_bytes,
         completion_request_sha256: receipt.completion_request.body_sha256,
@@ -132,7 +231,7 @@ export async function runCorpus(manifest, { now = Date.now(), execute = false, e
     report.failures.push(`selected_site_is_not_next:${siteId}`);
     return report;
   }
-  const selected = siteId ? (report.requested_site_completed ? [] : pending.slice(0, 1)) : pending;
+  const selected = verifyOnly ? [] : siteId ? (report.requested_site_completed ? [] : pending.slice(0, 1)) : pending;
   for (const site of selected) {
     let result;
     try { result = await executeSite(site); } catch (error) {
@@ -145,9 +244,16 @@ export async function runCorpus(manifest, { now = Date.now(), execute = false, e
   report.corpus_completed = scanIds.size === 50 && report.failures.length === 0;
   if (!siteId && !report.corpus_completed) report.failures.push("corpus_incomplete");
   report.corpus_resource_evidence_verified = report.corpus_completed && report.resource_verified_sites === 50;
-  // Coverage comparison and independent acceptance of the deployed tier remain separate.
   if (report.corpus_completed && !report.corpus_resource_evidence_verified) {
     report.failures.push("full_500_resource_or_runtime_acceptance_unverified");
+  }
+  if (verifyOnly && report.corpus_resource_evidence_verified) {
+    try {
+      const comparison = await compareCompleted?.();
+      report.coverage = verifyCorpusSelection(comparison, manifest, manifestDigest, report.scans);
+    } catch { /* Avoid printing private workspace data or SDK error output. */ }
+    report.corpus_selection_evidence_verified = report.coverage !== null;
+    if (!report.corpus_selection_evidence_verified) report.failures.push("corpus_selection_evidence_unverified");
   }
   return report;
 }
@@ -287,6 +393,26 @@ async function collectSiteReceipts(root, reportFile, output) {
   });
 }
 
+async function replayCompletedCorpus(root, rawManifest, evidenceDirectory) {
+  const directory = fs.mkdtempSync(path.join(fs.realpathSync(tmpdir()), "fixlist-selection-replay-"));
+  try {
+    const manifest = path.join(directory, "manifest.json");
+    const captures = path.join(directory, "captures.json");
+    const comparison = path.join(directory, "comparison.json");
+    fs.writeFileSync(manifest, rawManifest, { flag: "wx", mode: 0o600 });
+    const python = (name, args, timeout) => new Promise((resolve, reject) => {
+      execFile("python3", [path.join(root, "scanner-api/scripts", name), ...args], {
+        cwd: root, timeout, killSignal: "SIGKILL", maxBuffer: 64 * 1024,
+      }, error => error ? reject(error) : resolve());
+    });
+    await python("collect_staged_selection_captures.py", ["--manifest", manifest, "--evidence-dir", evidenceDirectory, "--output", captures], 920000);
+    await python("compare_staged_scan_selection.py", ["--manifest", manifest, "--captures", captures, "--output", comparison], 120000);
+    return readJsonFile(comparison).value;
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 function isOutside(root, file) {
   const relative = path.relative(root, file);
   return relative === ".." || relative.startsWith(`..${path.sep}`);
@@ -306,6 +432,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
     const { values } = parseArgs({ options: {
       help: { type: "boolean" }, execute: { type: "boolean" }, manifest: { type: "string" },
       output: { type: "string" }, confirm: { type: "string" }, site: { type: "string" },
+      "verify-completed": { type: "boolean" },
       "prerequisites-dir": { type: "string" }, "evidence-dir": { type: "string" },
     } });
     if (values.help) {
@@ -320,34 +447,48 @@ Keep an interrupted or failed attempt's files and reconcile the original request
 Remove a stale .corpus.lock only after confirming the original runner and all of its children have stopped.
 After a terminal scan, the runner collects private stage receipts with Python and existing GCS application credentials.
 A missing receipt leaves that site's resource evidence unverified. Keep the terminal scan report for a separate read-only collection.
-Default: dry-run. Corpus resource evidence does not certify coverage comparison or production acceptance.`);
+Use --verify-completed --evidence-dir /absolute/evidence and a new --output to verify a completed
+journal. It reads the exact saved plans from GCS and replays v7 and candidate selection without submitting scans.
+Default: dry-run. Corpus evidence does not authorize production acceptance.`);
     } else {
       const raw = fs.readFileSync(values.manifest, "utf8"), manifest = JSON.parse(raw);
       const root = fs.realpathSync(path.join(path.dirname(fileURLToPath(import.meta.url)), ".."));
-      const { execute, output, site: siteId } = values;
+      const { execute, output, site: siteId, "verify-completed": verifyOnly } = values;
+      const manifestDigest = sha256(raw);
+      let evidenceDirectory;
       let prerequisitesDirectory;
-      if (execute) {
-        const hash = sha256(raw);
+      if (execute || verifyOnly) {
+        if (verifyOnly && (execute || siteId || values.confirm || values["prerequisites-dir"])) {
+          throw new CorpusEvidenceError("corpus_execution_mode_invalid");
+        }
         if (siteId !== undefined && !siteIdentifier(siteId)) throw new CorpusEvidenceError("selected_site_invalid");
         const siteConfirmation = siteId ? `:site:${siteId}` : "";
-        if (values.confirm !== `RUN-STAGED-CORPUS:${manifest.source_sha}:${hash}${siteConfirmation}`
-            || !output || !values["prerequisites-dir"] || !values["evidence-dir"]) {
+        if (!output || !values["evidence-dir"] || (execute && (!values["prerequisites-dir"]
+            || values.confirm !== `RUN-STAGED-CORPUS:${manifest.source_sha}:${manifestDigest}${siteConfirmation}`))) {
           throw new CorpusEvidenceError("exact_corpus_confirmation_output_and_directories_required");
         }
-        prerequisitesDirectory = externalDirectory(root, values["prerequisites-dir"]);
-        const evidenceDirectory = externalDirectory(root, values["evidence-dir"]);
+        if (execute) prerequisitesDirectory = externalDirectory(root, values["prerequisites-dir"]);
+        evidenceDirectory = externalDirectory(root, values["evidence-dir"]);
         const outputParent = externalDirectory(root, path.dirname(output));
         if (!path.isAbsolute(output) || exists(output) || prerequisitesDirectory === evidenceDirectory
             || [prerequisitesDirectory, evidenceDirectory].includes(outputParent)) {
           throw new CorpusEvidenceError("corpus_output_invalid");
         }
-        if (validateCorpusManifest(manifest).length === 0) journal = openCorpusJournal(evidenceDirectory, hash);
+        if (validateCorpusManifest(manifest, Date.now(), { historical: verifyOnly }).length === 0) journal = openCorpusJournal(evidenceDirectory, manifestDigest);
       }
-      const report = await runCorpus(manifest, { execute, siteId, readPrior: journal?.readPrior,
+      const report = await runCorpus(manifest, { execute, verifyOnly, manifestDigest, siteId, readPrior: journal?.readPrior,
+        compareCompleted: async () => {
+          // The collector independently checks the journal on both sides of
+          // collection, and refuses an active writer.
+          journal.close();
+          journal = undefined;
+          return replayCompletedCorpus(root, raw, evidenceDirectory);
+        },
         executeSite: site => executeShell(root, site, manifest, prerequisitesDirectory, journal) });
       if (output) writeNewArtifact(output, report, root);
       console.log(JSON.stringify(report, null, 2));
-      if (report.failures.length || (execute && (siteId ? !report.requested_site_completed : !report.acceptance_verified))) process.exitCode = 1;
+      if (report.failures.length || (verifyOnly && !report.corpus_selection_evidence_verified)
+          || (execute && (siteId ? !report.requested_site_completed : !report.acceptance_verified))) process.exitCode = 1;
     }
   } catch (error) {
     console.error(`STAGED_CORPUS_BLOCKED: ${error instanceof CorpusEvidenceError ? error.message : "corpus_input_or_artifact_error"}`);

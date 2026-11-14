@@ -172,6 +172,23 @@ else
   fail "Ready revision Base44 routing is unverified or points at a foreign app/origin"
 fi
 
+# Also bind the Ready revision's IMAGE, runtime identity, source SHA, limits
+# and signing-key *reference* to explicit release expectations. The service's
+# desired template can already be updated while latestReadyRevisionName still
+# denotes the old worker. That would otherwise make this verifier say PASS.
+# No signing-key payload is accessed or printed.
+if [ -z "$REV" ] || [ -z "${REVISION_JSON:-}" ]; then
+  fail "cannot attest exact Ready revision image, worker identity and signing metadata"
+elif printf "%s" "$REVISION_JSON" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_worker_ready_revision_core.py" \
+    --revision "$REV" --image "$EXPECTED_IMAGE" \
+    --runtime-sa "$EXPECTED_RUNTIME_SA" --invoker-sa "$EXPECTED_INVOKER_SA" \
+    --source-sha "$EXPECTED_SOURCE_SHA" --signing-secret "$EXPECTED_SIGNING_SECRET" \
+    --signing-version "$EXPECTED_SIGNING_VERSION" >/dev/null; then
+  pass "Ready revision image, runtime identity and signing metadata match the pinned release"
+else
+  fail "Ready revision core identity is unverified or differs from the pinned release"
+fi
+
 echo
 echo "=== 3. Runtime configuration ==="
 SA=$(jqq "d['spec']['template']['spec'].get('serviceAccountName','')")

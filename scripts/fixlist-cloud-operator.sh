@@ -541,9 +541,13 @@ def safe_run_url(url):
             or canonical.netloc != canonical.hostname or canonical.path
             or canonical.query or canonical.fragment):
         return False
-    # 100%-serving revisions can use only the canonical service URL.
+    # The canonical URL is only evidence for the revision actually serving
+    # 100%. A forged zero-traffic tag entry pointing at the canonical URL
+    # must not let the candidate probe accidentally attest the serving worker.
     if url == canonical_url:
-        return True
+        return any(isinstance(entry, dict) and entry.get("revisionName") == revision
+                   and type(entry.get("percent")) is int and entry["percent"] == 100
+                   for entry in status.get("traffic") or [])
     # Zero-traffic revisions must use a tag on *the same* Cloud Run service.
     # Merely trusting a URL ending in .run.app can route the ID token to
     # another project's service if traffic metadata is malformed.

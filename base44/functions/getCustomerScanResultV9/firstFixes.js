@@ -16,6 +16,7 @@ const factorScore = fix => {
   const value = fix?.stage3_priority_factors?.priority_factor_score ?? fix?.raw_finding?.stage3_delivery?.priority_factors?.priority_factor_score;
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 };
+const limitedPriority = new Map([["critical", 0], ["high", 1], ["medium", 2], ["low", 3]]);
 
 export function topFixIds(fixes = [], { handoff } = {}) {
   const roots = new Map((Array.isArray(handoff?.fixes) ? handoff.fixes : [])
@@ -48,7 +49,14 @@ export function topFixIds(fixes = [], { handoff } = {}) {
 }
 
 export function withFirstFixes(projection, run = {}) {
-  if (run.page_cap !== undefined && (projection.authority_verified || projection.result_integrity_verified)) {
+  if (run.page_cap !== undefined && projection.result_integrity_verified && !projection.authority_verified) {
+    // Limited seals carry priority and rule, but do not carry Stage 3 ranks or
+    // owner-action claims. Select using only the verified limited-result fields.
+    const fixes = (projection.fixItems || []).map(fix => ({ fix_id: fix.fix_id, rule: fix.rule, priority: fix.priority }));
+    fixes.sort((left, right) => (limitedPriority.get(left.priority) ?? 4) - (limitedPriority.get(right.priority) ?? 4));
+    return { ...projection, top_fix_ids: topFixIds(fixes) };
+  }
+  if (run.page_cap !== undefined && projection.authority_verified) {
     const handoff = run?.health_score_explanation?.stage3_delivery?.handoff_v2_source;
     return {...projection, top_fix_ids: topFixIds(projection.fixItems || [], { handoff })};
   }

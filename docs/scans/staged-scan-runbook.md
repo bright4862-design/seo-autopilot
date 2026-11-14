@@ -163,7 +163,7 @@ Before expanding the cohort, verify:
 - Deleting terminal scan history writes a scan-wide tombstone, drains active leases for 450 seconds, and completes workspace cleanup across every attempt before deleting the customer record; transient cleanup failure remains retryable and does not claim deletion succeeded.
 - Review wall time and aggregate worker memory fit the current limits on representative 500-page evidence. Run the 50-site selection/coverage corpus before enabling the 500 tier broadly.
 
-After the reviewed 500-cap corpus reaches terminal outcomes, run the read-only verification from the exact source checkout with full Git history and read access to its private GCS workspace. Use a new output path outside the checkout.
+After the reviewed 500-cap corpus reaches terminal outcomes, run the read-only verification from the exact source checkout with full Git history and read access to its private GCS workspace. Put the scanner's Python environment first on `PATH` and use a new output path outside the checkout.
 
 ```sh
 node scripts/run-staged-scan-corpus.mjs --verify-completed \

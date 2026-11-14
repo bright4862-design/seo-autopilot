@@ -97,8 +97,10 @@ if printf "%s" "$DESCRIBE" | python3 scripts/verify_worker_invoker_iam.py >/dev/
 else
   fail "Cloud Run invoker IAM check is disabled or metadata is ambiguous"
 fi
-# Service-level IAM bindings are one additional privacy signal; effective
-# inherited grants and request-path behavior require separate verification.
+# Service-level IAM bindings are one additional privacy signal. Reject all
+# public principals rather than guessing which predefined or custom roles can
+# include run.routes.invoke. Inherited non-public grants and request-path
+# behavior still require separate verification.
 if ! POLICY=$(gcloud run services get-iam-policy "$WORKER_SERVICE" \
   --region="$REGION" --project="$PROJECT" --format=json 2>/dev/null); then
   echo "Could not read the worker IAM policy; privacy and invoker identity are unverified."
@@ -123,8 +125,11 @@ for binding in bindings:
     members = binding.get("members", [])
     if not isinstance(members, list):
         raise ValueError("members is not a list")
+    # Any public principal binding is unsafe for this private worker.
+    # roles/run.servicesInvoker also grants run.routes.invoke, and custom
+    # roles can make a role-name allowlist incomplete.
+    public = public or any(m in ("allUsers", "allAuthenticatedUsers") for m in members)
     if binding.get("role") == "roles/run.invoker":
-        public = public or any(m in ("allUsers", "allAuthenticatedUsers") for m in members)
         exact_invoker = exact_invoker or expected in members
 print(("PUBLIC" if public else "PRIVATE") + " " + ("INVOKER_OK" if exact_invoker else "INVOKER_MISSING"))
 ' 2>/dev/null) || {
@@ -133,10 +138,10 @@ print(("PUBLIC" if public else "PRIVATE") + " " + ("INVOKER_OK" if exact_invoker
 }
 case "$IAM_RESULT" in
   "PRIVATE INVOKER_OK")
-    pass "no public principal holds roles/run.invoker"
+    pass "no public principal appears in worker service IAM policy"
     pass "exact invoker holds roles/run.invoker"
     ;;
-  "PUBLIC "*) fail "service is PUBLIC (allUsers/allAuthenticatedUsers hold roles/run.invoker)" ;;
+  "PUBLIC "*) fail "worker service IAM has a public principal (role may permit invocation)" ;;
   "PRIVATE INVOKER_MISSING")
     fail "expected invoker serviceAccount:$EXPECTED_INVOKER_SA does not hold roles/run.invoker"
     ;;

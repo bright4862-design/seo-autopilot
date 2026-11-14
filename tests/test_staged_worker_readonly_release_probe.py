@@ -1,5 +1,7 @@
 """Zero-traffic candidate attribution and the separate owner-only probe path."""
 from pathlib import Path
+import json
+import subprocess
 import sys
 
 import pytest
@@ -154,4 +156,41 @@ def test_tag_cannot_be_derived_from_noncanonical_service_origin(origin):
     service["status"]["url"] = origin
     with pytest.raises(CandidateNotIsolated, match="service_origin_invalid"):
         verify_tagged_zero_traffic(service, REVISION)
+
+
+
+def resolve_authenticated_probe_destination(tmp_path, service, revision, requested_url):
+    """Execute the operator's actual inline Python URL resolver without GCP."""
+    script = (ROOT / "scripts/fixlist-cloud-operator.sh").read_text()
+    start = script.index("# runtime-revision-probe-url")
+    end = script.index("\nPY\n)", start)
+    source = script[start:end]
+    fixture = tmp_path / "service.json"
+    fixture.write_text(json.dumps(service))
+    completed = subprocess.run(
+        [sys.executable, "-c", source, str(fixture), revision, requested_url],
+        text=True, capture_output=True, check=True,
+    )
+    return completed.stdout.strip()
+
+
+def test_runtime_resolver_accepts_only_same_service_candidate_tag(tmp_path):
+    service = tagged_candidate()
+    assert resolve_authenticated_probe_destination(tmp_path, service, REVISION, TAG_URL) == TAG_URL
+    service["status"]["traffic"][1]["url"] = "https://foreign-service.a.run.app"
+    assert resolve_authenticated_probe_destination(
+        tmp_path, service, REVISION, "https://foreign-service.a.run.app"
+    ) == ""
+
+
+def test_runtime_resolver_accepts_valid_serving_and_revision_specific_canary(tmp_path):
+    service = tagged_candidate()
+    assert resolve_authenticated_probe_destination(
+        tmp_path, service, SERVING, service["status"]["url"]
+    ) == service["status"]["url"]
+    tag = "canary-00101-zh2"
+    url = f"https://{tag}---fixlist-standard150-worker.example.a.run.app"
+    service["status"]["traffic"][1].update(tag=tag, url=url)
+    assert resolve_authenticated_probe_destination(tmp_path, service, REVISION, url) == url
+    assert resolve_authenticated_probe_destination(tmp_path, service, REVISION, TAG_URL) == ""
 

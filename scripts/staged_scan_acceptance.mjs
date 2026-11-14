@@ -27,7 +27,27 @@ const digest = value => sha256(JSON.stringify(canonical(value)));
 const id = value => typeof value === "string" && /^[A-Za-z0-9_-]{6,160}$/.test(value);
 const percent = row => row?.percent === undefined ? 0 : Number.isInteger(row.percent) && row.percent >= 0 && row.percent <= 100 ? row.percent : NaN;
 const origin = value => { try { const url = new URL(value); return url.protocol === "https:" && !url.username && !url.password && !url.hash ? url.href : ""; } catch { return ""; } };
-const workerEnvKeys = ["SCAN_WORKSPACE_BUCKET", "SCAN_TASKS_PROJECT", "SCAN_TASKS_LOCATION", "SCAN_STAGE_QUEUE", "SCAN_STAGE_TASKS_QUEUE_PATH", "SCAN_STAGE_TARGET_URL", "SCAN_STAGE_TOKEN_AUDIENCE", "SCAN_PIPELINE_MODE", "SCAN_STAGED_OWNER_IDS"];
+const ownerIdPattern = /^[A-Za-z0-9_-]{6,64}$/;
+const workerProject = "seo-autopilot-501517";
+const workerRegion = "europe-west1";
+const stageQueueName = "fixlist-scan-stages";
+
+function reviewedWorkerEnvironment(sourceSha, workerOrigin) {
+  if (typeof workerOrigin !== "string" || !/^https:\/\/[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.run\.app$/.test(workerOrigin) || workerOrigin.includes("---")) return null;
+  const target = `https://staged-${sourceSha.slice(0, 12)}---${workerOrigin.slice("https://".length)}`;
+  if (new URL(target).hostname.split(".").some(label => !label || label.length > 63)) return null;
+  return {
+    SCAN_WORKSPACE_BUCKET: `fixlist-scan-workspaces-${workerProject}`,
+    SCAN_TASKS_PROJECT: workerProject,
+    SCAN_TASKS_LOCATION: workerRegion,
+    SCAN_STAGE_QUEUE: stageQueueName,
+    SCAN_STAGE_TASKS_QUEUE_PATH: `projects/${workerProject}/locations/${workerRegion}/queues/${stageQueueName}`,
+    SCAN_STAGE_TARGET_URL: target,
+    SCAN_STAGE_TOKEN_AUDIENCE: workerOrigin,
+    SCAN_PIPELINE_MODE: "monolith",
+    SCAN_STAGED_OWNER_IDS: "",
+  };
+}
 
 export function validatePrerequisites(packet, expected) {
   const failures = [], add = (condition, code) => { if (!condition) failures.push(code); };
@@ -77,27 +97,33 @@ export function validatePrerequisites(packet, expected) {
     add(env[component === "worker" ? "FIXLIST_WORKER_SOURCE_SHA" : "FIXLIST_GATEWAY_SOURCE_SHA"] === expected.sourceSha && observation?.runtime?.source_sha === expected.sourceSha, `${component}_source_mismatch`);
   }
   const worker = packet?.worker, gateway = packet?.gateway, workerEnv = environments.worker || {}, gatewayEnv = environments.gateway || {};
-  const ownerIds = String(workerEnv.SCAN_STAGED_OWNER_IDS || "").split(",").filter(Boolean).sort();
-  const cohort = sha256(JSON.stringify(ownerIds));
-  add(ownerIds.length >= 1 && ownerIds.length <= 5 && new Set(ownerIds).size === ownerIds.length && ownerIds.every(id) && ownerIds.includes(expected.ownerId) && workerEnv.SCAN_PIPELINE_MODE === "staged", "worker_cohort_mismatch");
-  add(gatewayEnv.SCAN_PIPELINE_MODE === "staged" && JSON.stringify(String(gatewayEnv.SCAN_STAGED_OWNER_IDS || "").split(",").filter(Boolean).sort()) === JSON.stringify(ownerIds), "gateway_cohort_mismatch");
+  const owner = expected.ownerId;
+  const cohort = sha256(JSON.stringify([owner]));
+  add(typeof owner === "string" && ownerIdPattern.test(owner) && workerEnv.SCAN_STAGED_OWNER_IDS === owner
+    && workerEnv.SCAN_PIPELINE_MODE === "staged" && !workerEnv.SCAN_PIPELINE_OWNER_IDS, "worker_cohort_mismatch");
+  add(gatewayEnv.SCAN_PIPELINE_MODE === "staged" && gatewayEnv.SCAN_STAGED_OWNER_IDS === owner, "gateway_cohort_mismatch");
   for (const name of STAGED_RELEASE_FUNCTIONS) {
     const observed = packet?.base44_configuration?.function_environments?.[name];
-    add(observed?.SCAN_PIPELINE_MODE === "staged" && JSON.stringify(String(observed?.SCAN_STAGED_OWNER_IDS || "").split(",").filter(Boolean).sort()) === JSON.stringify(ownerIds), `base44_cohort_mismatch:${name}`);
+    add(observed?.SCAN_PIPELINE_MODE === "staged" && observed?.SCAN_STAGED_OWNER_IDS === owner, `base44_cohort_mismatch:${name}`);
   }
-  const config = Object.fromEntries(workerEnvKeys.map(key => [key, workerEnv[key]]));
-  const configDigest = digest({ source_sha: expected.sourceSha, environment: config });
-  add(workerEnvKeys.every(key => typeof workerEnv[key] === "string" && workerEnv[key]) && workerEnv.FIXLIST_STAGED_CONFIG_SHA256 === configDigest, "worker_configuration_digest_mismatch");
+  // The worker stamp binds the reviewed inactive environment. Only mode and
+  // cohort may differ on the active revision, and both were checked above.
+  const reviewed = /^[a-f0-9]{40}$/.test(expected.sourceSha) ? reviewedWorkerEnvironment(expected.sourceSha, worker?.service?.status?.url) : null;
+  const configDigest = reviewed ? digest({ source_sha: expected.sourceSha, environment: reviewed }) : null;
+  add(Boolean(configDigest) && workerEnv.FIXLIST_STAGED_CONFIG_SHA256 === configDigest, "worker_configuration_digest_mismatch");
+  add(Boolean(reviewed) && Object.entries(reviewed).every(([key, value]) =>
+    key === "SCAN_PIPELINE_MODE" || key === "SCAN_STAGED_OWNER_IDS" || workerEnv[key] === value), "worker_configuration_drift");
   const traffic = worker?.service?.status?.traffic || [];
   add(Boolean(origin(worker?.probe_url)) && traffic.every(row => Number.isFinite(percent(row))) && traffic.some(row => row.revisionName === worker?.revision?.metadata?.name && row.url === worker?.probe_url && percent(row) === 0) && !traffic.some(row => row.revisionName === worker?.revision?.metadata?.name && percent(row) !== 0), "worker_tag_mapping_mismatch");
-  add(traffic.some(row => row.revisionName === worker?.revision?.metadata?.name && row.url === workerEnv.SCAN_STAGE_TARGET_URL), "stage_target_mapping_mismatch");
+  add(traffic.some(row => row.revisionName === worker?.revision?.metadata?.name
+    && row.tag === `staged-${expected.sourceSha?.slice(0, 12)}` && row.url === workerEnv.SCAN_STAGE_TARGET_URL), "stage_target_mapping_mismatch");
   add(workerEnv.SCAN_STAGE_TOKEN_AUDIENCE === worker?.service?.status?.url && Boolean(origin(worker?.service?.status?.url)) && workerEnv.SCAN_STAGE_TASKS_QUEUE_PATH === `projects/${workerEnv.SCAN_TASKS_PROJECT}/locations/${workerEnv.SCAN_TASKS_LOCATION}/queues/${workerEnv.SCAN_STAGE_QUEUE}`, "worker_stage_resource_identity_mismatch");
   add((worker?.runtime?.fingerprint || worker?.runtime?.beta_revision_fingerprint) === expected.fingerprint, "worker_fingerprint_mismatch");
   const health = gateway?.runtime || {};
-  add(health.ok === true && health.revision === gateway?.revision?.metadata?.name && health.pipeline_mode === "staged" && health.staged_owner_count === ownerIds.length && health.staged_owner_cohort_sha256 === cohort, "gateway_runtime_identity_mismatch");
+  add(health.ok === true && health.revision === gateway?.revision?.metadata?.name && health.pipeline_mode === "staged" && health.staged_owner_count === 1 && health.staged_owner_cohort_sha256 === cohort, "gateway_runtime_identity_mismatch");
   const gatewayTraffic = gateway?.service?.status?.traffic || [];
   add(gatewayTraffic.every(row => Number.isFinite(percent(row))) && gatewayTraffic.reduce((total, row) => total + percent(row), 0) === 100 && gatewayTraffic.filter(row => row.revisionName === health.revision).reduce((total, row) => total + percent(row), 0) === 100, "gateway_serving_revision_mismatch");
-  add(health.canary_worker_origin === worker?.probe_url && health.canary_owner_count === ownerIds.length && gatewayEnv.SCAN_CANARY_WORKER_ORIGIN === worker?.probe_url && JSON.stringify(String(gatewayEnv.SCAN_CANARY_OWNER_USER_IDS || "").split(",").filter(Boolean).sort()) === JSON.stringify(ownerIds), "gateway_canary_route_mismatch");
+  add(health.canary_worker_origin === worker?.probe_url && health.canary_owner_count === 1 && gatewayEnv.SCAN_CANARY_WORKER_ORIGIN === worker?.probe_url && gatewayEnv.SCAN_CANARY_OWNER_USER_IDS === owner, "gateway_canary_route_mismatch");
   const infra = packet?.infrastructure, stageQueue = infra?.queue, bucket = infra?.bucket;
   fresh(infra, "infrastructure_missing_or_stale");
   add(stageQueue?.name === workerEnv.SCAN_STAGE_TASKS_QUEUE_PATH && stageQueue?.state === "RUNNING" && stageQueue?.rateLimits?.maxConcurrentDispatches === 40 && stageQueue?.retryConfig?.maxAttempts === 10 && stageQueue?.retryConfig?.minBackoff === "10s" && stageQueue?.retryConfig?.maxBackoff === "120s" && stageQueue?.retryConfig?.maxDoublings === 4 && stageQueue?.retryConfig?.maxRetryDuration === "1800s" && !stageQueue?.httpTarget, "stage_queue_contract_mismatch");

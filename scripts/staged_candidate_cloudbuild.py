@@ -139,9 +139,32 @@ def _traffic_projection(rows, name):
     return sorted(weights), tags
 
 
+def _service_reconciled(service):
+    """Do not confuse equal traffic snapshots with a reconciled Ready service."""
+    metadata, status = service.get("metadata"), service.get("status")
+    require(isinstance(metadata, dict) and isinstance(status, dict), "Worker service reconciliation metadata is missing")
+
+    def generation(value):
+        # The v1 API's integer generation can also be represented as a decimal
+        # JSON string by clients; reject booleans, zero, floats and placeholders.
+        valid = (type(value) is int and value > 0) or (
+            type(value) is str and re.fullmatch(r"[1-9][0-9]*", value) is not None)
+        require(valid, "Worker service generation is missing or ambiguous")
+        return int(value)
+
+    require(generation(metadata.get("generation")) == generation(status.get("observedGeneration")),
+            "Worker service generation has not reconciled")
+    conditions = status.get("conditions")
+    require(isinstance(conditions, list), "Worker service Ready condition is missing")
+    ready = [row for row in conditions if isinstance(row, dict) and row.get("type") == "Ready"]
+    require(len(ready) == 1 and ready[0].get("status") == "True",
+            "Worker service is not Ready or Ready condition is ambiguous")
+
+
 def traffic_state(service):
-    """Refuse to tag while desired and observed Cloud Run routing disagree."""
+    """Refuse to tag without reconciled Ready state and desired/observed traffic parity."""
     require(isinstance(service, dict), "Worker service readback is invalid")
+    _service_reconciled(service)
     desired = _traffic_projection((service.get("spec") or {}).get("traffic"), "desired")
     observed = _traffic_projection((service.get("status") or {}).get("traffic"), "observed")
     require(desired == observed, "Worker desired/observed traffic is reconciling")

@@ -1,6 +1,7 @@
 """Recovery protocol checks independent of the HTTP crawler and cloud services."""
 import asyncio
 from dataclasses import dataclass, field
+from re import fullmatch
 
 import pytest
 
@@ -234,7 +235,41 @@ async def test_crashed_delivery_lease_expires_and_is_resumed(h):
     await h.store.write(h.prefix + "frontier.json", crashed, generation=stored.generation)
     h.now += STAGE_LEASE_SECONDS + 1
     await h.run("batch", batch=0)
-    assert (await h.frontier()).value["pages_crawled"] == 50
+    frontier = (await h.frontier()).value
+    assert frontier["pages_crawled"] == 50
+    assert frontier["telemetry_history_complete"] is False
+
+
+@pytest.mark.asyncio
+async def test_telemetry_history_is_bounded_without_interrupting_scans(h, monkeypatch):
+    monkeypatch.setattr("app.staged_scan.MAX_RECORDED_DELIVERIES", 1)
+    await h.run("plan")
+    await h.run("batch", batch=0)
+    frontier = (await h.frontier()).value
+    assert frontier["pages_crawled"] == 50
+    assert len(frontier["telemetry_delivery_ids"]) == 1
+    assert frontier["telemetry_history_complete"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "malformed",
+    [None, 5, "not-a-list", {"entry": "a" * 32}, [], ["a" * 32, None], ["bad/id"], ["a" * 32] * 2],
+)
+async def test_malformed_telemetry_history_does_not_strand_a_scan(h, malformed):
+    await h.run("plan")
+    key = h.prefix + "frontier.json"
+    stored = await h.frontier()
+    await h.store.write(
+        key, {**stored.value, "telemetry_delivery_ids": malformed}, generation=stored.generation,
+    )
+
+    assert (await h.run("batch", batch=0))["success"] is True
+    frontier = (await h.frontier()).value
+    assert frontier["pages_crawled"] == 50
+    assert frontier["telemetry_history_complete"] is False
+    [delivery_id] = frontier["telemetry_delivery_ids"]
+    assert fullmatch(r"[a-f0-9]{32}", delivery_id)
 
 
 @pytest.mark.asyncio
@@ -297,6 +332,83 @@ async def test_terminal_duplicate_finalize_is_inert(h):
     assert h.results[0]["normalized_domain"] == "example.com"
 
 
+@pytest.mark.asyncio
+async def test_committed_stage_receipts_are_bound_to_the_workspace_and_runtime(h, monkeypatch):
+    from hashlib import sha256
+
+    from app import staged_telemetry
+
+    monkeypatch.setenv("FIXLIST_WORKER_SOURCE_SHA", "a" * 40)
+    monkeypatch.setenv("FIXLIST_STAGED_CONFIG_SHA256", "b" * 64)
+    monkeypatch.setenv("K_REVISION", "worker-00100-bbc")
+    monkeypatch.setenv("K_SERVICE", "worker")
+    monkeypatch.setenv("SCAN_PIPELINE_MODE", "staged")
+    monkeypatch.setenv("SCAN_STAGED_OWNER_IDS", "owner_two,owner_one")
+    monkeypatch.setattr(staged_telemetry, "measure_worker_peak_memory_bytes", lambda: 42_000_000)
+
+    async def review(result):
+        staged_telemetry.active_delivery.get().observe_review_memory(112_000_000)
+        return {"success": True}
+
+    async def complete(client, scan, result, key, *, review):
+        return await h.complete(client, scan, result, key)
+
+    h.deps.review, h.deps.complete = review, complete
+    await h.run("plan")
+    for batch in range(3):
+        await h.run("batch", batch=batch)
+    await h.run("finalize", batch=3)
+
+    frontier = (await h.frontier()).value
+    references = [frontier["plan_receipt_ref"], *(entry["receipt_ref"] for entry in frontier["committed_batches"]),
+                  frontier["finalize_receipt_ref"]]
+    assert len(set(references)) == 5
+    receipts = [(await h.store.read(h.prefix + ref)).value for ref in references]
+    assert frontier["telemetry_history_complete"] is True
+    assert frontier["telemetry_delivery_ids"] == [receipt["delivery_id"] for receipt in receipts]
+    lease_generations = [int(receipt["lease_generation"]) for receipt in receipts]
+    assert lease_generations == sorted(set(lease_generations))
+    assert [(r["stage"], r["batch"]) for r in receipts] == [
+        ("plan", 0), ("batch", 0), ("batch", 1), ("batch", 2), ("finalize", 3),
+    ]
+    assert all(r["stage_committed"] and r["scan_id"] == h.scan["id"] and r["attempt"] == 1 for r in receipts)
+    assert all(r["request_id_sha256"] == sha256(h.scan["request_id"].encode()).hexdigest() for r in receipts)
+    assert all(r["runtime"] == {
+        "source_sha": "a" * 40, "staged_config_sha256": "b" * 64,
+        "revision": "worker-00100-bbc", "service": "worker",
+        "release_fingerprint": staged_telemetry.live_revision()["fingerprint"],
+        "pipeline_mode": "staged",
+        "staged_owner_cohort_sha256": sha256(b'["owner_one","owner_two"]').hexdigest(),
+    } for r in receipts)
+    for receipt, ref in zip(receipts, references, strict=True):
+        start = await h.store.read(h.prefix + ref.replace(".finished.", ".started."))
+        assert start.value["delivery_id"] == receipt["delivery_id"]
+        assert receipt["memory"]["parent_rss_peak_bytes"] == 42_000_000
+        assert h.job["website_url"] not in str(receipt)
+        assert "owner_one" not in str(receipt)
+    assert receipts[-1]["memory"]["parent_and_review_child_rss_peak_bytes"] == 112_000_000
+    assert receipts[-1]["artifacts"]["review"] == {
+        "generation": str((await h.store.read(h.prefix + "review.json.gz")).generation), "produced": True,
+    }
+    assert await h.run("finalize", batch=3) == {
+        "success": True, "skipped": "already_terminal", "status": "complete",
+    }
+    assert len(await h.store.keys(h.prefix + "receipts/")) == 10
+
+
+@pytest.mark.asyncio
+async def test_missing_finished_receipt_does_not_block_the_committed_plan(h):
+    h.store.fail_once = lambda key, value: key.endswith(".finished.json.gz")
+    assert (await h.run("plan"))["success"] is True
+    frontier = (await h.frontier()).value
+    ref = h.prefix + frontier["plan_receipt_ref"]
+    assert await h.store.read(ref.replace(".finished.", ".started."))
+    assert await h.store.read(ref) is None
+    assert frontier["telemetry_history_complete"] is True
+    assert frontier["telemetry_delivery_ids"][0] in ref
+    assert ("batch", 0) in h.dispatcher.tasks
+
+
 def test_missing_domain_is_derived_from_frozen_server_url(h):
     h.scan["website_url"] = "https://frozen.example.com/section"
     h.job["website_url"] = "https://task.example.com/other"
@@ -331,6 +443,17 @@ async def test_authority_retry_reuses_persisted_result_and_review(h):
     await h.run("finalize", batch=3)
     assert reviewed == [120]
     assert len(completed) == 2 and completed[0] == completed[1]
+    finished = [
+        (await h.store.read(key)).value for key in await h.store.keys(h.prefix + "receipts/")
+        if key.endswith(".finished.json.gz")
+    ]
+    retry = [r for r in finished if r["stage"] == "finalize" and r["stage_committed"]][0]
+    producer = [r for r in finished if r["stage"] == "finalize" and not r["stage_committed"]][0]
+    for artifact in ("result", "review"):
+        assert producer["artifacts"][artifact]["produced"] is True
+        assert retry["artifacts"][artifact] == {
+            "generation": producer["artifacts"][artifact]["generation"], "produced": False,
+        }
 
 
 @pytest.mark.parametrize("change,expected", [({"attempt_count": 2}, "superseded_attempt"), ({"status": "cancelled"}, "already_terminal"), ({"owner_user_id": "other-owner"}, "identity_mismatch")])

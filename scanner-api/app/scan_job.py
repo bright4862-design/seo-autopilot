@@ -35,6 +35,7 @@ from .acceptance_evidence import (
 from .observability import emit
 from .page_output_privacy import project_scan_result_for_external_boundary
 from .scan_limits import current_page_cap, page_cap_for_mode, scan_page_limit
+from .staged_telemetry import COMPLETION_FUNCTIONS, active_delivery
 
 WORKER_VERSION = "scan_job_worker_v1_cloud_tasks"
 CONTROL_VERSION = "durable_standard150_control_v1"
@@ -151,10 +152,16 @@ async def invoke_function(
     timeout: float = HANDOFF_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Call one Base44-hosted function with a signed worker envelope."""
+    delivery = active_delivery.get()
     try:
-        response = await client.post(
-            _function_url(name), headers=_service_headers(), json=payload, timeout=timeout
-        )
+        url, headers = _function_url(name), _service_headers()
+        if delivery is not None and name in COMPLETION_FUNCTIONS:
+            request = client.build_request("POST", url, headers=headers, json=payload, timeout=timeout)
+            delivery.observe_completion_request(name, request.content)
+            response = await client.send(request)
+            delivery.observe_completion_response(response.status_code)
+        else:
+            response = await client.post(url, headers=headers, json=payload, timeout=timeout)
     except httpx.HTTPError:
         return {"status_code": 503, "body": {}}
     try:
@@ -816,6 +823,9 @@ def run_local_review_isolated(
         sampled = measure_worker_peak_memory_bytes(child_pid=process.pid)
         if sampled is not None:
             review_peak_memory_bytes = max(review_peak_memory_bytes or 0, sampled)
+            delivery = active_delivery.get()
+            if delivery is not None:
+                delivery.observe_review_memory(sampled)
 
     try:
         sample_review_memory()

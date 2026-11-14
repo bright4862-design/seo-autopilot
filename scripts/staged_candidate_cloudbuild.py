@@ -135,10 +135,15 @@ def tag_candidate(args):
         env = {item.get("name"): item.get("value", "") for item in (revision.get("spec", {}).get("containers") or [{}])[0].get("env", [])}
         if (env.get("FIXLIST_WORKER_SOURCE_SHA") == args.source_sha and env.get("FIXLIST_STAGED_CONFIG_SHA256") == args.digest
                 and env.get("SCAN_PIPELINE_MODE") == expected_mode and env.get("SCAN_STAGED_OWNER_IDS", "") == owner
-                and not env.get("SCAN_PIPELINE_OWNER_IDS")):
+                and not env.get("SCAN_PIPELINE_OWNER_IDS")
+                and (not args.image_ref or (revision.get("status") or {}).get("imageDigest") == args.image_ref)):
             matches.append((revision.get("metadata", {}).get("creationTimestamp", ""), revision.get("metadata", {}).get("name", "")))
     require(bool(matches), "No exact source/configuration staged revision exists")
     candidate = sorted(matches)[-1][1]
+    if args.revision:
+        # The caller already bound this revision to the build's image digest:
+        # it must be the only match, or no tag is touched.
+        require([name for _, name in matches] == [args.revision], "Staged candidate is not the exact revision bound to the built image digest")
     before = cloud("run", "services", "describe", args.worker_service, *scope)
     weights, tags = traffic_state(before)
     require(args.tag not in tags, "Refusing to rebind an existing immutable staged source tag")
@@ -164,6 +169,8 @@ def main(argv=None):
     for name in ("mode", "source-sha", "tag", "digest", "worker-service", "region", "project"):
         item.add_argument("--" + name, required=True)
     item.add_argument("--owners", default="")
+    item.add_argument("--revision", default="")
+    item.add_argument("--image-ref", default="")
     args = parser.parse_args(argv)
     {"prepare": prepare, "validate": validate, "tag": tag_candidate}[args.command](args)
 

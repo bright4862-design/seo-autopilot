@@ -90,6 +90,54 @@ async def test_downtime_consumes_original_scan_budget(mock_network, monkeypatch)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("status", "retry_after", "reason", "recoveries"), [
+    (429, "3600", "rate_limit", 0),
+    (503, "3600", "wall_budget", 0),
+    (429, "200", "", 0),
+    (429, "0", "", 1),
+])
+async def test_only_429_that_blocks_the_scan_deadline_is_throttled(
+    mock_network, monkeypatch, status, retry_after, reason, recoveries,
+):
+    from tests import fixtures as fx
+    origin = "https://staged-throttle.example"
+    urls = [origin + path for path in ("/products", "/products/a", "/products/b", "/products/c")]
+    routes = {
+        origin + "/": fx._html(fx._page("Home", links=urls)),
+        origin + "/sitemap.xml": fx._xml(fx._sitemap(urls)),
+        **{url: fx._html(fx._page(url)) for url in urls},
+    }
+    mock_network(routes)
+    state = await scanner.plan_scan(origin + "/", scan_mode="standard_500", concurrency=1, job_mode=True, staged=True)
+    await scanner.crawl_batch(state, max_pages=1)
+    assert any(page["status_code"] == 200 for page in state.pages)
+
+    target = state.queue[0][-1]
+    healthy = routes[target]
+    routes[target] = {"body": "Unavailable", "status": status, "headers": {"retry-after": retry_after}}
+    original_fetch = scanner.fetch_and_extract
+
+    async def recover_on_retry(client, url, discovery, robots_policy=None):
+        page = await original_fetch(client, url, discovery, robots_policy=robots_policy)
+        if url == target:
+            routes[url] = healthy
+        return page
+
+    monkeypatch.setattr(scanner, "fetch_and_extract", recover_on_retry)
+    monkeypatch.setattr(scanner, "RATE_LIMIT_COOLDOWN_SECONDS", 0.0)
+    await scanner.crawl_batch(state, max_pages=1)
+    restored = scanner.ScanState.from_dict(json.loads(json.dumps(state.to_dict())))
+    assert restored.queue
+    assert restored.completion_reason == reason
+    assert restored.rate_limit_pacer.recovered_count == recoveries
+    if reason:
+        assert restored.limited is True
+    else:
+        restored.timing_budget["crawl_deadline"] = time.monotonic() - 1
+        assert restored.completion_reason == "wall_budget"
+
+
+@pytest.mark.asyncio
 async def test_first_partial_batch_contains_navigation_and_section_heads(mock_network):
     from tests import fixtures as fx
     origin = 'https://priority.example'

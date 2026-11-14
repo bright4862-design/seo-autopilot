@@ -1168,10 +1168,16 @@ async def complete_authority(
         }
 
     if _function_generation.get() == "V9" and result.get("pipeline_limited") is True:
-        # Useful committed evidence survives a wall limit or stalled chain,
-        # while its review can never claim complete/authoritative coverage.
+        # Preserve useful evidence after a wall limit, throttling or stalled
+        # chain while keeping the review provisional.
         reviewed = deepcopy(reviewed)
-        reason = "staged_wall_budget" if result.get("pipeline_limit_reason") == "wall_budget" else "staged_partial_evidence"
+        limit = result.get("pipeline_limit_reason")
+        if limit == "rate_limit" and scan.get("pipeline_mode") == result.get("pipeline_mode") == "staged":
+            reason = "staged_rate_limit"
+        elif limit == "wall_budget":
+            reason = "staged_wall_budget"
+        else:
+            reason = "staged_partial_evidence"
         reviewed.update({"scan_status": "limited", "release_gate_eligible": False,
                          "score_is_provisional": True, "coverage_state": "limited_coverage",
                          "limitation": "The scan stopped early. These findings cover only the pages checked."})

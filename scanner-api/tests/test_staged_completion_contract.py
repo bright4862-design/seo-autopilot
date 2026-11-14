@@ -71,30 +71,43 @@ def test_importance_ranks_repairs_without_overriding_verified_gsc():
 
 
 @pytest.mark.asyncio
-async def test_partial_staged_result_is_demoted_even_when_review_would_be_authoritative(monkeypatch):
+@pytest.mark.parametrize(("limit", "mode", "signed_reason"), [
+    ("rate_limit", "staged", "staged_rate_limit"),
+    ("wall_budget", "staged", "staged_wall_budget"),
+    ("stalled", "staged", "staged_partial_evidence"),
+    ("rate_limit", "monolith", "staged_partial_evidence"),
+])
+async def test_partial_staged_result_seals_only_the_actual_limit(monkeypatch, limit, mode, signed_reason):
     scan = {"id": "scan-partial", "attempt_count": 1, "status": "crawling",
-            "scan_mode": "standard_500", "page_cap": 500,
+            "scan_mode": "standard_500", "page_cap": 500, "pipeline_mode": mode,
             "respect_robots_txt": True, "owner_attested_robots_override": False}
     async def read(client, scan_id):
         return scan
     captured = []
-    async def limited(client, current, result, reviewed, key, **kwargs):
-        captured.append(reviewed)
-        return {"ok": True, "limited": True}
+
+    async def invoke(client, function, envelope):
+        assert function == "persistLimitedScanResultV9"
+        captured.append(envelope)
+        return {"status_code": 200, "body": {"fixListId": "limited-list", "resultIntegrityVerified": True}}
+
     monkeypatch.setattr(scan_job, "read_scan_run", read)
-    monkeypatch.setattr(scan_job, "persist_limited_result", limited)
+    monkeypatch.setattr(scan_job, "invoke_function", invoke)
     review = {"release_gate_eligible": True, "score_is_provisional": False,
               "site_fingerprint": {"coverage_assessment": {"state": "sufficient", "reasons": []}},
               "recommendations": []}
     with scan_job.worker_function_generation("V9"):
         outcome = await scan_job.complete_authority(None, scan, {
-            "pages_crawled": 50, "pipeline_limited": True, "pipeline_limit_reason": "wall_budget",
+            "pages_crawled": 50, "pipeline_mode": "staged", "pipeline_limited": True, "pipeline_limit_reason": limit,
             "respect_robots_txt": True, "owner_attested_robots_override": False,
         }, "key", review=review)
     assert outcome["limited"] is True
-    assert captured[0]["release_gate_eligible"] is False
-    assert captured[0]["coverage_state"] == "limited_coverage"
-    assert captured[0]["site_fingerprint"]["coverage_assessment"]["authoritative"] is False
+    envelope, = captured
+    assert envelope["review"]["release_gate_eligible"] is False
+    assert envelope["review"]["score_is_provisional"] is True
+    assert envelope["review"]["coverage_state"] == "limited_coverage"
+    assert envelope["review"]["coverage_reasons"] == [signed_reason]
+    signed = {key: value for key, value in envelope.items() if key != "proof"}
+    assert envelope["proof"] == scan_job.create_authority_seal(signed, "key")
     assert review["release_gate_eligible"] is True
 
 

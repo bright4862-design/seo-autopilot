@@ -76,7 +76,7 @@ class Harness:
         self.crawl_gate = None
         self.crawl_entered = asyncio.Event()
         self.plan_seconds = 0
-        self.engine_limited = False
+        self.engine_limit_reason = ""
         self.deps = StageDependencies(self.read, self.start, self.progress, self.complete, lambda r: r,
                                       self.fail, State, self.plan, self.crawl, self.finalize)
         self.runtime = StagedScanRuntime(self.store, self.dispatcher, self.deps, clock=lambda: self.now)
@@ -117,9 +117,9 @@ class Harness:
             await self.crawl_gate.wait()
         for _ in range(min(max_pages, len(state.queue))):
             state.pages.append({"url": f"https://example.com/{state.queue.pop(0)}"})
-        if self.engine_limited:
+        if self.engine_limit_reason:
             state.limited = True
-            state.completion_reason = "wall_budget"
+            state.completion_reason = self.engine_limit_reason
 
     async def finalize(self, state):
         return {"success": True, "pages": state.pages, "pages_crawled": len(state.pages)}
@@ -300,12 +300,17 @@ async def test_configured_ten_attempt_retry_schedule_outlives_crashed_lease_and_
     assert h.results[-1]["pages_crawled"] == 100
 
 
-@pytest.mark.parametrize("cause", ["wall_clock", "engine_deadline", "watchdog"])
+@pytest.mark.parametrize(("cause", "result_reason"), [
+    ("wall_clock", "wall_budget"),
+    ("engine_deadline", "wall_budget"),
+    ("rate_limit", "rate_limit"),
+    ("watchdog", "stalled"),
+])
 @pytest.mark.asyncio
-async def test_partial_evidence_finalizes_as_limited(h, cause):
+async def test_partial_evidence_finalizes_as_limited(h, cause, result_reason):
     await h.run("plan")
-    if cause == "engine_deadline":
-        h.engine_limited = True
+    if cause in {"engine_deadline", "rate_limit"}:
+        h.engine_limit_reason = result_reason
     await h.run("batch", batch=0)
     if cause == "wall_clock":
         h.now += 601
@@ -317,6 +322,7 @@ async def test_partial_evidence_finalizes_as_limited(h, cause):
     await h.run("finalize", batch=frontier["batch"])
     assert len(h.results) == 1
     assert h.results[0]["pipeline_limited"] is True
+    assert h.results[0]["pipeline_limit_reason"] == result_reason
     assert h.results[0]["pages_crawled"] == 50
     assert h.scan["status"] == "limited"
 

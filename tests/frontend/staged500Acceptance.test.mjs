@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { localAcceptanceIdentity, validatePrerequisites, executeStaged500Canary, renderRemoteCanary } from "../../scripts/staged_scan_acceptance.mjs";
+import { assemblePrerequisites, localAcceptanceIdentity, validatePrerequisites, executeStaged500Canary, renderRemoteCanary } from "../../scripts/staged_scan_acceptance.mjs";
 import { openCorpusJournal, readSitePrerequisites, validateCorpusManifest, runCorpus, verifyReceiptSummary } from "../../scripts/run-staged-scan-corpus.mjs";
 
 const now = Date.parse("2026-11-12T10:00:00.000Z");
@@ -24,7 +24,7 @@ function prerequisites() {
   const inactiveConfig = { ...observedConfig, SCAN_PIPELINE_MODE: "monolith", SCAN_STAGED_OWNER_IDS: "" };
   const configDigest = hash(JSON.stringify({ environment: JSON.parse(stable(inactiveConfig)), source_sha: sha }));
   env.FIXLIST_STAGED_CONFIG_SHA256 = configDigest;
-  const revision = (name, environment) => ({ metadata: { name }, spec: { serviceAccountName: "worker@example.iam.gserviceaccount.com", containers: [{ env: Object.entries(environment).map(([name, value]) => ({ name, value })) }] }, status: { imageDigest: `image@sha256:${"c".repeat(64)}`, conditions: [{ type: "Ready", status: "True" }] } });
+  const revision = (name, environment) => ({ metadata: { name }, spec: { serviceAccountName: "fixlist-standard150-worker@seo-autopilot-501517.iam.gserviceaccount.com", containers: [{ env: Object.entries(environment).map(([name, value]) => ({ name, value })) }] }, status: { imageDigest: `image@sha256:${"c".repeat(64)}`, conditions: [{ type: "Ready", status: "True" }] } });
   const local = { sourceSha: sha, fingerprint, ownerId: owner, now,
     functions: Object.fromEntries(names.map(name => [name, { build_id: "d".repeat(64), package_digest: "e".repeat(64), runtime_activation_id: `${name}-runtime` }])),
     entitySources: Object.fromEntries(["ScanRun", "FixList", "FixItem", "Access"].map(name => [name, JSON.stringify({ name })])),
@@ -33,11 +33,22 @@ function prerequisites() {
     base44: { schema_version: "fixlist_staged_v9_readiness_v1", source_sha: sha, app_id: "6a498732ec779dfaaeab0e53", candidate_fingerprint: fingerprint, observed_at: stamp.observed_at,
       functions: names.map(name => ({ name, ...local.functions[name], http_status: 405 })) },
     schema_readback: { ...stamp, source_sha: sha, app_id: "6a498732ec779dfaaeab0e53", entity_sources: { ...local.entitySources } },
-    base44_configuration: { ...stamp, source_sha: sha, function_environments: Object.fromEntries(names.map(name => [name, { SCAN_PIPELINE_MODE: "staged", SCAN_STAGED_OWNER_IDS: owner }])) },
+    base44_configuration: { ...stamp, source_sha: sha, intake_route: {
+      schema_version: "fixlist_staged_v9_intake_readback_v1", success: true, observed_at: stamp.observed_at,
+      build_id: local.functions[names[0]].build_id, runtime_activation_id: local.functions[names[0]].runtime_activation_id,
+      release_fingerprint: fingerprint, configured_pipeline_mode: "staged", pipeline_mode: "staged",
+      staged_owner_cohort_state: "explicit", staged_owner_count: 1, staged_owner_cohort_sha256: hash(JSON.stringify([owner])),
+      staged_owner_enabled: true, intake_gate: "enabled", admission_gate: "enabled",
+    } },
     worker: { ...stamp, revision: revision("fixlist-standard150-worker-00105-abc", env), service: { status: { url: "https://worker.run.app", traffic: [{ revisionName: "fixlist-standard150-worker-00105-abc", tag: "canary-00105-abc", url: workerUrl, percent: 0 }, { revisionName: "fixlist-standard150-worker-00105-abc", tag: stageTag, url: stageUrl, percent: 0 }] } }, probe_url: workerUrl, runtime: { source_sha: sha, fingerprint } },
     gateway: { ...stamp, revision: revision("fixlist-dispatch-gateway-g123", { FIXLIST_GATEWAY_SOURCE_SHA: sha, SCAN_PIPELINE_MODE: "staged", SCAN_STAGED_OWNER_IDS: owner, SCAN_CANARY_OWNER_USER_IDS: owner, SCAN_CANARY_WORKER_ORIGIN: workerUrl }), service: { status: { traffic: [{ revisionName: "fixlist-dispatch-gateway-g123", percent: 100 }] } }, runtime: { ok: true, revision: "fixlist-dispatch-gateway-g123", source_sha: sha, pipeline_mode: "staged", staged_owner_count: 1, staged_owner_cohort_sha256: hash(JSON.stringify([owner])), canary_worker_origin: workerUrl, canary_owner_count: 1 } },
-    infrastructure: { ...stamp, queue: { name: queue, state: "RUNNING", rateLimits: { maxConcurrentDispatches: 40 }, retryConfig: { maxAttempts: 10, minBackoff: "10s", maxBackoff: "120s", maxDoublings: 4, maxRetryDuration: "1800s" } }, bucket: { name: env.SCAN_WORKSPACE_BUCKET, iamConfiguration: { uniformBucketLevelAccess: { enabled: true }, publicAccessPrevention: "enforced" }, lifecycle: { rule: [{ action: { type: "Delete" }, condition: { age: 30 } }] } }, task: { httpRequest: { httpMethod: "POST", url: stageUrl + "/scan-batch", oidcToken: { serviceAccountEmail: "invoker@example.iam.gserviceaccount.com", audience: "https://worker.run.app" } }, dispatchDeadline: "480s" }, invoker_service_account: "invoker@example.iam.gserviceaccount.com",
-      bucket_policy: { bindings: [{ role: "roles/storage.objectUser", members: ["serviceAccount:worker@example.iam.gserviceaccount.com"] }] }, queue_policy: { bindings: [{ role: "roles/cloudtasks.enqueuer", members: ["serviceAccount:worker@example.iam.gserviceaccount.com"] }] }, invoker_policy: { bindings: [{ role: "roles/iam.serviceAccountUser", members: ["serviceAccount:worker@example.iam.gserviceaccount.com"] }] } },
+    infrastructure: { ...stamp, queue: { name: queue, state: "RUNNING", rateLimits: { maxConcurrentDispatches: 40 }, retryConfig: { maxAttempts: 10, minBackoff: "10s", maxBackoff: "120s", maxDoublings: 4, maxRetryDuration: "1800s" } }, bucket: { name: env.SCAN_WORKSPACE_BUCKET, iamConfiguration: { uniformBucketLevelAccess: { enabled: true }, publicAccessPrevention: "enforced" }, lifecycle: { rule: [{ action: { type: "Delete" }, condition: { age: 30 } }] } }, task: { schema_version: "staged_scan_task_observation_v1", status: "verified_task_metadata",
+      source_sha: sha, worker_revision: "fixlist-standard150-worker-00105-abc", worker_config_sha256: configDigest, queue_path: queue,
+      observed_at: new Date(now - 3600_000).toISOString(),
+      sample: { task_id: "scan-" + "1".repeat(64), stage: "batch", target: stageUrl + "/scan-batch",
+        oidc_invoker: "fixlist-standard150-invoker@seo-autopilot-501517.iam.gserviceaccount.com",
+        oidc_audience: "https://worker.run.app", dispatch_deadline_seconds: 480, method: "POST" } },
+      bucket_policy: { bindings: [{ role: "roles/storage.objectUser", members: ["serviceAccount:fixlist-standard150-worker@seo-autopilot-501517.iam.gserviceaccount.com"] }] }, queue_policy: { bindings: [{ role: "roles/cloudtasks.enqueuer", members: ["serviceAccount:fixlist-standard150-worker@seo-autopilot-501517.iam.gserviceaccount.com"] }] }, invoker_policy: { bindings: [{ role: "roles/iam.serviceAccountUser", members: ["serviceAccount:fixlist-standard150-worker@seo-autopilot-501517.iam.gserviceaccount.com"] }] } },
   };
   return { data, local };
 }
@@ -112,8 +123,8 @@ test("the worker stamp binds inactive settings while active owner and route agre
   env(gateway, "gateway", "SCAN_STAGED_OWNER_IDS").value = ` ${owner}`;
   assert.ok(validatePrerequisites(gateway, local).failures.includes("gateway_cohort_mismatch"));
   const readback = structuredClone(data);
-  readback.base44_configuration.function_environments[names[0]].SCAN_STAGED_OWNER_IDS = "other_owner";
-  assert.ok(validatePrerequisites(readback, local).failures.includes(`base44_cohort_mismatch:${names[0]}`));
+  readback.base44_configuration.intake_route.staged_owner_cohort_sha256 = hash(JSON.stringify(["other_owner"]));
+  assert.ok(validatePrerequisites(readback, local).failures.includes("base44_intake_cohort_mismatch"));
 });
 
 test("prerequisites reject coerced traffic, conditional retention and mismatched stage resources", () => {
@@ -134,6 +145,37 @@ test("prerequisites reject coerced traffic, conditional retention and mismatched
   bucket.uniform_bucket_level_access = true; bucket.public_access_prevention = "enforced"; bucket.lifecycle_config = bucket.lifecycle;
   delete bucket.iamConfiguration; delete bucket.lifecycle;
   assert.equal(validatePrerequisites(native, local).ready, true);
+});
+
+test("prerequisite assembly uses fresh live reports and preserves the actual task observation time", () => {
+  const { data, local } = prerequisites();
+  const schema = {
+    schema_version: "fixlist_staged_schema_v1", action: "verify", status: "live_match", live_verified: true,
+    readback_verified: true, local_source_verified: true, execution_environment: "production",
+    source_sha: sha, app_id: data.base44.app_id, observed_at: stamp.observed_at,
+    before_schemas: Object.fromEntries(Object.entries(local.entitySources).map(([name, contents]) => [name, JSON.parse(contents)])),
+  };
+  const input = { base44: data.base44, schema, intake: data.base44_configuration.intake_route,
+    cloud: { ...stamp, schema_version: "staged_scan_gcp_observations_v1", source_sha: sha, release_fingerprint: fingerprint,
+      worker: data.worker, gateway: data.gateway, infrastructure: data.infrastructure },
+    task: data.infrastructure.task };
+  const packet = assemblePrerequisites(input, local, now);
+  assert.equal(packet.expires_at, stamp.expires_at);
+  assert.equal(packet.infrastructure.task.observed_at, data.infrastructure.task.observed_at);
+  for (const [key, value] of [
+    ["observed_at", new Date(now - 25 * 3600_000).toISOString()],
+    ["worker_revision", "fixlist-standard150-worker-99999-bbb"],
+    ["worker_config_sha256", "0".repeat(64)],
+  ]) {
+    assert.throws(() => assemblePrerequisites({ ...input, task: { ...input.task, [key]: value } }, local, now),
+      /stage_task_contract_mismatch/);
+  }
+  assert.throws(() => assemblePrerequisites({ ...input, schema: { ...schema, live_verified: false } }, local, now),
+    /live_observations_unverified/);
+  assert.throws(() => assemblePrerequisites({ ...input, intake: { ...input.intake, intake_gate: "disabled" } }, local, now),
+    /base44_intake_cohort_mismatch/);
+  assert.throws(() => assemblePrerequisites({ ...input, cloud: { ...input.cloud, expires_at: stamp.observed_at } }, local, now),
+    /live_observations_stale/);
 });
 
 test("raw schema readbacks compare the migration contract rather than JSON formatting", () => {
@@ -453,6 +495,7 @@ test("a fresh per-site packet can be replaced after expiry without reusing stale
   for (const name of ["base44", "schema_readback", "base44_configuration", "worker", "gateway", "infrastructure"]) {
     updated[name] = { ...data[name], observed_at: updated.observed_at, expires_at: updated.expires_at };
   }
+  updated.base44_configuration.intake_route = { ...data.base44_configuration.intake_route, observed_at: updated.observed_at };
   writeFileSync(path.join(dir, second.site_id + ".json"), JSON.stringify(updated));
   assert.equal(readSitePrerequisites(dir, second, local, later).packet.observed_at, updated.observed_at);
 });
@@ -506,8 +549,11 @@ test("the corpus CLI journals a failed child and preserves its report across a r
     Object.assign(data[key], freshness);
   }
   Object.assign(data, freshness);
+  data.infrastructure.task.observed_at = new Date(Date.now() - 3600_000).toISOString();
   data.base44.functions = names.map(name => ({ name, ...expected.functions[name], http_status: 405 }));
   data.schema_readback.entity_sources = expected.entitySources;
+  Object.assign(data.base44_configuration.intake_route, { observed_at: freshness.observed_at,
+    build_id: expected.functions[names[0]].build_id, runtime_activation_id: expected.functions[names[0]].runtime_activation_id });
   const check = validatePrerequisites(data, expected);
   assert.equal(check.ready, true, check.failures.join(","));
   writeFileSync(path.join(dir, "packets", first.site_id + ".json"), JSON.stringify(data));

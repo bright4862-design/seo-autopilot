@@ -5,12 +5,11 @@
 // Prerequisite packet v1 contains fresh raw observations, not verified:true:
 // base44 = existing fixlist_staged_v9_readiness_v1 report;
 // schema_readback.entity_sources = exact pulled .jsonc file contents;
-// base44_configuration.function_environments = observed staged settings;
+// base44_configuration.intake_route = authenticated V9 intake configuration;
 // worker/gateway = Cloud Run revision+service exports and bound runtime probes;
-// infrastructure = bucket/queue/IAM/existing-task JSON used by the verifier.
+// infrastructure = fresh bucket/queue/IAM plus a source-bound task observation.
 // Every observation has observed_at/expires_at, within a 15 minute window.
-// A producer assembling these observations is still required. Existing schema,
-// Base44 configuration and infrastructure tools do not emit this packet.
+// Assembly validates independent live observations and preserves their capture times.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -20,7 +19,7 @@ import { buildManifest, STAGED_RELEASE_FUNCTIONS, STAGED_RELEASE_ENTITIES } from
 import { diffEntity } from "./base44_authority_schema.mjs";
 
 export const APP_ID = "6a498732ec779dfaaeab0e53";
-export const MISSING_PRODUCERS = ["fresh_prerequisite_packet_collector", "completion_request_byte_measurement", "all_stage_memory_measurement", "per_scan_runtime_revision_receipt"];
+export const MISSING_PRODUCERS = ["deployed_runtime_readbacks", "live_stage_task_observation"];
 const sha256 = value => createHash("sha256").update(value).digest("hex");
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
 const digest = value => sha256(JSON.stringify(canonical(value)));
@@ -31,6 +30,9 @@ const ownerIdPattern = /^[A-Za-z0-9_-]{6,64}$/;
 const workerProject = "seo-autopilot-501517";
 const workerRegion = "europe-west1";
 const stageQueueName = "fixlist-scan-stages";
+const invokerAccount = `fixlist-standard150-invoker@${workerProject}.iam.gserviceaccount.com`;
+const workerAccount = `fixlist-standard150-worker@${workerProject}.iam.gserviceaccount.com`;
+const taskSampleLifetimeMs = 24 * 3600 * 1000;
 
 function reviewedWorkerEnvironment(sourceSha, workerOrigin) {
   if (typeof workerOrigin !== "string" || !/^https:\/\/[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.run\.app$/.test(workerOrigin) || workerOrigin.includes("---")) return null;
@@ -102,10 +104,17 @@ export function validatePrerequisites(packet, expected) {
   add(typeof owner === "string" && ownerIdPattern.test(owner) && workerEnv.SCAN_STAGED_OWNER_IDS === owner
     && workerEnv.SCAN_PIPELINE_MODE === "staged" && !workerEnv.SCAN_PIPELINE_OWNER_IDS, "worker_cohort_mismatch");
   add(gatewayEnv.SCAN_PIPELINE_MODE === "staged" && gatewayEnv.SCAN_STAGED_OWNER_IDS === owner, "gateway_cohort_mismatch");
-  for (const name of STAGED_RELEASE_FUNCTIONS) {
-    const observed = packet?.base44_configuration?.function_environments?.[name];
-    add(observed?.SCAN_PIPELINE_MODE === "staged" && observed?.SCAN_STAGED_OWNER_IDS === owner, `base44_cohort_mismatch:${name}`);
-  }
+  const intake = packet?.base44_configuration?.intake_route;
+  const intakeIdentity = expected.functions?.startStandardScanJobV9;
+  fresh(intake, "base44_intake_runtime_stale", true);
+  add(intake?.schema_version === "fixlist_staged_v9_intake_readback_v1" && intake.success === true
+    && Boolean(intakeIdentity) && intake.build_id === intakeIdentity.build_id
+    && intake.runtime_activation_id === intakeIdentity.runtime_activation_id
+    && intake.release_fingerprint === expected.fingerprint, "base44_intake_identity_mismatch");
+  add(intake?.configured_pipeline_mode === "staged" && intake?.pipeline_mode === "staged"
+    && intake?.staged_owner_cohort_state === "explicit" && intake?.staged_owner_count === 1
+    && intake?.staged_owner_cohort_sha256 === cohort && intake?.staged_owner_enabled === true
+    && intake?.intake_gate === "enabled" && intake?.admission_gate === "enabled", "base44_intake_cohort_mismatch");
   // The worker stamp binds the reviewed inactive environment. Only mode and
   // cohort may differ on the active revision, and both were checked above.
   const reviewed = /^[a-f0-9]{40}$/.test(expected.sourceSha) ? reviewedWorkerEnvironment(expected.sourceSha, worker?.service?.status?.url) : null;
@@ -132,11 +141,23 @@ export function validatePrerequisites(packet, expected) {
   const bucketRules = bucket?.lifecycle_config?.rule ?? bucket?.lifecycle?.rule;
   add(bucket?.name === workerEnv.SCAN_WORKSPACE_BUCKET && bucketUniform === true && bucketPublic === "enforced" && Array.isArray(bucketRules) && bucketRules.some(row => row?.action?.type === "Delete" && Object.keys(row.action).length === 1 && row?.condition?.age === 30 && Object.keys(row.condition).length === 1), "workspace_bucket_contract_mismatch");
   const workerSa = worker?.revision?.spec?.serviceAccountName;
+  add(workerSa === workerAccount, "worker_service_identity_mismatch");
   for (const [policy, role] of [[infra?.bucket_policy, "roles/storage.objectUser"], [infra?.queue_policy, "roles/cloudtasks.enqueuer"], [infra?.invoker_policy, "roles/iam.serviceAccountUser"]]) {
     add(typeof workerSa === "string" && policy?.bindings?.some(row => row.role === role && !row.condition && row.members?.includes(`serviceAccount:${workerSa}`)) && !policy?.bindings?.some(row => row.members?.some(member => ["allUsers", "allAuthenticatedUsers"].includes(member))), `infrastructure_iam_mismatch:${role}`);
   }
-  const request = infra?.task?.httpRequest;
-  add(infra?.task?.dispatchDeadline === "480s" && request?.httpMethod === "POST" && ["/scan-batch", "/scan-finalize"].some(suffix => request?.url === workerEnv.SCAN_STAGE_TARGET_URL + suffix) && request?.oidcToken?.serviceAccountEmail === infra?.invoker_service_account && request?.oidcToken?.audience === workerEnv.SCAN_STAGE_TOKEN_AUDIENCE, "stage_task_contract_mismatch");
+  const task = infra?.task;
+  const sample = task?.sample;
+  const taskObserved = Date.parse(task?.observed_at);
+  add(task?.schema_version === "staged_scan_task_observation_v1" && task.status === "verified_task_metadata"
+    && task.source_sha === expected.sourceSha && task.worker_revision === worker?.revision?.metadata?.name
+    && task.worker_config_sha256 === configDigest && task.queue_path === stageQueue?.name
+    && Number.isFinite(taskObserved) && taskObserved <= now && now - taskObserved <= taskSampleLifetimeMs
+    && /^scan-[a-f0-9]{64}$/.test(sample?.task_id || "")
+    && ["batch", "finalize"].includes(sample?.stage)
+    && sample?.target === `${workerEnv.SCAN_STAGE_TARGET_URL}/scan-${sample?.stage}`
+    && sample?.dispatch_deadline_seconds === 480 && sample?.method === "POST"
+    && sample?.oidc_invoker === invokerAccount && sample?.oidc_audience === workerEnv.SCAN_STAGE_TOKEN_AUDIENCE,
+  "stage_task_contract_mismatch");
   return { ready: failures.length === 0, failures: [...new Set(failures)], missing_producers: MISSING_PRODUCERS, provenance: failures.length ? null : {
     source_sha: expected.sourceSha, release_fingerprint: expected.fingerprint, observed_at: packet.observed_at, expires_at: packet.expires_at,
     worker_revision: worker.revision.metadata.name, gateway_revision: gateway.revision.metadata.name,
@@ -280,6 +301,37 @@ export function localAcceptanceIdentity(root, sourceSha, ownerId) {
   return { sourceSha, ownerId, fingerprint: JSON.parse(fs.readFileSync(path.join(root, "data/beta-crawler-revision.json"), "utf8")).fingerprint, functions, entitySources: Object.fromEntries(STAGED_RELEASE_ENTITIES.map(name => [name, fs.readFileSync(path.join(root, "base44/entities", `${name}.jsonc`), "utf8")])) };
 }
 
+export function assemblePrerequisites({ base44, schema, intake, cloud, task }, expected, now = Date.now()) {
+  if (schema?.schema_version !== "fixlist_staged_schema_v1" || schema.action !== "verify"
+      || schema.status !== "live_match" || schema.live_verified !== true || schema.readback_verified !== true
+      || schema.local_source_verified !== true || schema.execution_environment !== "production"
+      || cloud?.schema_version !== "staged_scan_gcp_observations_v1"
+      || cloud.source_sha !== expected.sourceSha || cloud.release_fingerprint !== expected.fingerprint) {
+    throw new Error("live_observations_unverified");
+  }
+  const sourceTime = [base44, schema, intake, cloud, cloud.worker, cloud.gateway, cloud.infrastructure]
+    .map(record => Date.parse(record?.observed_at));
+  const expires = Math.min(...sourceTime.map(time => time + 900_000),
+    ...[cloud, cloud.worker, cloud.gateway, cloud.infrastructure].map(record => record?.expires_at == null ? Infinity : Date.parse(record.expires_at)));
+  if (!sourceTime.every(Number.isFinite) || !Number.isFinite(expires) || expires <= now) throw new Error("live_observations_stale");
+  const observed_at = new Date(Math.min(now, ...sourceTime)).toISOString();
+  const expires_at = new Date(expires).toISOString();
+  const packet = {
+    schema_version: "staged_scan_acceptance_prerequisites_v1", source_sha: expected.sourceSha,
+    release_fingerprint: expected.fingerprint, observed_at, expires_at,
+    base44: { ...base44, expires_at },
+    schema_readback: { observed_at: schema.observed_at, expires_at, source_sha: schema.source_sha, app_id: schema.app_id,
+      entity_sources: Object.fromEntries(STAGED_RELEASE_ENTITIES.map(name => [name, JSON.stringify(schema.before_schemas?.[name])])) },
+    base44_configuration: { observed_at: intake.observed_at, expires_at, source_sha: expected.sourceSha, intake_route: intake },
+    worker: { ...cloud.worker, expires_at },
+    gateway: { ...cloud.gateway, expires_at },
+    infrastructure: { ...cloud.infrastructure, expires_at, task },
+  };
+  const check = validatePrerequisites(packet, { ...expected, now });
+  if (!check.ready) throw new Error(check.failures.join(","));
+  return packet;
+}
+
 export function writeNewArtifact(output, value, root) {
   if (!path.isAbsolute(output) || !fs.existsSync(path.dirname(output)) || fs.realpathSync(path.dirname(output)) !== path.dirname(output)) throw new Error("artifact_path_invalid");
   const relative = path.relative(fs.realpathSync(root), path.dirname(output));
@@ -291,6 +343,20 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   try {
     const mode = process.argv[2];
     if (mode === "describe-prerequisites") console.log(JSON.stringify({ schema_version: "staged_scan_acceptance_prerequisites_v1", missing_producers: MISSING_PRODUCERS, required_observations: ["base44", "schema_readback", "base44_configuration", "worker", "gateway", "infrastructure"], freshness_seconds: 900 }, null, 2));
+    else if (mode === "assemble-prerequisites") {
+      if (process.argv.length !== 9) throw new Error("expected six paths: package schema intake cloud task output");
+      const [base44File, schemaFile, intakeFile, cloudFile, taskFile, output] = process.argv.slice(3);
+      const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+      const expected = localAcceptanceIdentity(root, process.env.SOURCE_SHA, process.env.EXPECTED_OWNER_USER_ID);
+      const read = file => {
+        if (!path.isAbsolute(file) || !fs.lstatSync(file).isFile() || fs.realpathSync(file) !== file) throw new Error("observation_path_invalid");
+        return JSON.parse(fs.readFileSync(file, "utf8"));
+      };
+      const packet = assemblePrerequisites({ base44: read(base44File), schema: read(schemaFile), intake: read(intakeFile),
+        cloud: read(cloudFile), task: read(taskFile) }, expected);
+      writeNewArtifact(output, packet, root);
+      console.log("STAGED_500_PREREQUISITES_ASSEMBLED");
+    }
     else if (mode === "render") {
       const env = process.env, root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
       const expected = localAcceptanceIdentity(root, env.SOURCE_SHA, env.EXPECTED_OWNER_USER_ID);
@@ -311,6 +377,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
       writeNewArtifact(output, report, path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."));
       console.log(`STAGED_500_REPORT_SAVED outcome=${report.outcome} acceptance_verified=${report.acceptance_verified === true}`);
       if (!report.terminal_outcome_verified) process.exitCode = 1;
-    } else throw new Error("Use render, collect, or describe-prerequisites");
+    } else throw new Error("Use render, collect, assemble-prerequisites, or describe-prerequisites");
   } catch (error) { console.error(`STAGED_500_ACCEPTANCE_BLOCKED: ${error.message}`); process.exitCode = 2; }
 }

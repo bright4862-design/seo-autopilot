@@ -605,10 +605,22 @@ PY
 import json, sys
 
 response_path, recorded_path, expected_sha = sys.argv[1:4]
+# JSON permits duplicate member names, but silently accepting the last value
+# would let a contradictory /revision answer appear consistent with the freeze.
+# Reject duplicates at every level, including inside component_versions.
+def unique_json_members(pairs):
+    obj = {}
+    for key, value in pairs:
+        if key in obj:
+            raise ValueError("duplicate JSON member")
+        obj[key] = value
+    return obj
+
 try:
-    live = json.load(open(response_path, encoding="utf-8"))
-except Exception:
-    print("FAIL: /revision did not return JSON.")
+    with open(response_path, encoding="utf-8") as stream:
+        live = json.load(stream, object_pairs_hook=unique_json_members)
+except (ValueError, TypeError):
+    print("FAIL: /revision returned invalid or ambiguous JSON (duplicate members are not accepted).")
     raise SystemExit(1)
 if not isinstance(live, dict):
     print("FAIL: /revision did not return a JSON object.")

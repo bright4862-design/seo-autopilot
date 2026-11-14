@@ -151,6 +151,7 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
   const report = { schema_version: "staged_500_canary_v1", production_freeze: false, source_sha: config.sourceSha,
     expected_owner_user_id: config.ownerId, project_id: config.projectId, target_url: config.targetUrl, request_id: config.requestId,
     release_fingerprint: null, provenance: config.provenance, observed_at: new Date(now()).toISOString(), scan_id: null,
+    attempt_count: null, scan_started_at: null, scan_completed_at: null,
     terminal_outcome_verified: false, functional_500_verified: false, full_500_gate: false, acceptance_verified: false,
     outcome: "unverified", progress: [], payload_bytes: { customer_projection: null, completion_request: null },
     memory: { finalize_peak_bytes: null, scope: "finalize_only", all_stages_verified: false }, unverified: ["completion_request_byte_measurement", "all_stage_memory_measurement", "per_scan_runtime_revision_receipt"], failure_code: null };
@@ -160,6 +161,14 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
   const unwrap = value => value?.data && typeof value.data === "object" ? value.data : value;
   const integer = value => Number.isInteger(value) && value >= 0;
   const url = value => { try { return new URL(String(value)).href; } catch { return ""; } };
+  function persistedTimestamp(value) {
+    if (typeof value !== "string") return NaN;
+    const match = /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.exec(value);
+    if (!match || match[1].startsWith("0000-")) return NaN;
+    const date = new Date(`${match[1]}T00:00:00Z`);
+    if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== match[1]) return NaN;
+    return Date.parse(value);
+  }
   async function bounded(operation) {
     const remaining = Math.min(30000, deadline - now()); require(remaining > 0, "scan_timeout");
     let timer; try { return await Promise.race([Promise.resolve().then(operation), new Promise((_, reject) => { timer = setTimeout(() => reject(new CanaryCheckError("operation_timeout")), remaining); })]); } finally { clearTimeout(timer); }
@@ -215,8 +224,14 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
     report.payload_bytes.customer_projection = new TextEncoder().encode(JSON.stringify(projection)).byteLength;
     const memory = projection.run.worker_peak_memory_bytes ?? projection.run.peak_memory_bytes;
     report.memory.finalize_peak_bytes = typeof memory === "number" && Number.isFinite(memory) && memory > 0 ? memory : null;
-    report.duration_ms = Date.parse(run.completed_at || "") - Date.parse(run.started_at || "");
+    require(integer(run.attempt_count) && run.attempt_count > 0 && run.attempt_count < 2 ** 31, "scan_attempt_unverified");
+    const startedAt = persistedTimestamp(run.started_at);
+    const completedAt = persistedTimestamp(run.completed_at);
+    report.duration_ms = Number.isFinite(startedAt) && Number.isFinite(completedAt) ? completedAt - startedAt : null;
     require(Number.isFinite(report.duration_ms) && report.duration_ms > 0 && report.duration_ms <= 1800000, "duration_unverified");
+    report.attempt_count = run.attempt_count;
+    report.scan_started_at = run.started_at;
+    report.scan_completed_at = run.completed_at;
     if (run.status === "complete") {
       require(projection.authority_verified === true && /^[a-f0-9]{64}$/.test(run.authority_proof || "") && Boolean(run.authority_seal_version), "complete_authority_unverified");
       // Slow batches may end at the stage work fuse before retaining 50 pages.

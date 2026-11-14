@@ -44,7 +44,7 @@ function prerequisites() {
 
 function fakeSdk(scenario = "complete") {
   const calls = [];
-  const run = { id: "scan_123456", owner_user_id: owner, project_id: project, request_id: "request_500_123", idempotency_key: "request_500_123", website_url: "https://example.com/", scan_mode: "standard_500", page_cap: 500, pipeline_mode: "staged", status: "complete", pages_crawled: 500, pages_planned: 500, last_committed_batch: 9, started_at: new Date(now - 60000).toISOString(), completed_at: new Date(now).toISOString(), beta_revision_fingerprint: fingerprint, authority_proof: "f".repeat(64), authority_seal_version: "standard_review_snapshot_hmac_identity_v1" };
+  const run = { id: "scan_123456", owner_user_id: owner, project_id: project, request_id: "request_500_123", idempotency_key: "request_500_123", website_url: "https://example.com/", scan_mode: "standard_500", page_cap: 500, pipeline_mode: "staged", status: "complete", pages_crawled: 500, pages_planned: 500, last_committed_batch: 9, attempt_count: 2, started_at: new Date(now - 25000).toISOString(), completed_at: new Date(now).toISOString(), beta_revision_fingerprint: fingerprint, authority_proof: "f".repeat(64), authority_seal_version: "standard_review_snapshot_hmac_identity_v1" };
   const projection = { success: true, scan_id: run.id, authority_verified: true, release_contract_current: true, top_fix_ids: ["fix_1"], run: { ...run, advanced_scan_backend: "python_scanner_api", deno_fallback_used: false, ai_review_backend: "python_review_api", python_review_fallback_used: false, worker_peak_memory_bytes: 123456, private_text: "never-print-private" }, fixItems: [{ fix_id: "fix_1", canonical_action_rank: 1 }] };
   const grant = { id: "grant_123", owner_user_id: owner, user_email: "private@example.com", has_full_access: true, access_status: "active", plan_id: "standard150_lifetime", app_id: "6a498732ec779dfaaeab0e53", grant_source: "manual_grant", granted_at: new Date(now - 86400000).toISOString(), page_cap: 500 };
   if (scenario === "grant150") grant.page_cap = 150;
@@ -154,8 +154,13 @@ test("complete500 requires ten committed batches and retains truthful measuremen
   const report = await executeStaged500Canary(fake.sdk, config(), () => now);
   assert.equal(report.terminal_outcome_verified, true);
   assert.equal(report.functional_500_verified, true);
+  assert.equal(report.production_freeze, false);
   assert.equal(report.full_500_gate, false);
   assert.equal(report.acceptance_verified, false);
+  assert.equal(report.scan_id, fake.run.id);
+  assert.equal(report.attempt_count, fake.run.attempt_count);
+  assert.equal(report.scan_started_at, fake.run.started_at);
+  assert.equal(report.scan_completed_at, fake.run.completed_at);
   assert.equal(report.committed_batch_count, 10);
   assert.ok(report.payload_bytes.customer_projection > 0);
   assert.equal(report.payload_bytes.completion_request, null);
@@ -166,6 +171,39 @@ test("complete500 requires ten committed batches and retains truthful measuremen
   assert.equal(starts[0].value.scan_mode, "standard_500");
   assert.equal("page_cap" in starts[0].value, false);
   assert.doesNotMatch(JSON.stringify(report), /private@example|never-print-private|authority_proof/);
+});
+
+test("terminal receipt identity comes from the persisted scan row without coercion or projection fallback", async () => {
+  const valid = fakeSdk();
+  valid.run.started_at = "2026-11-12T10:59:35+01:00";
+  valid.projection.run.attempt_count = 999;
+  valid.projection.run.started_at = "2026-11-12T09:40:00.000Z";
+  const report = await executeStaged500Canary(valid.sdk, config(), () => now);
+  assert.equal(report.terminal_outcome_verified, true);
+  assert.equal(report.attempt_count, 2);
+  assert.equal(report.scan_started_at, "2026-11-12T10:59:35+01:00");
+  assert.equal(report.scan_completed_at, valid.run.completed_at);
+  assert.equal(report.duration_ms, 25000);
+  for (const [field, value, code] of [
+    ["attempt_count", undefined, "scan_attempt_unverified"],
+    ["attempt_count", "2", "scan_attempt_unverified"],
+    ["attempt_count", 0, "scan_attempt_unverified"],
+    ["attempt_count", 2 ** 31, "scan_attempt_unverified"],
+    ["started_at", "2026-11-12T09:59:35", "duration_unverified"],
+    ["started_at", "2026-02-30T09:59:35Z", "duration_unverified"],
+    ["completed_at", "invalid-private-value", "duration_unverified"],
+    ["completed_at", "2026-11-12T09:59:34Z", "duration_unverified"],
+  ]) {
+    const fake = fakeSdk();
+    fake.run[field] = value;
+    const invalid = await executeStaged500Canary(fake.sdk, config(), () => now);
+    assert.equal(invalid.terminal_outcome_verified, false, field);
+    assert.equal(invalid.failure_code, code, field);
+    assert.equal(invalid.production_freeze, false);
+    assert.equal(invalid.full_500_gate, false);
+    assert.equal(invalid.acceptance_verified, false);
+    assert.doesNotMatch(JSON.stringify(invalid), /invalid-private-value/);
+  }
 });
 
 for (const scenario of ["grant150", "duplicateGrant", "notAdmin", "nineBatches", "overCap"]) test(`${scenario} cannot satisfy entitled500 acceptance`, async () => {
@@ -181,6 +219,11 @@ test("integrity-verified limited evidence is classified separately and cannot pa
   const report = await executeStaged500Canary(fake.sdk, config(), () => now);
   assert.equal(report.terminal_outcome_verified, true);
   assert.equal(report.outcome, "limited_budget");
+  assert.equal(report.terminal_status, "limited");
+  assert.equal(report.attempt_count, fake.run.attempt_count);
+  assert.equal(report.scan_started_at, fake.run.started_at);
+  assert.equal(report.scan_completed_at, fake.run.completed_at);
+  assert.equal(report.production_freeze, false);
   assert.equal(report.committed_batch_count, 2);
   assert.equal(report.functional_500_verified, false);
   assert.equal(report.full_500_gate, false);
@@ -230,6 +273,8 @@ test("polling timeout preserves one accepted request and does not start another 
   const report = await executeStaged500Canary(fake.sdk, { ...config(), maxWait: 2 }, () => time, async ms => { time += ms; });
   assert.equal(report.failure_code, "scan_timeout");
   assert.equal(report.scan_id, fake.run.id);
+  assert.equal(report.attempt_count, null);
+  assert.equal(report.scan_completed_at, null);
   assert.equal(fake.calls.filter(call => call.name === "startStandardScanJobV9").length, 1);
   assert.equal(report.terminal_outcome_verified, false);
 });

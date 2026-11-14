@@ -32,14 +32,25 @@ def verify_tagged_zero_traffic(service: dict, revision: str, tag: str = "candida
     traffic = status.get("traffic")
     if not isinstance(traffic, list) or not traffic:
         raise CandidateNotIsolated("service_traffic_missing")
-    if tag != "candidate" and any(isinstance(entry, dict) and entry.get("tag") == tag
-                                  and entry.get("revisionName") != revision for entry in traffic):
-        raise CandidateNotIsolated("canary_tag_reassigned")
+    # A tag is an exact routing identity, including the shared candidate tag.
+    # A conflicting row cannot be ignored just because the requested revision
+    # has a valid-looking candidate entry of its own.
+    if any(isinstance(entry, dict) and entry.get("tag") == tag
+           and entry.get("revisionName") != revision for entry in traffic):
+        raise CandidateNotIsolated("candidate_tag_reassigned" if tag == "candidate"
+                                   else "canary_tag_reassigned")
     candidates = [entry for entry in traffic
                   if isinstance(entry, dict) and entry.get("revisionName") == revision]
     if not candidates:
         raise CandidateNotIsolated("candidate_not_addressable")
-    urls: set[str] = set()
+    origin = urlsplit(str(status.get("url") or ""))
+    if (origin.scheme != "https" or not origin.hostname
+            or not origin.hostname.endswith(".run.app")
+            or origin.netloc != origin.hostname or origin.path
+            or origin.query or origin.fragment):
+        raise CandidateNotIsolated("service_origin_invalid")
+    expected_url = f"https://{tag}---{origin.hostname}"
+    tagged_urls: list[str] = []
     for entry in candidates:
         try:
             percent = int(entry.get("percent") or 0)
@@ -51,15 +62,16 @@ def verify_tagged_zero_traffic(service: dict, revision: str, tag: str = "candida
             url = entry.get("url")
             if not isinstance(url, str) or not url.startswith("https://"):
                 raise CandidateNotIsolated("candidate_tag_url_missing")
-            if tag != "candidate":
-                origin = urlsplit(str(status.get("url") or ""))
-                if (origin.scheme != "https" or not origin.hostname
-                        or url.rstrip("/") != f"https://{tag}---{origin.hostname}"):
-                    raise CandidateNotIsolated("canary_tag_url_mismatch")
-            urls.add(url.rstrip("/"))
-    if len(urls) != 1:
+            # A Cloud Run tag stays on the canonical service hostname. Merely
+            # starting with HTTPS is not enough: an unrelated HTTPS endpoint
+            # must never become the destination of an authenticated probe.
+            if url != expected_url:
+                raise CandidateNotIsolated("candidate_tag_url_mismatch" if tag == "candidate"
+                                           else "canary_tag_url_mismatch")
+            tagged_urls.append(url)
+    if len(tagged_urls) != 1:
         raise CandidateNotIsolated("candidate_tag_missing_or_ambiguous")
-    return next(iter(urls))
+    return tagged_urls[0]
 
 
 def main() -> int:

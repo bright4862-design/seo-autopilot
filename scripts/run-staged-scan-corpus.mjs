@@ -7,7 +7,7 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { parseArgs } from "node:util";
 import { writeNewArtifact, localAcceptanceIdentity, validatePrerequisites } from "./staged_scan_acceptance.mjs";
 
@@ -15,6 +15,37 @@ const identifier = value => typeof value === "string" && /^[A-Za-z0-9_-]{6,160}$
 const siteIdentifier = value => typeof value === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(value);
 const sha256 = value => createHash("sha256").update(value).digest("hex");
 const sha256Pattern = /^[a-f0-9]{64}$/;
+const workerMemoryLimit = 1024 ** 3;
+const workspaceBucket = "fixlist-scan-workspaces-seo-autopilot-501517";
+
+export function verifyReceiptSummary(evidence, report, reportDigest) {
+  const provenance = report?.provenance;
+  const memory = evidence?.memory;
+  const request = evidence?.completion_request;
+  const positive = value => Number.isSafeInteger(value) && value > 0;
+  const bounded = value => positive(value) && value < workerMemoryLimit;
+  const terminalFunction = report?.terminal_status === "complete" ? "persistDurableScanAuthorityV9"
+    : report?.terminal_status === "limited" ? "persistLimitedScanResultV9" : null;
+  return Boolean(terminalFunction && report?.terminal_outcome_verified === true
+    && evidence?.schema_version === "staged_500_receipt_evidence_v1" && evidence.production_freeze === false
+    && sha256Pattern.test(reportDigest || "") && evidence.canary_report_sha256 === reportDigest
+    && evidence.scan_id === report.scan_id && positive(report.attempt_count) && evidence.attempt_count === report.attempt_count
+    && evidence.source_sha === report.source_sha && evidence.release_fingerprint === report.release_fingerprint
+    && evidence.worker_revision === provenance?.worker_revision && /^fixlist-standard150-worker-[a-z0-9-]+$/.test(evidence.worker_revision || "")
+    && sha256Pattern.test(provenance?.prerequisite_sha256 || "") && evidence.prerequisite_sha256 === provenance.prerequisite_sha256
+    && evidence.workspace_bucket === workspaceBucket && evidence.terminal_status === report.terminal_status
+    && evidence.worker_runtime_verified === true && evidence.receipt_evidence_verified === true
+    && Array.isArray(evidence.unverified) && evidence.unverified.length === 0
+    && /^[1-9][0-9]{0,23}$/.test(evidence.frontier_generation || "") && sha256Pattern.test(evidence.receipt_snapshot_sha256 || "")
+    && positive(report.committed_batch_count) && evidence.committed_delivery_count === report.committed_batch_count + 2
+    && positive(evidence.delivery_count) && evidence.delivery_count <= 256 && evidence.delivery_count >= evidence.committed_delivery_count
+    && request?.function === terminalFunction && positive(request.body_bytes) && sha256Pattern.test(request.body_sha256 || "")
+    && Number.isInteger(request.status_code) && request.status_code >= 200 && request.status_code < 300
+    && memory?.all_stages_verified === true && memory.reviewed_worker_memory_limit_bytes === workerMemoryLimit
+    && memory.parent_sampled_delivery_count === evidence.delivery_count && memory.cgroup_measured_delivery_count === evidence.delivery_count
+    && positive(memory.review_sampled_delivery_count) && memory.review_sampled_delivery_count <= evidence.delivery_count
+    && bounded(memory.sampled_aggregate_rss_peak_bytes) && bounded(memory.cgroup_lifetime_peak_upper_bound_bytes));
+}
 const targetUrl = value => { try { const url = new URL(value); return url.protocol === "https:" && !url.username && !url.password && !url.hash ? url.href : ""; } catch { return ""; } };
 
 export function validateCorpusManifest(manifest, now = Date.now()) {
@@ -47,6 +78,7 @@ export async function runCorpus(manifest, { now = Date.now(), execute = false, e
   const report = { schema_version: "staged_scan_corpus_report_v1", source_sha: manifest?.source_sha, release_fingerprint: manifest?.release_fingerprint,
     dry_run: execute !== true, expected_site_count: 50, supplied_site_count: Array.isArray(manifest?.sites) ? manifest.sites.length : 0,
     requested_site_id: siteId ?? null, requested_site_completed: false, corpus_completed: false,
+    resource_verified_sites: 0, corpus_resource_evidence_verified: false,
     production_freeze: false, acceptance_verified: false, full_500_gate: false, scans: [], failures: validateCorpusManifest(manifest, now) };
   if (report.failures.length || !execute) return report;
   if (typeof executeSite !== "function") { report.failures.push("corpus_executor_missing"); return report; }
@@ -62,6 +94,22 @@ export async function runCorpus(manifest, { now = Date.now(), execute = false, e
     if (scan?.schema_version !== "staged_500_canary_v1" || scan.source_sha !== manifest.source_sha || scan.release_fingerprint !== manifest.release_fingerprint || scan.expected_owner_user_id !== site.owner_user_id || scan.project_id !== site.project_id || scan.request_id !== site.request_id || scan.target_url !== site.target_url || !identifier(scan.scan_id) || scanIds.has(scan.scan_id)) { report.failures.push("scan_report_identity_mismatch"); return false; }
     scanIds.add(scan.scan_id);
     if (scan.terminal_outcome_verified !== true || (site.expectation === "complete_500" ? scan.functional_500_verified !== true || scan.outcome !== "complete" : scan.outcome !== "limited_throttled")) { report.failures.push(`scan_outcome_mismatch:${site.site_id}`); return false; }
+    const verified = verifyReceiptSummary(result.receipt, scan, result.reportDigest);
+    const observation = report.scans.at(-1);
+    observation.resource_evidence_verified = verified;
+    if (verified) {
+      const receipt = result.receipt;
+      observation.receipt = {
+        worker_revision: receipt.worker_revision,
+        receipt_snapshot_sha256: receipt.receipt_snapshot_sha256,
+        completion_request_bytes: receipt.completion_request.body_bytes,
+        completion_request_sha256: receipt.completion_request.body_sha256,
+        completion_http_status: receipt.completion_request.status_code,
+        sampled_aggregate_rss_peak_bytes: receipt.memory.sampled_aggregate_rss_peak_bytes,
+        cgroup_lifetime_peak_upper_bound_bytes: receipt.memory.cgroup_lifetime_peak_upper_bound_bytes,
+      };
+    }
+    if (verified) report.resource_verified_sites++;
     if (site.site_id === siteId) report.requested_site_completed = true;
     return true;
   }
@@ -96,14 +144,11 @@ export async function runCorpus(manifest, { now = Date.now(), execute = false, e
   }
   report.corpus_completed = scanIds.size === 50 && report.failures.length === 0;
   if (!siteId && !report.corpus_completed) report.failures.push("corpus_incomplete");
-  // A truthful throttled limited result belongs in the corpus, but is never a
-  // successful full-500 proof. Missing resource/runtime producers keep the
-  // rollout gate closed even when all functional outcomes are verified.
-  // Child report booleans cannot replace the missing raw measurements. Keep
-  // this closed until their producers and independent verification exist.
-  report.full_500_gate = false;
-  report.acceptance_verified = false;
-  if (report.corpus_completed) report.failures.push("full_500_resource_or_runtime_acceptance_unverified");
+  report.corpus_resource_evidence_verified = report.corpus_completed && report.resource_verified_sites === 50;
+  // Coverage comparison and independent acceptance of the deployed tier remain separate.
+  if (report.corpus_completed && !report.corpus_resource_evidence_verified) {
+    report.failures.push("full_500_resource_or_runtime_acceptance_unverified");
+  }
   return report;
 }
 
@@ -161,11 +206,12 @@ export function openCorpusJournal(directory, manifestHash) {
     return path.join(directory, `${site.site_id}.${kind}.json`);
   }
   const reportPath = site => sitePath(site, "report");
+  const receiptPath = site => sitePath(site, "receipt");
   const started = site => sitePath(site, "started");
   const finished = site => sitePath(site, "finished");
   function readPrior(site) {
     const files = [started(site), finished(site), reportPath(site)];
-    if (files.every(file => !exists(file))) return null;
+    if ([...files, receiptPath(site)].every(file => !exists(file))) return null;
     if (!exists(files[0]) || !exists(files[1])) throw new CorpusEvidenceError("prior_scan_attempt_unverified");
     const start = readJsonFile(files[0]).value, finish = readJsonFile(files[1]).value;
     if (start?.manifest_sha256 !== manifestHash || start.site_id !== site.site_id || start.request_id !== site.request_id
@@ -178,10 +224,15 @@ export function openCorpusJournal(directory, manifestHash) {
     if (scan && scan.value?.provenance?.prerequisite_sha256 !== start.prerequisite_sha256) {
       throw new CorpusEvidenceError("prior_scan_prerequisites_changed");
     }
-    return { exitCode: finish.exit_code, exitSignal: finish.exit_signal, report: scan?.value ?? null };
+    const receipt = exists(receiptPath(site)) ? readJsonFile(receiptPath(site)) : null;
+    if (finish.receipt_sha256 != null && receipt?.digest !== finish.receipt_sha256) {
+      throw new CorpusEvidenceError("prior_scan_receipt_changed");
+    }
+    return { exitCode: finish.exit_code, exitSignal: finish.exit_signal, report: scan?.value ?? null,
+      reportDigest: scan?.digest ?? null, receipt: receipt?.value ?? null };
   }
   function begin(site, prerequisiteDigest) {
-    if ([started(site), finished(site), reportPath(site)].some(exists)) throw new CorpusEvidenceError("prior_scan_attempt_exists");
+    if ([started(site), finished(site), reportPath(site), receiptPath(site)].some(exists)) throw new CorpusEvidenceError("prior_scan_attempt_exists");
     if (!sha256Pattern.test(prerequisiteDigest)) throw new CorpusEvidenceError("site_prerequisites_unverified");
     writeExclusive(started(site), { manifest_sha256: manifestHash, site_id: site.site_id,
       request_id: site.request_id, prerequisite_sha256: prerequisiteDigest, observed_at: new Date().toISOString() });
@@ -190,10 +241,11 @@ export function openCorpusJournal(directory, manifestHash) {
     if (!exists(started(site))) throw new CorpusEvidenceError("prior_scan_attempt_unverified");
     const scan = exists(reportPath(site)) ? readJsonFile(reportPath(site)) : null;
     writeExclusive(finished(site), { manifest_sha256: manifestHash, site_id: site.site_id, request_id: site.request_id,
-      exit_code: exitCode, exit_signal: exitSignal, report_sha256: scan?.digest ?? null, observed_at: new Date().toISOString() });
+      exit_code: exitCode, exit_signal: exitSignal, report_sha256: scan?.digest ?? null,
+      receipt_sha256: exists(receiptPath(site)) ? readJsonFile(receiptPath(site)).digest : null, observed_at: new Date().toISOString() });
     return readPrior(site);
   }
-  return { begin, finish, close, readPrior, reportPath };
+  return { begin, finish, close, readPrior, reportPath, receiptPath };
 }
 
 async function executeShell(root, site, manifest, prerequisitesDirectory, journal) {
@@ -215,10 +267,24 @@ async function executeShell(root, site, manifest, prerequisitesDirectory, journa
         CONFIRM: `RUN-ONE-STAGED-500-CANARY:${manifest.source_sha}:${site.owner_user_id}:${site.project_id}:${site.request_id}` } });
       child.once("error", reject); child.once("exit", (exitCode, exitSignal) => resolve({ exitCode, exitSignal }));
     });
+    if (exitCode === 0 && !exitSignal && exists(journal.reportPath(site))) {
+      await collectSiteReceipts(root, journal.reportPath(site), journal.receiptPath(site));
+    }
     return journal.finish(site, exitCode, exitSignal);
   } finally {
     fs.rmSync(staged, { recursive: true, force: true });
   }
+}
+
+async function collectSiteReceipts(root, reportFile, output) {
+  const collector = path.join(root, "scanner-api/scripts/collect_staged_scan_receipts.py");
+  // Collection is read-only. A credential failure must leave the terminal
+  // scan report usable for reconciliation without starting the scan again.
+  await new Promise(resolve => {
+    execFile("python3", [collector, "--canary-report", reportFile, "--output", output], {
+      cwd: root, timeout: 135000, killSignal: "SIGKILL", maxBuffer: 64 * 1024,
+    }, () => resolve());
+  });
 }
 
 function isOutside(root, file) {
@@ -252,7 +318,9 @@ Resume with the identical manifest and evidence directory, fresh packets for pen
 Before submitting, the runner checks prior reports in manifest order. It stops on a failed, conflicting, or unresolved attempt.
 Keep an interrupted or failed attempt's files and reconcile the original request ID before considering another submission.
 Remove a stale .corpus.lock only after confirming the original runner and all of its children have stopped.
-Default: dry-run. Full 500 acceptance requires independent runtime and resource measurements.`);
+After a terminal scan, the runner collects private stage receipts with Python and existing GCS application credentials.
+A missing receipt leaves that site's resource evidence unverified. Keep the terminal scan report for a separate read-only collection.
+Default: dry-run. Corpus resource evidence does not certify coverage comparison or production acceptance.`);
     } else {
       const raw = fs.readFileSync(values.manifest, "utf8"), manifest = JSON.parse(raw);
       const root = fs.realpathSync(path.join(path.dirname(fileURLToPath(import.meta.url)), ".."));

@@ -6,7 +6,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSyn
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { localAcceptanceIdentity, validatePrerequisites, executeStaged500Canary, renderRemoteCanary } from "../../scripts/staged_scan_acceptance.mjs";
-import { openCorpusJournal, readSitePrerequisites, validateCorpusManifest, runCorpus } from "../../scripts/run-staged-scan-corpus.mjs";
+import { openCorpusJournal, readSitePrerequisites, validateCorpusManifest, runCorpus, verifyReceiptSummary } from "../../scripts/run-staged-scan-corpus.mjs";
 
 const now = Date.parse("2026-11-12T10:00:00.000Z");
 const sha = "a".repeat(40), fingerprint = "b".repeat(16), owner = "owner_123", project = "project_123";
@@ -341,6 +341,61 @@ test("corpus dry-run starts no scans and complete execution remains sequential a
   const bad = await runCorpus(input, { now, execute: true, executeSite: async site => ({ exitCode: 0, report: { ...corpusScan(site), source_sha: "0".repeat(40) } }) });
   assert.equal(bad.scans.length, 1);
   assert.ok(bad.failures.includes("scan_report_identity_mismatch"));
+});
+
+function measuredCorpusScan(site) {
+  const limited = site.expectation === "throttled_limited";
+  const workerRevision = "fixlist-standard150-worker-00123-abc";
+  const report = { ...corpusScan(site), attempt_count: 1, committed_batch_count: limited ? 3 : 10,
+    terminal_status: limited ? "limited" : "complete",
+    provenance: { prerequisite_sha256: "d".repeat(64), worker_revision: workerRevision } };
+  const reportDigest = hash(JSON.stringify(report));
+  const deliveryCount = report.committed_batch_count + 2;
+  const receipt = {
+    schema_version: "staged_500_receipt_evidence_v1", production_freeze: false, canary_report_sha256: reportDigest,
+    scan_id: report.scan_id, attempt_count: 1, source_sha: sha, release_fingerprint: fingerprint, worker_revision: workerRevision,
+    workspace_bucket: "fixlist-scan-workspaces-seo-autopilot-501517",
+    prerequisite_sha256: report.provenance.prerequisite_sha256, terminal_status: report.terminal_status,
+    worker_runtime_verified: true, receipt_evidence_verified: true, unverified: [],
+    frontier_generation: "157", receipt_snapshot_sha256: "a".repeat(64),
+    delivery_count: deliveryCount, committed_delivery_count: deliveryCount,
+    completion_request: { function: limited ? "persistLimitedScanResultV9" : "persistDurableScanAuthorityV9",
+      body_bytes: 7_172_726, body_sha256: "b".repeat(64), status_code: 200 },
+    memory: { all_stages_verified: true, reviewed_worker_memory_limit_bytes: 1024 ** 3,
+      parent_sampled_delivery_count: deliveryCount, cgroup_measured_delivery_count: deliveryCount,
+      review_sampled_delivery_count: 1, sampled_aggregate_rss_peak_bytes: 200_000_000,
+      cgroup_lifetime_peak_upper_bound_bytes: 210_000_000 },
+  };
+  return { exitCode: 0, report, reportDigest, receipt };
+}
+
+test("the corpus counts receipt evidence only when the trusted collector binds the exact terminal report", async () => {
+  const input = manifest();
+  const evidence = await runCorpus(input, { now, execute: true, executeSite: async site => measuredCorpusScan(site) });
+  assert.equal(evidence.corpus_resource_evidence_verified, true);
+  assert.equal(evidence.resource_verified_sites, 50);
+  assert.equal(evidence.acceptance_verified, false);
+  assert.equal(evidence.full_500_gate, false);
+  assert.equal(evidence.scans.at(-1).receipt.completion_request_bytes, 7_172_726);
+
+  const { receipt, report, reportDigest } = measuredCorpusScan(input.sites[0]);
+  assert.equal(verifyReceiptSummary(receipt, report, "f".repeat(64)), false);
+  assert.equal(verifyReceiptSummary({ ...receipt, attempt_count: 2 }, report, reportDigest), false);
+  assert.equal(verifyReceiptSummary({ ...receipt, completion_request: { ...receipt.completion_request, status_code: 413 } }, report, reportDigest), false);
+  assert.equal(verifyReceiptSummary({ ...receipt, memory: { ...receipt.memory, cgroup_measured_delivery_count: 0 } }, report, reportDigest), false);
+  const incomplete = await runCorpus(input, { now, execute: true, executeSite: async site => {
+    const row = measuredCorpusScan(site);
+    if (site === input.sites[1]) {
+      row.receipt.canary_report_sha256 = "0".repeat(64);
+      row.receipt.privatePayload = "do_not_print";
+    }
+    return row;
+  } });
+  assert.equal(incomplete.corpus_completed, true);
+  assert.equal(incomplete.corpus_resource_evidence_verified, false);
+  assert.equal(incomplete.resource_verified_sites, 49);
+  assert.ok(incomplete.failures.includes("full_500_resource_or_runtime_acceptance_unverified"));
+  assert.doesNotMatch(JSON.stringify(incomplete), /do_not_print/);
 });
 
 test("a nonzero child report survives in the aggregate and stops all later sites", async () => {

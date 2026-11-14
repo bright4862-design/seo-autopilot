@@ -87,6 +87,9 @@ export function assertRollbackRows(evidence, operations) {
     const rows = evidence.rows[name];
     requireCondition(Array.isArray(rows), `${name} rollback rows missing`);
     counts[name] = rows.length;
+    // A rollback must not drop a field that still holds persisted evidence.
+    // Fields already present before this apply receipt are not being removed.
+    const removed = operations.filter(operation => operation.entity === name && operation.kind === 'add_property');
     for (const row of rows) {
       requireCondition(object(row) && typeof row.id === 'string' && row.id, `${name} rollback row is malformed`);
       if (name === 'ScanRun') {
@@ -94,10 +97,12 @@ export function assertRollbackRows(evidence, operations) {
         requireCondition(!row.pipeline_mode || row.pipeline_mode === 'monolith', 'staged ScanRun blocks rollback');
         requireCondition(row.scan_mode !== 'standard_500' && (row.page_cap == null || row.page_cap === 150), 'large-cap ScanRun blocks rollback');
         requireCondition(['pages_planned', 'last_committed_batch', 'workspace_cleanup_state', 'workspace_cleanup_completed_at'].every(key => row[key] == null || row[key] === ''), 'retained staged ScanRun evidence blocks rollback');
+        requireCondition(removed.every(({property}) => property !== 'page_cap' || row.page_cap == null), 'retained ScanRun page_cap blocks rollback');
+        requireCondition(removed.every(({property}) => property !== 'pipeline_mode' || row.pipeline_mode == null || row.pipeline_mode === ''), 'retained ScanRun pipeline_mode blocks rollback');
       } else if (name === 'Access') {
         requireCondition(row.page_cap == null || row.page_cap === 150, '500 or unknown Access entitlement blocks rollback');
+        requireCondition(removed.every(({property}) => property !== 'page_cap' || row.page_cap == null), 'retained Access page_cap blocks rollback');
       } else {
-        const removed = operations.filter(operation => operation.entity === name && operation.kind === 'add_property');
         requireCondition(removed.every(({property}) => row[property] == null || (Array.isArray(row[property]) && row[property].length === 0)), 'retained FixItem evidence blocks rollback');
       }
     }

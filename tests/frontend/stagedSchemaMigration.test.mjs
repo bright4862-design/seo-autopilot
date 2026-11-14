@@ -25,15 +25,17 @@ function baseline() {
 const moduleUnderTest = () => import(pathToFileURL(resolve('scripts/base44_staged_schema.mjs')));
 function run(script, args, options = {}) {
   return new Promise((resolveRun, reject) => {
-    const child = spawn(process.execPath, [script, ...args], options);
+    const {onSpawn, ...spawnOptions} = options;
+    const child = spawn(process.execPath, [script, ...args], spawnOptions);
+    onSpawn?.(child);
     let stdout = '', stderr = '';
     child.stdout.on('data', value => { stdout += value; });
     child.stderr.on('data', value => { stderr += value; });
     child.on('error', reject);
-    child.on('close', status => resolveRun({status, stdout, stderr}));
+    child.on('close', (status, signal) => resolveRun({status, signal, stdout, stderr}));
   });
 }
-async function fixture(t, {schemas = baseline(), rows = {}, changeReadback = false, driftBeforeWrite = false, rowsMalformed = false} = {}) {
+async function fixture(t, {schemas = baseline(), rows = {}, changeReadback = false, driftBeforeWrite = false, rowsMalformed = false, killAfterFirstPut = false} = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'staged-schema-')));
   const artifactRoot = realpathSync(mkdtempSync(join(tmpdir(), 'staged-schema-reports-')));
   mkdirSync(join(root, 'scripts/lib'), {recursive: true});
@@ -50,6 +52,7 @@ async function fixture(t, {schemas = baseline(), rows = {}, changeReadback = fal
   writeFileSync(auth, JSON.stringify({accessToken: 'fixture-token-'.repeat(4)}));
   const requests = [];
   let reads = 0;
+  let activeChild = null;
   const state = structuredClone(schemas);
   const server = createServer((request, response) => {
     const url = new URL(request.url, 'http://localhost');
@@ -68,6 +71,12 @@ async function fixture(t, {schemas = baseline(), rows = {}, changeReadback = fal
         assert.deepEqual(Object.keys(payload), ['entity_schema']);
         assert.equal(payload.entity_schema.name, name);
         state[name] = payload.entity_schema;
+        if (killAfterFirstPut && name === 'Access') {
+          // Simulate the worst ordering: Base44 committed the PUT but the
+          // orchestrator died before it could receive an acknowledgment.
+          assert.ok(activeChild?.pid);
+          process.kill(activeChild.pid, 'SIGKILL');
+        }
         if (changeReadback) state[name].rls.update = {user_condition: {role: 'user'}};
         response.end('{}');
       } else if (url.pathname.includes('/entities/')) {
@@ -87,8 +96,10 @@ async function fixture(t, {schemas = baseline(), rows = {}, changeReadback = fal
       const report = join(artifactRoot, `report-${++reportNumber}.json`);
       const args = [action, '--source-sha', sourceSha, '--report', report, ...extra];
       if (action === 'apply') args.push('--generation', '77', '--confirm', `APPLY-STAGED-SCHEMA:${sourceSha}:77`);
-      const result = await run(join(root, 'scripts/base44_staged_schema.mjs'), args, {cwd: root, env: {...env, ...environment}});
-      return {...result, report, data: existsSync(report) ? JSON.parse(readFileSync(report, 'utf8')) : null};
+      const result = await run(join(root, 'scripts/base44_staged_schema.mjs'), args,
+        {cwd: root, env: {...env, ...environment}, onSpawn: child => { activeChild = child; }});
+      const content = existsSync(report) ? readFileSync(report, 'utf8') : '';
+      return {...result, report, data: content.trim() ? JSON.parse(content) : null};
     },
   };
 }
@@ -234,6 +245,43 @@ test('changed live readback refuses success and preserves evidence without overw
   assert.equal(result.data.status, 'failed');
   assert.equal(f.requests.filter(row => row.method === 'PUT').length, 1);
   assert.equal(f.state.Access.rls.update.user_condition.role, 'user');
+});
+
+
+test('killed schema apply preserves a fsynced baseline and labels the first PUT uncertain', async t => {
+  const f = await fixture(t, {killAfterFirstPut: true});
+  const result = await f.command('apply');
+  assert.equal(result.signal, 'SIGKILL');
+  assert.equal(result.data, null, 'SIGKILL cannot execute the ordinary final JSON report');
+  assert.equal(f.requests.filter(row => row.method === 'PUT').length, 1);
+  assert.ok(f.state.Access.properties.page_cap, 'provider has already committed the first PUT');
+  assert.equal(f.state.FixItem.properties.affected_page_count, undefined);
+
+  const journal = readFileSync(result.report + '.journal.ndjson', 'utf8').trim()
+    .split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(journal.map(entry => entry.event), ['started', 'planned', 'put_started']);
+  assert.deepEqual(journal.map(entry => entry.sequence), [1, 2, 3]);
+  assert.deepEqual(journal[1].before_schemas, baseline(), 'original four-entity baseline survives');
+  assert.equal(journal[1].operations.length, 11);
+  assert.equal(journal[2].entity, 'Access');
+  assert.match(journal[2].intended_sha256, /^[a-f0-9]{64}$/);
+  assert.ok(!journal.some(entry => entry.event === 'put_returned' || entry.event === 'report_fsynced'));
+});
+
+test('successful schema apply journals every independently verified entity', async t => {
+  const f = await fixture(t);
+  const result = await f.command('apply');
+  assert.equal(result.status, 0, result.stderr);
+  const journal = readFileSync(result.report + '.journal.ndjson', 'utf8').trim()
+    .split('\n').map(line => JSON.parse(line));
+  const stages = journal.filter(entry => ['put_started', 'put_returned', 'readback_verified'].includes(entry.event))
+    .map(entry => `${entry.entity}:${entry.event}`);
+  assert.deepEqual(stages, ['Access:put_started', 'Access:put_returned', 'Access:readback_verified',
+    'FixItem:put_started', 'FixItem:put_returned', 'FixItem:readback_verified',
+    'ScanRun:put_started', 'ScanRun:put_returned', 'ScanRun:readback_verified']);
+  assert.equal(journal.at(-1).event, 'report_fsynced');
+  assert.equal(journal.at(-1).status, 'applied_verified');
+  assert.equal(result.data.mutation_journal, result.report + '.journal.ndjson');
 });
 
 test('rollback removes only this receipt additions after full paginated row proof', async t => {

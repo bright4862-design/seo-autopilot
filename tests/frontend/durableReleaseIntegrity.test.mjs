@@ -574,6 +574,7 @@ elif [[ " $* " == *" get-iam-policy "* ]]; then
     authenticated_service_invoker) printf '%s' '{"bindings":[{"role":"roles/run.invoker","members":["serviceAccount:invoker@test.iam.gserviceaccount.com"]},{"role":"roles/run.servicesInvoker","members":["allAuthenticatedUsers"]}]}' ;;
     public_custom_role) printf '%s' '{"bindings":[{"role":"roles/run.invoker","members":["serviceAccount:invoker@test.iam.gserviceaccount.com"]},{"role":"projects/test/roles/routeInvoker","members":["allUsers"]}]}' ;;
     public_viewer) printf '%s' '{"bindings":[{"role":"roles/run.invoker","members":["serviceAccount:invoker@test.iam.gserviceaccount.com"]},{"role":"roles/run.viewer","members":["allUsers"]}]}' ;;
+    private_viewer) printf '%s' '{"bindings":[{"role":"roles/run.invoker","members":["serviceAccount:invoker@test.iam.gserviceaccount.com"]},{"role":"roles/run.viewer","members":["user:auditor@test.example"]}]}' ;;
     valid) printf '%s' '{"bindings":[{"role":"roles/run.invoker","members":["serviceAccount:invoker@test.iam.gserviceaccount.com"]}]}' ;;
     *) exit 9 ;;
   esac
@@ -647,9 +648,11 @@ test("post-deploy refuses public principals outside the legacy run.invoker role"
     assert.match(result.output, /worker service IAM has a public principal/);
     assert.match(result.output, /POST-DEPLOY VERIFICATION FAILED/);
   }
-  const clean = runPostDeployVerifier("valid");
-  assert.equal(clean.status, 0, clean.output);
-  assert.match(clean.output, /POST-DEPLOY VERIFICATION PASSED/);
+  for (const mode of ["valid", "private_viewer"]) {
+    const clean = runPostDeployVerifier(mode);
+    assert.equal(clean.status, 0, clean.output);
+    assert.match(clean.output, /POST-DEPLOY VERIFICATION PASSED/);
+  }
 });
 
 test("post-deploy privacy check rejects disabled invoker IAM despite a private-looking policy", () => {

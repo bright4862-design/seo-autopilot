@@ -273,20 +273,26 @@ test("an untagged revision that does not hold all traffic yields no probe URL", 
 // Running the real operation end to end against stubbed gcloud/curl is the only
 // way to prove the refusal paths refuse. Asserting on their prose would pass a
 // guard that printed INDETERMINATE and then fell through to PASS.
-function runGuard({ service, revision = "", body, code = "200", token = "stub-token", audience = "", probeUrl = "", sourceSha = "" }) {
+function runGuard({ service, afterService, revision = "", body, code = "200", token = "stub-token", audience = "", probeUrl = "", sourceSha = "" }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-revision-e2e-"));
   const bin = path.join(dir, "bin");
   fs.mkdirSync(bin);
   const servicePath = path.join(dir, "service.json");
+  const afterServicePath = path.join(dir, "service-after.json");
+  const seenServicePath = path.join(dir, "service-read");
   const bodyPath = path.join(dir, "revision.json");
   const curlLog = path.join(dir, "curl.log");
   fs.writeFileSync(servicePath, JSON.stringify(service));
+  fs.writeFileSync(afterServicePath, JSON.stringify(afterService ?? service));
   fs.writeFileSync(bodyPath, typeof body === "string" ? body : JSON.stringify(body));
   fs.writeFileSync(
     path.join(bin, "gcloud"),
     `#!/usr/bin/env bash
 if [ "$1 $2" = "config set" ]; then exit 0; fi
-if [ "$1 $2 $3" = "run services describe" ]; then cat "${servicePath}"; exit 0; fi
+if [ "$1 $2 $3" = "run services describe" ]; then
+  if [ -e "${seenServicePath}" ]; then cat "${afterServicePath}"; else touch "${seenServicePath}"; cat "${servicePath}"; fi
+  exit 0
+fi
 echo "unexpected gcloud: $*" >&2; exit 1
 `,
     { mode: 0o755 },
@@ -543,6 +549,11 @@ test("end to end: unnamed serving revision requires reconciled Cloud Run traffic
   assert.equal(contradicted.curl, "", "never spend the worker token while traffic is reconciling");
   assert.doesNotMatch(contradicted.stdout, /PASS:/);
   assert.doesNotMatch(contradicted.stdout, /revision under test:/);
+
+  const changedDuringProbe = runGuard({ service: reconciled, afterService: moving, body: LIVE_MATCHING });
+  assert.notEqual(changedDuringProbe.status, 0, "a correct /revision body cannot rescue traffic that moved during the probe");
+  assert.match(changedDuringProbe.curl, /\/revision/, "it must exercise a genuine post-probe refusal");
+  assert.doesNotMatch(changedDuringProbe.stdout, /PASS:/, "post-probe traffic drift must never print PASS");
 
   const split = structuredClone(reconciled);
   split.status.traffic = [

@@ -110,7 +110,7 @@ def candidate(tmp_path):
     state_path, calls = tmp_path / "state.json", tmp_path / "calls.jsonl"
     worker = {"spec": {"template": {"spec": {"serviceAccountName": f"worker@{PROJECT}.iam.gserviceaccount.com", "containers": [{"image": "europe-west1-docker.pkg.dev/example-project/workers/scanner:old", "env": [
         {"name": "TASKS_INVOKER_SERVICE_ACCOUNT", "value": f"invoker@{PROJECT}.iam.gserviceaccount.com"},
-        {"name": "BASE44_APP_ID", "value": "app-test"}, {"name": "BASE44_API_URL", "value": "https://base44.app"},
+        {"name": "BASE44_APP_ID", "value": "6a498732ec779dfaaeab0e53"}, {"name": "BASE44_API_URL", "value": "https://base44.app"},
         {"name": "SCAN_EVIDENCE_SIGNING_KEY", "valueFrom": {"secretKeyRef": {"name": "scan-evidence", "key": "7"}}}]}]}}},
         "status": {"url": CANONICAL, "traffic": [{"revisionName": "serving", "percent": 100}, {"tag": "candidate", "revisionName": "older-candidate", "percent": 0, "url": "https://candidate---worker-abc-ew.a.run.app"}]}}
     state_path.write_text(json.dumps({"service": worker}))
@@ -533,3 +533,37 @@ def test_tag_cli_requires_both_bindings_for_staged_modes(tmp_path):
     assert not (bin_dir / "gcloud.calls").exists()
     off = subprocess.run([*base[:3], "--mode=off", *base[4:]], env=env, capture_output=True, text=True)
     assert off.returncode == 0
+
+
+@pytest.mark.parametrize("failure,message", [
+    ("foreign_app", "Base44 app routing"),
+    ("foreign_origin", "Base44 API origin"),
+    ("missing_app", "Base44 app routing"),
+    ("duplicate_app", "duplicate worker template environment name"),
+    ("duplicate_container", "exactly one container"),
+])
+def test_candidate_build_refuses_foreign_or_ambiguous_base44_routing_before_cloudbuild(candidate, failure, message):
+    """A source-matching worker must not inherit a foreign persistence destination."""
+    run, state, calls, sha = candidate
+    saved = json.loads(state.read_text())
+    containers = saved["service"]["spec"]["template"]["spec"]["containers"]
+    env = containers[0]["env"]
+    if failure == "foreign_app":
+        next(row for row in env if row["name"] == "BASE44_APP_ID")["value"] = "foreign-app"
+    elif failure == "foreign_origin":
+        next(row for row in env if row["name"] == "BASE44_API_URL")["value"] = "https://other-base44.example"
+    elif failure == "missing_app":
+        env[:] = [row for row in env if row["name"] != "BASE44_APP_ID"]
+    elif failure == "duplicate_app":
+        env.append({"name": "BASE44_APP_ID", "value": "foreign-app"})
+    else:
+        containers.append(dict(containers[0]))
+    state.write_text(json.dumps(saved))
+
+    result = run(**inactive())
+    assert result.returncode != 0 and message in result.stderr, result.stderr
+    after = json.loads(state.read_text())
+    assert "revision" not in after, "candidate revision must not be built from a foreign route"
+    commands = [json.loads(row) for row in calls.read_text().splitlines()]
+    assert not any(command[:2] == ["builds", "submit"] for command in commands)
+    assert not any(command[:3] == ["run", "services", "update-traffic"] for command in commands)

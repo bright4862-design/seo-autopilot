@@ -151,7 +151,7 @@ function matchesExpectedOutcome(scan, expectation) {
   return scan.page_cap === 500 && scan.functional_500_verified === false
     && Number.isSafeInteger(planned) && planned > 0 && planned < scan.page_cap && scan.pages_crawled === planned
     && sampling?.pages_checked === planned && sampling.inventory_capped === false
-    && Number.isSafeInteger(sampling.inventory_urls) && sampling.inventory_urls >= 0 && sampling.inventory_urls < scan.page_cap
+    && Number.isSafeInteger(sampling.inventory_urls) && sampling.inventory_urls > 0 && sampling.inventory_urls < scan.page_cap
     && sha256Pattern.test(sampling.sections_sha256 || "");
 }
 
@@ -287,7 +287,7 @@ export function readSitePrerequisites(directory, site, expected, now = Date.now(
 
 // Start/finish markers survive an interruption. A report without both markers
 // cannot establish whether retrying the stable request is safe.
-export function openCorpusJournal(directory, manifestHash) {
+export function openCorpusJournal(directory, manifestHash, { requireExisting = false } = {}) {
   const lock = path.join(directory, ".corpus.lock");
   if (!sha256Pattern.test(manifestHash)) throw new CorpusEvidenceError("corpus_journal_manifest_invalid");
   try { writeExclusive(lock, { pid: process.pid }); } catch (error) {
@@ -304,7 +304,8 @@ export function openCorpusJournal(directory, manifestHash) {
     const manifestFile = path.join(directory, "manifest.sha256.json");
     if (exists(manifestFile)) {
       if (readJsonFile(manifestFile).value?.manifest_sha256 !== manifestHash) throw new CorpusEvidenceError("corpus_journal_manifest_mismatch");
-    } else writeExclusive(manifestFile, { manifest_sha256: manifestHash });
+    } else if (requireExisting) throw new CorpusEvidenceError("corpus_journal_missing");
+    else writeExclusive(manifestFile, { manifest_sha256: manifestHash });
   } catch (error) { close(); throw error; }
 
   function sitePath(site, kind) {
@@ -451,7 +452,7 @@ Use --verify-completed --evidence-dir /absolute/evidence and a new --output to v
 journal. It reads the exact saved plans from GCS and replays v7 and candidate selection without submitting scans.
 Default: dry-run. Corpus evidence does not authorize production acceptance.`);
     } else {
-      const raw = fs.readFileSync(values.manifest, "utf8"), manifest = JSON.parse(raw);
+      const raw = fs.readFileSync(values.manifest), manifest = JSON.parse(raw.toString("utf8"));
       const root = fs.realpathSync(path.join(path.dirname(fileURLToPath(import.meta.url)), ".."));
       const { execute, output, site: siteId, "verify-completed": verifyOnly } = values;
       const manifestDigest = sha256(raw);
@@ -474,7 +475,9 @@ Default: dry-run. Corpus evidence does not authorize production acceptance.`);
             || [prerequisitesDirectory, evidenceDirectory].includes(outputParent)) {
           throw new CorpusEvidenceError("corpus_output_invalid");
         }
-        if (validateCorpusManifest(manifest, Date.now(), { historical: verifyOnly }).length === 0) journal = openCorpusJournal(evidenceDirectory, manifestDigest);
+        if (validateCorpusManifest(manifest, Date.now(), { historical: verifyOnly }).length === 0) {
+          journal = openCorpusJournal(evidenceDirectory, manifestDigest, { requireExisting: verifyOnly });
+        }
       }
       const report = await runCorpus(manifest, { execute, verifyOnly, manifestDigest, siteId, readPrior: journal?.readPrior,
         compareCompleted: async () => {

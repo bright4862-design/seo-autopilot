@@ -543,6 +543,13 @@ test("completed coverage verification joins exact receipt attempts to signed sec
   }
   const missing = await runCorpus(input, { ...options, compareCompleted: () => comparison, readPrior: site => site === input.sites.at(-1) ? null : results.get(site.site_id) });
   assert.ok(missing.failures.includes("corpus_incomplete"));
+  const uninventoried = await runCorpus(input, { ...options, compareCompleted: () => comparison,
+    readPrior: site => {
+      const result = structuredClone(results.get(site.site_id));
+      if (site === input.sites[0]) result.report.selection_coverage.inventory_urls = 0;
+      return result;
+    } });
+  assert.ok(uninventoried.failures.includes("scan_outcome_mismatch:site_0"));
   assert.equal(submissions, 0);
 });
 

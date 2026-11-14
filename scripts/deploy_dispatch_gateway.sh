@@ -28,6 +28,21 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$REPO_ROOT/scripts/lib/release-source-guard.sh"
 fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$CONFIRM"
 
+# Staging is a distinct, bounded opt-in. Validate before any cloud access;
+# a normal deployment explicitly restores monolith mode and removes its cohort.
+STAGED_PLAN="$(python3 "$REPO_ROOT/scripts/gateway_staged_config.py" \
+  --config "${GATEWAY_STAGED_CONFIG:-off}" --owners "${GATEWAY_STAGED_OWNER_IDS:-}" \
+  --canary-owners "${GATEWAY_CANARY_OWNER_USER_IDS:-}")"
+read -r GATEWAY_PIPELINE_MODE STAGED_OWNER_COUNT STAGED_COHORT_SHA < <(python3 -c \
+  'import json,sys; p=json.loads(sys.argv[1]); print(p["pipeline_mode"],p["staged_owner_count"],p["staged_owner_cohort_sha256"])' "$STAGED_PLAN")
+STAGED_OWNER_IDS="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["owner_ids"])' "$STAGED_PLAN")"
+if [[ "$GATEWAY_PIPELINE_MODE" == staged ]]; then
+  [[ -n "${GATEWAY_CANARY_REVISION:-}" ]] || { echo 'Staging requires an exact canary revision.' >&2; exit 2; }
+  [[ "${GATEWAY_STAGED_CONFIRM:-}" == "ENABLE-STAGED-GATEWAY:${SOURCE_SHA}:${STAGED_COHORT_SHA}" ]] || {
+    echo 'Staging requires exact source and cohort confirmation.' >&2; exit 2;
+  }
+fi
+
 # The gateway uses the canonical pure comparison library from scanner-api. Build
 # a minimal context from this exact committed tree, never maintained copies or
 # the full scanner/worker image. gcloud source deploy requires a root Dockerfile.
@@ -170,6 +185,19 @@ PY
 elif [[ -n "${GATEWAY_CANARY_REVISION:-}" || -n "${GATEWAY_CANARY_OWNER_USER_IDS:-}" ]]; then
   echo 'Owner canary requires a verified existing gateway rollback target.' >&2; exit 2
 fi
+if [[ "$GATEWAY_PIPELINE_MODE" == staged ]]; then
+  # First deploy and verify the zero-owner revision. Enabling staging is then
+  # a separate deployment with its own exact source/cohort confirmation.
+  python3 - "$GATEWAY_ROLLBACK_BASELINE" "$SOURCE_SHA" <<'PY'
+import hashlib,json,sys
+previous=json.load(open(sys.argv[1]))
+empty_hash=hashlib.sha256(b'[]').hexdigest()
+if (previous.get('source_sha') != sys.argv[2]
+        or previous.get('pipeline_mode') != 'monolith' or previous.get('staged_owner_count') != 0
+        or previous.get('staged_owner_cohort_sha256') != empty_hash):
+    raise SystemExit('Staging requires a freshly verified zero-owner gateway baseline')
+PY
+fi
 
 # Optional owner-only release canary. Off unless BOTH an exact zero-traffic
 # tagged worker revision and an owner allowlist are supplied. The canary origin
@@ -207,6 +235,10 @@ verify_canary_mapping() {
   [[ "${check##* tag_url=}" == "$CANARY_WORKER_ORIGIN" ]]
 }
 ENV_VARS="^|^SCAN_TASKS_QUEUE_PATH=$QUEUE_PATH|SCAN_DRAIN_QUEUE_PATH=$DRAIN_QUEUE_PATH|SCAN_WORKER_URL=$WORKER_URL|TASKS_INVOKER_SERVICE_ACCOUNT=$INVOKER_SA|DISPATCH_MAX_CLOCK_SKEW_SECONDS=300|DISPATCH_MAX_BODY_BYTES=262144|FIXLIST_GATEWAY_SOURCE_SHA=$SOURCE_SHA"
+ENV_VARS="${ENV_VARS}|SCAN_PIPELINE_MODE=$GATEWAY_PIPELINE_MODE"
+if [[ "$GATEWAY_PIPELINE_MODE" == staged ]]; then
+  ENV_VARS="${ENV_VARS}|SCAN_STAGED_OWNER_IDS=$STAGED_OWNER_IDS"
+fi
 if [[ -n "$CANARY_WORKER_ORIGIN" ]]; then
   ENV_VARS="${ENV_VARS}|SCAN_CANARY_WORKER_ORIGIN=$CANARY_WORKER_ORIGIN|SCAN_CANARY_OWNER_USER_IDS=$GATEWAY_CANARY_OWNER_USER_IDS"
 fi
@@ -217,6 +249,7 @@ echo "drain_queue_path=$DRAIN_QUEUE_PATH"
 echo "signing_secret_ref=${SIGNING_SECRET}:${SIGNING_VERSION} (value not read)"
 echo "source_sha=$SOURCE_SHA"
 echo "canary_worker_origin=${CANARY_WORKER_ORIGIN:-<off>} canary_owner_count=$CANARY_OWNER_COUNT"
+echo "pipeline_mode=$GATEWAY_PIPELINE_MODE staged_owner_count=$STAGED_OWNER_COUNT staged_cohort_sha256=$STAGED_COHORT_SHA"
 
 echo
 echo "=== Reserve this deployment's revision name ==="
@@ -307,10 +340,10 @@ gcloud run revisions describe "$NEW_REVISION" \
   --region="$REGION" \
   --format=json > "$REVISION_JSON"
 
-GATEWAY_URL="$(python3 - "$GATEWAY_JSON" "$DISPATCHER_SA" "$QUEUE_PATH" "$DRAIN_QUEUE_PATH" "$WORKER_URL" "$INVOKER_SA" "$SOURCE_SHA" "$SIGNING_SECRET" "$SIGNING_VERSION" "$CANARY_WORKER_ORIGIN" "$GATEWAY_CANARY_OWNER_USER_IDS" <<'PY'
+GATEWAY_URL="$(python3 - "$GATEWAY_JSON" "$DISPATCHER_SA" "$QUEUE_PATH" "$DRAIN_QUEUE_PATH" "$WORKER_URL" "$INVOKER_SA" "$SOURCE_SHA" "$SIGNING_SECRET" "$SIGNING_VERSION" "$CANARY_WORKER_ORIGIN" "$GATEWAY_CANARY_OWNER_USER_IDS" "$GATEWAY_PIPELINE_MODE" "$STAGED_OWNER_IDS" "$REVISION_JSON" <<'PY'
 import json, sys
 (path, expected_sa, queue_path, drain_queue_path, worker_url, invoker_sa, source_sha, secret_name, secret_version,
- canary_origin, canary_owners) = sys.argv[1:]
+ canary_origin, canary_owners, pipeline_mode, staged_owners, revision_path) = sys.argv[1:]
 with open(path, encoding='utf-8') as handle:
     service = json.load(handle)
 url = str(service.get('status', {}).get('url') or '').strip()
@@ -331,7 +364,12 @@ expected_values = {
     'DISPATCH_MAX_CLOCK_SKEW_SECONDS': '300',
     'DISPATCH_MAX_BODY_BYTES': '262144',
     'FIXLIST_GATEWAY_SOURCE_SHA': source_sha,
+    'SCAN_PIPELINE_MODE': pipeline_mode,
 }
+if pipeline_mode == 'staged':
+    expected_values['SCAN_STAGED_OWNER_IDS'] = staged_owners
+elif 'SCAN_STAGED_OWNER_IDS' in env:
+    raise SystemExit('Inactive gateway unexpectedly carries staged owners')
 if canary_origin:
     expected_values['SCAN_CANARY_WORKER_ORIGIN'] = canary_origin
     expected_values['SCAN_CANARY_OWNER_USER_IDS'] = canary_owners
@@ -342,6 +380,15 @@ else:
 for name, value in expected_values.items():
     if str(env.get(name, {}).get('value') or '') != value:
         raise SystemExit(f'Gateway environment mismatch: {name}')
+revision = json.load(open(revision_path, encoding='utf-8'))
+actual_env = {item.get('name'): str(item.get('value') or '')
+              for item in revision.get('spec', {}).get('containers', [{}])[0].get('env', [])}
+for name, value in expected_values.items():
+    if actual_env.get(name, '') != value:
+        raise SystemExit(f'Serving gateway revision configuration mismatch: {name}')
+for name in ('SCAN_STAGED_OWNER_IDS', 'SCAN_CANARY_WORKER_ORIGIN', 'SCAN_CANARY_OWNER_USER_IDS'):
+    if name not in expected_values and name in actual_env:
+        raise SystemExit(f'Serving gateway revision unexpectedly carries {name}')
 ref = env.get('SCAN_EVIDENCE_SIGNING_KEY', {}).get('valueFrom', {}).get('secretKeyRef', {})
 if str(ref.get('name') or '') != secret_name or str(ref.get('key') or '') != secret_version:
     raise SystemExit('Gateway signing-secret reference mismatch')
@@ -395,7 +442,9 @@ while :; do
       --drain-queue-path "$DRAIN_QUEUE_PATH" \
       --worker-origin "$WORKER_ORIGIN" \
       --canary-worker-origin "$CANARY_WORKER_ORIGIN" \
-      --canary-owner-count "$CANARY_OWNER_COUNT" 2>/dev/null)"; then
+      --canary-owner-count "$CANARY_OWNER_COUNT" \
+      --pipeline-mode "$GATEWAY_PIPELINE_MODE" \
+      --staged-owner-ids "$STAGED_OWNER_IDS" 2>/dev/null)"; then
       break
     fi
   fi

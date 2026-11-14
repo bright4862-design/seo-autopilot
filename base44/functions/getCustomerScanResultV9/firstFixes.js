@@ -2,7 +2,13 @@
 const id = fix => String(fix?.fix_id || fix?.issue_id || fix?.id || "");
 const root = fix => String(fix?.root_cause_id || fix?.raw_finding?.root_cause_id || fix?.rule || "");
 const template = fix => String(fix?.template_key || fix?.page_template_family || fix?.raw_finding?.template_key || "");
-const ownerCanDo = fix => ["you", "owner", "business_owner", "site_owner"].includes(String(fix?.who_can_do_this || fix?.who_does_it || fix?.implementation_owner || fix?.raw_finding?.implementation_owner || "").toLowerCase()) || String(fix?.difficulty || "").toLowerCase() === "easy";
+const ownerCanDo = fix => {
+  if (fix?.requires_developer === true || fix?.raw_finding?.requires_developer === true) return false;
+  const role = [fix?.who_can_do_this, fix?.who_does_it, fix?.implementation_owner, fix?.raw_finding?.implementation_owner]
+    .map(value => String(value || "").trim().toLowerCase()).find(Boolean);
+  // Effort alone cannot establish that the owner can perform the work.
+  return ["you", "owner", "business_owner", "site_owner", "you_or_your_web_person", "you or your web person"].includes(role);
+};
 const rank = fix => Number.isFinite(Number(fix?.canonical_action_rank)) && Number(fix?.canonical_action_rank) > 0 ? Number(fix.canonical_action_rank) : Number.MAX_SAFE_INTEGER;
 const compatible = (fix, chosen) => !chosen.some(other => id(other) === id(fix) || (root(fix) && root(other) === root(fix)) || (template(fix) && template(other) === template(fix)));
 
@@ -11,8 +17,15 @@ const factorScore = fix => {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 };
 
-export function topFixIds(fixes = []) {
-  const ordered = fixes.filter(fix => id(fix)).map((fix, index) => ({fix, index})).sort((a, b) => ((factorScore(b.fix) ?? -Infinity) - (factorScore(a.fix) ?? -Infinity)) || rank(a.fix) - rank(b.fix) || a.index - b.index).map(row => row.fix);
+export function topFixIds(fixes = [], { handoff } = {}) {
+  const roots = new Map((Array.isArray(handoff?.fixes) ? handoff.fixes : [])
+    .filter(fix => typeof fix?.rule_id === "string" && typeof fix?.root_cause_id === "string" && fix.root_cause_id.trim())
+    .map(fix => [fix.rule_id, fix.root_cause_id]));
+  // Stage3 retains verified root identities in its signed handoff source.
+  const candidates = fixes.map(fix => roots.has(id(fix))
+    ? { ...fix, root_cause_id: fix?.root_cause_id || fix?.raw_finding?.root_cause_id || roots.get(id(fix)) }
+    : fix);
+  const ordered = candidates.filter(fix => id(fix)).map((fix, index) => ({fix, index})).sort((a, b) => ((factorScore(b.fix) ?? -Infinity) - (factorScore(a.fix) ?? -Infinity)) || rank(a.fix) - rank(b.fix) || a.index - b.index).map(row => row.fix);
   const selected = [];
   for (const fix of ordered) {
     if (compatible(fix, selected)) selected.push(fix);
@@ -36,7 +49,8 @@ export function topFixIds(fixes = []) {
 
 export function withFirstFixes(projection, run = {}) {
   if (run.page_cap !== undefined && (projection.authority_verified || projection.result_integrity_verified)) {
-    return {...projection, top_fix_ids: topFixIds(projection.fixItems || [])};
+    const handoff = run?.health_score_explanation?.stage3_delivery?.handoff_v2_source;
+    return {...projection, top_fix_ids: topFixIds(projection.fixItems || [], { handoff })};
   }
   return projection;
 }

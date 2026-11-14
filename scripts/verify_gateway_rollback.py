@@ -29,6 +29,10 @@ def verify(service, revision, health, baseline, expected_revision, source_sha):
     if "canary_worker_origin" in baseline:
         canary = {"canary_worker_origin": baseline["canary_worker_origin"] or "",
                   "canary_owner_count": baseline.get("canary_owner_count", 0)}
+    if "pipeline_mode" in baseline:
+        canary.update(pipeline_mode=baseline["pipeline_mode"],
+                      staged_owner_cohort_sha256=baseline.get("staged_owner_cohort_sha256"),
+                      staged_owner_count=baseline.get("staged_owner_count"))
     verify_runtime_health(health, expected_revision, source_sha, baseline["contract_version"],
                           baseline["queue"], baseline["drain_queue"], baseline["worker_origin"], **canary)
 

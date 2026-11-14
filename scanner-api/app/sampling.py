@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 from .extract import is_legal_page_path, is_route_boundary
 from .market_scope import strip_market_locale_prefix
 
-SAMPLING_VERSION = "balanced_sitemap_buckets_v8_importance_section_quotas"
+SAMPLING_VERSION = "balanced_sitemap_buckets_v9_feasible_ceiling_hub_reservations"
 TRUST_PREFIXES = (
     "/about", "/contact", "/privacy", "/terms", "/legal", "/mentions-legales",
     "/cgv", "/security", "/impressum", "/conditions", "/a-propos",
@@ -240,11 +240,21 @@ def select_balanced_urls(
 
     buckets = {section: spread(values) for section, values in buckets.items()}
     section_order = sorted(buckets, key=lambda section: rank(buckets[section][0]))
+    # Apply a feasible ceiling to every allocation, including the commercial
+    # reserve. Checking only proportional fill lets that reserve monopolize a
+    # section before quota allocation starts. Content sections can collectively
+    # supply the balance; root singletons and trust pages do not establish a
+    # competing business section. Use actual capacity rather than section count.
+    section_ceiling = int(budget * 0.4)
+    ceiling = section_ceiling if section_ceiling > 0 and sum(
+        min(len(values), section_ceiling) for section, values in buckets.items()
+        if section != "/" and not all(is_trust_path(paths[url]) for url in values)
+    ) >= budget else budget
     selected, chosen = [], set()
     counts = Counter()
 
     def take(url: str) -> bool:
-        if url in chosen or len(selected) >= budget:
+        if url in chosen or len(selected) >= budget or counts[sections[url]] >= ceiling:
             return False
         chosen.add(url)
         selected.append(url)
@@ -264,6 +274,13 @@ def select_balanced_urls(
 
     # One head in every section before a second or third representative.
     heads = []
+    for section in section_order:
+        head = next((url for url in buckets[section]
+                     if (strip_locale_prefix(paths[url]).rstrip("/") or "/") == section), None)
+        # Navigation leaves can already satisfy a section's numerical floor;
+        # its actual hub is still a separate coverage requirement.
+        if head and (head in chosen or take(head)):
+            heads.append(head)
     for round_index in range(3):
         for section in section_order:
             want = min(3, len(buckets[section]))
@@ -299,15 +316,9 @@ def select_balanced_urls(
         weights[section] = math.sqrt(len(values)) * (0.2 + mean_score) * role_weight
     total_weight = sum(weights.values())
     targets = {section: budget * weight / total_weight for section, weight in weights.items()}
-    # A 40% ceiling is feasible only when at least three sizeable sections can
-    # supply the balance. Small /trust and singleton sections do not count.
-    sizeable = [section for section, values in buckets.items() if len(values) >= max(3, int(budget * 0.2)) and not all(is_trust_path(paths[url]) for url in values)]
-    ceiling = max(1, int(budget * 0.4)) if len(sizeable) >= 4 else budget
     remaining = {section: [url for url in values if url not in chosen] for section, values in buckets.items()}
     while len(selected) < budget:
         eligible = [section for section in section_order if remaining[section] and counts[section] < ceiling]
-        if not eligible:
-            eligible = [section for section in section_order if remaining[section]]
         if not eligible:
             break
         section = min(eligible, key=lambda key: (counts[key] / max(targets[key], 0.000001), rank(remaining[key][0])))

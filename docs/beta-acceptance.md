@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `1470ccb6398a7f4f` |
+| Candidate fingerprint | `118544dcf77d86cf` |
 | Classifier | `archetype_classifier_v12_locale_normalized_structural_routes` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,12 +15,14 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `1470ccb6398a7f4f` with classifier
+fingerprint `118544dcf77d86cf` with classifier
 `archetype_classifier_v12_locale_normalized_structural_routes`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v7_content_applicability`.
 
-The current `1470ccb6398a7f4f` candidate implements section-based importance sampling, resumable staged execution, server-owned 150/500 caps and V9 publication/readback. V8/monolith remains the default and production acceptance is still **not met**. Offline evidence, infrastructure preparation and the owner-cohort rollout gates are documented in `docs/scans/staged-scan-runbook.md`. This record is not evidence of deployment or representative live-site acceptance.
+The current `118544dcf77d86cf` candidate implements section-based importance sampling, resumable staged execution, server-owned 150/500 caps and V9 publication/readback. V8/monolith remains the default and production acceptance is still **not met**. Offline evidence, infrastructure preparation and the owner-cohort rollout gates are documented in `docs/scans/staged-scan-runbook.md`. This record is not evidence of deployment or representative live-site acceptance.
+
+The preceding `1470ccb6398a7f4f` staged candidate is superseded by the architecture corrections above. Neither candidate has live acceptance. Current corrections enforce feasible section ceilings and real hub coverage, reject synchronous 500-page ingress before work, preserve cached aggregate RSS, and keep new signed Stage 3 shortlists consistent while preserving historical HMAC reconstruction.
 
 The preceding `e0eca935c350e590` local candidate prioritizes commercial category, city/location and service hubs within the Standard 150 page cap, while retaining representative detail pages and diagnostic coverage. Sitemap traversal interleaves business structures before repeated language and numbered siblings. Offline evidence and limitations are recorded in `docs/standard150-commercial-sampling-acceptance.md`; this is not a live acceptance report. Exact-SHA CI, coordinated scanner/Base44 deployment verification and live acceptance remain pending.
 

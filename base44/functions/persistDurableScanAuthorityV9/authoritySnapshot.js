@@ -7,6 +7,7 @@ import {
   buildPersistedAuthoritySnapshotStage3,
 } from "./stage3V7Delivery.js";
 import { PUBLISHED_REVIEW_ATTESTATION_VERSION } from "./publishedRepairEvidence.js";
+import { topFixIds } from "./firstFixes.js";
 
 export * from "./authoritySnapshotStage1Legacy.js";
 
@@ -15,6 +16,24 @@ const INTERNAL_STAGE3_BASE = "__fixlist_stage3_v7_legacy_base";
 function withoutInternalMarker(value = {}) {
   const { [INTERNAL_STAGE3_BASE]: _marker, ...rest } = value || {};
   return rest;
+}
+
+function withNewStagedFirstFixes(snapshot) {
+  if (snapshot?.scan?.page_cap === undefined) return snapshot;
+  const handoff = snapshot.scan?.health_score_explanation?.stage3_delivery?.handoff_v2_source;
+  return { ...snapshot, fix_list: {
+    ...snapshot.fix_list,
+    top_action_fix_ids: topFixIds(snapshot.recommendations, { handoff }),
+  } };
+}
+
+function withPersistedFirstFixes(snapshot, args) {
+  // Selection is mutable policy; historical HMAC reconstruction must use the
+  // original signed list, exactly as the independent customer reader does.
+  const ids = args?.fixList?.top_action_fix_ids;
+  const signedIds = Array.isArray(ids) ? ids.slice(0, 3)
+    .map(id => typeof id === "string" ? id.trim().slice(0, 160) : "").filter(Boolean) : [];
+  return { ...snapshot, fix_list: { ...snapshot.fix_list, top_action_fix_ids: signedIds } };
 }
 
 function hasPersistedStage3Delivery(run) {
@@ -52,24 +71,24 @@ export function buildAuthoritySnapshot(options = {}) {
     return legacy.buildAuthoritySnapshot(withoutInternalMarker(options));
   }
   if (!claimsDurableStage3Delivery(options?.review, options?.identity)) {
-    return legacy.buildAuthoritySnapshot(options);
+    return withNewStagedFirstFixes(legacy.buildAuthoritySnapshot(options));
   }
   const staged = buildAuthoritySnapshotStage3({
     ...options,
     [INTERNAL_STAGE3_BASE]: true,
   });
-  return staged?.version === STAGE3_AUTHORITY_VERSION
+  return withNewStagedFirstFixes(staged?.version === STAGE3_AUTHORITY_VERSION
     ? { ...staged, version: PUBLISHED_REVIEW_ATTESTATION_VERSION }
-    : staged;
+    : staged);
 }
 
 export function buildPersistedAuthoritySnapshot(args = {}) {
   if (args?.[INTERNAL_STAGE3_BASE] === true) {
-    return legacy.buildPersistedAuthoritySnapshot(withoutInternalMarker(args));
+    return withPersistedFirstFixes(legacy.buildPersistedAuthoritySnapshot(withoutInternalMarker(args)), args);
   }
   const run = args?.run;
   if (!hasPersistedStage3Delivery(run)) {
-    return legacy.buildPersistedAuthoritySnapshot(args);
+    return withPersistedFirstFixes(legacy.buildPersistedAuthoritySnapshot(args), args);
   }
   const staged = buildPersistedAuthoritySnapshotStage3({
     ...args,
@@ -79,5 +98,5 @@ export function buildPersistedAuthoritySnapshot(args = {}) {
   if (staged?.version !== STAGE3_AUTHORITY_VERSION) {
     throw new Error("Persisted Stage3 delivery did not reconstruct the expected authenticated contract");
   }
-  return { ...staged, version: PUBLISHED_REVIEW_ATTESTATION_VERSION };
+  return withPersistedFirstFixes({ ...staged, version: PUBLISHED_REVIEW_ATTESTATION_VERSION }, args);
 }

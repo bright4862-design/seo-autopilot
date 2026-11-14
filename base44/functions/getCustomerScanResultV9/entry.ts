@@ -45,7 +45,7 @@ import {
   parseCustomerPreviewPayload,
   verifyCustomerPreviewProof,
 } from "./customerPreviewSeal.js";
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "1470ccb6398a7f4f";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "118544dcf77d86cf";
 const MAX_FIX_ITEMS = 100;
 
 // Runtime-secret convergence must not be confused with cryptographic key

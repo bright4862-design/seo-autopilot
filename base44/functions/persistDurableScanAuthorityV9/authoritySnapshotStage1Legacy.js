@@ -131,7 +131,8 @@ export function isAuthorityEligible(scan, review, context = {}) {
 }
 
 export function buildAuthoritySnapshot({ scan, review, identity, userId, now = new Date().toISOString(), identityVersion = "", persistedEvidence = false }) {
-  const context = { ...publishedIdentityContext(scan, identityVersion), persisted: persistedEvidence };
+  const context = { ...publishedIdentityContext(scan, identityVersion), persisted: persistedEvidence,
+    stagedFirstFixes: scan?.page_cap !== undefined && persistedEvidence !== true };
   const firstPage = firstArray([scan?.crawled_pages, scan?.pages, scan?.scanned_pages])[0] || {};
   if (!canonicalReviewIsAbsentOrValid(review, context)) {
     throw new Error("canonical repair contract is invalid");
@@ -425,6 +426,15 @@ function toAuthorityFix(fix, index, context = {}) {
     : "page";
   const affectedPages = textArray(fix?.affected_pages, 150, 2_000);
   const raw = fix?.raw_finding && typeof fix.raw_finding === "object" ? fix.raw_finding : {};
+  const requiresDeveloper = fix?.requires_developer === true || (context.stagedFirstFixes === true && raw.requires_developer === true);
+  const assignment = context.stagedFirstFixes
+    ? [fix?.who_can_do_this, fix?.who_does_it, fix?.implementation_owner, raw.implementation_owner].map(value => text(value, 120)).find(Boolean) || ""
+    : text(fix?.who_can_do_this, 120);
+  const ownerAssignment = ["you", "owner", "business_owner", "site_owner"].includes(assignment.toLowerCase());
+  const sharedAssignment = ["you_or_your_web_person", "you or your web person"].includes(assignment.toLowerCase());
+  const who = context.stagedFirstFixes
+    ? (requiresDeveloper && (!assignment || ownerAssignment || sharedAssignment) ? "developer" : ownerAssignment ? "you" : assignment)
+    : assignment;
   const reportEvidence = sanitizeReportRawFindingEvidence({ ...fix, ...raw });
   const persistedEvidenceGroups = text(fix?.repair_contract_version, 160) === REPAIR_CONTRACT_V2
     ? canonicalRepairEvidenceGroups(fix?.repair_evidence_groups || raw.repair_evidence_groups)
@@ -477,8 +487,8 @@ function toAuthorityFix(fix, index, context = {}) {
     confidence_score: number(fix?.confidence_score),
     priority,
     difficulty: text(fix?.difficulty, 120),
-    who_can_do_this: text(fix?.who_can_do_this, 120),
-    requires_developer: fix?.requires_developer === true,
+    who_can_do_this: who,
+    requires_developer: requiresDeveloper,
     requires_approval: fix?.requires_approval === true,
     can_auto_fix: false,
     estimated_time: text(fix?.estimated_time, 120),

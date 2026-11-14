@@ -279,6 +279,11 @@ async def chat(payload: ChatRequest, x_scanner_key: str | None = Header(default=
 @app.post("/scan")
 async def scan(payload: ScanRequest, x_scanner_key: str | None = Header(default=None)):
     require_scanner_api_key(x_scanner_key)
+    # An API key authenticates synchronous ingress, not a customer's page
+    # entitlement. Only the staged worker validates Standard 500 against its
+    # server-owned ScanRun before admitting that crawl budget.
+    if str(payload.scan_mode or "").strip().lower() == "standard_500":
+        raise HTTPException(status_code=400, detail="Standard 500 requires an entitled staged scan.")
 
     request_id = str(payload.request_id or payload.idempotency_key or "").strip()
     idempotency_key = str(payload.idempotency_key or request_id).strip()

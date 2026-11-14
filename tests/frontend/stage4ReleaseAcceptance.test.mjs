@@ -59,7 +59,8 @@ function validRecord(overrides = {}) {
     acceptance: {
       cohort: {
         mode: "acceptance_only",
-        total_claim_budget: 1,
+        total_claim_budget: 2,
+        per_owner_claim_budget: 2,
         public_claims_closed: true,
         activation_reference: `${RECEIPT}:cohort`,
       },
@@ -264,4 +265,34 @@ test("a distinct, valid, bounded Standard 150 rescan retains the acceptance shap
   record.acceptance.rescan.authority_proof = "e".repeat(64);
   record.acceptance.rescan.fix_list_id = "fix-list-3";
   assert.equal(evaluateStage4ReleaseAcceptance(record).pass, true);
+});
+
+test("a linked rescan needs a second fresh claim for the same owner", () => {
+  const valid = validRecord();
+  assert.equal(evaluateStage4ReleaseAcceptance(valid).pass, true);
+
+  for (const [total, perOwner, fragment] of [
+    [1, 1, "total claim budget"],
+    [2, 1, "per-owner claim budget"],
+    [2, undefined, "per-owner claim budget"],
+    [2, 3, "per-owner claim budget"],
+    [2, 1.5, "per-owner claim budget"],
+    [0, 0, "total claim budget"],
+    [4, 2, "total claim budget"],
+  ]) {
+    const record = validRecord();
+    record.acceptance.cohort.total_claim_budget = total;
+    if (perOwner === undefined) delete record.acceptance.cohort.per_owner_claim_budget;
+    else record.acceptance.cohort.per_owner_claim_budget = perOwner;
+    const result = evaluateStage4ReleaseAcceptance(record);
+    assert.equal(result.status, "failed", `total=${total}, perOwner=${perOwner}`);
+    assert.ok(result.failures.some((item) => item.includes(fragment)), JSON.stringify(result.failures));
+  }
+
+  // Allow a bounded spare claim for a failed attempt without promising that
+  // a terminal release refunds admission quota.
+  const spare = validRecord();
+  spare.acceptance.cohort.total_claim_budget = 3;
+  spare.acceptance.cohort.per_owner_claim_budget = 2;
+  assert.equal(evaluateStage4ReleaseAcceptance(spare).pass, true);
 });

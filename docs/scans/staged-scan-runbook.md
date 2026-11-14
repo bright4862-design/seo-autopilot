@@ -96,6 +96,30 @@ verification scripts. The target must be a tag belonging to that same service;
 a tag URL is not a valid Cloud Run OIDC audience. Keep this mapping in place
 while the candidate's stage tasks drain.
 
+**Worker cohort build.** Run `build-worker-candidate` with
+`stage_config=owner-canary` and `acceptance_owner_user_ids=<one exact owner
+ID>`. Set `worker_cohort_confirm=STAGE-WORKER-OWNER-CANARY:<exact-main-sha>:<sorted-cohort-sha256>`.
+The hash uses the gateway's definition: SHA-256 of the JSON array of sorted
+owner IDs, with no spaces. The build:
+
+- creates one 0%-traffic revision with the reviewed inactive environment,
+  except `SCAN_PIPELINE_MODE=staged` and `SCAN_STAGED_OWNER_IDS=<owner>`;
+- keeps `FIXLIST_STAGED_CONFIG_SHA256` as the **inactive-equivalent** digest,
+  computed over the reviewed inactive environment, so a cohort cannot hide a
+  change to any other staged setting;
+- creates the immutable `staged-<sha12>` tag on that revision.
+
+It refuses:
+
+- more than one owner, a wildcard or the legacy `SCAN_PIPELINE_OWNER_IDS`;
+- a mode override;
+- a confirmation bound to another source or owner.
+
+The tag can never be rebound, so do **not** build an `inactive` baseline from
+the same source first. Build the owner-canary candidate once, from the exact
+`main` you will activate from. Stage-queue activation stays a separate
+barrier-gated operation (`staged-queue-activate`).
+
 Use the **same explicit owner IDs** in Base44, gateway and worker:
 
 ```text

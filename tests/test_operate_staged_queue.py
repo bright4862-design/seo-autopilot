@@ -318,7 +318,8 @@ def operator(tmp_path):
         "import json,os,sys\n"
         "with open(os.environ['TEST_CALL_LOG'],'a') as f: f.write(json.dumps(['barrier',os.environ['OPERATION'],"
         "os.environ['SOURCE_SHA'],os.environ['BARRIER_EXPECTED_GENERATION'],os.environ['BARRIER_EXPECTED_PRIOR_MODE'],"
-        "os.environ['CHANGE_TICKET']])+'\\n')\n"
+        "os.environ['CHANGE_TICKET'],os.environ.get('CLOUDSDK_AUTH_ACCESS_TOKEN_FILE',''),"
+        "os.environ.get('GCP_OPERATOR_SERVICE_ACCOUNT','')])+'\\n')\n"
         "b=json.load(open(os.environ['FAKE_STATE']))['barrier']\n"
         "if b is None: sys.exit('Refusing: barrier snapshot signature invalid')\n"
         "print('ADMISSION_BARRIER_STATUS mode={mode} generation={generation} drain_ready={ready} active={active} "
@@ -383,7 +384,9 @@ def operator(tmp_path):
                "GITHUB_REF": "refs/heads/main", "GITHUB_SHA": sha, "SOURCE_SHA": sha,
                "TEST_CALL_LOG": str(log), "FAKE_STATE": str(state_path), "OPERATION": operation,
                "CONFIRM": confirm, "STAGED_QUEUE_DRAIN_TIMEOUT_SECONDS": "5",
-               "STAGED_QUEUE_DRAIN_POLL_SECONDS": "0", "STAGED_QUEUE_DRAIN_STABLE_READS": "2", **env_overrides}
+               "STAGED_QUEUE_DRAIN_POLL_SECONDS": "0", "STAGED_QUEUE_DRAIN_STABLE_READS": "2",
+               # The real repo ignores __pycache__/; this bare fixture repo does not.
+               "PYTHONDONTWRITEBYTECODE": "1", **env_overrides}
         result = subprocess.run(["bash", "scripts/operate-staged-queue.sh"], cwd=repo, env=env,
                                 text=True, capture_output=True, timeout=30)
         calls = [json.loads(line) for line in log.read_text().splitlines()]
@@ -533,6 +536,55 @@ def test_activate_reports_partial_activation_when_post_resume_verification_fails
 
 DRAIN = "DRAIN-PAUSE-STAGED-QUEUE:{sha}:fixlist-scan-stages:7"
 RECOVER = "RECOVER-STAGED-QUEUE:{sha}:fixlist-scan-stages:7"
+
+
+def test_barrier_reads_use_the_admission_identity_only_when_a_token_file_is_given(operator, tmp_path):
+    sha, write_state, run = operator
+    token = tmp_path / "barrier-token"
+    token.write_text("opaque")
+    write_state(stage_tasks=[stage_task("b1", sha)])
+    result, calls, _ = run("recover", RECOVER.format(sha=sha), BARRIER_EXPECTED_GENERATION="7",
+                           STAGED_BARRIER_ACCESS_TOKEN_FILE=str(token),
+                           GCP_OPERATOR_SERVICE_ACCOUNT="fixlist-github-operator@seo-autopilot-501517.iam.gserviceaccount.com")
+    assert result.returncode == 0, result.stderr
+    barriers = [c for c in calls if c[0] == "barrier"]
+    assert barriers and all(c[6] == str(token) for c in barriers)
+    assert all(c[7] == "fixlist-admission-operator@seo-autopilot-501517.iam.gserviceaccount.com" for c in barriers)
+    # Without a token file nothing is overridden (local operator runs).
+    write_state(stage_tasks=[stage_task("b1", sha)])
+    result, calls, _ = run("recover", RECOVER.format(sha=sha), BARRIER_EXPECTED_GENERATION="7")
+    assert result.returncode == 0 and all(c[6] == "" for c in calls if c[0] == "barrier")
+    token.write_text("")
+    write_state(stage_tasks=[stage_task("b1", sha)])
+    result, calls, final = run("recover", RECOVER.format(sha=sha), BARRIER_EXPECTED_GENERATION="7",
+                               STAGED_BARRIER_ACCESS_TOKEN_FILE=str(token))
+    assert result.returncode != 0 and "token file is empty" in result.stderr and mutations(calls) == []
+
+
+def test_cloud_operator_workflow_wires_every_staged_queue_operation():
+    import yaml
+    workflow = yaml.safe_load((ROOT / ".github/workflows/fixlist-cloud-operator.yml").read_text())
+    options = workflow[True]["workflow_dispatch"]["inputs"]["operation"]["options"]
+    ops = ["staged-queue-status", "staged-queue-activate", "staged-queue-drain-pause", "staged-queue-recover"]
+    assert all(op in options for op in ops)
+    steps = {step.get("name"): step for step in workflow["jobs"]["operate"]["steps"]}
+    run_step = steps["Operate staged scan queue"]
+    assert run_step["if"] == "startsWith(inputs.operation, 'staged-queue-')"
+    assert "scripts/operate-staged-queue.sh" in run_step["run"]
+    for op, local in zip(ops, ["status", "activate", "drain-pause", "recover"]):
+        assert f"{op}) export OPERATION={local} ;;" in run_step["run"]
+    assert run_step["env"]["SOURCE_SHA"] == "${{ github.sha }}"
+    # The generic operator step must never also receive these operations.
+    assert "!startsWith(inputs.operation, 'staged-queue-')" in steps["Run allowlisted worker operation"]["if"]
+    for name in ("Mint coordinator operator identity token", "Mint admission access token for staged-queue barrier reads"):
+        for op in ops[1:]:
+            assert f'"{op}"' in steps[name]["if"]
+    barrier_auth = steps["Mint admission access token for staged-queue barrier reads"]["with"]
+    assert barrier_auth["token_format"] == "access_token" and barrier_auth["create_credentials_file"] is False
+    assert barrier_auth["service_account"] == "${{ env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT }}"
+    # Queue calls keep the GitHub operator as the active gcloud identity.
+    auth = steps["Authenticate to Google Cloud"]["with"]["service_account"]
+    assert not any(op in auth for op in ops)
 
 
 def test_drain_pause_and_recover_confirmations_bind_the_barrier_generation(operator):

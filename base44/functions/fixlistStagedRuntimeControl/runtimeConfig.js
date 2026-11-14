@@ -6,23 +6,27 @@ const MAX_COHORT = 5;
 function observe(reader, name) {
   try {
     const value = reader(name);
-    return typeof value === "string" ? { known: true, value } : { known: false, value: "" };
+    if (typeof value === "string") return { known: true, value };
+    if (value === undefined) return { known: false, absent: true };
   } catch {
-    return { known: false, value: "" };
+    // An unreadable key cannot be treated as a confirmed missing key.
   }
+  return { known: false };
 }
 
 function modeOf(observed) {
   if (!observed.known) return "unavailable";
-  const mode = observed.value.trim().toLowerCase();
+  const mode = observed.value;
   return mode === "" ? "absent" : VALID_MODES.has(mode) ? mode : "invalid";
 }
 
 function cohortOf(observed, expectedOwnerId) {
-  if (!observed.known) return { valid: false, state: "unavailable", ownerCount: null, ownerMatch: false, members: [] };
-  const raw = observed.value.trim();
+  if (!observed.known) {
+    return { valid: false, state: observed.absent ? "absent" : "unavailable", ownerCount: null, ownerMatch: false, members: [] };
+  }
+  const raw = observed.value;
   if (!raw) return { valid: true, state: "empty", ownerCount: 0, ownerMatch: false, members: [] };
-  const members = raw.split(",").map(item => item.trim());
+  const members = raw.split(",");
   const valid = members.length <= MAX_COHORT
     && members.every(item => OWNER_PATTERN.test(item))
     && new Set(members).size === members.length;
@@ -60,7 +64,7 @@ export function summarizeStagedRuntime({ readEnv, readSecret, expectedOwnerId })
   const cohortsAgree = envOwners.valid && secretOwners.valid
     && envOwners.members.length === secretOwners.members.length
     && envOwners.members.every((member, i) => member === secretOwners.members[i]);
-  const legacyAliasClear = legacyAlias.state === "empty" || legacyAlias.state === "unavailable";
+  const legacyAliasClear = legacyAlias.state === "empty" || legacyAlias.state === "absent";
   const configConverged = validModes && envMode === secretMode && cohortsAgree && legacyAliasClear;
   const stagedOwnerEnabled = configConverged && envMode === "staged" && envOwners.ownerMatch;
   const intakeDisabledVerified = intakeGate === "disabled";

@@ -61,6 +61,26 @@ test("conflicting runtime modes fail closed",()=>{
   assert.equal(report.config_converged,false);
   assert.equal(report.owner_match,false);
 });
+test("staged mode must match the value V9 compares without normalization",()=>{
+  for (const mode of ["STAGED", " staged "]) {
+    const settings={...on,SCAN_PIPELINE_MODE:mode};
+    const report=state(settings,{...settings,...gates});
+    assert.equal(report.env_mode,"invalid");
+    assert.equal(report.secret_mode,"invalid");
+    assert.equal(report.config_converged,false);
+    assert.equal(report.staged_owner_enabled,false);
+  }
+});
+test("staged owner tokens must match the gateway format without normalization",()=>{
+  for (const cohort of [` ${OWNER_ID}`,`${OWNER_ID} `,`${OWNER_ID}, other_owner`]) {
+    const settings={...on,SCAN_STAGED_OWNER_IDS:cohort};
+    const report=state(settings,{...settings,...gates});
+    assert.equal(report.env_cohort_state,"invalid");
+    assert.equal(report.secret_cohort_state,"invalid");
+    assert.equal(report.config_converged,false);
+    assert.equal(report.staged_owner_enabled,false);
+  }
+});
 for(const owners of ["*",OWNER_ID+",*",OWNER_ID+","+OWNER_ID,"other_owner,"+OWNER_ID+",",...[
   "a", " ".repeat(4), ",".repeat(10), "u".repeat(65), "owner!wrong"
 ]]) {
@@ -76,6 +96,31 @@ test("legacy owner alias does not silently create a staged cohort",()=>{
   const result=state(settings,{...on,...gates});
   assert.equal(result.config_converged,false);
   assert.equal(result.owner_match,false);
+});
+test("a legacy owner alias is clear only when successfully read as unset or empty",()=>{
+  const aliasKey="SCAN_PIPELINE_OWNER_IDS";
+  const secret={...on,...gates};
+  for (const [value,expectedState] of [[undefined,"absent"],["","empty"]]) {
+    const report=state({...on,[aliasKey]:value},secret);
+    assert.equal(report.legacy_alias_state,expectedState);
+    assert.equal(report.config_converged,true);
+    assert.equal(report.staged_owner_enabled,true);
+  }
+  const unreadable=[
+    ()=>{throw Error("alias read failed");},
+    ()=>null,
+    ()=>17,
+  ];
+  for (const readAlias of unreadable) {
+    const report=summarizeStagedRuntime({
+      readEnv: key=>key===aliasKey ? readAlias() : on[key],
+      readSecret: key=>secret[key],
+      expectedOwnerId: OWNER_ID,
+    });
+    assert.equal(report.legacy_alias_state,"unavailable");
+    assert.equal(report.config_converged,false);
+    assert.equal(report.staged_owner_enabled,false);
+  }
 });
 test("invalid mode and unknown intake are explicit unverified states",()=>{
   const report=state({...off,SCAN_PIPELINE_MODE:"hybrid"},{...off,BETA_SCAN_INTAKE_ENABLED:"enabled"});

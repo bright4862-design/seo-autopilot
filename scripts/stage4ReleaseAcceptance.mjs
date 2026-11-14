@@ -121,6 +121,14 @@ export function evaluateStage4ReleaseAcceptance(record) {
   add(failures, hosts.some((host) => host.endsWith(".base44.app")), "Base44-hosted source identity not verified");
 
   const functions = Array.isArray(record.deployment?.functions) ? record.deployment.functions : [];
+  const functionNames = functions.map((fn) => clean(fn?.name));
+  const expectedNames = new Set(EXPECTED_SCANNER_FUNCTIONS);
+  // A Map silently overwrites duplicate names. A valid final row must not conceal
+  // a conflicting runtime observation, nor may an extra V8/V9 route be ignored.
+  add(failures, functions.length === EXPECTED_SCANNER_FUNCTIONS.length
+    && new Set(functionNames).size === functions.length
+    && functionNames.every((name) => expectedNames.has(name)),
+  "Base44 runtime identity roster must contain exactly the distinct source-declared functions");
   const byName = new Map(functions.map((fn) => [clean(fn?.name), fn]));
   for (const name of EXPECTED_SCANNER_FUNCTIONS) {
     const fn = byName.get(name);

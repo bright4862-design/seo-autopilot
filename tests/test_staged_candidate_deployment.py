@@ -82,6 +82,7 @@ elif args[:3] == ['run','services','update-traffic']:
     tag, revision = option('--update-tags').split('=',1)
     canonical = state['service']['status']['url']
     state['service']['status']['traffic'].append({'tag':tag,'revisionName':revision,'percent':0,'url':'https://'+tag+'---'+canonical.removeprefix('https://')})
+    state['service']['spec']['traffic'].append({'tag':tag,'revisionName':revision,'percent':0})
     save(); print(json.dumps(state['service']))
 else: raise SystemExit('Unexpected cloud command '+repr(args))
 '''
@@ -113,6 +114,12 @@ def candidate(tmp_path):
         {"name": "BASE44_APP_ID", "value": "app-test"}, {"name": "BASE44_API_URL", "value": "https://base44.app"},
         {"name": "SCAN_EVIDENCE_SIGNING_KEY", "valueFrom": {"secretKeyRef": {"name": "scan-evidence", "key": "7"}}}]}]}}},
         "status": {"url": CANONICAL, "traffic": [{"revisionName": "serving", "percent": 100}, {"tag": "candidate", "revisionName": "older-candidate", "percent": 0, "url": "https://candidate---worker-abc-ew.a.run.app"}]}}
+    # Cloud Run v1 desired and observed traffic must both be stable before an
+    # immutable staged source tag is installed.
+    worker["spec"]["traffic"] = [
+        {key: value for key, value in row.items() if key != "url"}
+        for row in worker["status"]["traffic"]
+    ]
     state_path.write_text(json.dumps({"service": worker}))
     env = {**os.environ, "PATH": str(binaries) + os.pathsep + os.environ["PATH"], "GCP_PROJECT": PROJECT, "GCP_REGION": REGION,
            "SOURCE_SHA": sha, "CONFIRM": sha, "GITHUB_ACTIONS": "true", "GITHUB_REF": "refs/heads/main", "GITHUB_SHA": sha,
@@ -533,3 +540,55 @@ def test_tag_cli_requires_both_bindings_for_staged_modes(tmp_path):
     assert not (bin_dir / "gcloud.calls").exists()
     off = subprocess.run([*base[:3], "--mode=off", *base[4:]], env=env, capture_output=True, text=True)
     assert off.returncode == 0
+
+
+@pytest.mark.parametrize("desired", [
+    [{"revisionName": "fixlist-standard150-worker-00105-abc", "percent": 100}],
+    [{"revisionName": "serving", "percent": 80}, {"revisionName": "other", "percent": 20}],
+])
+def test_owner_canary_refuses_reconciling_desired_traffic_before_tag(candidate, desired):
+    """Observed traffic can still show the old 100% serving revision mid-rollout."""
+    run, state, calls, sha = candidate
+    saved = json.loads(state.read_text())
+    saved["service"]["spec"]["traffic"] = desired
+    state.write_text(json.dumps(saved))
+    result = run(**owner_canary(sha))
+    assert result.returncode != 0 and "desired/observed traffic is reconciling" in result.stderr, result.stderr
+    made = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert not any(args[:3] == ["run", "services", "update-traffic"] for args in made)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("missing", None), ("percent", 0.9), ("percent", "100"), ("percent", True),
+])
+def test_staged_tag_refuses_missing_or_ambiguous_traffic_evidence(candidate, field, value):
+    run, state, calls, sha = candidate
+    saved = json.loads(state.read_text())
+    if field == "missing":
+        del saved["service"]["spec"]["traffic"]
+    else:
+        saved["service"]["status"]["traffic"][0]["percent"] = value
+    state.write_text(json.dumps(saved))
+    result = run(**inactive())
+    assert result.returncode != 0
+    assert "traffic" in result.stderr, result.stderr
+    made = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert not any(args[:3] == ["run", "services", "update-traffic"] for args in made)
+
+
+def test_staged_tag_refuses_duplicate_traffic_tag_and_floating_revision(candidate):
+    run, state, calls, sha = candidate
+    saved = json.loads(state.read_text())
+    saved["service"]["spec"]["traffic"].append({
+        "revisionName": "another-candidate", "percent": 0, "tag": "candidate"})
+    state.write_text(json.dumps(saved))
+    result = run(**inactive())
+    assert result.returncode != 0 and "traffic tag is ambiguous" in result.stderr
+    saved = json.loads(state.read_text())
+    saved["service"]["spec"]["traffic"].pop()
+    saved["service"]["spec"]["traffic"][0] = {"latestRevision": True, "percent": 100}
+    state.write_text(json.dumps(saved))
+    result = run(**inactive())
+    assert result.returncode != 0 and "floating latest revision" in result.stderr
+    made = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert not any(args[:3] == ["run", "services", "update-traffic"] for args in made)

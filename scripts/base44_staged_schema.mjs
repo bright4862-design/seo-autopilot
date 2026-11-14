@@ -266,7 +266,6 @@ async function main(argv) {
         report.status = config.action === 'apply' ? 'applied_verified' : 'rolled_back_verified';
         report.readback_verified = true;
         report.live_verified = environment === 'production';
-        journal('terminal_verified', {status: report.status, after_schemas_sha256: digest(report.after_schemas)});
       }
     }
   } catch (error) {
@@ -279,6 +278,9 @@ async function main(argv) {
     try {
       fs.writeFileSync(reportDescriptor, JSON.stringify(report, null, 2) + '\n');
       fs.fsyncSync(reportDescriptor);
+      // Only the persisted JSON report is an apply/rollback receipt. Do not
+      // call a crash-interrupted postflight an accepted terminal result.
+      journal('report_fsynced', {status: report.status, report_sha256: digest(report)});
     } finally {
       fs.closeSync(reportDescriptor);
       if (journalDescriptor !== null) fs.closeSync(journalDescriptor);

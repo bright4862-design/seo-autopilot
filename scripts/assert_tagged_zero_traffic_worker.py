@@ -32,6 +32,12 @@ def verify_tagged_zero_traffic(service: dict, revision: str, tag: str = "candida
     traffic = status.get("traffic")
     if not isinstance(traffic, list) or not traffic:
         raise CandidateNotIsolated("service_traffic_missing")
+    # Preserve the revision-specific immutable canary tag guard even if its
+    # expected revision has disappeared from the traffic table.
+    if tag != "candidate" and any(
+            isinstance(entry, dict) and entry.get("tag") == tag
+            and entry.get("revisionName") != revision for entry in traffic):
+        raise CandidateNotIsolated("canary_tag_reassigned")
     candidates = [entry for entry in traffic
                   if isinstance(entry, dict) and entry.get("revisionName") == revision]
     if not candidates:
@@ -64,10 +70,10 @@ def verify_tagged_zero_traffic(service: dict, revision: str, tag: str = "candida
             tagged_urls.append(url)
     # Report the requested revision's own errors first (not addressable,
     # serving traffic) before diagnosing a conflicting shared tag assignment.
-    if any(isinstance(entry, dict) and entry.get("tag") == tag
-           and entry.get("revisionName") != revision for entry in traffic):
-        raise CandidateNotIsolated("candidate_tag_reassigned" if tag == "candidate"
-                                   else "canary_tag_reassigned")
+    if tag == "candidate" and any(
+            isinstance(entry, dict) and entry.get("tag") == tag
+            and entry.get("revisionName") != revision for entry in traffic):
+        raise CandidateNotIsolated("candidate_tag_reassigned")
     if len(tagged_urls) != 1:
         raise CandidateNotIsolated("candidate_tag_missing_or_ambiguous")
     return tagged_urls[0]

@@ -1,5 +1,4 @@
 """Regression for the Cloud Run v1 invoker-IAM bypass release boundary."""
-import importlib.util
 import json
 from pathlib import Path
 import subprocess

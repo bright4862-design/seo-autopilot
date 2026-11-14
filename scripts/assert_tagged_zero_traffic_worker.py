@@ -32,13 +32,6 @@ def verify_tagged_zero_traffic(service: dict, revision: str, tag: str = "candida
     traffic = status.get("traffic")
     if not isinstance(traffic, list) or not traffic:
         raise CandidateNotIsolated("service_traffic_missing")
-    # A tag is an exact routing identity, including the shared candidate tag.
-    # A conflicting row cannot be ignored just because the requested revision
-    # has a valid-looking candidate entry of its own.
-    if any(isinstance(entry, dict) and entry.get("tag") == tag
-           and entry.get("revisionName") != revision for entry in traffic):
-        raise CandidateNotIsolated("candidate_tag_reassigned" if tag == "candidate"
-                                   else "canary_tag_reassigned")
     candidates = [entry for entry in traffic
                   if isinstance(entry, dict) and entry.get("revisionName") == revision]
     if not candidates:
@@ -69,6 +62,12 @@ def verify_tagged_zero_traffic(service: dict, revision: str, tag: str = "candida
                 raise CandidateNotIsolated("candidate_tag_url_mismatch" if tag == "candidate"
                                            else "canary_tag_url_mismatch")
             tagged_urls.append(url)
+    # Report the requested revision's own errors first (not addressable,
+    # serving traffic) before diagnosing a conflicting shared tag assignment.
+    if any(isinstance(entry, dict) and entry.get("tag") == tag
+           and entry.get("revisionName") != revision for entry in traffic):
+        raise CandidateNotIsolated("candidate_tag_reassigned" if tag == "candidate"
+                                   else "canary_tag_reassigned")
     if len(tagged_urls) != 1:
         raise CandidateNotIsolated("candidate_tag_missing_or_ambiguous")
     return tagged_urls[0]

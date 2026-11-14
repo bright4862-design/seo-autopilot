@@ -9,6 +9,8 @@ import {
   evaluateStage4ReleaseAcceptance,
 } from "../../scripts/stage4ReleaseAcceptance.mjs";
 
+import { RELEASE_FINGERPRINT, RELEASE_COMPONENT_VERSIONS } from "../../src/lib/generatedReleaseContract.js";
+
 const SHA = "a".repeat(40);
 const PROOF = "b".repeat(64);
 const DIGEST = `sha256:${"c".repeat(64)}`;
@@ -44,6 +46,8 @@ function validRecord(overrides = {}) {
         verification_reference: `${RECEIPT}:${name}`,
       })),
       worker: {
+        beta_revision_fingerprint: RELEASE_FINGERPRINT,
+        component_versions: { ...RELEASE_COMPONENT_VERSIONS },
         verified: true,
         source_sha: SHA,
         image_digest: DIGEST,
@@ -64,6 +68,7 @@ function validRecord(overrides = {}) {
         activation_reference: `${RECEIPT}:cohort`,
       },
       scan: {
+        beta_revision_fingerprint: RELEASE_FINGERPRINT,
         scan_id: "scan-acceptance-1",
         mode: "standard_150",
         submission_surface: "published_customer_ui",
@@ -218,4 +223,35 @@ test("claimed live state without traceable receipts fails closed", () => {
     "close/drain receipt",
     "public opening receipt",
   ]) assert.ok(result.failures.some((value) => value.includes(fragment)), fragment);
+});
+
+test("source-bound worker and persisted scan fingerprint are required beyond matching source SHA", () => {
+  const record = validRecord();
+  assert.equal(evaluateStage4ReleaseAcceptance(record).pass, true, "synthetic control");
+  record.deployment.worker.beta_revision_fingerprint = "01ebe8e90df1e6bd";
+  record.acceptance.scan.beta_revision_fingerprint = "e0eca935c350e590";
+  const result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.pass, false);
+  assert.ok(result.failures.some((value) => value.includes("worker release fingerprint")));
+  assert.ok(result.failures.some((value) => value.includes("customer acceptance fingerprint")));
+});
+
+test("source-matching SHA and fingerprint cannot conceal a drifted or incomplete worker component map", () => {
+  const record = validRecord();
+  record.deployment.worker.component_versions.scanner_version = "foreign_scanner";
+  let result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.pass, false);
+  assert.ok(result.failures.some((value) => value.includes("worker component versions")));
+
+  record.deployment.worker.component_versions = { ...RELEASE_COMPONENT_VERSIONS };
+  delete record.deployment.worker.component_versions.scanner_version;
+  result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.pass, false);
+
+  record.deployment.worker.component_versions = { ...RELEASE_COMPONENT_VERSIONS, invented_marker: "surprise" };
+  result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.pass, false);
+
+  record.deployment.worker.component_versions = { ...RELEASE_COMPONENT_VERSIONS };
+  assert.equal(evaluateStage4ReleaseAcceptance(record).pass, true, "full exact-map control");
 });

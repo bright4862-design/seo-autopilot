@@ -514,6 +514,7 @@ function runPostDeployVerifier(policyMode) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "durable-release-verify-"));
   const gcloudPath = path.join(tempDir, "gcloud");
   const describePath = path.join(tempDir, "describe.json");
+  const revisionDescribePath = path.join(tempDir, "revision-describe.json");
   const pulledFunctions = path.join(tempDir, "base44-functions");
   const pulledEntities = path.join(tempDir, "base44-entities");
   fs.mkdirSync(pulledFunctions);
@@ -536,7 +537,8 @@ function runPostDeployVerifier(policyMode) {
       containers: [{
         image,
         env: [
-          { name: "BASE44_APP_ID", value: "test-app" },
+          { name: "BASE44_APP_ID", value: "6a498732ec779dfaaeab0e53" },
+          { name: "BASE44_API_URL", value: "https://base44.app" },
           { name: "TASKS_INVOKER_SERVICE_ACCOUNT", value: invokerSa },
           { name: "GROK_PROXY_ENABLED", value: "false" },
           { name: "FIXLIST_WORKER_SOURCE_SHA", value: "a".repeat(40) },
@@ -548,6 +550,10 @@ function runPostDeployVerifier(policyMode) {
     } } },
   };
   fs.writeFileSync(describePath, JSON.stringify(describe));
+  fs.writeFileSync(revisionDescribePath, JSON.stringify({
+    metadata: { name: describe.status.latestReadyRevisionName },
+    spec: { containers: describe.spec.template.spec.containers },
+  }));
   const scanQueuePath = path.join(tempDir, "scan-queue.json");
   const drainQueuePath = path.join(tempDir, "drain-queue.json");
   fs.writeFileSync(scanQueuePath, JSON.stringify({
@@ -561,7 +567,9 @@ function runPostDeployVerifier(policyMode) {
     retryConfig: { maxAttempts: 100, maxRetryDuration: "14400s", minBackoff: "30s", maxBackoff: "180s", maxDoublings: 3 },
   }));
   fs.writeFileSync(gcloudPath, `#!/usr/bin/env bash
-if [[ " $* " == *" tasks queues describe "* ]]; then
+if [[ " $* " == *" run revisions describe "* ]]; then
+  command cat "$FAKE_REVISION_DESCRIBE_PATH"
+ elif [[ " $* " == *" tasks queues describe "* ]]; then
   if [[ " $* " == *" $DRAIN_QUEUE "* ]]; then command cat "$FAKE_DRAIN_QUEUE_PATH"; else command cat "$FAKE_SCAN_QUEUE_PATH"; fi
 elif [[ " $* " == *" get-iam-policy "* ]]; then
   case "$FAKE_POLICY_MODE" in
@@ -584,6 +592,7 @@ fi
       PATH: `${tempDir}:${process.env.PATH}`,
       FAKE_POLICY_MODE: policyMode,
       FAKE_DESCRIBE_PATH: describePath,
+      FAKE_REVISION_DESCRIBE_PATH: revisionDescribePath,
       FAKE_SCAN_QUEUE_PATH: scanQueuePath,
       FAKE_DRAIN_QUEUE_PATH: drainQueuePath,
       WORKER_SERVICE: "worker",

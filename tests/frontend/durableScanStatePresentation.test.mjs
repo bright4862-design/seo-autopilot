@@ -188,6 +188,43 @@ test("incident-shaped unsaved results are explained as a FixList-side fault, not
   assert.doesNotMatch(customerText, /website limited|site blocked|robots\.txt/i);
 });
 
+test("failed release-fingerprint persistence outranks leftover crawl-quality verdicts", () => {
+  // A failed save can retain an access/coverage diagnosis from the *attempt*.
+  // The row is not a published result; directing the owner to fix their CDN
+  // before acknowledging our rejected write would misdiagnose incident #378.
+  const record = {
+    status: "failed",
+    pages_found: 0,
+    pages_crawled: 0,
+    evidence_quality_state: "access_limited",
+    coverage_state: "limited_coverage",
+    coverage_reasons: ["retained_pages_below_minimum"],
+    crawl_timing: { crawl_deadline_reached: true },
+    status_detail: "Scan finished, but results could not be saved",
+    error_code: "authority_snapshot_not_eligible__beta_revision_fingerprint__expected_e0eca935c350e590__received_01ebe8e90df1e6bd",
+  };
+  const view = durableScanStatePresentation(record);
+  assert.equal(durableScanLimitationKind(record), "save_failed");
+  assert.equal(view.kind, "save_failed");
+  assert.match(view.nextStep, /contact FixList support/i);
+  assert.doesNotMatch(view.nextStep + view.retryAdvice, /allow FixList through|run the scan again|worth trying now/i);
+  assert.doesNotMatch([view.title, view.detail, view.nextStep, view.retryAdvice].join(" "),
+    /authority_snapshot|fingerprint|e0eca935|01ebe8e/i);
+});
+
+test("only exact terminal release mismatch overrides structured crawl states", () => {
+  const code = "authority_snapshot_not_eligible__beta_revision_fingerprint__expected_e0eca935c350e590__received_01ebe8e90df1e6bd";
+  for (const record of [
+    { status: "limited", error_code: code, evidence_quality_state: "access_limited" },
+    { status: "failed", error_code: "authority_snapshot_not_eligible__beta_revision_fingerprint_extra", evidence_quality_state: "access_limited" },
+    { status: "failed", error_code: "authority_write_failed", evidence_quality_state: "access_limited" },
+    { status: "failed", status_detail: code, evidence_quality_state: "access_limited" },
+  ]) {
+    assert.equal(durableScanLimitationKind(record), "access_limited",
+      `unexpected precedence for ${JSON.stringify(record)}`);
+  }
+});
+
 test("a generic failed authority write uses the same cautious saving guidance", () => {
   const view = durableScanStatePresentation({ status: "failed", error_code: "authority_write_failed" });
   assert.equal(view.kind, "save_failed");

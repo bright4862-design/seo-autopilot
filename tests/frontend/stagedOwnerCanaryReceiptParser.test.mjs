@@ -121,6 +121,6 @@ test('empty and malformed CLI output remain unverified', () => {
   assert.equal(parse('FIXLIST_STAGED_OWNER_CANARY={broken', expected).failure_code, 'cli_report_malformed');
 });
 test('the canary still submits exactly one job, without changing the scanner contract', () => {
-  assert.equal((script.match(/base44\\.functions\\.invoke\\('startStandardScanJobV9'/g) || []).length, 1);
+  assert.equal((script.match(/base44\.functions\.invoke\('startStandardScanJobV9'/g) || []).length, 1);
   assert.match(script, /expected_page_cap:150/);
 });

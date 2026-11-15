@@ -942,13 +942,13 @@ async def write_drain_failure(client: httpx.AsyncClient, scan: dict[str, Any], s
 async def run_staged_delivery(stage: str, job: dict[str, Any], *, batch: int = 0, limited: bool = False) -> dict[str, Any]:
     from .scan_job import worker_function_generation
     from .scan_limits import scan_page_limit
-    from .staged_scan import StageRetry
+    from .staged_scan import STAGE_DELIVERY_SECONDS, StageRetry
     from .workspace import WorkspaceConflict, WorkspaceUnavailable
     try:
         with worker_function_generation("V9"), scan_page_limit(500 if job.get("scan_mode") == "standard_500" else 150):
             runtime = build_staged_runtime()
             async with httpx.AsyncClient() as client:
-                return await asyncio.wait_for(runtime.process(client, stage, job, batch=batch, limited=limited), timeout=420)
+                return await asyncio.wait_for(runtime.process(client, stage, job, batch=batch, limited=limited), timeout=STAGE_DELIVERY_SECONDS)
     except StageRetry as exc:
         raise HTTPException(status_code=503, detail="The scan stage will be retried.", headers={"Retry-After": str(exc.retry_after)}) from exc
     except ValueError as exc:

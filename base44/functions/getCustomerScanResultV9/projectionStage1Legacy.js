@@ -6,6 +6,7 @@ import { sanitizeReportRawFindingEvidence, sanitizeScanCoverage } from "./repair
 import { PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION } from "./evidenceUrlIdentity.js";
 import { PUBLISHED_REVIEW_ATTESTATION_VERSION, publishedIdentityContext, publishedRepairEvidenceFields, publishedPriorityContext } from "./publishedRepairEvidence.js";
 import { sanitizeComparisonEvidence } from "./comparisonEvidence.js";
+import { buildLimitedResultSnapshot } from "./limitedResultIntegrity.js";
 const ENCODER = new TextEncoder();
 
 export const ACCESS_APP_ID = "6a498732ec779dfaaeab0e53";
@@ -146,6 +147,8 @@ const DETAILED_RUN_FIELDS = [
   "fix_list_id",
   "scan_coverage",
 ];
+
+const LIMITED_COVERAGE_FIELDS = ["coverage_state", "coverage_reasons", "coverage_authority_version"];
 
 const FIX_LIST_FIELDS = [
   "id",
@@ -419,6 +422,7 @@ export function buildCustomerProjection({ run, fixList, fixItems, fullAccess, pr
     run: {
       ...(previewVerified ? sanitizePreviewRun(run) : sanitizeRun(run, { detailed: canReadResult, healthScoreStatus: customerHealthScoreStatus })),
       ...(canReadSummary && authorityVerified === true ? {geo_readiness: signedPreview && previewVerified ? validatedGeoSummary(run?.geo_readiness ?? geoReadinessSummary(emptyGeoReadiness())) : customerGeoReadiness(run, canReadResult)} : {}),
+      ...(limitedVerified && run?.status === "limited" && authorityVerified !== true ? sanitizeLimitedCoverage(run) : {}),
     },
     fixList: canReadResult
       ? pickFields(fixList, FIX_LIST_FIELDS)
@@ -688,6 +692,13 @@ function nullableNumber(value) {
   if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function sanitizeLimitedCoverage(run) {
+  // Reuse the proof snapshot's bounds and normalization for these signed fields.
+  const review = pickFields(run, LIMITED_COVERAGE_FIELDS);
+  const { scan } = buildLimitedResultSnapshot({ review });
+  return pickFields(scan, LIMITED_COVERAGE_FIELDS);
 }
 
 function sanitizeRun(run, { detailed, healthScoreStatus = "" }) {

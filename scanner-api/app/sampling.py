@@ -6,6 +6,7 @@ import re
 import hashlib
 import math
 from collections import Counter, defaultdict
+from datetime import datetime
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import urlparse
 
@@ -152,6 +153,7 @@ def select_balanced_urls(
     homepage_links: Iterable[str] = (),
     lastmod: Mapping[str, str] | None = None,
     importance_scores: Mapping[str, Any] | None = None,
+    now: datetime | None = None,
 ) -> list[str]:
     """Select sections before volume, retaining commercial and trust reserves.
 
@@ -171,7 +173,9 @@ def select_balanced_urls(
     families = {url: family_of(url) for url in urls}
     roles = {url: selection_role(paths[url], families[url]) for url in urls}
     signatures = {url: route_signature(paths[url]) for url in urls}
-    scores = importance_scores or build_page_importance(urls, family_of, path_of, homepage_links=homepage_links, lastmod=lastmod)
+    scores = importance_scores or build_page_importance(
+        urls, family_of, path_of, homepage_links=homepage_links, lastmod=lastmod, now=now,
+    )
     navigation = set(homepage_links)
     market_parts = str(preferred_market or "").strip("/").split("/")
     valid_market = 1 <= len(market_parts) <= 2 and all(LOCALE_SEGMENT_RE.fullmatch(part) for part in market_parts)

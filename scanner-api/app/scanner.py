@@ -285,10 +285,13 @@ class _AdaptiveRateLimitPacer:
         self.healthy_streak = 0
         self.saw_pressure = False
         self.saw_429 = False
+        self.rate_limit_blocked_scan = False
         self.floor_interval_seconds = self.request_interval_seconds
         self._lock = asyncio.Lock()
 
-    async def activate(self, kind: str = "429", *, retry_after_seconds: float = 0.0) -> None:
+    async def activate(
+        self, kind: str = "429", *, retry_after_seconds: float = 0.0, scan_deadline: float | None = None,
+    ) -> None:
         if not self.enabled:
             return
         async with self._lock:
@@ -322,7 +325,13 @@ class _AdaptiveRateLimitPacer:
             self.retry_after_max_seconds = max(self.retry_after_max_seconds, retry_after)
             delay = RATE_LIMIT_COOLDOWN_SECONDS if first_pressure else self.request_interval_seconds
             delay = max(delay, retry_after)
-            self.next_request_at = max(self.next_request_at, now + max(0.0, float(delay)))
+            next_request_at = now + max(0.0, float(delay))
+            # Record the cause only when this HTTP 429 moves an available slot
+            # past the full crawl budget. The per-batch budget can renew.
+            if (kind == "429" and scan_deadline is not None and now < scan_deadline
+                    and self.next_request_at < scan_deadline <= next_request_at):
+                self.rate_limit_blocked_scan = True
+            self.next_request_at = max(self.next_request_at, next_request_at)
 
     async def note_success(self) -> None:
         """Recover pacing gradually after sustained healthy responses."""
@@ -536,6 +545,8 @@ class ScanState:
     duplicate_merges: list[dict] = field(default_factory=list)
     crawl_elapsed_ms: int = 0
     render_page: Any = field(default=None, repr=False)
+    selection_preferred_market: str = ""
+    selection_captured_at: str = ""
 
     @property
     def completion_reason(self) -> str:
@@ -545,6 +556,8 @@ class ScanState:
             return "initial_access_limited"
         if not self.queue:
             return "queue_exhausted"
+        if self.rate_limit_pacer.rate_limit_blocked_scan:
+            return "rate_limit"
         if time.monotonic() >= self.timing_budget["crawl_deadline"] or (
             self.rate_limit_pacer.active
             and self.rate_limit_pacer.next_request_at >= self.timing_budget["crawl_deadline"]
@@ -560,7 +573,7 @@ class ScanState:
 
     @property
     def limited(self) -> bool:
-        return self.completion_reason in {"wall_budget", "request_budget", "initial_access_limited"}
+        return self.completion_reason in {"wall_budget", "rate_limit", "request_budget", "initial_access_limited"}
 
     @property
     def pages_planned(self) -> int:
@@ -925,11 +938,13 @@ async def plan_scan(
         homepage_links = [url for url in queue if url != start_url]
         candidate_urls = list(dict.fromkeys(sitemap_urls + list(queue)))
         candidate_urls = [url for url in candidate_urls if url != start_url]
+        selection_captured_at = datetime.now(timezone.utc)
         sampled_sitemap_urls = select_balanced_urls(
             candidate_urls, family_of, path_of, max(0, max_pages - 1),
             preferred_market=primary_market_hint,
             homepage_links=homepage_links,
             lastmod=sitemap_diagnostics.get("sitemap_lastmod", {}),
+            now=selection_captured_at,
         )
         sampling_evidence = sampling_report(sitemap_urls, sampled_sitemap_urls, family_of, path_of)
         sampling_evidence["inventory_capped"] = bool(sitemap_diagnostics.get("inventory_capped"))
@@ -1011,6 +1026,8 @@ async def plan_scan(
         rate_limit_pacer=rate_limit_pacer,
         homepage_links=homepage_links,
         render_page=kwargs.get("_render_page"),
+        selection_preferred_market=primary_market_hint,
+        selection_captured_at=selection_captured_at.isoformat(timespec="microseconds"),
     )
     state.rebuild_priority()
     return state
@@ -1131,6 +1148,7 @@ async def crawl_batch(state: ScanState, max_pages: int = 50) -> list[dict]:
                             await rate_limit_pacer.activate(
                                 pressure_kind,
                                 retry_after_seconds=retry_after,
+                                scan_deadline=timing_budget["crawl_deadline"],
                             )
                             if not await rate_limit_pacer.wait_for_slot():
                                 break

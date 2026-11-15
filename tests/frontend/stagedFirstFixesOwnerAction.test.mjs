@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { topFixIds as readerTopFixIds } from "../../base44/functions/getCustomerScanResultV9/firstFixes.js";
+import { withFirstFixes } from "../../base44/functions/getCustomerScanResultV9/firstFixes.js";
 import { topFixIds as writerTopFixIds } from "../../base44/functions/persistDurableScanAuthorityV9/firstFixes.js";
 import { serverSelectedPriorityCards } from "../../src/lib/scanPresentation.js";
 const topFixIds = readerTopFixIds;
@@ -18,6 +19,20 @@ function rankedFix(fixId, rank, fields = {}) {
 }
 
 const expected = ["technical-a", "technical-b", "owner-action"];
+
+test("a verified limited result prioritizes its signed severity with rule diversity", () => {
+  const fixItems = [
+    { fix_id: "a-low", priority: "low", rule: "low", canonical_action_rank: 1, who_can_do_this: "you" },
+    { fix_id: "b-high", priority: "high", rule: "shared" },
+    { fix_id: "c-critical", priority: "critical", rule: "shared" },
+    { fix_id: "d-medium", priority: "medium", rule: "medium" },
+    { fix_id: "e-high", priority: "high", rule: "high" },
+  ];
+  const before = structuredClone(fixItems);
+  const projection = withFirstFixes({ result_integrity_verified: true, authority_verified: false, fixItems }, { page_cap: 500 });
+  assert.deepEqual(projection.top_fix_ids, ["c-critical", "e-high", "d-medium"]);
+  assert.deepEqual(fixItems, before);
+});
 
 for (const field of ["who_can_do_this", "who_does_it", "implementation_owner", "raw_finding"]) {
   test(`an easy task assigned through ${field} to a specialist cannot displace the owner action`, () => {

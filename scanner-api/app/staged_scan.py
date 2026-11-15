@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -17,14 +18,17 @@ from typing import Any, Callable
 
 from .scan_job import already_terminal, current_attempt, identity_matches, is_superseded_attempt
 from .observability import website_host
+from .staged_telemetry import MAX_RECORDED_DELIVERIES, DeliveryReceipt, active_delivery
 from .workspace import WorkspaceConflict, WorkspaceUnavailable, attempt_prefix
 
 
 STAGE_LEASE_SECONDS = 450.0
 STAGE_WORK_SECONDS = 180.0
+STAGE_DELIVERY_SECONDS = 420.0
 SCAN_WALL_SECONDS = 600.0
 BATCH_SIZE = 50
 STAGED_SCAN_PIPELINE_VERSION = "staged_scan_pipeline_v2_owner_shortlist_cached_rss_admission"
+_DELIVERY_ID_RE = re.compile(r"[a-f0-9]{32}")
 
 
 class StageRetry(RuntimeError):
@@ -126,7 +130,31 @@ class StagedScanRuntime:
             return None
         if float(current.get("lease_until") or 0) > self.clock():
             raise StageRetry("A delivery already owns this stage", retry_after=int(current["lease_until"] - self.clock()) + 1)
-        current.update({"lease_owner": uuid.uuid4().hex, "lease_until": self.clock() + STAGE_LEASE_SECONDS})
+        delivery_id = uuid.uuid4().hex
+        deliveries = current.get("telemetry_delivery_ids")
+        complete_history = stored is None
+        if (
+            isinstance(deliveries, list)
+            and 0 < len(deliveries) <= MAX_RECORDED_DELIVERIES
+            and all(isinstance(item, str) and _DELIVERY_ID_RE.fullmatch(item) for item in deliveries)
+            and len(set(deliveries)) == len(deliveries)
+        ):
+            complete_history = current.get("telemetry_history_complete") is True
+        else:
+            # This metadata is optional. A malformed history cannot own or
+            # prevent a lease; record new deliveries and preserve the gap.
+            deliveries = []
+        previous_owner = current.get("lease_owner")
+        if previous_owner and (not deliveries or deliveries[-1] != previous_owner):
+            complete_history = False
+        if len(deliveries) < MAX_RECORDED_DELIVERIES:
+            current["telemetry_delivery_ids"] = [*deliveries, delivery_id]
+        else:
+            complete_history = False
+        current.update({
+            "lease_owner": delivery_id, "lease_until": self.clock() + STAGE_LEASE_SECONDS,
+            "telemetry_history_complete": complete_history,
+        })
         generation = await self.store.write(key, current, generation=stored.generation if stored else 0)
         return current, generation
 
@@ -159,12 +187,15 @@ class StagedScanRuntime:
         return {"success": True, "scan_id": job["scan_id"], "stage": frontier["stage"], "batch": frontier["batch"], "pages_crawled": int(frontier.get("pages_crawled") or 0)}
 
     async def process(self, client: Any, stage: str, job: dict, *, batch: int = 0, limited: bool = False) -> dict:
+        delivery_deadline = time.monotonic() + STAGE_DELIVERY_SECONDS
         scan, skipped = await self._fence(client, job)
         if skipped:
             return skipped
         job = self._canonical_job(scan, job)
         prefix = self._prefix(job)
         frontier = None
+        receipt = None
+        receipt_context = None
         try:
             leased = await self._lease(prefix, stage, batch)
             if leased is None:
@@ -173,11 +204,15 @@ class StagedScanRuntime:
                     raise StageRetry("The plan has not committed")
                 return await self._replay(client, scan, job, stored.value)
             frontier, generation = leased
+            receipt = DeliveryReceipt(self.store, prefix, job, stage, batch, frontier["lease_owner"], generation)
+            receipt_context = active_delivery.set(receipt)
+            receipt.start()
             if stage == "plan":
                 await self.dep.start(client, scan)
                 planned = await self.store.read(prefix + "plan.json")
                 if planned:
                     plan = planned.value
+                    receipt.observe_artifact("plan", planned.generation, produced=False)
                 else:
                     remaining = float(frontier["wall_deadline"]) - self.clock()
                     if remaining < 20:
@@ -195,15 +230,22 @@ class StagedScanRuntime:
                     _, stopped = await self._fence(client, job)
                     if stopped:
                         return stopped
-                    await self.store.write(prefix + "plan.json", plan)
+                    plan_generation = await self.store.write(prefix + "plan.json", plan)
+                    receipt.observe_artifact("plan", plan_generation, produced=True)
                 state = self.dep.state_type.from_dict(plan["state"])
                 planned_count = min(int(job["page_cap"]), max(len(state.queue), len(state.pages)))
-                frontier = await self._commit(prefix, frontier, generation, stage="finalize" if state.finished else "batch", batch=0, state_ref="plan.json", wall_deadline=plan["wall_deadline"], pages_crawled=len(state.pages), pages_planned=planned_count)
+                frontier = await self._commit(
+                    prefix, frontier, generation, stage="finalize" if state.finished else "batch",
+                    batch=0, state_ref="plan.json", wall_deadline=plan["wall_deadline"],
+                    pages_crawled=len(state.pages), pages_planned=planned_count, plan_receipt_ref=receipt.finished_ref,
+                )
+                receipt.stage_committed = True
                 return await self._replay(client, scan, job, frontier)
 
             snapshot = await self.store.read(prefix + str(frontier["state_ref"]))
             if not snapshot:
                 raise StageRetry("The committed state snapshot is unavailable")
+            receipt.observe_artifact("input_state", snapshot.generation, produced=False)
             state = self.dep.state_type.from_dict(snapshot.value["state"])
             deadline_hit = self.clock() >= float(frontier["wall_deadline"])
             if stage == "batch":
@@ -217,11 +259,13 @@ class StagedScanRuntime:
                 execution = uuid.uuid4().hex
                 ref = f"batches/{batch}-{execution}.state.json.gz"
                 checkpoint = state.to_dict()
-                await self.store.write(prefix + ref, {"state": checkpoint})
+                state_generation = await self.store.write(prefix + ref, {"state": checkpoint})
+                receipt.observe_artifact("output_state", state_generation, produced=True)
                 # Full state includes cross-batch identity merges and evidence;
                 # immutable manifests avoid a non-atomic shared append object.
                 evidence_ref = f"batches/{batch}-{execution}.pages.json.gz"
-                await self.store.write(prefix + evidence_ref, {"pages": state.pages})
+                pages_generation = await self.store.write(prefix + evidence_ref, {"pages": state.pages})
+                receipt.observe_artifact("batch_pages", pages_generation, produced=True)
                 cutoff = deadline_hit or self.clock() >= float(frontier["wall_deadline"]) or bool(getattr(state, "limited", False))
                 limit_reason = str(getattr(state, "completion_reason", "")) if cutoff else ""
                 done = state.finished or cutoff
@@ -229,11 +273,14 @@ class StagedScanRuntime:
                     stage="finalize" if done else "batch", batch=batch + 1,
                     state_ref=ref, pages_crawled=len(state.pages),
                     pages_planned=min(int(job["page_cap"]), max(int(frontier.get("pages_planned") or 0), len(state.pages))),
-                    committed_batches=[*frontier.get("committed_batches", []), {"batch": batch, "state": ref, "pages": evidence_ref}],
+                    committed_batches=[*frontier.get("committed_batches", []), {
+                        "batch": batch, "state": ref, "pages": evidence_ref, "receipt_ref": receipt.finished_ref,
+                    }],
                     limited=bool(frontier.get("limited")) or cutoff,
                     limit_reason=limit_reason or ("wall_budget" if cutoff else ""),
                     dispatch_after=float(checkpoint.get("rate_limit_pacer", {}).get("next_request_at") or 0),
                 )
+                receipt.stage_committed = True
                 return await self._replay(client, scan, job, frontier)
 
             if stage != "finalize":
@@ -243,6 +290,7 @@ class StagedScanRuntime:
             result_snapshot = await self.store.read(prefix + "result.json.gz")
             if result_snapshot:
                 result = result_snapshot.value
+                receipt.observe_artifact("result", result_snapshot.generation, produced=False)
             else:
                 from .robots_policy import owner_robots_override
                 with owner_robots_override(bool(job.get("owner_attested_robots_override"))):
@@ -263,7 +311,8 @@ class StagedScanRuntime:
                 _, stopped = await self._fence(client, job)
                 if stopped:
                     return stopped
-                await self.store.write(prefix + "result.json.gz", result)
+                result_generation = await self.store.write(prefix + "result.json.gz", result)
+                receipt.observe_artifact("result", result_generation, produced=True)
             fresh, stopped = await self._fence(client, job)
             if stopped:
                 return stopped
@@ -275,12 +324,14 @@ class StagedScanRuntime:
                 review_snapshot = await self.store.read(prefix + "review.json.gz")
                 if review_snapshot:
                     reviewed = review_snapshot.value
+                    receipt.observe_artifact("review", review_snapshot.generation, produced=False)
                 else:
                     reviewed = await asyncio.wait_for(self.dep.review(result), timeout=25)
                     _, stopped = await self._fence(client, job)
                     if stopped:
                         return stopped
-                    await self.store.write(prefix + "review.json.gz", reviewed)
+                    review_generation = await self.store.write(prefix + "review.json.gz", reviewed)
+                    receipt.observe_artifact("review", review_generation, produced=True)
                 fresh, stopped = await self._fence(client, job)
                 if stopped:
                     return stopped
@@ -293,11 +344,19 @@ class StagedScanRuntime:
             if not outcome.get("ok"):
                 await self.dep.fail(client, job["scan_id"], str(outcome.get("failure_code") or "staged_completion_failed"), str(outcome.get("customer_message") or "The scan result could not be saved."), attempt_count=job.get("attempt_count"))
                 return {"success": False, "error_code": outcome.get("failure_code")}
-            await self._commit(prefix, frontier, generation, stage="done", batch=batch, pages_crawled=len(state.pages))
+            frontier = await self._commit(
+                prefix, frontier, generation, stage="done", batch=batch,
+                pages_crawled=len(state.pages), finalize_receipt_ref=receipt.finished_ref,
+            )
+            receipt.stage_committed = True
             return {"success": True, "scan_id": job["scan_id"], "pages_crawled": len(state.pages), "fix_list_id": outcome.get("fix_list_id")}
         except (WorkspaceConflict, WorkspaceUnavailable, asyncio.TimeoutError) as exc:
             raise StageRetry("The stage did not finish its durable commit") from exc
         finally:
+            if receipt is not None:
+                receipt.stop_sampling()
+            if receipt_context is not None:
+                active_delivery.reset(receipt_context)
             # Release stopped deliveries immediately; a process crash instead
             # recovers through the bounded lease and duplicate Retry-After.
             if frontier and frontier.get("lease_owner"):
@@ -308,6 +367,9 @@ class StagedScanRuntime:
                         await self.store.write(prefix + "frontier.json", released, generation=stored.generation)
                 except (WorkspaceConflict, WorkspaceUnavailable):
                     pass
+            if receipt is not None:
+                # Leave room for the existing HTTP timeout and response.
+                await receipt.finish(deadline=delivery_deadline - 1)
 
     async def request_partial_finalize(self, client: Any, job: dict) -> dict:
         scan, skipped = await self._fence(client, job)

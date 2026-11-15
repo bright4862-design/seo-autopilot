@@ -49,7 +49,13 @@ const base44={auth:{me:async()=>{track('auth.me');return{id:scenario==='wrongOwn
 BusinessProject:{get:async(id)=>{track('BusinessProject.get',id);return{id,owner_user_id:scenario==='wrongProject'?'other_123':owner,website_url:url};},create:denied,update:denied},
 Access:{filter:async(query)=>{track('Access.filter',query);return scenario==='duplicateGrant'?[grant,{...grant,id:'access_456'}]:[grant];},create:denied,update:denied},
 ScanRun:{get:async(id)=>{track('ScanRun.get',id);return run;},create:denied,update:denied}
-},functions:{invoke:async(name,payload)=>{track(name,payload);if(name==='startStandardScanJobV9')return{data:{success:true,accepted:true,scan_id:run.id,scan_mode:'standard_150',page_cap:150,pipeline_mode:scenario==='monolith'?'monolith':'staged'}};if(name==='getCustomerScanResultV9')return{data:{success:true,scan_id:run.id,authority_verified:true,release_contract_current:true,run:projected}};throw new Error('Unexpected function');}}};
+},functions:{invoke:async(name,payload)=>{track(name,payload);if(name==='startStandardScanJobV9')return{data:{success:true,accepted:true,scan_id:run.id,scan_mode:'standard_150',page_cap:150,pipeline_mode:scenario==='monolith'?'monolith':'staged'}};if(name==='getCustomerScanResultV9'){
+  const fixListId='fixlist_123456';
+  const isReopen=payload?.action==='get';
+  return {data:{success:true,access:'full',scan_id:run.id,fix_list_id:isReopen&&scenario==='reopenMismatch'?'fixlist_foreign':fixListId,
+    authority_verified:true,release_contract_current:true,run:projected,
+    fixList:{id:fixListId,scan_run_id:run.id,project_id:project}}};
+}throw new Error('Unexpected function');}}};
 const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
 await new AsyncFunction('base44',readFileSync(0,'utf8'))(base44);
 `);
@@ -134,6 +140,16 @@ test('one stable request produces a filtered verified staged-150 acceptance repo
   assert.equal(result.report.release_fingerprint,fingerprint);
   assert.doesNotMatch(JSON.stringify(result.report),/never-print|private page body|authority_proof/);
   assert.doesNotMatch(result.stdout,/never-print|private page body/);
+});
+
+test('changed FixList on the fresh owner read-back cannot certify a staged canary', t => {
+  const result=fixture(t).run('reopenMismatch');
+  assert.equal(result.status,1);
+  assert.equal(result.report.acceptance_verified,false);
+  assert.equal(result.report.customer_reopen_verified,false);
+  assert.ok(result.report.unverified.includes('customer_reopen'));
+  assert.equal(result.calls.filter(row=>row.name==='startStandardScanJobV9').length,1);
+  assert.equal(result.calls.filter(row=>row.name==='getCustomerScanResultV9').length,2);
 });
 
 test('a legacy active grant without page_cap resolves to the server default 150', t => {

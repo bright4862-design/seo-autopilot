@@ -86,6 +86,7 @@ const report = {
   expected_release_fingerprint:config.expectedFingerprint,
   scan_id:null, accepted:false, acceptance_verified:false, terminal_status:null,
   authority_verified:false, release_fingerprint:null, release_contract_current:false,
+  customer_reopen_verified:false, customer_reopen_fix_list_id:null,
   durable_worker_owned:false, ownership_evidence:[], page_cap:null, pages_crawled:null,
   pipeline_mode:null, last_committed_batch:null, committed_batch_count:null,
   duration_ms:null, worker_peak_memory_bytes:null, progress:[], unverified:[], failure_code:null,
@@ -105,6 +106,23 @@ function body(response) { return response?.data && typeof response.data === 'obj
 function canonicalUrl(value) { try { return new URL(String(value)).href; } catch { return ''; } }
 function finitePositive(value) { return typeof value === 'number' && Number.isFinite(value) && value > 0; }
 function safeInteger(value) { return Number.isInteger(value) && value >= 0; }
+// A second owner-authenticated result GET must reopen the SAME persisted FixList.
+// This verifies customer read-back; it does not attest the deployment SHA or a new login session.
+function verifiedCustomerReopen(reopened, original, scanId, projectId, fingerprint) {
+  const initialFixListId = String(original?.fix_list_id || '');
+  const reopenedFixListId = String(reopened?.fix_list_id || '');
+  return /^[A-Za-z0-9_-]{6,160}$/.test(initialFixListId)
+    && initialFixListId === reopenedFixListId
+    && original?.scan_id === scanId && original?.run?.id === scanId && original?.run?.status === 'complete'
+    && reopened?.success === true && reopened?.access === 'full'
+    && reopened?.authority_verified === true && reopened?.release_contract_current === true
+    && reopened?.scan_id === scanId && reopened?.run?.id === scanId
+    && reopened?.run?.status === 'complete'
+    && reopened?.run?.beta_revision_fingerprint === fingerprint
+    && reopened?.fixList?.id === reopenedFixListId
+    && reopened?.fixList?.scan_run_id === scanId
+    && reopened?.fixList?.project_id === projectId;
+}
 function observe(run) {
   requireCondition(run?.id === report.scan_id && run?.owner_user_id === config.ownerId && run?.project_id === config.projectId, 'scan_identity_mismatch');
   requireCondition(run?.request_id === config.requestId && (run?.idempotency_key || run?.request_id) === config.requestId, 'scan_request_mismatch');
@@ -168,6 +186,17 @@ try {
   }
   report.terminal_status = String(run?.status || '');
   requireCondition(['complete', 'limited', 'failed', 'cancelled'].includes(report.terminal_status), 'canary_timeout');
+  if (report.terminal_status === 'complete') {
+    // A distinct, fresh user-scoped invocation after terminal persistence.
+    // The polling projection alone cannot establish that the result reopens.
+    const reopened = body(await bounded(() => base44.functions.invoke('getCustomerScanResultV9', {
+      action:'get', scan_id:report.scan_id,
+    })));
+    report.customer_reopen_verified = verifiedCustomerReopen(
+      reopened, projection, report.scan_id, config.projectId, config.expectedFingerprint,
+    );
+    if (report.customer_reopen_verified) report.customer_reopen_fix_list_id = reopened.fix_list_id;
+  }
   report.authority_verified = projection.authority_verified === true;
   report.release_contract_current = projection.release_contract_current === true;
   report.release_fingerprint = /^[a-f0-9]{16}$/.test(String(projection.run?.beta_revision_fingerprint || '')) ? projection.run.beta_revision_fingerprint : null;
@@ -188,6 +217,7 @@ try {
   const checks = {
     terminal_complete:report.terminal_status === 'complete',
     signed_authority:report.authority_verified && /^[a-f0-9]{64}$/.test(String(run.authority_proof || '')) && Boolean(run.authority_seal_version),
+    customer_reopen:report.customer_reopen_verified === true,
     release_fingerprint:report.release_contract_current && report.release_fingerprint === config.expectedFingerprint && run.beta_revision_fingerprint === config.expectedFingerprint,
     staged_150:report.page_cap === 150 && report.pipeline_mode === 'staged',
     durable_ownership:report.durable_worker_owned,

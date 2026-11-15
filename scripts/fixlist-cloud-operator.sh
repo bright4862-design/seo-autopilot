@@ -534,15 +534,27 @@ for entry in status.get("traffic") or []:
 # Never send an ID token to any other caller-controlled endpoint.
 from urllib.parse import urlsplit
 def safe_run_url(url):
-    parts = urlsplit(url)
-    canonical = urlsplit(str(status.get("url") or ""))
-    return (parts.scheme == "https" and bool(parts.hostname)
-            and parts.hostname.endswith(".run.app")
-            and canonical.scheme == "https" and bool(canonical.hostname)
-            and canonical.hostname.endswith(".run.app")
-            and parts.username is None and parts.password is None
-            and parts.port is None and not parts.path and not parts.query
-            and not parts.fragment)
+    canonical_url = str(status.get("url") or "")
+    canonical = urlsplit(canonical_url)
+    if (canonical.scheme != "https" or not canonical.hostname
+            or not canonical.hostname.endswith(".run.app")
+            or canonical.netloc != canonical.hostname or canonical.path
+            or canonical.query or canonical.fragment):
+        return False
+    # The canonical URL is only evidence for the revision actually serving
+    # 100%. A forged zero-traffic tag entry pointing at the canonical URL
+    # must not let the candidate probe accidentally attest the serving worker.
+    if url == canonical_url:
+        return any(isinstance(entry, dict) and entry.get("revisionName") == revision
+                   and type(entry.get("percent")) is int and entry["percent"] == 100
+                   for entry in status.get("traffic") or [])
+    # Zero-traffic revisions must use a tag on *the same* Cloud Run service.
+    # Merely trusting a URL ending in .run.app can route the ID token to
+    # another project's service if traffic metadata is malformed.
+    return any(isinstance(entry, dict) and entry.get("revisionName") == revision
+               and isinstance(entry.get("tag"), str) and entry["tag"]
+               and url == f"https://{entry['tag']}---{canonical.hostname}"
+               for entry in status.get("traffic") or [])
 addressable = [url for url in addressable if safe_run_url(url)]
 if requested_url:
     print(requested_url if requested_url in addressable else "")

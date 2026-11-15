@@ -1,5 +1,7 @@
 """Zero-traffic candidate attribution and the separate owner-only probe path."""
 from pathlib import Path
+import json
+import subprocess
 import sys
 
 import pytest
@@ -109,3 +111,100 @@ def test_workflow_separates_tag_mutation_from_read_only_candidate_probe():
     for forbidden in ["update-traffic", "--update-tags", "promote-worker", "queues pause", "queues resume"]:
         assert forbidden not in probe
     assert "inputs.operation != 'verify-staged-worker-release'" in workflow
+
+
+@pytest.mark.parametrize(("bad_url", "expected"), [
+    ("https://foreign-service.a.run.app", "candidate_tag_url_mismatch"),
+    ("https://candidate---unrelated-service.a.run.app", "candidate_tag_url_mismatch"),
+    ("https://candidate---fixlist-standard150-worker.example.a.run.app/path", "candidate_tag_url_mismatch"),
+    ("https://candidate---fixlist-standard150-worker.example.a.run.app?token=1", "candidate_tag_url_mismatch"),
+])
+def test_candidate_tag_cannot_redirect_authenticated_probe(bad_url, expected):
+    """A valid-looking tag entry must route to this service, not arbitrary HTTPS."""
+    service = tagged_candidate()
+    service["status"]["traffic"][1]["url"] = bad_url
+    with pytest.raises(CandidateNotIsolated, match=expected):
+        verify_tagged_zero_traffic(service, REVISION)
+
+
+def test_shared_candidate_tag_conflicting_revision_is_rejected():
+    service = tagged_candidate()
+    service["status"]["traffic"].append({
+        "revisionName": "fixlist-standard150-worker-00103-abc",
+        "percent": 0, "tag": "candidate",
+        "url": "https://candidate---another-worker.example.a.run.app",
+    })
+    with pytest.raises(CandidateNotIsolated, match="candidate_tag_reassigned"):
+        verify_tagged_zero_traffic(service, REVISION)
+
+
+def test_duplicate_identical_tag_rows_are_not_unique_evidence():
+    service = tagged_candidate()
+    service["status"]["traffic"].append(dict(service["status"]["traffic"][1]))
+    with pytest.raises(CandidateNotIsolated, match="candidate_tag_missing_or_ambiguous"):
+        verify_tagged_zero_traffic(service, REVISION)
+
+
+@pytest.mark.parametrize("origin", [
+    "https://foreign.example.org",
+    "http://fixlist-standard150-worker.example.a.run.app",
+    "https://fixlist-standard150-worker.example.a.run.app/path",
+    "https://fixlist-standard150-worker.example.a.run.app:8443",
+])
+def test_tag_cannot_be_derived_from_noncanonical_service_origin(origin):
+    service = tagged_candidate()
+    service["status"]["url"] = origin
+    with pytest.raises(CandidateNotIsolated, match="service_origin_invalid"):
+        verify_tagged_zero_traffic(service, REVISION)
+
+
+
+def resolve_authenticated_probe_destination(tmp_path, service, revision, requested_url):
+    """Execute the operator's actual inline Python URL resolver without GCP."""
+    script = (ROOT / "scripts/fixlist-cloud-operator.sh").read_text()
+    start = script.index("# runtime-revision-probe-url")
+    end = script.index("\nPY\n)", start)
+    source = script[start:end]
+    fixture = tmp_path / "service.json"
+    fixture.write_text(json.dumps(service))
+    completed = subprocess.run(
+        [sys.executable, "-c", source, str(fixture), revision, requested_url],
+        text=True, capture_output=True, check=True,
+    )
+    return completed.stdout.strip()
+
+
+def test_runtime_resolver_accepts_only_same_service_candidate_tag(tmp_path):
+    service = tagged_candidate()
+    assert resolve_authenticated_probe_destination(tmp_path, service, REVISION, TAG_URL) == TAG_URL
+    service["status"]["traffic"][1]["url"] = "https://foreign-service.a.run.app"
+    assert resolve_authenticated_probe_destination(
+        tmp_path, service, REVISION, "https://foreign-service.a.run.app"
+    ) == ""
+
+
+def test_runtime_resolver_accepts_valid_serving_and_revision_specific_canary(tmp_path):
+    service = tagged_candidate()
+    assert resolve_authenticated_probe_destination(
+        tmp_path, service, SERVING, service["status"]["url"]
+    ) == service["status"]["url"]
+    tag = "canary-00101-zh2"
+    url = f"https://{tag}---fixlist-standard150-worker.example.a.run.app"
+    service["status"]["traffic"][1].update(tag=tag, url=url)
+    assert resolve_authenticated_probe_destination(tmp_path, service, REVISION, url) == url
+    assert resolve_authenticated_probe_destination(tmp_path, service, REVISION, TAG_URL) == ""
+
+
+
+def test_runtime_resolver_cannot_attest_serving_worker_as_zero_traffic_candidate(tmp_path):
+    """A fake tag URL that equals the canonical origin must not change revision identity."""
+    service = tagged_candidate()
+    service["status"]["traffic"][1]["url"] = service["status"]["url"]
+    assert resolve_authenticated_probe_destination(
+        tmp_path, service, REVISION, service["status"]["url"]
+    ) == ""
+    # The same service's genuinely serving revision must remain addressable.
+    assert resolve_authenticated_probe_destination(
+        tmp_path, service, SERVING, service["status"]["url"]
+    ) == service["status"]["url"]
+

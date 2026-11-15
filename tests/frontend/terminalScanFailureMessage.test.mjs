@@ -26,7 +26,8 @@ test("nonterminal or unknown statuses have no failure message", () => {
 
 test("scan form wires terminal failure fallback to a real dashboard action", () => {
   const source = readFileSync(new URL("../../src/components/scan/ScanWebsiteForm.jsx", import.meta.url), "utf8");
-  assert.match(source, /setError\(terminalScanFailureMessage\(durableScan\.status\)\)/);
+  assert.match(source, /const message = terminalScanFailureMessage\(durableScan\.status\)/);
+  assert.match(source, /setError\(message\)/);
   assert.match(source, /setErrorAction\("open_dashboard"\)/);
   assert.match(source, /errorAction === "open_dashboard"/);
   assert.doesNotMatch(source, /Nothing was charged — you can run it again/);

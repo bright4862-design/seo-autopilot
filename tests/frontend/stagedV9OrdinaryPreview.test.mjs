@@ -1,11 +1,33 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { execFileSync, spawnSync } from "node:child_process";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { ORDINARY_RECEIPT_PATH, prepareOrdinaryReceiptEntry } from "../../scripts/lib/staged-v9-ordinary-preview.mjs";
 import { allowsOrdinaryReceiptApi } from "../../scripts/preview-base44-v9.mjs";
 import routes from "../../data/generated-staged-v9-routes.json" with { type: "json" };
+
+test("receipt preview refuses edited tooling even when its requested source is HEAD", async t => {
+  const checkout = await mkdtemp(join(tmpdir(), "fixlist-dirty-receipt-preview-"));
+  t.after(() => rm(checkout, { force: true, recursive: true }));
+  await mkdir(join(checkout, "scripts/lib"), { recursive: true });
+  await mkdir(join(checkout, "data"));
+  const paths = ["scripts/preview-base44-v9.mjs", "scripts/lib/staged-v9-ordinary-preview.mjs", "data/generated-staged-v9-routes.json"];
+  await Promise.all(paths.map(file => copyFile(new URL("../../" + file, import.meta.url), join(checkout, file))));
+  const git = args => execFileSync("git", args, { cwd: checkout, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  git(["init", "-q"]);
+  git(["add", "."]);
+  git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "commit.gpgsign=false", "commit", "-qm", "initial fixture"]);
+  const source = git(["rev-parse", "HEAD"]).trim();
+  await writeFile(join(checkout, "scripts/staged_scan_acceptance.mjs"), "throw Error('toxic fixture renderer must never run');");
+  const result = spawnSync(process.execPath, [join(checkout, paths[0]), "--source-sha", source, "--ordinary-readback"], {
+    cwd: checkout, env: { ...process.env, SOURCE_SHA: source }, encoding: "utf8",
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /clean exact-source checkout/);
+  assert.doesNotMatch(result.stderr, /toxic fixture renderer/);
+});
 
 test("receipt mode forwards reads and the exact generated result POST", () => {
   const app = "/api/apps/6a498732ec779dfaaeab0e53";

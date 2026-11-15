@@ -261,6 +261,26 @@ test("the authenticated ordinary account can verify a completed native V9 scan w
   writeFileSync(browserFile, JSON.stringify({ ...report, pages_crawled: 22, pages_planned: 22, committed_batch_count: 1,
     progress: [{ status: "complete", pages_crawled: 22, pages_planned: 22, last_committed_batch: 0 }] }));
   assert.match(collect("collect-ordinary-readback", browserFile, reportFile).stderr, /ordinary_operator_report_mismatch/);
+  smallOperator.run.last_committed_batch = null;
+  writeFileSync(operatorFile, JSON.stringify(smallOperator));
+  writeFileSync(browserFile, JSON.stringify({ ...report, functional_500_verified: false,
+    pages_crawled: 22, pages_planned: 22, committed_batch_count: 1,
+    progress: [{ status: "complete", pages_crawled: 22, pages_planned: 22, last_committed_batch: null }] }));
+  assert.match(collect("collect-ordinary-readback", browserFile, reportFile).stderr, /ordinary_operator_readback_identity_mismatch/);
+  const limitedOperator = structuredClone(fullOperator);
+  Object.assign(limitedOperator.run, { status: "limited", pages_crawled: 22, pages_planned: 100, last_committed_batch: 0,
+    result_integrity_proof_present: true, result_integrity_version: "standard_limited_result_integrity_v5_report_evidence",
+    termination_reasons: ["staged_wall_budget"] });
+  writeFileSync(operatorFile, JSON.stringify(limitedOperator));
+  const limitedReport = { ...report, terminal_status: "limited", functional_500_verified: false, pages_crawled: 22,
+    pages_planned: 100, committed_batch_count: 1, durable_worker_owned: false, durable_worker_receipt_required: true,
+    progress: [{ status: "limited", pages_crawled: 22, pages_planned: 100, last_committed_batch: 0 }] };
+  writeFileSync(browserFile, JSON.stringify({ ...limitedReport, outcome: "limited_throttled",
+    termination_reasons: ["staged_rate_limit"], throttled_priority_summary: ["critical"] }));
+  assert.match(collect("collect-ordinary-readback", browserFile, reportFile).stderr, /ordinary_customer_terminal_evidence_invalid/);
+  writeFileSync(browserFile, JSON.stringify({ ...limitedReport, outcome: "limited_budget", termination_reasons: ["staged_wall_budget"] }));
+  const limitedReceipt = collect("collect-ordinary-readback", browserFile, path.join(directory, "limited.json"));
+  assert.equal(limitedReceipt.status, 0, limitedReceipt.stderr);
   writeFileSync(operatorFile, JSON.stringify({ ...fullOperator, terminal_observed_at: new Date(observationTime).toISOString() }));
   assert.match(collect("collect-ordinary-readback", browserFile, reportFile).stderr, /ordinary_operator_window_invalid/);
   writeFileSync(operatorFile, JSON.stringify(fullOperator));

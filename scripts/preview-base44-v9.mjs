@@ -135,6 +135,8 @@ async function main() {
   assert(!ordinaryReadback || !process.env.SOURCE_SHA || process.env.SOURCE_SHA === source, "Receipt and preview source must match.");
   let verifierModule;
   if (ordinaryReadback) {
+    const status = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], { cwd: ROOT, encoding: "utf8" });
+    assert(!status, "The receipt preview requires a clean exact-source checkout.");
     verifierModule = execFileSync(process.execPath, [
       join(ROOT, "scripts/staged_scan_acceptance.mjs"), "render-ordinary-readback",
     ], { cwd: ROOT, encoding: "utf8", env: { ...process.env, SOURCE_SHA: source } });

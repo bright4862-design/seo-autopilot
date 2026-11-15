@@ -232,7 +232,12 @@ function ordinaryTerminalWindow(operator, now) {
     && completed <= terminal + 30_000 && terminal <= now + 30_000 && now - terminal <= 900_000;
 }
 
-// Embed both timestamp helpers when running this function outside this module.
+function receiptTerminationReasons(reasons) {
+  const known = ["rate_limit", "rate_limited", "throttled", "staged_rate_limit", "staged_wall_budget", "staged_partial_evidence"];
+  return Array.isArray(reasons) ? reasons.filter(reason => known.includes(reason)) : [];
+}
+
+// Embed the plain helpers when running this function outside this module.
 export async function executeStaged500Canary(base44, config, now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms))) {
   const ordinary = config.ordinaryScanId !== undefined;
   const report = { schema_version: "staged_500_canary_v1", production_freeze: false, source_sha: config.sourceSha,
@@ -431,7 +436,7 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
       }
       const budget = reasons.includes("staged_wall_budget");
       require(throttled || budget || reasons.includes("staged_partial_evidence"), "limited_termination_reason_missing");
-      report.termination_reasons = reasons.filter(reason => ["rate_limit", "rate_limited", "throttled", "staged_rate_limit", "staged_wall_budget", "staged_partial_evidence"].includes(reason));
+      report.termination_reasons = receiptTerminationReasons(reasons);
       report.outcome = throttled ? "limited_throttled" : budget ? "limited_budget" : "limited_partial";
       // Limited seals do not attest the scan/review backend fields. The
       // independent receipt must bind this result to the exact worker.
@@ -451,12 +456,12 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
 }
 
 export function renderRemoteCanary(config) {
-  return `const config = ${JSON.stringify(config)};\n${persistedTimestamp.toString()}\n${ordinaryTerminalWindow.toString()}\nconsole.log('FIXLIST_STAGED_500_CANARY=' + JSON.stringify(await (${executeStaged500Canary.toString()})(base44, config)));\n`;
+  return `const config = ${JSON.stringify(config)};\n${persistedTimestamp.toString()}\n${ordinaryTerminalWindow.toString()}\n${receiptTerminationReasons.toString()}\nconsole.log('FIXLIST_STAGED_500_CANARY=' + JSON.stringify(await (${executeStaged500Canary.toString()})(base44, config)));\n`;
 }
 
 export function renderOrdinaryReadback(config) {
   if (!id(config.ordinaryScanId)) throw new Error("ordinary_scan_id_invalid");
-  return `const config = ${JSON.stringify(config)};\n${persistedTimestamp.toString()}\n${ordinaryTerminalWindow.toString()}\nexport async function verifyOrdinaryStaged500Readback(authenticatedClient) {\n  return (${executeStaged500Canary.toString()})(authenticatedClient, config);\n}\n`;
+  return `const config = ${JSON.stringify(config)};\n${persistedTimestamp.toString()}\n${ordinaryTerminalWindow.toString()}\n${receiptTerminationReasons.toString()}\nexport async function verifyOrdinaryStaged500Readback(authenticatedClient) {\n  return (${executeStaged500Canary.toString()})(authenticatedClient, config);\n}\n`;
 }
 
 // Observe a single newly submitted native scan with the approved operator's
@@ -508,6 +513,7 @@ export async function observeOrdinaryPilotRun(base44, config, now = Date.now,
           admission_claim_proof_present: true,
           authority_proof_present: /^[a-f0-9]{64}$/.test(run.authority_proof || ""),
           result_integrity_proof_present: /^[a-f0-9]{64}$/.test(run.result_integrity_proof || ""),
+          ...(run.status === "limited" ? { termination_reasons: receiptTerminationReasons(run.coverage_reasons) } : {}),
         },
       };
     }
@@ -519,7 +525,7 @@ export async function observeOrdinaryPilotRun(base44, config, now = Date.now,
 
 export function renderOrdinaryOperatorReadback(config) {
   if (!id(config.ordinaryScanId)) throw new Error("ordinary_scan_id_invalid");
-  return `const config = ${JSON.stringify(config)};\ntry { console.log('FIXLIST_STAGED_500_ORDINARY_OPERATOR=' + JSON.stringify(await (${observeOrdinaryPilotRun.toString()})(base44, config))); } catch { throw new Error('ordinary_operator_readback_failed'); }\n`;
+  return `const config = ${JSON.stringify(config)};\n${receiptTerminationReasons.toString()}\ntry { console.log('FIXLIST_STAGED_500_ORDINARY_OPERATOR=' + JSON.stringify(await (${observeOrdinaryPilotRun.toString()})(base44, config))); } catch { throw new Error('ordinary_operator_readback_failed'); }\n`;
 }
 
 function operatorReadbackFromExec(input) {
@@ -538,7 +544,9 @@ function ordinaryReadbackContext(packet, expected, operator, env, now = Date.now
   const run = operator.run;
   const complete = run.status === "complete";
   const duration = persistedTimestamp(run.completed_at) - persistedTimestamp(run.started_at);
-  const batches = run.last_committed_batch + 1;
+  const lastBatch = run.last_committed_batch;
+  const batches = Number.isSafeInteger(lastBatch) && lastBatch >= 0 ? lastBatch + 1 : NaN;
+  const termination = receiptTerminationReasons(run.termination_reasons);
   const positive = value => Number.isSafeInteger(value) && value > 0;
   if (operator.schema_version !== "staged_500_ordinary_operator_readback_v1"
       || operator.operator_user_id !== expected.ordinaryOperatorId || operator.source_sha !== expected.sourceSha
@@ -555,6 +563,7 @@ function ordinaryReadbackContext(packet, expected, operator, env, now = Date.now
       || !positive(run.pages_crawled) || !positive(run.pages_planned) || run.pages_crawled > run.pages_planned || run.pages_planned > 500
       || !positive(batches) || batches > 254 || run.pages_crawled > batches * 50
       || (complete && run.pages_crawled !== run.pages_planned)
+      || (!complete && (!termination.some(reason => reason.startsWith("staged_")) || termination.length > 6))
       || (complete ? run.authority_proof_present !== true || !/^[a-zA-Z0-9_]{1,120}$/.test(run.authority_seal_version || "")
         : run.result_integrity_proof_present !== true || !/^[a-zA-Z0-9_]{1,120}$/.test(run.result_integrity_version || ""))) {
     throw new Error("ordinary_operator_readback_identity_mismatch");
@@ -573,6 +582,7 @@ function ordinaryReadbackContext(packet, expected, operator, env, now = Date.now
     run: Object.fromEntries(runFields.map(key => [key, run[key]])),
   };
   safeOperator.run.website_url = origin(env.TARGET_URL);
+  if (!complete) safeOperator.run.termination_reasons = termination;
   return { operator: safeOperator, provenance, duration, batches, complete };
 }
 
@@ -597,17 +607,15 @@ function collectOrdinaryBrowserReport(report, { operator, provenance, duration, 
       || report.memory?.scope !== "finalize_only" || report.memory.all_stages_verified !== false
       || (peak !== null && !positive(peak))) throw new Error("ordinary_operator_report_mismatch");
 
-  const reasons = ["rate_limit", "rate_limited", "throttled", "staged_rate_limit", "staged_wall_budget", "staged_partial_evidence"];
   const termination = report.termination_reasons;
   const priorities = report.throttled_priority_summary;
   const levels = ["critical", "high", "medium", "low"];
-  const hasReason = reason => Array.isArray(termination) && termination.includes(reason);
+  const hasReason = reason => run.termination_reasons?.includes(reason);
   const throttled = !complete && hasReason("staged_rate_limit");
   const outcome = complete ? "complete" : throttled ? "limited_throttled"
     : hasReason("staged_wall_budget") ? "limited_budget" : "limited_partial";
-  if (report.outcome !== outcome || (!complete && (!Array.isArray(termination) || termination.length > reasons.length
-      || termination.some(reason => !reasons.includes(reason))
-      || !termination.some(reason => reason.startsWith("staged_"))))
+  if (report.outcome !== outcome || (!complete && (!Array.isArray(termination)
+      || digest(termination) !== digest(run.termination_reasons)))
       || (throttled && (run.result_integrity_version !== "standard_limited_result_integrity_v5_report_evidence"
         || !Array.isArray(priorities) || !positive(priorities.length) || priorities.length > 3
         || priorities.some((priority, index) => !levels.includes(priority)
@@ -645,7 +653,7 @@ function collectOrdinaryBrowserReport(report, { operator, provenance, duration, 
     memory: { finalize_peak_bytes: peak, scope: "finalize_only", all_stages_verified: false },
     unverified: ["completion_request_byte_measurement", "all_stage_memory_measurement", "per_scan_runtime_revision_receipt",
       ...(complete && !selection ? ["signed_selection_coverage"] : []), ...(peak === null ? ["finalize_memory_measurement"] : [])],
-    failure_code: null, ...(!complete ? { termination_reasons: termination } : {}),
+    failure_code: null, ...(!complete ? { termination_reasons: run.termination_reasons } : {}),
     ...(throttled ? { throttled_priority_summary: priorities } : {}),
   };
 }

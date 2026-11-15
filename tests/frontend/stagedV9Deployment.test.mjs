@@ -21,12 +21,15 @@ const collector="scripts/collect-base44-staged-observations.sh";
 const operatorProbe="fixlistStagedRuntimeControl";
 const text=file=>existsSync(file)?readFileSync(file,"utf8"):"";
 function fixture({legacyPackages = false} = {}) {
-  const root=mkdtempSync(join(tmpdir(),"staged-v9-publish-"));
+  const fixtureRoot = realpathSync(mkdtempSync(join(tmpdir(), "staged-v9-publish-")));
+  const root = join(fixtureRoot, "repo");
+  mkdirSync(root);
   const bin=join(root,"bin");mkdirSync(bin);mkdirSync(join(root,"scripts/lib"),{recursive:true});mkdirSync(join(root,"data"));mkdirSync(join(root,"base44/functions"),{recursive:true});
   for(const file of [publisher,sitePublisher,verifier,collector,"scripts/base44_release_manifest.mjs","scripts/materialize-base44-staged-functions.mjs","scripts/lib/staged-v9-function-packages.mjs","scripts/lib/base44-public-routes.mjs","data/base44-function-routes.json","data/beta-crawler-revision.json",routeManifest]) cpSync(file,join(root,file));
   for(const name of [...names, operatorProbe, ...(legacyPackages ? RELEASE_FUNCTIONS : [])]) cpSync(`base44/functions/${name}`,join(root,"base44/functions",name),{recursive:true});
   const remote=join(root,"remote");mkdirSync(remote);
-  const temporary=join(root,"tmp");mkdirSync(temporary);
+  const temporary = join(fixtureRoot, "tmp");
+  mkdirSync(temporary);
   const upstream=join(root,"expected-packages");
   materializeStagedV9Packages(root,upstream);
   const calls=join(root,"calls");const events=join(root,"events");
@@ -218,7 +221,7 @@ if(process.env.TEST_ANONYMOUS_MODE==='activation') body.runtime_activation_id='p
 fs.writeFileSync(output,process.env.TEST_ANONYMOUS_MODE==='malformed'?'not-json':JSON.stringify(body));
 process.stdout.write('405');
 `);chmodSync(curl,0o755);
-  const readiness=join(tmpdir(),`${root.split('/').at(-1)}-readiness.json`);
+  const readiness = join(fixtureRoot, "readiness.json");
   const activeEntry = join(root, 'scripts/active-v9-wrapper.sh');
   writeFileSync(activeEntry, `#!/usr/bin/env bash
 set -euo pipefail
@@ -234,7 +237,7 @@ if [[ "\${TEST_RESTORE:-}" == yes ]]; then
 fi
 `);
   const run=(extra={},args=[],script=publisher)=>spawnSync("bash",[join(root,script),...args],{cwd:root,encoding:"utf8",env:{...process.env,PATH:`${bin}:${process.env.PATH}`,TMPDIR:temporary,SOURCE_SHA:sourceSha,CONFIRM:`PUBLISH-BASE44-STAGED-V9:${sourceSha}`,BASE44_APP_ID:appId,BASE44_EXPECTED_OWNER:ownerEmail,BASE44_API_KEY:"",READINESS_OUTPUT:readiness,PROBE_ATTEMPTS:"1",PROBE_DELAY_SECONDS:"0",TEST_CLI_CALLS:calls,TEST_EVENTS:events,TEST_FAKE_CLI:cli,TEST_FAKE_READBACK:fakeReadback,TEST_FAKE_PULL:fakePull,TEST_FINGERPRINT:JSON.parse(text(join(root,"data/beta-crawler-revision.json"))).fingerprint,TEST_PACKAGES_ROOT:join(upstream,"base44/functions"),TEST_ROUTE_MANIFEST:join(root,routeManifest),TEST_REMOTE:remote,TEST_OPERATOR_PACKAGE:join(root,"base44/functions",operatorProbe),TEST_SITE_WRAPPER:join(root,sitePublisher),...extra}});
-  return {root,remote,calls,events,readiness,run,cleanup(){rmSync(root,{recursive:true,force:true});rmSync(readiness,{force:true});rmSync(readiness + '.restored',{force:true});}};
+  return {root,remote,calls,events,readiness,run,cleanup(){rmSync(fixtureRoot,{recursive:true,force:true});}};
 }
 
 const pullCall=route=>`--app-id ${appId} functions pull ${route}`;

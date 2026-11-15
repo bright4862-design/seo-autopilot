@@ -371,7 +371,7 @@ jobs:
       # Tagging is a SEPARATE exact-revision confirmed action, never part of
       # this read-only diagnosis. Do not infer identity from the serving URL.
       - name: Resolve staged worker token audience (read only)
-        if: inputs.operation == 'verify-staged-worker-release' || (inputs.operation == 'deploy-dispatch-gateway' && (inputs.gateway_canary == 'owner-canary' || startsWith(inputs.gateway_staged_config, 'paid')))
+        if: inputs.operation == 'verify-staged-worker-release' || inputs.operation == 'staged-queue-activate' || (inputs.operation == 'deploy-dispatch-gateway' && (inputs.gateway_canary == 'owner-canary' || startsWith(inputs.gateway_staged_config, 'paid')))
         id: staged-worker-url
         shell: bash
         run: |
@@ -382,7 +382,7 @@ jobs:
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
       - name: Mint staged worker invoker identity token (read only)
-        if: inputs.operation == 'verify-staged-worker-release' || (inputs.operation == 'deploy-dispatch-gateway' && (inputs.gateway_canary == 'owner-canary' || startsWith(inputs.gateway_staged_config, 'paid')))
+        if: inputs.operation == 'verify-staged-worker-release' || inputs.operation == 'staged-queue-activate' || (inputs.operation == 'deploy-dispatch-gateway' && (inputs.gateway_canary == 'owner-canary' || startsWith(inputs.gateway_staged_config, 'paid')))
         id: staged-worker-token
         uses: google-github-actions/auth@v3
         with:
@@ -408,7 +408,8 @@ jobs:
             --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json \
             > "$RUNNER_TEMP/staged-service.json"
           candidate_check="$(python3 scripts/assert_tagged_zero_traffic_worker.py \
-            --revision "$TARGET_REVISION" < "$RUNNER_TEMP/staged-service.json")"
+            --revision "$TARGET_REVISION" --tag "staged-${SOURCE_SHA:0:12}" --source-sha "$SOURCE_SHA" \
+            < "$RUNNER_TEMP/staged-service.json")"
           printf '%s\n' "$candidate_check"
           # The preflight and runtime resolver independently bind this
           # destination to the exact revision's canonical Cloud Run tag.
@@ -418,6 +419,7 @@ jobs:
           esac
           export FIXLIST_WORKER_PROBE_URL="${candidate_check##* tag_url=}"
           OPERATION=verify-worker-routes bash ./scripts/fixlist-cloud-operator.sh
+          export FIXLIST_VERIFY_STAGED_BASE44_RUNTIME=1
           OPERATION=verify-worker-runtime-revision bash ./scripts/fixlist-cloud-operator.sh
 
       - name: Run allowlisted worker operation
@@ -498,6 +500,7 @@ jobs:
           FIXLIST_ADMISSION_ACCESS_TOKEN: ${{ steps.staged-barrier-auth.outputs.access_token }}
           FIXLIST_OPERATOR_ID_TOKEN: ${{ steps.operator-id-token.outputs.id_token }}
           FIXLIST_OPERATOR_TOKEN_AUDIENCE: ${{ env.ADMISSION_OPERATOR_AUDIENCE }}
+          FIXLIST_WORKER_ID_TOKEN: ${{ steps.staged-worker-token.outputs.id_token }}
         run: |
           set -euo pipefail
           case "$QUEUE_OPERATION" in

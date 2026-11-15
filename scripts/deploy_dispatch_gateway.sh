@@ -271,7 +271,7 @@ PY
   GCP_PROJECT="$PROJECT" GCP_REGION="$REGION" CLOUD_RUN_SERVICE="$WORKER" \
     CLOUD_TASKS_QUEUE="$QUEUE" TASKS_INVOKER_SERVICE_ACCOUNT="$INVOKER_SA" \
     OPERATION=verify-worker-runtime-revision TARGET_REVISION="$GATEWAY_STAGED_SERVING_REVISION" \
-    FIXLIST_WORKER_PROBE_URL="$WORKER_ORIGIN" \
+    FIXLIST_WORKER_PROBE_URL="$WORKER_ORIGIN" FIXLIST_VERIFY_STAGED_BASE44_RUNTIME=1 \
     bash "$REPO_ROOT/scripts/fixlist-cloud-operator.sh"
 }
 verify_paid_cutover
@@ -286,6 +286,7 @@ GATEWAY_CANARY_REVISION="${GATEWAY_CANARY_REVISION:-}"
 GATEWAY_CANARY_OWNER_USER_IDS="${GATEWAY_CANARY_OWNER_USER_IDS:-}"
 CANARY_WORKER_ORIGIN=""
 CANARY_OWNER_COUNT=0
+CANARY_STAGED_RUNTIME_REQUIRED=0
 if [[ -n "$GATEWAY_CANARY_REVISION" || -n "$GATEWAY_CANARY_OWNER_USER_IDS" ]]; then
   if [[ -z "$GATEWAY_CANARY_REVISION" || -z "$GATEWAY_CANARY_OWNER_USER_IDS" ]]; then
     echo "Refusing gateway deployment: canary revision and owner allowlist must be set together." >&2
@@ -295,12 +296,19 @@ if [[ -n "$GATEWAY_CANARY_REVISION" || -n "$GATEWAY_CANARY_OWNER_USER_IDS" ]]; t
     echo "Refusing gateway deployment: canary owner allowlist must be 1-5 exact comma-separated user IDs." >&2
     exit 2
   fi
+  require_staged_runtime=0
+  if [[ "$GATEWAY_PIPELINE_MODE" == staged ]]; then require_staged_runtime=1; fi
   canary_report="$(GCP_PROJECT="$PROJECT" GCP_REGION="$REGION" CLOUD_RUN_SERVICE="$WORKER" \
     CLOUD_TASKS_QUEUE="$QUEUE" TASKS_INVOKER_SERVICE_ACCOUNT="$INVOKER_SA" \
+    GATEWAY_REQUIRE_STAGED_RUNTIME="$require_staged_runtime" \
     bash "$REPO_ROOT/scripts/prepare_gateway_canary.sh")"
   printf '%s\n' "$canary_report"
   CANARY_WORKER_ORIGIN="$(printf '%s\n' "$canary_report" | sed -n 's/^GATEWAY_CANARY_WORKER_ORIGIN=//p')"
+  CANARY_STAGED_RUNTIME_REQUIRED="$(printf '%s\n' "$canary_report" | sed -n 's/^GATEWAY_CANARY_STAGED_RUNTIME_REQUIRED=//p')"
   [[ "$CANARY_WORKER_ORIGIN" == https://canary-* ]] || { echo 'Missing verified pinned canary origin.' >&2; exit 2; }
+  [[ "$CANARY_STAGED_RUNTIME_REQUIRED" == 0 || "$CANARY_STAGED_RUNTIME_REQUIRED" == 1 ]] || {
+    echo 'Missing canary staged-runtime verification classification.' >&2; exit 2;
+  }
   CANARY_OWNER_COUNT="$(printf '%s' "$GATEWAY_CANARY_OWNER_USER_IDS" | tr ',' '\n' | sort -u | grep -c .)"
 fi
 verify_canary_mapping() {
@@ -309,7 +317,15 @@ verify_canary_mapping() {
   local check
   check="$(python3 "$REPO_ROOT/scripts/assert_tagged_zero_traffic_worker.py" \
     --revision "$GATEWAY_CANARY_REVISION" --tag "canary-${GATEWAY_CANARY_REVISION#fixlist-standard150-worker-}" < "$WORKER_JSON")"
-  [[ "${check##* tag_url=}" == "$CANARY_WORKER_ORIGIN" ]]
+  [[ "${check##* tag_url=}" == "$CANARY_WORKER_ORIGIN" ]] || return 1
+  if [[ "$CANARY_STAGED_RUNTIME_REQUIRED" == 1 ]]; then
+    # Base44 publication can change while the gateway image builds.
+    GCP_PROJECT="$PROJECT" GCP_REGION="$REGION" CLOUD_RUN_SERVICE="$WORKER" \
+      CLOUD_TASKS_QUEUE="$QUEUE" TASKS_INVOKER_SERVICE_ACCOUNT="$INVOKER_SA" \
+      OPERATION=verify-worker-runtime-revision TARGET_REVISION="$GATEWAY_CANARY_REVISION" SOURCE_SHA="$SOURCE_SHA" \
+      FIXLIST_WORKER_PROBE_URL="$CANARY_WORKER_ORIGIN" FIXLIST_VERIFY_STAGED_BASE44_RUNTIME=1 \
+      bash "$REPO_ROOT/scripts/fixlist-cloud-operator.sh"
+  fi
 }
 ENV_VARS="^|^SCAN_TASKS_QUEUE_PATH=$QUEUE_PATH|SCAN_DRAIN_QUEUE_PATH=$DRAIN_QUEUE_PATH|SCAN_WORKER_URL=$WORKER_URL|TASKS_INVOKER_SERVICE_ACCOUNT=$INVOKER_SA|DISPATCH_MAX_CLOCK_SKEW_SECONDS=300|DISPATCH_MAX_BODY_BYTES=262144|FIXLIST_GATEWAY_SOURCE_SHA=$SOURCE_SHA"
 ENV_VARS="${ENV_VARS}|SCAN_PIPELINE_MODE=$GATEWAY_PIPELINE_MODE|SCAN_STAGED_ROLLOUT_SCOPE=$STAGED_ROLLOUT_SCOPE|SCAN_STAGED_500_ENTITLED_ENABLED=$STAGED_500_ENABLED"

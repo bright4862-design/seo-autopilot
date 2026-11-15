@@ -312,10 +312,16 @@ def operator(tmp_path):
     # Keep the verifier's real per-task predicate (the guard imports it) and
     # stub only its gcloud-reading main.
     real_verifier = (ROOT / "scripts/verify_staged_scan_infra.py").read_text().split("\ndef describe(")[0]
-    # Stands in for the operator's signed barrier-status readback.
+    # Stand in for the operator's readbacks. The guarded queue script and
+    # authenticated runtime-check arguments are exercised unchanged.
     (repo / "scripts/fixlist-cloud-operator.sh").write_text(
         "#!/usr/bin/env bash\nset -euo pipefail\nexec python3 - <<'PY'\n"
         "import json,os,sys\n"
+        "if os.environ['OPERATION'] == 'verify-worker-runtime-revision':\n"
+        "    probe = [os.environ[key] for key in ('TARGET_REVISION','SOURCE_SHA',"
+        "'FIXLIST_WORKER_PROBE_URL','FIXLIST_WORKER_TOKEN_AUDIENCE','FIXLIST_VERIFY_STAGED_BASE44_RUNTIME')]\n"
+        "    with open(os.environ['TEST_CALL_LOG'],'a') as f: f.write(json.dumps(['runtime',*probe])+'\\n')\n"
+        "    sys.exit('Staged signed Base44 probe failed.' if os.environ.get('FAKE_RUNTIME_FAILURE') else 0)\n"
         "with open(os.environ['TEST_CALL_LOG'],'a') as f: f.write(json.dumps(['barrier',os.environ['OPERATION'],"
         "os.environ['SOURCE_SHA'],os.environ['BARRIER_EXPECTED_GENERATION'],os.environ['BARRIER_EXPECTED_PRIOR_MODE'],"
         "os.environ['CHANGE_TICKET'],os.environ.get('CLOUDSDK_AUTH_ACCESS_TOKEN_FILE',''),"
@@ -474,6 +480,8 @@ def test_activate_resumes_only_after_full_readback(operator):
     assert verifies[0][verifies[0].index("--token-audience") + 1] == ORIGIN
     resume = [i for i, c in enumerate(calls) if c[1:4] == ["tasks", "queues", "resume"]]
     assert len(resume) == 1 and calls.index(verifies[0]) < resume[0] < calls.index(verifies[1])
+    runtime = calls.index(["runtime", CANDIDATE, sha, target_for(sha), ORIGIN, "1"])
+    assert calls.index(verifies[0]) < runtime < resume[0]
     # Barrier and queue are re-read after the slow checks, right before resume.
     barriers = [i for i, c in enumerate(calls) if c[0] == "barrier"]
     lists = [i for i, c in enumerate(calls) if c[1:3] == ["tasks", "list"]]
@@ -482,6 +490,15 @@ def test_activate_resumes_only_after_full_readback(operator):
     assert "STAGED_QUEUE_ACTIVATION_PROOF generation=7" in result.stdout
     assert [c[3] for c in mutations(calls)] == ["resume"]
     assert "STAGED_QUEUE_ACTIVATED" in result.stdout
+
+
+def test_activate_leaves_queue_paused_if_signed_worker_probe_fails(operator):
+    sha, write_state, run = operator
+    write_state()
+    result, calls, final = run("activate", ACTIVATE.format(sha=sha), **ACT, FAKE_RUNTIME_FAILURE="1")
+    assert result.returncode != 0 and "Staged signed Base44 probe failed." in result.stderr
+    assert mutations(calls) == []
+    assert final["queues"]["fixlist-scan-stages"]["state"] == "PAUSED"
 
 
 def test_activate_refuses_misconfigured_candidate_without_mutation(operator):

@@ -92,6 +92,22 @@ def test_malformed_revision_fails():
         verify_tagged_zero_traffic(tagged_candidate(), "../../worker")
 
 
+def test_source_bound_tag_needs_exact_source_revision_and_zero_traffic():
+    source = "a" * 40
+    tag = "staged-" + source[:12]
+    service = tagged_candidate()
+    origin = "https://fixlist-standard150-worker.example.run.app"
+    service["status"]["url"] = origin
+    url = origin.replace("https://", f"https://{tag}---")
+    service["status"]["traffic"].append({"revisionName": REVISION, "tag": tag, "url": url})
+    assert verify_tagged_zero_traffic(service, REVISION, tag, source_sha=source) == url
+    with pytest.raises(CandidateNotIsolated, match="source_tag_mismatch"):
+        verify_tagged_zero_traffic(service, REVISION, tag, source_sha="b" * 40)
+    service["status"]["traffic"][-1]["percent"] = 0.5
+    with pytest.raises(CandidateNotIsolated, match="candidate_percent_invalid"):
+        verify_tagged_zero_traffic(service, REVISION, tag, source_sha=source)
+
+
 def test_workflow_separates_tag_mutation_from_read_only_candidate_probe():
     workflow = (ROOT / ".github/workflows/fixlist-cloud-operator.yml").read_text()
     assert "\n          - tag-worker-candidate\n" in workflow

@@ -6,7 +6,7 @@ import { buildLimitedResultSnapshot, verifyLimitedResultProof } from "../../base
 
 const packageUrl = new URL("../../base44/functions/persistLimitedScanResultV9/", import.meta.url);
 const modulePaths = [
-  "./scanLimits.js", "./workerEnvelope.js", "./generatedReleaseContract.js",
+  "./scanLimits.js", "./workerEnvelope.js", "./workerRuntime.js", "./generatedReleaseContract.js",
   "./generatedBuildId.js", "./completionTimestamp.js", "./limitedResultIntegrity.js",
 ];
 const modules = Object.fromEntries(await Promise.all(modulePaths.map(async (path) => [

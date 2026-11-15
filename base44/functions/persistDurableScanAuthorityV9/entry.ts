@@ -3,8 +3,9 @@ import { stagedCompletionTime } from "./completionTimestamp.js";
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import { secrets } from "base44:runtime";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "persistDurableScanAuthorityV9-staged-runtime-20261111-v4";
+const BASE44_RUNTIME_ACTIVATION_ID = "persistDurableScanAuthorityV9-staged-runtime-20261111-v5";
 import { createAuthoritySeal, verifyAuthoritySeal } from "./authoritySeal.js";
+import { handleWorkerRuntime } from "./workerRuntime.js";
 import { authorityRowsFromSnapshot } from "./authorityRows.js";
 import { AUTHORITY_CONTRACT, buildAuthoritySnapshot, buildPersistedAuthoritySnapshot, firstFailedAuthorityPredicate, hasCompleteAcceptanceEvidence } from "./authoritySnapshot.js";
 import { PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION } from "./evidenceUrlIdentity.js";
@@ -79,14 +80,28 @@ Deno.serve(async (req) => {
     return Response.json({ success: false, error_code: "method_not_allowed", error: "Use POST to persist durable scan authority.", build_id: FUNCTION_BUILD_ID, runtime_activation_id: BASE44_RUNTIME_ACTIVATION_ID }, { status: 405 });
   }
 
+  if (AUTHORITY_CONTRACT.beta_revision_fingerprint !== BASE44_HANDLER_RELEASE_FINGERPRINT) {
+    return problemResponse(new RequestProblem(503, "authority_release_activation_mismatch", "Server scan authority release activation is inconsistent."));
+  }
+  if (String(req.headers.get("X-FixList-Worker") || "") !== WORKER_VERSION) {
+    return problemResponse(new RequestProblem(403, "worker_header_invalid", "The durable worker identity is invalid."));
+  }
+
+  const body = await req.json().catch(() => ({}));
+  const secret = String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || "");
+  if (body && typeof body === "object" && (Object.hasOwn(body, "runtime_request") || Object.hasOwn(body, "runtime_proof"))) {
+    return handleWorkerRuntime(body, {
+      function_name: "persistDurableScanAuthorityV9",
+      build_id: FUNCTION_BUILD_ID,
+      runtime_activation_id: BASE44_RUNTIME_ACTIVATION_ID,
+      release_fingerprint: AUTHORITY_CONTRACT.beta_revision_fingerprint,
+    }, secret, { verify: verifyAuthoritySeal, sign: createAuthoritySeal }, payload => dispatchWorkerRequest(req, payload, secret));
+  }
+  return dispatchWorkerRequest(req, body, secret);
+});
+
+async function dispatchWorkerRequest(req: Request, body, secret: string) {
   try {
-    if (AUTHORITY_CONTRACT.beta_revision_fingerprint !== BASE44_HANDLER_RELEASE_FINGERPRINT) {
-      throw new RequestProblem(503, "authority_release_activation_mismatch", "Server scan authority release activation is inconsistent.");
-    }
-    assertWorkerHeader(req);
-    const serviceBase44 = createClientFromRequest(req);
-    const entities = serviceBase44.asServiceRole.entities;
-    const body = await req.json().catch(() => ({}));
     const signedDocument = {
       version: body?.version,
       identity: body?.identity,
@@ -94,7 +109,6 @@ Deno.serve(async (req) => {
       review: body?.review,
     };
     const proof = cleanProof(body?.proof);
-    const secret = String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || "");
     if (!secret) throw new RequestProblem(503, "authority_not_configured", "Server scan authority is not configured.");
     if (body?.version !== COMPLETION_VERSION || !proof || !await verifyAuthoritySeal(signedDocument, secret, proof)) {
       throw new RequestProblem(409, "worker_envelope_invalid", "The durable worker completion envelope could not be verified.");
@@ -107,6 +121,8 @@ Deno.serve(async (req) => {
       throw new RequestProblem(400, "worker_identity_missing", "The durable worker identity is incomplete.");
     }
 
+    const serviceBase44 = createClientFromRequest(req);
+    const entities = serviceBase44.asServiceRole.entities;
     const scan = await entities.ScanRun.get(identity.scan_id).catch(() => null);
     const project = await entities.BusinessProject.get(identity.project_id).catch(() => null);
     if (!scan || !project) throw new RequestProblem(404, "authority_record_not_found", "The durable scan project was not found.");
@@ -386,7 +402,7 @@ Deno.serve(async (req) => {
     console.error("persistDurableScanAuthority failed", error instanceof Error ? error.name : "unknown_error");
     return problemResponse(new RequestProblem(500, "durable_authority_failed", "The durable scan authority could not be saved."));
   }
-});
+}
 
 
 async function ensureVerifiedCustomerPreview({
@@ -464,12 +480,6 @@ function diagnosticClassifierMarker(value: unknown) {
   return /^archetype_classifier_v[0-9]+_[a-z0-9_]+$/.test(marker) && marker.length <= 160
     ? marker
     : "missing";
-}
-
-function assertWorkerHeader(req: Request) {
-  if (String(req.headers.get("X-FixList-Worker") || "") !== WORKER_VERSION) {
-    throw new RequestProblem(403, "worker_header_invalid", "The durable worker identity is invalid.");
-  }
 }
 
 function normalizeIdentity(value) {

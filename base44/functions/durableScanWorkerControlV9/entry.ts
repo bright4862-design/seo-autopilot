@@ -3,8 +3,9 @@ import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import { secrets } from "base44:runtime";
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "durableScanWorkerControlV9-staged-runtime-20261111-v2";
-import { verifyAuthoritySeal } from "./authoritySeal.js";
+const BASE44_RUNTIME_ACTIVATION_ID = "durableScanWorkerControlV9-staged-runtime-20261111-v3";
+import { createAuthoritySeal, verifyAuthoritySeal } from "./authoritySeal.js";
+import { handleWorkerRuntime } from "./workerRuntime.js";
 import {
   finishReconciliationInvocation as finishReconciliationInvocationClient,
   releaseAdmission as releaseAdmissionClient,
@@ -100,15 +101,28 @@ Deno.serve(async (req) => {
     return Response.json({ success: false, error_code: "method_not_allowed", error: "Use POST for durable worker control.", build_id: FUNCTION_BUILD_ID, runtime_activation_id: BASE44_RUNTIME_ACTIVATION_ID }, { status: 405 });
   }
 
-  try {
-    if (RELEASE_FINGERPRINT !== BASE44_HANDLER_RELEASE_FINGERPRINT) {
-      throw new RequestProblem(503, "control_release_activation_mismatch", "Server worker-control release activation is inconsistent.");
-    }
-    if (String(req.headers.get("X-FixList-Worker") || "") !== WORKER_VERSION) {
-      throw new RequestProblem(403, "worker_header_invalid", "The durable worker identity is invalid.");
-    }
+  if (RELEASE_FINGERPRINT !== BASE44_HANDLER_RELEASE_FINGERPRINT) {
+    return problemResponse(new RequestProblem(503, "control_release_activation_mismatch", "Server worker-control release activation is inconsistent."));
+  }
+  if (String(req.headers.get("X-FixList-Worker") || "") !== WORKER_VERSION) {
+    return problemResponse(new RequestProblem(403, "worker_header_invalid", "The durable worker identity is invalid."));
+  }
 
-    const body = await req.json().catch(() => ({}));
+  const body = await req.json().catch(() => ({}));
+  const secret = String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || "");
+  if (body && typeof body === "object" && (Object.hasOwn(body, "runtime_request") || Object.hasOwn(body, "runtime_proof"))) {
+    return handleWorkerRuntime(body, {
+      function_name: "durableScanWorkerControlV9",
+      build_id: FUNCTION_BUILD_ID,
+      runtime_activation_id: BASE44_RUNTIME_ACTIVATION_ID,
+      release_fingerprint: RELEASE_FINGERPRINT,
+    }, secret, { verify: verifyAuthoritySeal, sign: createAuthoritySeal }, payload => dispatchWorkerRequest(req, payload, secret));
+  }
+  return dispatchWorkerRequest(req, body, secret);
+});
+
+async function dispatchWorkerRequest(req: Request, body, secret: string) {
+  try {
     const signedDocument = {
       version: body?.version,
       action: body?.action,
@@ -118,7 +132,6 @@ Deno.serve(async (req) => {
       ...(body?.action === "progress" ? {progress: body?.progress} : {}),
     };
     const proof = cleanProof(body?.proof);
-    const secret = String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || "");
     if (!secret) throw new RequestProblem(503, "authority_not_configured", "Server scan authority is not configured.");
     if (body?.version !== CONTROL_VERSION || !proof || !await verifyAuthoritySeal(signedDocument, secret, proof)) {
       throw new RequestProblem(409, "worker_control_invalid", "The durable worker control envelope could not be verified.");
@@ -267,7 +280,7 @@ Deno.serve(async (req) => {
     console.error("durableScanWorkerControl failed", error instanceof Error ? error.name : "unknown_error");
     return problemResponse(new RequestProblem(500, "worker_control_failed", "The durable worker control request failed."));
   }
-});
+}
 
 async function reconcileDurableScans(entities) {
   const sourceSha = String(Deno.env.get("FIXLIST_RELEASE_SOURCE_SHA") || "").trim();

@@ -1,11 +1,12 @@
 import { validateScanResultCap } from "./scanLimits.js";
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import { secrets } from "base44:runtime";
-import { verifyAuthoritySeal } from "./workerEnvelope.js";
+import { createAuthoritySeal, verifyAuthoritySeal } from "./workerEnvelope.js";
+import { handleWorkerRuntime } from "./workerRuntime.js";
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
 import { stagedCompletionTime } from "./completionTimestamp.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "persistLimitedScanResultV9-staged-runtime-20261111-v3";
+const BASE44_RUNTIME_ACTIVATION_ID = "persistLimitedScanResultV9-staged-runtime-20261111-v4";
 import {
   buildLimitedResultSnapshot,
   createLimitedResultProof,
@@ -57,14 +58,28 @@ Deno.serve(async (req) => {
     return Response.json({ success: false, error_code: "method_not_allowed", error: "Use POST to persist a limited scan result.", build_id: FUNCTION_BUILD_ID, runtime_activation_id: BASE44_RUNTIME_ACTIVATION_ID }, { status: 405 });
   }
 
+  if (RELEASE_FINGERPRINT !== BASE44_HANDLER_RELEASE_FINGERPRINT) {
+    return problemResponse(new RequestProblem(503, "limited_release_activation_mismatch", "Server limited-result release activation is inconsistent."));
+  }
+  if (String(req.headers.get("X-FixList-Worker") || "") !== WORKER_VERSION) {
+    return problemResponse(new RequestProblem(403, "worker_header_invalid", "The durable worker identity is invalid."));
+  }
+
+  const body = await req.json().catch(() => ({}));
+  const secret = String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || "");
+  if (body && typeof body === "object" && (Object.hasOwn(body, "runtime_request") || Object.hasOwn(body, "runtime_proof"))) {
+    return handleWorkerRuntime(body, {
+      function_name: "persistLimitedScanResultV9",
+      build_id: FUNCTION_BUILD_ID,
+      runtime_activation_id: BASE44_RUNTIME_ACTIVATION_ID,
+      release_fingerprint: RELEASE_FINGERPRINT,
+    }, secret, { verify: verifyAuthoritySeal, sign: createAuthoritySeal }, payload => dispatchWorkerRequest(req, payload, secret));
+  }
+  return dispatchWorkerRequest(req, body, secret);
+});
+
+async function dispatchWorkerRequest(req: Request, body, secret: string) {
   try {
-    if (RELEASE_FINGERPRINT !== BASE44_HANDLER_RELEASE_FINGERPRINT) {
-      throw new RequestProblem(503, "limited_release_activation_mismatch", "Server limited-result release activation is inconsistent.");
-    }
-    assertWorkerHeader(req);
-    const serviceBase44 = createClientFromRequest(req);
-    const entities = serviceBase44.asServiceRole.entities;
-    const body = await req.json().catch(() => ({}));
     const signedDocument = {
       version: body?.version,
       identity: body?.identity,
@@ -72,7 +87,6 @@ Deno.serve(async (req) => {
       review: body?.review,
     };
     const proof = cleanProof(body?.proof);
-    const secret = String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || "");
     if (!secret) throw new RequestProblem(503, "limited_not_configured", "Server result integrity is not configured.");
     if (body?.version !== LIMITED_COMPLETION_VERSION || !proof || !await verifyAuthoritySeal(signedDocument, secret, proof)) {
       throw new RequestProblem(409, "worker_envelope_invalid", "The limited-result envelope could not be verified.");
@@ -94,6 +108,8 @@ Deno.serve(async (req) => {
       throw new RequestProblem(409, "limited_claims_authority", "A limited result cannot claim release eligibility.");
     }
 
+    const serviceBase44 = createClientFromRequest(req);
+    const entities = serviceBase44.asServiceRole.entities;
     const scan = await entities.ScanRun.get(identity.scan_id).catch(() => null);
     if (!scan) throw new RequestProblem(404, "limited_record_not_found", "The durable scan was not found.");
     try { validateScanResultCap(scan, scanResult, review); }
@@ -240,7 +256,7 @@ Deno.serve(async (req) => {
     console.error("persistLimitedScanResult failed", error instanceof Error ? error.name : "unknown_error");
     return problemResponse(new RequestProblem(500, "limited_result_failed", "The limited scan result could not be saved."));
   }
-});
+}
 
 function robotsPolicyMatches(scan, scanResult) {
   const storedRespect = scan?.respect_robots_txt;
@@ -463,12 +479,6 @@ function nonNegativeInteger(value) {
 
 function stableTimestamp(scan) {
   return cleanText(scan?.started_at, 80) || cleanText(scan?.created_date, 80) || new Date().toISOString();
-}
-
-function assertWorkerHeader(req: Request) {
-  if (String(req.headers.get("X-FixList-Worker") || "") !== WORKER_VERSION) {
-    throw new RequestProblem(403, "worker_header_invalid", "The durable worker identity is invalid.");
-  }
 }
 
 function normalizeIdentity(value) {

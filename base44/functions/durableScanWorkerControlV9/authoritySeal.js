@@ -4,6 +4,12 @@ export function stableSerialize(value) {
   return JSON.stringify(canonicalize(value));
 }
 
+export async function createAuthoritySeal(payload, secret, cryptoImpl = globalThis.crypto) {
+  const key = await importHmacKey(secret, cryptoImpl, ["sign"]);
+  const signature = await cryptoImpl.subtle.sign("HMAC", key, ENCODER.encode(stableSerialize(payload)));
+  return Array.from(new Uint8Array(signature), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
 export async function verifyAuthoritySeal(payload, secret, proof, cryptoImpl = globalThis.crypto) {
   const cleanProof = typeof proof === "string" ? proof.trim().toLowerCase() : "";
   if (!/^[a-f0-9]{64}$/.test(cleanProof)) return false;

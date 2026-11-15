@@ -18,10 +18,12 @@ import contextlib
 import multiprocessing as mp
 import os
 import re
+import secrets
 import time
 from copy import deepcopy
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
+from hmac import compare_digest
 from typing import Any
 from urllib.parse import urlparse
 
@@ -32,6 +34,7 @@ from .acceptance_evidence import (
     build_classification_integrity,
     measure_worker_peak_memory_bytes,
 )
+from .generated_v9_worker_runtime import V9_WORKER_FUNCTION_IDENTITIES, V9_WORKER_RELEASE_FINGERPRINT
 from .observability import emit
 from .page_output_privacy import project_scan_result_for_external_boundary
 from .scan_limits import current_page_cap, page_cap_for_mode, scan_page_limit, standard_scan_contract
@@ -40,6 +43,10 @@ from .staged_telemetry import COMPLETION_FUNCTIONS, active_delivery
 WORKER_VERSION = "scan_job_worker_v1_cloud_tasks"
 CONTROL_VERSION = "durable_standard150_control_v1"
 COMPLETION_VERSION = "durable_standard150_completion_v1"
+V9_WORKER_RUNTIME_PROTOCOL = "fixlist_worker_runtime_v1"
+V9_WORKER_FUNCTIONS = frozenset({
+    "durableScanWorkerControlV9", "persistDurableScanAuthorityV9", "persistLimitedScanResultV9",
+})
 
 # Cloud Run allows 300s; leave room to review, persist, and write a terminal
 # state before the platform closes the request.
@@ -145,6 +152,96 @@ def _function_url(name: str) -> str:
     return f"{base44_api_url()}/api/apps/{base44_app_id()}/functions/{name}"
 
 
+def _function_response_body(response: httpx.Response) -> dict[str, Any]:
+    try:
+        body = response.json()
+    except ValueError:
+        return {}
+    if not isinstance(body, dict):
+        return {}
+    return body["data"] if isinstance(body.get("data"), dict) else body
+
+
+def _unverified_worker_runtime() -> dict[str, Any]:
+    return {"status_code": 503, "body": {"error_code": "worker_runtime_unverified"}}
+
+
+async def _invoke_v9_worker_function(
+    client: httpx.AsyncClient,
+    name: str,
+    action: str,
+    payload: dict[str, Any] | None,
+    timeout: float,
+) -> dict[str, Any]:
+    identity = V9_WORKER_FUNCTION_IDENTITIES.get(name, {})
+    build_id = identity.get("build_id")
+    activation_id = identity.get("runtime_activation_id")
+    signing_key = str(os.getenv("SCAN_EVIDENCE_SIGNING_KEY") or "")
+    if (name not in V9_WORKER_FUNCTIONS or not signing_key
+            or not isinstance(build_id, str) or not re.fullmatch(r"[0-9a-f]{64}", build_id)
+            or not isinstance(activation_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", activation_id)
+            or not re.fullmatch(r"[0-9a-f]{16}", V9_WORKER_RELEASE_FINGERPRINT)):
+        return _unverified_worker_runtime()
+
+    runtime_request = {
+        "protocol": V9_WORKER_RUNTIME_PROTOCOL,
+        "function_name": name,
+        "action": action,
+        "nonce": secrets.token_hex(16),
+        "issued_at": int(time.time()),
+        "expected_build_id": build_id,
+        "expected_runtime_activation_id": activation_id,
+        "payload": payload,
+    }
+    delivery = active_delivery.get() if action == "invoke" and name in COMPLETION_FUNCTIONS else None
+    try:
+        envelope = {
+            "runtime_request": runtime_request,
+            "runtime_proof": create_authority_seal(runtime_request, signing_key),
+        }
+        request = client.build_request("POST", _function_url(name), headers=_service_headers(), json=envelope, timeout=timeout)
+        request.headers.pop("Authorization", None)
+        if delivery is not None:
+            delivery.observe_completion_request(name, request.content)
+        response = await client.send(request, auth=None, follow_redirects=False)
+        if delivery is not None:
+            delivery.observe_completion_response(response.status_code)
+    except (httpx.HTTPError, TypeError, ValueError):
+        return _unverified_worker_runtime()
+
+    body = _function_response_body(response)
+    runtime = body.get("_worker_runtime")
+    expected_receipt = {
+        "protocol": V9_WORKER_RUNTIME_PROTOCOL,
+        "function_name": name,
+        "action": action,
+        "nonce": runtime_request["nonce"],
+        "build_id": build_id,
+        "runtime_activation_id": activation_id,
+        "release_fingerprint": V9_WORKER_RELEASE_FINGERPRINT,
+        "http_status": response.status_code,
+    }
+    if not isinstance(runtime, dict) or set(runtime) != {"receipt", "proof"}:
+        return _unverified_worker_runtime()
+    receipt, proof = runtime["receipt"], runtime["proof"]
+    if (receipt != expected_receipt or type(receipt["http_status"]) is not int
+            or not isinstance(proof, str) or not re.fullmatch(r"[0-9a-f]{64}", proof)
+            or not compare_digest(proof, create_authority_seal(expected_receipt, signing_key))):
+        return _unverified_worker_runtime()
+    if action == "invoke":
+        body.pop("_worker_runtime")
+    return {"status_code": response.status_code, "body": body}
+
+
+async def probe_worker_runtime_identity(
+    client: httpx.AsyncClient,
+    name: str,
+    timeout: float = 15.0,
+) -> dict[str, Any]:
+    """Prove a V9 worker's signed POST path without executing its business action."""
+    return await _invoke_v9_worker_function(client, name, "identity", None, timeout)
+
+
 async def invoke_function(
     client: httpx.AsyncClient,
     name: str,
@@ -152,25 +249,13 @@ async def invoke_function(
     timeout: float = HANDOFF_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Call one Base44-hosted function with a signed worker envelope."""
-    delivery = active_delivery.get()
+    if name in V9_WORKER_FUNCTIONS:
+        return await _invoke_v9_worker_function(client, name, "invoke", payload, timeout)
     try:
-        url, headers = _function_url(name), _service_headers()
-        if delivery is not None and name in COMPLETION_FUNCTIONS:
-            request = client.build_request("POST", url, headers=headers, json=payload, timeout=timeout)
-            delivery.observe_completion_request(name, request.content)
-            response = await client.send(request)
-            delivery.observe_completion_response(response.status_code)
-        else:
-            response = await client.post(url, headers=headers, json=payload, timeout=timeout)
+        response = await client.post(_function_url(name), headers=_service_headers(), json=payload, timeout=timeout)
     except httpx.HTTPError:
         return {"status_code": 503, "body": {}}
-    try:
-        body = response.json()
-    except ValueError:
-        body = {}
-    if isinstance(body, dict):
-        body = body.get("data") if isinstance(body.get("data"), dict) else body
-    return {"status_code": response.status_code, "body": body if isinstance(body, dict) else {}}
+    return {"status_code": response.status_code, "body": _function_response_body(response)}
 
 
 # ---------------------------------------------------------------- authority --

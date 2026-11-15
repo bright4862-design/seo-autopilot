@@ -45,6 +45,13 @@ function time(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+// Internal chronology only: timestamps are not themselves authenticated receipts.
+function observedAfter(later, earlier, strict = false) {
+  const late = time(later);
+  const early = time(earlier);
+  return late !== null && early !== null && (strict ? late > early : late >= early);
+}
+
 function isSha(value, width) {
   return new RegExp(`^[a-f0-9]{${width}}$`).test(clean(value));
 }
@@ -146,6 +153,8 @@ export function evaluateStage4ReleaseAcceptance(record) {
 
   const reload = record.acceptance?.reload || {};
   add(failures, time(reload.observed_at) !== null, "reload observation timestamp missing");
+  add(failures, observedAfter(reload.observed_at, scan.observed_at),
+    "reload observation precedes accepted scan");
   add(failures, hasReceipt(reload.evidence_reference), "reload evidence reference missing");
   add(failures, clean(reload.requested_scan_id) === scanId && clean(reload.loaded_scan_id) === scanId,
     "exact scan_id reload did not load the same scan");
@@ -155,6 +164,8 @@ export function evaluateStage4ReleaseAcceptance(record) {
   const history = record.acceptance?.history || {};
   const historyIds = Array.isArray(history.scan_ids) ? history.scan_ids.map(clean) : [];
   add(failures, time(history.observed_at) !== null, "history observation timestamp missing");
+  add(failures, observedAfter(history.observed_at, scan.observed_at),
+    "history observation precedes accepted scan");
   add(failures, hasReceipt(history.evidence_reference), "history evidence reference missing");
   add(failures, history.owner_scoped === true, "history is not verified owner-scoped");
   add(failures, historyIds.includes(scanId), "history does not include the exact acceptance scan_id");
@@ -162,6 +173,8 @@ export function evaluateStage4ReleaseAcceptance(record) {
   const rescan = record.acceptance?.rescan || {};
   const rescanId = clean(rescan.scan_id);
   add(failures, time(rescan.observed_at) !== null, "rescan observation timestamp missing");
+  add(failures, observedAfter(rescan.observed_at, scan.observed_at, true),
+    "rescan observation must follow accepted scan");
   add(failures, hasReceipt(rescan.evidence_reference), "rescan evidence reference missing");
   add(failures, Boolean(rescanId) && rescanId !== scanId, "rescan scan_id missing or reused");
   add(failures, clean(rescan.parent_scan_id) === scanId, "rescan is not linked to the accepted baseline scan");

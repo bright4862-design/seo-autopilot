@@ -293,3 +293,26 @@ test("the actual limited saved-results page preserves the limitation and finding
   assert.match(html, /Keep the saved alpha instruction\./);
   assert.match(html, /Keep the separate beta instruction\./);
 });
+
+test("a signed rate-limited report explains why it stopped and keeps useful coverage distinct", () => {
+  const record = savedRecord({
+    status: "limited", authority_verified: false, release_gate_eligible: false,
+    is_authoritative: false, result_integrity_verified: true, score_is_provisional: true,
+    health_score: 55, health_score_status: "insufficient_evidence",
+    coverage_reasons: ["staged_rate_limit"],
+    access_limitation: { kind: "bot_challenge", provider: "cloudflare" },
+    limitation: "The scan stopped early. These findings cover only the pages checked.",
+    pages_crawled: 58, pages_found: 60,
+    scan_coverage: { urls_attempted: 58, usable_html_pages: 50, verified_http_failures: 8, access_unverified_pages: 8 },
+  });
+  const html = renderSavedPage(record);
+  assert.match(html, /The website rate-limited this scan\./);
+  assert.match(html, /Try again when the site(?:'|&#x27;)s rate limit clears\./);
+  assert.match(html, /These findings cover only the pages checked\./);
+  assert.match(html, /58 of 60 pages checked/);
+  assert.match(html, /Usable HTML pages<\/dt>\s*<dd\b[^>]*>50<\/dd>/);
+  assert.match(html, /Could not fully verify access<\/dt>\s*<dd\b[^>]*>8<\/dd>/);
+  assert.match(html, /Site health score unavailable/);
+  assert.doesNotMatch(html, /Site health score 55|>55<|Cloudflare challenged this scan/);
+  assert.match(html, /Keep the saved alpha instruction\./);
+});

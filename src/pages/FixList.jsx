@@ -2224,6 +2224,15 @@ function getLimitationNote(record) {
   // showing -- but it is passed through rather than written here, so it goes
   // through the same gate as the limited-state copy.
   const limitation = customerSafeLimitationLine(record);
+  if (record?.status === "limited" && record.result_integrity_verified === true
+    && record.authority_verified !== true && record.release_gate_eligible !== true
+    && Array.isArray(record.coverage_reasons) && record.coverage_reasons.includes("staged_rate_limit")) {
+    // Select provider-neutral copy from the signed reason alone.
+    const { title, detail, nextStep } = durableScanStatePresentation({
+      status: "limited", coverage_reasons: ["staged_rate_limit"],
+    });
+    return `${title}. ${limitation || detail} ${nextStep}`;
+  }
   if (limitation) return limitation;
   if (isHealthScoreUnavailable(record)) return "We couldn't verify enough usable pages to calculate a reliable score. These findings describe the evidence collected, not a complete site assessment.";
   if (record?.score_is_provisional === true) return "Scan coverage was limited, so this score is provisional. Fix what's below, then scan again for a fuller picture.";

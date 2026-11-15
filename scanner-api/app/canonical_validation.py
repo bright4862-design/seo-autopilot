@@ -6,7 +6,11 @@ from collections import Counter
 from urllib.parse import urldefrag, urljoin, urlparse
 
 from .extract import extract_page
-from .finalize_probe_guard import FinalizeProbeGuard, FinalizeProbeSuppressed
+from .finalize_probe_guard import (
+    FINALIZE_OPTIONAL_PROBES_UNAVAILABLE,
+    FinalizeProbeGuard,
+    FinalizeProbeSuppressed,
+)
 from .redirect_validation import _comparable_origin_key
 from .robots_policy import SCANNER_USER_AGENT, SEARCH_USER_AGENT, annotate_robots_evidence
 from .security import DEFAULT_MAX_DECODED_RESPONSE_BYTES, safe_get_once
@@ -108,16 +112,20 @@ def _evidence_from_page(page: dict, target: str, source: str = "crawl") -> dict:
     }
 
 
-def _unchecked_target(target: str, *, rate_limited: bool) -> dict:
+def _unchecked_target(target: str, *, block_reason: str) -> dict:
+    if block_reason == FINALIZE_OPTIONAL_PROBES_UNAVAILABLE:
+        evidence_source = "optional_probe_fence"
+    else:
+        evidence_source = "rate_limit" if block_reason else "budget"
     return {
-        "state": "not_checked_due_to_limit" if rate_limited else "not_checked_due_to_deadline",
+        "state": "not_checked_due_to_limit" if block_reason else "not_checked_due_to_deadline",
         "target_url": target,
         "status_code": 0,
         "indexability_state": "Unknown",
         "fetch_error": "",
         "location": "",
         "target_canonical": "",
-        "evidence_source": "rate_limit" if rate_limited else "budget",
+        "evidence_source": evidence_source,
     }
 
 
@@ -156,9 +164,11 @@ async def _fetch_target(
         }
 
     remaining = None if deadline is None else deadline - time.monotonic()
-    rate_limited = rate_limited or bool(finalize_guard and finalize_guard.reason)
-    if rate_limited or (remaining is not None and remaining <= 0):
-        return _unchecked_target(target, rate_limited=rate_limited)
+    block_reason = finalize_guard.reason if finalize_guard else ""
+    if rate_limited and not block_reason:
+        block_reason = "rate_limit"
+    if block_reason or (remaining is not None and remaining <= 0):
+        return _unchecked_target(target, block_reason=block_reason)
 
     timeout = DEFAULT_REQUEST_TIMEOUT_SECONDS if remaining is None else max(0.1, min(DEFAULT_REQUEST_TIMEOUT_SECONDS, remaining))
     try:
@@ -181,8 +191,8 @@ async def _fetch_target(
                 "target_canonical": "",
                 "evidence_source": "validation",
             }
-    except FinalizeProbeSuppressed:
-        return _unchecked_target(target, rate_limited=True)
+    except FinalizeProbeSuppressed as exc:
+        return _unchecked_target(target, block_reason=str(exc))
     except Exception as exc:
         return {
             "state": "target_failed",

@@ -9,6 +9,8 @@ from typing import Any, Mapping
 # with the byte count observed from aiter_raw().
 TRANSFER_BODY_BYTES_HEADER = "x-fixlist-transfer-body-bytes"
 TRANSFER_BODY_BYTES_BASIS = "raw_response_body_before_content_decoding"
+# A local HTTPX hook can retain status and headers without reading a body.
+SKIP_RESPONSE_BODY_EXTENSION = "fixlist_skip_response_body"
 
 
 def measured_transfer_body_bytes(headers: Mapping[str, Any] | None) -> int | None:

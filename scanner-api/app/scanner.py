@@ -28,7 +28,7 @@ from .coverage_probes import (
 )
 from .redirect_validation import apply_redirect_evidence, fetch_with_redirect_evidence, summarize_redirect_evidence
 from .extract import classify_template, extract_links, extract_page
-from .finalize_probe_guard import FinalizeProbeGuard
+from .finalize_probe_guard import FINALIZE_OPTIONAL_PROBES_UNAVAILABLE, FinalizeProbeGuard
 from .market_scope import MARKET_SEGMENT_RE, market_pair_prefix, path_within_scope
 from .page_evidence_gate import (
     ACCESS_BLOCK_HEADER_ALLOWLIST,
@@ -1247,7 +1247,7 @@ async def crawl_batch(state: ScanState, max_pages: int = 50) -> list[dict]:
     return pages[batch_start:]
 
 
-async def _finalize_scan(state: ScanState) -> dict:
+async def _finalize_scan(state: ScanState, *, allow_optional_probes: bool) -> dict:
     """Run bounded cross-page probes, rules and result assembly once."""
     budget = state.budget
     scan_mode = state.scan_mode
@@ -1312,12 +1312,14 @@ async def _finalize_scan(state: ScanState) -> dict:
             probe_guard.reason = "crawl_rate_limited"
         elif rate_limit_pacer.rate_limit_cooldown_until > probe_started_at:
             probe_guard.reason = "crawl_rate_limit_cooldown"
-        probe_blocked_by_crawl = bool(probe_guard.reason)
+        elif not allow_optional_probes:
+            probe_guard.reason = FINALIZE_OPTIONAL_PROBES_UNAVAILABLE
+        probe_blocked_at_entry = bool(probe_guard.reason)
         remaining_crawl_seconds = max(0.0, timing_budget["crawl_deadline"] - probe_started_at)
         # Coverage is additive. It must not consume the whole remainder and
         # starve the pre-existing canonical validator that follows it.
         probe_time_budget_seconds = (
-            0.0 if probe_blocked_by_crawl else min(12.0, remaining_crawl_seconds * 0.25)
+            0.0 if probe_blocked_at_entry else min(12.0, remaining_crawl_seconds * 0.25)
         )
         probe_scheduler = SharedCoverageProbeScheduler(
             max_probe_requests=coverage_probe_request_limit(scan_mode),
@@ -1439,7 +1441,7 @@ async def _finalize_scan(state: ScanState) -> dict:
                     "score_impact": 0,
                 })
 
-        if probe_blocked_by_crawl:
+        if probe_blocked_at_entry:
             coverage_probe_evidence = probe_scheduler.summary()
         elif int(budget.get("max_pages") or 0) >= 150 and _supports_stage2_probe_fetch(fetch_and_extract):
             coverage_probe_evidence = await run_stage2_shared_probe_orchestration(
@@ -1635,9 +1637,9 @@ async def _finalize_scan(state: ScanState) -> dict:
         "crawl_warnings": crawl_warnings,
     }
 
-async def finalize_scan(state: ScanState) -> dict:
+async def finalize_scan(state: ScanState, *, allow_optional_probes: bool = True) -> dict:
     with scan_page_limit(page_cap_for_mode("standard_500" if state.max_pages > 150 else "advanced")):
-        return await _finalize_scan(state)
+        return await _finalize_scan(state, allow_optional_probes=allow_optional_probes)
 
 
 async def run_scan(

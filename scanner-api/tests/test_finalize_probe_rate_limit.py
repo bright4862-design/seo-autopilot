@@ -108,7 +108,7 @@ async def test_finalize_429_stops_optional_requests_without_changing_retained_pa
 
 
 @pytest.mark.asyncio
-async def test_canonical_429_blocks_waiting_request_while_its_body_is_still_pending(mock_network, monkeypatch):
+async def test_canonical_429_keeps_status_without_reading_its_body_and_blocks_new_targets(mock_network, monkeypatch):
     from app.finalize_probe_guard import FinalizeProbeGuard
 
     origin = "https://concurrent-probes.example"
@@ -117,26 +117,35 @@ async def test_canonical_429_blocks_waiting_request_while_its_body_is_still_pend
     waiting = "/target-2"
     requests = []
     second_started = asyncio.Event()
-    throttle_body_started = asyncio.Event()
-    release_throttle_body = asyncio.Event()
+    closing_throttle = asyncio.Event()
+    release_close = asyncio.Event()
+    body_reads = []
     waiting_checked = asyncio.Event()
 
-    class SlowThrottleBody(httpx.AsyncByteStream):
+    class BrokenBody(httpx.AsyncByteStream):
+        def __init__(self, *, throttle=False):
+            self.throttle = throttle
+
         async def __aiter__(self):
-            throttle_body_started.set()
-            await release_throttle_body.wait()
-            yield b"Throttled"
+            body_reads.append(self.throttle)
+            yield b"Incomplete"
+            raise httpx.ReadError("fixture body read failed")
+
+        async def aclose(self):
+            if self.throttle:
+                closing_throttle.set()
+                await release_close.wait()
 
     async def target_response(request):
         path = request.url.path
         requests.append(path)
         if path == first:
             await second_started.wait()
-            return httpx.Response(429, stream=SlowThrottleBody())
+            return httpx.Response(429, headers={"retry-after": "30"}, stream=BrokenBody(throttle=True))
         if path == second:
             second_started.set()
-            await throttle_body_started.wait()
-        return httpx.Response(200, text="<html><body>Checked</body></html>")
+            await closing_throttle.wait()
+        return httpx.Response(200, stream=BrokenBody())
 
     fetch_target = canonical_validation._fetch_target
 
@@ -173,11 +182,16 @@ async def test_canonical_429_blocks_waiting_request_while_its_body_is_still_pend
         try:
             await asyncio.wait_for(waiting_checked.wait(), timeout=2)
             assert requests == [first, second]
+            assert body_reads == [False]
             assert not validation.done()
         finally:
-            release_throttle_body.set()
+            release_close.set()
             await validation
 
     assert pages[0]["canonical_target_state"] == "unknown_access_limited"
+    assert pages[0]["canonical_target_status_code"] == 429
+    assert pages[1]["canonical_target_state"] == "target_failed"
+    assert pages[1]["canonical_target_status_code"] == 0
+    assert pages[1]["canonical_target_fetch_error"] == "fixture body read failed"
     assert pages[1]["canonical_target_evidence_source"] == "validation"
     assert pages[2]["canonical_target_evidence_source"] == "rate_limit"

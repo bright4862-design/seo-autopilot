@@ -2,8 +2,11 @@
 
 import httpx
 
+from .transport_evidence import SKIP_RESPONSE_BODY_EXTENSION
+
 
 FINALIZE_RATE_LIMITED = "finalize_rate_limited"
+FINALIZE_OPTIONAL_PROBES_UNAVAILABLE = "finalize_optional_probes_unavailable"
 
 
 class FinalizeProbeSuppressed(RuntimeError):
@@ -25,4 +28,6 @@ class FinalizeProbeGuard:
     async def after_response(self, response: httpx.Response) -> None:
         # HTTPX calls response hooks before consuming the body. Admit no new
         # optional traffic even if the throttled response body is slow.
-        self.observe_status(response.status_code)
+        if response.status_code == 429:
+            self.observe_status(429)
+            response.extensions[SKIP_RESPONSE_BODY_EXTENSION] = True

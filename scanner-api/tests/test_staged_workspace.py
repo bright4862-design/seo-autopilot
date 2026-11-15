@@ -71,6 +71,7 @@ class Harness:
         self.store = FaultStore()
         self.dispatcher = Dispatcher()
         self.crawls, self.results, self.progresses, self.failures = [], [], [], []
+        self.finalize_permissions = []
         self.progress_failure = False
         self.crawl_gate = None
         self.crawl_entered = asyncio.Event()
@@ -120,7 +121,8 @@ class Harness:
             state.limited = True
             state.completion_reason = self.engine_limit_reason
 
-    async def finalize(self, state):
+    async def finalize(self, state, *, allow_optional_probes):
+        self.finalize_permissions.append(allow_optional_probes)
         return {"success": True, "pages": state.pages, "pages_crawled": len(state.pages)}
 
     async def run(self, stage, *, batch=0, limited=False):
@@ -335,6 +337,7 @@ async def test_partial_evidence_finalizes_as_limited(h, cause, result_reason):
         None, "finalize", h.job, batch=frontier["batch"],
         recovery_generation=int(cause == "watchdog"),
     )
+    assert h.finalize_permissions == [cause != "watchdog"]
     assert len(h.results) == 1
     assert h.results[0]["pipeline_limited"] is True
     assert h.results[0]["pipeline_limit_reason"] == result_reason
@@ -351,6 +354,55 @@ async def test_terminal_duplicate_finalize_is_inert(h):
     assert (await h.run("finalize", batch=3))["skipped"] == "already_terminal"
     assert len(h.results) == 1
     assert h.results[0]["normalized_domain"] == "example.com"
+    assert h.finalize_permissions == [True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_or_invalid", [None, 0, "false"])
+async def test_finalize_can_complete_when_frontier_has_no_verified_unused_permit(h, legacy_or_invalid):
+    await h.run("plan")
+    for batch in range(3):
+        await h.run("batch", batch=batch)
+    stored = await h.frontier()
+    frontier = stored.value
+    if legacy_or_invalid is None:
+        frontier.pop("finalize_optional_probes_claimed")
+    else:
+        frontier["finalize_optional_probes_claimed"] = legacy_or_invalid
+    await h.store.write(h.prefix + "frontier.json", frontier, generation=stored.generation)
+
+    assert (await h.run("finalize", batch=3))["success"] is True
+    assert h.finalize_permissions == [False]
+    assert h.scan["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_finalize_lease_acknowledgement_loss_does_not_reissue_optional_permission(h, monkeypatch):
+    await h.run("plan")
+    for batch in range(3):
+        await h.run("batch", batch=batch)
+    write = h.store.write
+
+    async def lose_lease_ack(key, value, *, generation=0):
+        committed = await write(key, value, generation=generation)
+        if key.endswith("/frontier.json") and value.get("lease_owner"):
+            raise WorkspaceUnavailable("injected acknowledgement loss after lease commit")
+        return committed
+
+    with monkeypatch.context() as patch:
+        patch.setattr(h.store, "write", lose_lease_ack)
+        with pytest.raises(StageRetry):
+            await h.run("finalize", batch=3)
+    frontier = (await h.frontier()).value
+    assert frontier["finalize_optional_probes_claimed"] is True
+    assert frontier["lease_until"] > h.now
+    assert h.finalize_permissions == []
+    assert await h.store.read(h.prefix + "result.json.gz") is None
+
+    h.now = frontier["lease_until"] + 1
+    assert (await h.run("finalize", batch=3))["success"] is True
+    assert h.finalize_permissions == [False]
+    assert len(h.results) == 1
 
 
 @pytest.mark.asyncio
@@ -583,7 +635,7 @@ async def test_blocked_crawl_can_finish_without_starting_review(h, monkeypatch, 
     h.job.update(scan_mode=mode, page_cap=cap)
     monkeypatch.setattr(scan_job, "read_scan_run", h.read)
 
-    async def blocked_result(state):
+    async def blocked_result(state, *, allow_optional_probes):
         return {"pages_crawled": 1, "pages": [{
             "url": h.scan["website_url"],
             "status_code": 403,

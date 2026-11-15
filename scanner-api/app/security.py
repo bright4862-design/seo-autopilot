@@ -7,7 +7,7 @@ import zlib
 
 import httpx
 
-from .transport_evidence import TRANSFER_BODY_BYTES_HEADER
+from .transport_evidence import SKIP_RESPONSE_BODY_EXTENSION, TRANSFER_BODY_BYTES_HEADER
 
 
 REDIRECT_STATUSES = {301, 302, 303, 307, 308}
@@ -33,6 +33,25 @@ def _decoded_body_headers(headers: httpx.Headers) -> httpx.Headers:
     return decoded_headers
 
 
+def _decoded_response(
+    streamed: httpx.Response,
+    resolved: ResolvedHTTPHop,
+    *,
+    body: bytes,
+    transfer_body_bytes: int | None,
+) -> httpx.Response:
+    headers = _decoded_body_headers(streamed.headers)
+    if transfer_body_bytes is not None:
+        headers[TRANSFER_BODY_BYTES_HEADER] = str(transfer_body_bytes)
+    request = getattr(streamed, "request", None)
+    if request is not None:
+        request.url = resolved.logical_url
+    return httpx.Response(
+        streamed.status_code, headers=headers, content=body, request=request,
+        extensions=dict(getattr(streamed, "extensions", {}) or {}),
+    )
+
+
 async def _bounded_decoded_response(
     client,
     resolved: ResolvedHTTPHop,
@@ -52,6 +71,10 @@ async def _bounded_decoded_response(
         },
         extensions={"sni_hostname": resolved.hostname},
     ) as streamed:
+        extensions = getattr(streamed, "extensions", None) or {}
+        if streamed.status_code == 429 and extensions.get(SKIP_RESPONSE_BODY_EXTENSION) is True:
+            return _decoded_response(streamed, resolved, body=b"", transfer_body_bytes=None)
+
         raw_encoding = streamed.headers.get("content-encoding", "")
         encodings = [
             value.strip().lower()
@@ -146,19 +169,8 @@ async def _bounded_decoded_response(
                 f"incomplete_{encoding}_response_body"
             )
 
-        body = b"".join(chunks)
-        decoded_headers = _decoded_body_headers(streamed.headers)
-        decoded_headers[TRANSFER_BODY_BYTES_HEADER] = str(transfer_body_bytes)
-
-        request = getattr(streamed, "request", None)
-        if request is not None:
-            request.url = resolved.logical_url
-        return httpx.Response(
-            status_code=streamed.status_code,
-            headers=decoded_headers,
-            content=body,
-            request=request,
-            extensions=dict(getattr(streamed, "extensions", {}) or {}),
+        return _decoded_response(
+            streamed, resolved, body=b"".join(chunks), transfer_body_bytes=transfer_body_bytes,
         )
 
 

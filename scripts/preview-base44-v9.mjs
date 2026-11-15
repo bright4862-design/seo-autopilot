@@ -7,6 +7,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import stagedDeployments from "../data/generated-staged-v9-routes.json" with { type: "json" };
+import { ORDINARY_RECEIPT_PATH, prepareOrdinaryReceiptEntry } from "./lib/staged-v9-ordinary-preview.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const APP_ID = "6a498732ec779dfaaeab0e53";
@@ -14,6 +15,7 @@ const APP_ORIGIN = "https://getfixlist.base44.app";
 const PUBLIC_SETTINGS = `/api/apps/public/prod/public-settings/by-id/${APP_ID}`;
 const AUTH_CALLBACK = "/api/apps/auth/final-callback";
 const APP_API_PATH = new RegExp(`^/api/apps/${APP_ID}/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_.-]+)*$`);
+const ORDINARY_RESULT_API = `/api/apps/${APP_ID}/functions/${stagedDeployments.functions.getCustomerScanResultV9.route_name}`;
 const FRONTEND_INPUTS = [
   "index.html", "src", "public", "base44", "package.json", "package-lock.json",
   "vite.config.js", "postcss.config.js", "tailwind.config.js", "data/base44-function-routes.json",
@@ -57,11 +59,22 @@ export function isPreviewAuthCallback(path, method, query, origin) {
   }
 }
 
-function restrictApiPaths(origin) {
+export function allowsOrdinaryReceiptApi(path, method) {
+  // The app's SDK can emit analytics as soon as it loads. The receipt
+  // preview only forwards reads and the POST-shaped saved-result read.
+  return method === "GET" || method === "HEAD" || (method === "POST" && path === ORDINARY_RESULT_API);
+}
+
+function restrictApiPaths(origin, ordinaryReadback) {
+  const host = new URL(origin).host;
   return {
     name: "fixlist-preview-scope",
     configurePreviewServer(server) {
       server.middlewares.use((request, response, next) => {
+        if (ordinaryReadback && request.headers.host !== host) {
+          response.writeHead(404).end();
+          return;
+        }
         const requestUrl = String(request.url || "");
         const rawPath = requestUrl.split("?", 1)[0];
         // Refuse ambiguity up front, before Vite parses the URL for proxying.
@@ -71,11 +84,12 @@ function restrictApiPaths(origin) {
         const sameApp = APP_API_PATH.test(rawPath) && !rawPath.split("/").some((part) => part === "." || part === "..");
         const query = new URLSearchParams(requestUrl.slice(rawPath.length));
         const authCallback = isPreviewAuthCallback(rawPath, request.method, query, origin);
+        const receiptApi = !ordinaryReadback || !localApi || allowsOrdinaryReceiptApi(rawPath, request.method);
         // The application normally accepts app parameters from the entry URL.
         // Keep those parameters pinned even on an auth callback.
         const expectedApp = query.getAll("app_id").every((id) => id === APP_ID)
           && query.getAll("app_base_url").every((url) => url === APP_ORIGIN);
-        if (absolutePath && expectedApp && (!localApi || publicSettings || sameApp || authCallback)) {
+        if (absolutePath && expectedApp && receiptApi && (!localApi || publicSettings || sameApp || authCallback)) {
           next();
           return;
         }
@@ -101,12 +115,14 @@ async function main() {
       "source-sha": { type: "string" },
       port: { type: "string", default: "4173" },
       check: { type: "boolean" },
+      "ordinary-readback": { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
   if (values.help) {
-    console.log("Usage: node scripts/preview-base44-v9.mjs --source-sha <checked-out full SHA> [--port 4173] [--check]");
+    console.log("Usage: node scripts/preview-base44-v9.mjs --source-sha <checked-out full SHA> [--port 4173] [--check] [--ordinary-readback]");
     console.log("Use the repository's pinned Node 20.19.5 and npm ci. --check builds, probes FixList public settings and exits.");
+    console.log("--ordinary-readback adds a local receipt page using the staged acceptance renderer's exact pilot inputs.");
     return;
   }
   const source = values["source-sha"];
@@ -115,6 +131,16 @@ async function main() {
   assert(source === head, "The requested source must match the checkout.");
   const port = Number(values.port);
   assert(/^[0-9]{1,5}$/.test(values.port) && port >= 1024 && port <= 65535, "Use a preview port from 1024 to 65535.");
+  const ordinaryReadback = values["ordinary-readback"] === true;
+  assert(!ordinaryReadback || !process.env.SOURCE_SHA || process.env.SOURCE_SHA === source, "Receipt and preview source must match.");
+  let verifierModule;
+  if (ordinaryReadback) {
+    const status = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], { cwd: ROOT, encoding: "utf8" });
+    assert(!status, "The receipt preview requires a clean exact-source checkout.");
+    verifierModule = execFileSync(process.execPath, [
+      join(ROOT, "scripts/staged_scan_acceptance.mjs"), "render-ordinary-readback",
+    ], { cwd: ROOT, encoding: "utf8", env: { ...process.env, SOURCE_SHA: source } });
+  }
 
   const { build, preview } = await import("vite");
   const directory = await realpath(await mkdtemp(join(tmpdir(), "fixlist-v9-preview-")));
@@ -125,6 +151,7 @@ async function main() {
     execFileSync("tar", ["-xf", "-", "-C", directory], { input: tar });
     await symlink(join(ROOT, "node_modules"), join(directory, "node_modules"), "dir");
     process.chdir(directory);
+    const receiptPage = verifierModule ? await prepareOrdinaryReceiptEntry(directory, verifierModule) : null;
     const expected = {
       VITE_BASE44_APP_ID: APP_ID,
       VITE_BASE44_APP_BASE_URL: APP_ORIGIN,
@@ -143,6 +170,7 @@ async function main() {
     };
     await build({
       ...config,
+      ...(receiptPage ? { build: { rollupOptions: { input: [join(directory, "index.html"), receiptPage] } } } : {}),
       plugins: [{
         name: "fixlist-preview-environment",
         configResolved(resolved) {
@@ -156,13 +184,16 @@ async function main() {
     const origin = `http://127.0.0.1:${port}`;
     server = await preview({
       ...config,
-      plugins: [restrictApiPaths(origin)],
+      plugins: [restrictApiPaths(origin, ordinaryReadback)],
       preview: {
         host: "127.0.0.1",
         port,
         strictPort: true,
         cors: false,
-        headers: { "X-Robots-Tag": "noindex, noarchive" },
+        headers: {
+          "X-Robots-Tag": "noindex, noarchive",
+          ...(ordinaryReadback ? { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } : {}),
+        },
         proxy: { "/api/": fixlistApiProxy() },
       },
     });
@@ -173,6 +204,7 @@ async function main() {
     const wrongApp = await fetch(origin + "/api/apps/preview-probe-wrong-app/entities/User/me", { signal: AbortSignal.timeout(5000) });
     assert(wrongApp.status === 404 && await wrongApp.text() === "Preview route unavailable.", "The preview proxy did not enforce its app scope.");
     console.log(`FIXLIST_V9_PREVIEW_READY source=${source} url=${origin} public_settings_http=${settings.status}`);
+    if (receiptPage) console.log(`FIXLIST_ORDINARY_RECEIPT_URL=${origin}${ORDINARY_RECEIPT_PATH}`);
     if (!values.check) {
       await new Promise((resolve) => {
         process.once("SIGINT", resolve);

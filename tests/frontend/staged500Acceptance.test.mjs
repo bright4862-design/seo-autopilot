@@ -5,11 +5,14 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { assemblePrerequisites, localAcceptanceIdentity, validatePrerequisites, executeStaged500Canary, renderRemoteCanary } from "../../scripts/staged_scan_acceptance.mjs";
+import { assemblePrerequisites, localAcceptanceIdentity, validatePrerequisites, executeStaged500Canary, observeOrdinaryPilotRun, renderOrdinaryReadback, renderRemoteCanary } from "../../scripts/staged_scan_acceptance.mjs";
+import { buildCustomerProjection } from "../../base44/functions/getCustomerScanResultV9/projection.js";
+import { RELEASE_FINGERPRINT as fingerprint } from "../../base44/functions/getCustomerScanResultV9/generatedReleaseContract.js";
+import { emptyGeoReadiness } from "../../base44/functions/getCustomerScanResultV9/geoReadiness.js";
 import { openCorpusJournal, readSitePrerequisites, validateCorpusManifest, runCorpus, verifyReceiptSummary } from "../../scripts/run-staged-scan-corpus.mjs";
 
 const now = Date.parse("2026-11-12T10:00:00.000Z");
-const sha = "a".repeat(40), fingerprint = "b".repeat(16), owner = "owner_123", project = "project_123";
+const sha = "a".repeat(40), owner = "owner_123", project = "project_123";
 const names = ["startStandardScanJobV9", "durableScanWorkerControlV9", "persistDurableScanAuthorityV9", "persistLimitedScanResultV9", "getCustomerScanResultV9", "deleteCustomerScanDataV9"];
 const routeManifest = "data/generated-staged-v9-routes.json";
 const { functions: stagedFunctions } = JSON.parse(readFileSync(new URL("../../" + routeManifest, import.meta.url), "utf8"));
@@ -21,6 +24,7 @@ const stamp = { observed_at: new Date(now - 1000).toISOString(), expires_at: new
 const queue = "projects/seo-autopilot-501517/locations/europe-west1/queues/fixlist-scan-stages";
 const workerUrl = "https://canary-00105-abc---worker.run.app";
 const stageTag = `staged-${sha.slice(0, 12)}`, stageUrl = `https://${stageTag}---worker.run.app`;
+const pilotOperator = "6a498732ec779dfaaeab0e54";
 
 function workerBase44Runtime(expected, revision) {
   return {
@@ -96,9 +100,9 @@ function fakeSdk(scenario = "complete") {
     if (scenario === "limitedNoPriorities") delete projection.top_fix_ids;
   }
   const track = (name, value) => { calls.push({ name, value }); };
-  const sdk = { auth: { me: async () => { track("auth"); return { id: owner, email: "private@example.com", role: scenario === "notAdmin" ? "user" : "admin" }; } }, entities: {
+  const sdk = { auth: { me: async () => { track("auth"); return { id: owner, email: "private@example.com", role: ["notAdmin", "ordinary150"].includes(scenario) ? "user" : "admin" }; } }, entities: {
     BusinessProject: { get: async id => { track("project", id); return { id, owner_user_id: owner, website_url: "https://example.com/" }; } },
-    Access: { filter: async query => { track("access", query); return scenario === "duplicateGrant" ? [grant, { ...grant, id: "grant_456" }] : [grant]; } },
+    Access: { filter: async query => { track("access", query); return scenario === "duplicateGrant" ? [grant, { ...grant, id: "grant_456" }] : [scenario === "ordinary150" ? { ...grant, page_cap: 150 } : grant]; } },
     ScanRun: { get: async () => { track("run"); return run; } },
   }, functions: { invoke: async (name, body) => {
     track(name, body);
@@ -115,6 +119,249 @@ function config() {
   assert.equal(prerequisite.ready, true, prerequisite.failures.join(","));
   return { appId: "6a498732ec779dfaaeab0e53", sourceSha: sha, ownerId: owner, projectId: project, targetUrl: "https://example.com/", requestId: "request_500_123", expectedFingerprint: fingerprint, maxWait: 600, pollSeconds: 1, provenance: prerequisite.provenance, launchRoute, resultRoute };
 }
+
+function ordinaryPacket(at = now, entitySources) {
+  const { data, local } = prerequisites();
+  if (entitySources) {
+    local.entitySources = entitySources;
+    data.schema_readback.entity_sources = entitySources;
+  }
+  const fresh = { observed_at: new Date(at - 1000).toISOString(), expires_at: new Date(at + 600000).toISOString() };
+  Object.assign(data, fresh);
+  for (const key of ["base44", "schema_readback", "base44_configuration", "worker", "gateway", "infrastructure"]) {
+    Object.assign(data[key], fresh);
+  }
+  data.infrastructure.task.observed_at = new Date(at - 3600_000).toISOString();
+  Object.assign(data.base44_configuration.intake_route, {
+    observer_user_id: pilotOperator, route_name: launchRoute, observed_at: fresh.observed_at,
+    pipeline_mode: "monolith", staged_owner_enabled: false,
+    staged_rollout_scope: "off", staged_500_entitled_enabled: false,
+  });
+  return { data, local: { ...local, now: at }, expected: { ...local, now: at, ordinaryOperatorId: pilotOperator } };
+}
+
+test("the ordinary-user packet verifies the separate operator readback for only the target cohort", () => {
+  const { data, local, expected } = ordinaryPacket();
+  const check = validatePrerequisites(data, expected);
+  assert.equal(check.ready, true, check.failures.join(","));
+  assert.deepEqual(check.provenance.ordinary_pilot, { operator_user_id: pilotOperator, owner_user_id: owner });
+  assert.equal(validatePrerequisites(data, local).ready, false);
+  for (const mutate of [
+    v => { v.observer_user_id = owner; },
+    v => { delete v.observer_user_id; },
+    v => { v.route_name = "startStandardScanJobV9"; },
+    v => { delete v.route_name; },
+    v => { v.staged_owner_enabled = true; },
+    v => { v.pipeline_mode = "staged"; },
+    v => { v.staged_owner_cohort_sha256 = hash(JSON.stringify([pilotOperator])); },
+  ]) {
+    const altered = structuredClone(data);
+    mutate(altered.base44_configuration.intake_route);
+    assert.equal(validatePrerequisites(altered, expected).ready, false);
+  }
+  const legacyPacket = structuredClone(data);
+  legacyPacket.base44.schema_version = "fixlist_staged_v9_readiness_v1";
+  assert.ok(validatePrerequisites(legacyPacket, expected).failures.includes("base44_readiness_identity_mismatch"));
+});
+
+test("the first ordinary V9 scan supplies its own exact task evidence without needing a rehearsal scan", async t => {
+  const receiptTime = Date.now();
+  const observationTime = receiptTime - 20 * 60_000;
+  const { entitySources } = localAcceptanceIdentity(process.cwd(), sha, owner);
+  const { data, expected } = ordinaryPacket(observationTime, entitySources);
+  const ownTask = structuredClone(data.infrastructure.task);
+  data.infrastructure.task = null;
+  data.ordinary_task_observation = "deferred";
+  assert.ok(validatePrerequisites(data, expected).failures.includes("stage_task_contract_mismatch"));
+  const { provenance } = validatePrerequisites(data, { ...expected, allowDeferredOrdinaryTask: true });
+  assert.ok(provenance);
+  assert.ok(Date.parse(data.expires_at) < receiptTime);
+  const fake = fakeSdk("notAdmin");
+  fake.run.started_at = new Date(observationTime - 25_000).toISOString();
+  fake.run.completed_at = new Date(receiptTime - 1_000).toISOString();
+  fake.run.admission_mode = "acceptance_only";
+  fake.run.admission_acceptance_source_sha = sha;
+  fake.run.admission_cohort_evidence_version = "admission_claim_evidence_v1";
+  fake.run.admission_cohort_evidence_proof = "e".repeat(64);
+  const ordinary = { ...config(), provenance, ordinaryScanId: fake.run.id };
+  const operator = {
+    auth: { me: async () => ({ id: pilotOperator, email: "londonparisbrussels@gmail.com", role: "admin" }) },
+    entities: { ScanRun: { get: async id => { assert.equal(id, fake.run.id); return fake.run; } } },
+  };
+  await assert.rejects(observeOrdinaryPilotRun({
+    auth: { me: async () => ({ id: pilotOperator, email: "londonparisbrussels@gmail.com", role: "user" }) },
+  }, ordinary, () => observationTime), /ordinary_operator_identity_mismatch/);
+  const observationTimes = [observationTime, receiptTime];
+  const operatorReadback = await observeOrdinaryPilotRun(operator, ordinary, () => observationTimes.shift());
+  assert.equal(operatorReadback.run.authority_proof_present, true);
+  assert.doesNotMatch(JSON.stringify(operatorReadback), /f{64}|e{64}|londonparisbrussels|never-print-private/);
+  ordinary.operatorReadback = operatorReadback;
+  const run = { ...fake.run, advanced_scan_backend: "python_scanner_api", deno_fallback_used: false,
+    ai_review_backend: "python_review_api", python_review_fallback_used: false, geo_readiness: emptyGeoReadiness() };
+  const projection = buildCustomerProjection({ run, fullAccess: true, authorityVerified: true });
+  assert.equal(projection.run.last_committed_batch, undefined);
+  assert.equal(projection.run.authority_proof, undefined);
+  fake.sdk.functions.invoke = async (name, payload) => {
+    fake.calls.push({ name });
+    assert.equal(name, resultRoute);
+    assert.deepEqual(payload, { scan_id: fake.run.id });
+    return { data: projection };
+  };
+  delete fake.sdk.entities.ScanRun;
+  const unproven = await executeStaged500Canary({}, ordinary, () => receiptTime);
+  assert.equal(unproven.failure_code, "ordinary_stage_task_observation_required");
+  const staged = { ...ordinary, provenance: { ...provenance, ordinary_stage_task_observation_sha256: "4".repeat(64) } };
+  let report = await executeStaged500Canary(fake.sdk, staged, () => receiptTime);
+  assert.equal(report.terminal_outcome_verified, true, report.failure_code);
+  assert.equal(report.execution_mode, "ordinary_user_readback");
+  assert.equal(report.scan_id, fake.run.id);
+  assert.equal(report.functional_500_verified, true);
+  assert.equal(report.full_500_gate, false);
+  assert.equal(report.observed_at, operatorReadback.observed_at);
+  assert.equal(report.committed_batch_count, 10);
+  assert.ok(fake.calls.some(call => call.name === resultRoute));
+  assert.ok(!fake.calls.some(call => call.name === launchRoute));
+  const unversioned = await executeStaged500Canary({}, { ...staged, resultRoute: "getCustomerScanResultV9" }, () => receiptTime);
+  assert.equal(unversioned.failure_code, "staged_scan_routes_unverified");
+  projection.run.pages_crawled = 499;
+  const discrepant = await executeStaged500Canary(fake.sdk, staged, () => receiptTime);
+  assert.equal(discrepant.failure_code, "ordinary_customer_projection_mismatch");
+  projection.run.pages_crawled = 500;
+
+  const importReadback = config => import(`data:text/javascript;base64,${Buffer.from(renderOrdinaryReadback(config)).toString("base64")}`);
+  const browser = await importReadback(staged);
+  assert.deepEqual(await browser.verifyOrdinaryStaged500Readback(fake.sdk), report);
+
+  const staleConfig = { ...ordinary, provenance: { ...provenance, expires_at: "1970-01-01T00:00:00.000Z" } };
+  const module = await importReadback(staleConfig);
+  const expired = await module.verifyOrdinaryStaged500Readback({});
+  assert.equal(expired.failure_code, "prerequisites_invalid_or_expired");
+
+  const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "ordinary-pilot-")));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const operatorExec = path.join(directory, "operator.log");
+  const operatorFile = path.join(directory, "operator.json");
+  const browserFile = path.join(directory, "browser.json");
+  const reportFile = path.join(directory, "report.json");
+  const taskFile = path.join(directory, "task.json");
+  const prerequisitesFile = path.join(directory, "prerequisites.json");
+  writeFileSync(prerequisitesFile, JSON.stringify(data));
+  const env = { ...process.env, SOURCE_SHA: sha, EXPECTED_OWNER_USER_ID: owner, EXPECTED_OPERATOR_USER_ID: pilotOperator,
+    PROJECT_ID: project, REQUEST_ID: fake.run.request_id, TARGET_URL: fake.run.website_url,
+    ORDINARY_SCAN_ID: fake.run.id, ORDINARY_OPERATOR_READBACK_FILE: operatorFile, PREREQUISITES_FILE: prerequisitesFile,
+    ORDINARY_TASK_OBSERVATION_FILE: "" };
+  const collect = (mode, input, output) => spawnSync(process.execPath,
+    ["scripts/staged_scan_acceptance.mjs", mode, input, output], { env, encoding: "utf8" });
+  const preflightClock = `data:text/javascript,${encodeURIComponent(`Date.now = () => ${observationTime}`)}`;
+  const operatorRender = spawnSync(process.execPath, ["--import", preflightClock, "scripts/staged_scan_acceptance.mjs",
+    "render-ordinary-operator-readback"], { env, encoding: "utf8" });
+  assert.equal(operatorRender.status, 0, operatorRender.stderr);
+  assert.match(operatorRender.stdout, /FIXLIST_STAGED_500_ORDINARY_OPERATOR=/);
+  writeFileSync(operatorExec, "CLI banner\nFIXLIST_STAGED_500_ORDINARY_OPERATOR=" + JSON.stringify(operatorReadback) + "\n");
+  const collected = collect("collect-ordinary-operator-readback", operatorExec, operatorFile);
+  assert.equal(collected.status, 0, collected.stderr);
+  const renderBrowser = () => spawnSync(process.execPath, ["scripts/staged_scan_acceptance.mjs", "render-ordinary-readback"], { env, encoding: "utf8" });
+  assert.match(renderBrowser().stderr, /ordinary_stage_task_observation_required/);
+  env.ORDINARY_TASK_OBSERVATION_FILE = taskFile;
+  ownTask.observed_at = new Date(observationTime + 60_000).toISOString();
+  ownTask.sample.task_id = `scan-${hash(`${fake.run.id}:${fake.run.attempt_count}:batch:0`)}`;
+  for (const identity of ["another_scan:2:batch:0", `${fake.run.id}:1:batch:0`]) {
+    writeFileSync(taskFile, JSON.stringify({ ...ownTask, sample: { ...ownTask.sample, task_id: `scan-${hash(identity)}` } }));
+    assert.match(renderBrowser().stderr, /ordinary_stage_task_attempt_mismatch/);
+  }
+  for (const wrongTime of [observationTime - 26_000, receiptTime + 1000]) {
+    writeFileSync(taskFile, JSON.stringify({ ...ownTask, observed_at: new Date(wrongTime).toISOString() }));
+    assert.match(renderBrowser().stderr, /ordinary_stage_task_observation_mismatch/);
+  }
+  const startedSecond = new Date(Date.parse(fake.run.started_at)).toISOString().replace(/\.\d{3}Z$/, "Z");
+  writeFileSync(taskFile, JSON.stringify({ ...ownTask, observed_at: startedSecond }));
+  assert.equal(renderBrowser().status, 0, "whole-second metadata can be captured in the first partial second of the run");
+  const recoveredFinalizer = { ...ownTask, sample: {
+    ...ownTask.sample, stage: "finalize", target: stageUrl + "/scan-finalize",
+    task_id: `scan-${hash(`${fake.run.id}:${fake.run.attempt_count}:finalize:10:recovery:1`)}`,
+  }};
+  writeFileSync(taskFile, JSON.stringify(recoveredFinalizer));
+  assert.equal(renderBrowser().status, 0, "the exact recovery finalizer can supply proof for the same terminal attempt");
+  writeFileSync(taskFile, JSON.stringify(ownTask));
+  const rendered = renderBrowser();
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.ok(rendered.stdout.includes(resultRoute));
+  const withTask = await import(`data:text/javascript;base64,${Buffer.from(rendered.stdout).toString("base64")}`);
+  report = await withTask.verifyOrdinaryStaged500Readback(fake.sdk);
+  assert.equal(report.terminal_outcome_verified, true, report.failure_code);
+  assert.equal(report.provenance.prerequisite_sha256, provenance.prerequisite_sha256);
+  assert.match(report.provenance.ordinary_stage_task_observation_sha256, /^[a-f0-9]{64}$/);
+  writeFileSync(browserFile, JSON.stringify(report));
+  writeFileSync(taskFile, JSON.stringify(recoveredFinalizer));
+  assert.match(collect("collect-ordinary-readback", browserFile, reportFile).stderr, /ordinary_operator_report_mismatch/);
+  writeFileSync(taskFile, JSON.stringify({ ...ownTask, worker_config_sha256: "0".repeat(64) }));
+  assert.match(collect("collect-ordinary-readback", browserFile, reportFile).stderr, /ordinary_stage_task_observation_mismatch/);
+  writeFileSync(taskFile, JSON.stringify(ownTask));
+  for (const change of [{ committed_batch_count: 9 }, { terminal_outcome_verified: "yes" }, { full_500_gate: true },
+    { acceptance_verified: true }, { production_freeze: true }, { duration_ms: 1 }, { release_fingerprint: "b".repeat(16) }]) {
+    writeFileSync(browserFile, JSON.stringify({ ...report, ...change }));
+    assert.match(collect("collect-ordinary-readback", browserFile, reportFile).stderr, /ordinary_operator_report_mismatch/);
+  }
+  const fullOperator = JSON.parse(readFileSync(operatorFile, "utf8"));
+  const smallOperator = structuredClone(fullOperator);
+  Object.assign(smallOperator.run, { pages_crawled: 22, pages_planned: 22, last_committed_batch: 0 });
+  writeFileSync(operatorFile, JSON.stringify(smallOperator));
+  writeFileSync(browserFile, JSON.stringify({ ...report, pages_crawled: 22, pages_planned: 22, committed_batch_count: 1,
+    progress: [{ status: "complete", pages_crawled: 22, pages_planned: 22, last_committed_batch: 0 }] }));
+  assert.match(collect("collect-ordinary-readback", browserFile, reportFile).stderr, /ordinary_operator_report_mismatch/);
+  smallOperator.run.last_committed_batch = null;
+  writeFileSync(operatorFile, JSON.stringify(smallOperator));
+  writeFileSync(browserFile, JSON.stringify({ ...report, functional_500_verified: false,
+    pages_crawled: 22, pages_planned: 22, committed_batch_count: 1,
+    progress: [{ status: "complete", pages_crawled: 22, pages_planned: 22, last_committed_batch: null }] }));
+  assert.match(collect("collect-ordinary-readback", browserFile, reportFile).stderr, /ordinary_operator_readback_identity_mismatch/);
+  const limitedOperator = structuredClone(fullOperator);
+  Object.assign(limitedOperator.run, { status: "limited", pages_crawled: 22, pages_planned: 100, last_committed_batch: 0,
+    result_integrity_proof_present: true, result_integrity_version: "standard_limited_result_integrity_v5_report_evidence",
+    termination_reasons: ["staged_wall_budget"] });
+  writeFileSync(operatorFile, JSON.stringify(limitedOperator));
+  const limitedReport = { ...report, terminal_status: "limited", functional_500_verified: false, pages_crawled: 22,
+    pages_planned: 100, committed_batch_count: 1, durable_worker_owned: false, durable_worker_receipt_required: true,
+    progress: [{ status: "limited", pages_crawled: 22, pages_planned: 100, last_committed_batch: 0 }] };
+  writeFileSync(browserFile, JSON.stringify({ ...limitedReport, outcome: "limited_throttled",
+    termination_reasons: ["staged_rate_limit"], throttled_priority_summary: ["critical"] }));
+  assert.match(collect("collect-ordinary-readback", browserFile, reportFile).stderr, /ordinary_customer_terminal_evidence_invalid/);
+  writeFileSync(browserFile, JSON.stringify({ ...limitedReport, outcome: "limited_budget", termination_reasons: ["staged_wall_budget"] }));
+  const limitedReceipt = collect("collect-ordinary-readback", browserFile, path.join(directory, "limited.json"));
+  assert.equal(limitedReceipt.status, 0, limitedReceipt.stderr);
+  writeFileSync(operatorFile, JSON.stringify({ ...fullOperator, terminal_observed_at: new Date(observationTime).toISOString() }));
+  assert.match(collect("collect-ordinary-readback", browserFile, reportFile).stderr, /ordinary_operator_window_invalid/);
+  writeFileSync(operatorFile, JSON.stringify(fullOperator));
+  writeFileSync(browserFile, JSON.stringify({ ...report, private_extra: "ignore-me", memory: { ...report.memory, private_extra: "ignore-me" } }));
+  const combined = collect("collect-ordinary-readback", browserFile, reportFile);
+  assert.equal(combined.status, 0, combined.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(reportFile, "utf8")), report);
+});
+
+test("ordinary readback refuses wrong role, grant, scan, claim, or operator without starting a scan", async () => {
+  const { data, expected } = ordinaryPacket();
+  const { provenance } = validatePrerequisites(data, expected);
+  for (const [scenario, change, failure] of [
+    ["complete", {}, "authenticated_ordinary_user_mismatch"],
+    ["ordinary150", {}, "existing_entitlement_not_500"],
+    ["notAdmin", { request_id: "different_request" }, "scan_identity_mismatch"],
+    ["notAdmin", { admission_mode: "open" }, "ordinary_acceptance_claim_mismatch"],
+  ]) {
+    const fake = fakeSdk(scenario);
+    Object.assign(fake.run, { admission_mode: "acceptance_only", admission_acceptance_source_sha: sha, admission_claim_proof_present: true, ...change });
+    const operatorReadback = { schema_version: "staged_500_ordinary_operator_readback_v1", operator_user_id: pilotOperator,
+      source_sha: sha, prerequisite_sha256: provenance.prerequisite_sha256, observed_at: new Date(now).toISOString(),
+      terminal_observed_at: new Date(now).toISOString(), run: fake.run };
+    const ordinary = { ...config(), provenance, ordinaryScanId: fake.run.id, operatorReadback };
+    delete fake.sdk.entities.ScanRun;
+    const result = await executeStaged500Canary(fake.sdk, ordinary, () => now);
+    assert.equal(result.failure_code, failure);
+    assert.equal(result.terminal_outcome_verified, false);
+    assert.ok(!fake.calls.some(call => call.name === launchRoute));
+    operatorReadback.operator_user_id = owner;
+    assert.equal((await executeStaged500Canary({}, ordinary, () => now)).failure_code, "ordinary_operator_run_missing_or_mismatched");
+  }
+});
 
 test("prerequisites bind fresh runtime, package, schema, cohort and infrastructure facts", () => {
   const { data, local } = prerequisites();
@@ -251,6 +498,13 @@ test("prerequisite assembly uses fresh live reports and preserves the actual tas
     /base44_intake_cohort_mismatch/);
   assert.throws(() => assemblePrerequisites({ ...input, cloud: { ...input.cloud, expires_at: stamp.observed_at } }, local, now),
     /live_observations_stale/);
+  assert.throws(() => assemblePrerequisites({ ...input, task: null }, { ...local, allowDeferredOrdinaryTask: true }, now),
+    /stage_task_contract_mismatch/);
+  const ordinary = ordinaryPacket();
+  const firstPilot = assemblePrerequisites({ ...input, intake: ordinary.data.base44_configuration.intake_route, task: null },
+    { ...ordinary.expected, allowDeferredOrdinaryTask: true }, now);
+  assert.equal(firstPilot.ordinary_task_observation, "deferred");
+  assert.equal(firstPilot.infrastructure.task, null);
 });
 
 test("raw schema readbacks compare the migration contract rather than JSON formatting", () => {
@@ -825,4 +1079,16 @@ test("500 shell wrapper refuses execution without its exact confirmation", () =>
   assert.notEqual(result.status, 0);
   assert.doesNotMatch(result.stdout, /CANARY_VERIFIED/);
   assert.match(readFileSync("scripts/run-staged-owner-canary.sh", "utf8"), /EXPECTED_PAGE_CAP.*150/);
+});
+
+test("ordinary operator readback does not fall through to the admin launch confirmation", () => {
+  const request = "request_500_123";
+  const result = spawnSync("bash", ["scripts/run-staged-500-canary.sh"], { encoding: "utf8", env: {
+    ...process.env, SOURCE_SHA: sha, EXPECTED_OPERATOR_USER_ID: pilotOperator, EXPECTED_OWNER_USER_ID: owner,
+    PROJECT_ID: project, REQUEST_ID: request, ORDINARY_SCAN_ID: "scan_123456",
+    CONFIRM: `RUN-ONE-STAGED-500-CANARY:${sha}:${owner}:${project}:${request}`,
+  } });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /action-specific confirmation/);
+  assert.equal(result.stdout, "");
 });

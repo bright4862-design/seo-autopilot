@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import DurableScanProgressSurface from "@/components/scan/DurableScanProgressSurface";
 import { base44 } from "@/api/base44Client";
 import useDurableScanCompletion from "@/hooks/useDurableScanCompletion";
+import { terminalScanFailureMessage } from "@/lib/terminalScanFailureMessage";
 import { ensureScanProject } from "@/lib/activeProject";
 import { normalizeActionPriority, normalizeFindingEvidence, normalizeReviewEvidenceState, normalizeReviewScope, selectFinalReviewFixes } from "@/lib/reviewContract";
 import { pageCapFromRecord } from "@/lib/scanPresentation";
@@ -106,7 +107,7 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
 
   const isLoading = submitting || saving;
   const durableScan = useDurableScanCompletion(watchedScanId, isLoading);
-  const durableScanFailed = ["failed", "cancelled"].includes(durableScan.status);
+
   const cleanedKeywords = useMemo(() => splitLines(keywordsText), [keywordsText]);
   const selectedCms = CMS_OPTIONS.find((item) => item.value === cmsPlatform);
   // Show the customer their own domain the moment the scan starts. Momentum
@@ -164,16 +165,18 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
     return () => window.clearInterval(timer);
   }, [isLoading]);
 
-  // A durable terminal failure always stops the spinner, even when the pending
-  // function call never returns an error to this component.
+  // If navigation was interrupted after admission, show safe fallback copy.
+  // A failed persistence path must not tell the customer to repeat the scan.
   useEffect(() => {
-    if (!durableScanFailed) return;
+    const message = terminalScanFailureMessage(durableScan.status);
+    if (!message) return;
     submitLockRef.current = false;
     setSubmitting(false);
     setActiveStep("");
     setWatchedScanId("");
-    setError("This scan stopped before it finished, so no results were saved. Nothing was charged — you can run it again.");
-  }, [durableScanFailed]);
+    setError(message);
+    setErrorAction("open_dashboard");
+  }, [durableScan.status]);
 
   function recordDebug(data) {
     const next = runtimeDebug(data);

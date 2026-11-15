@@ -7,7 +7,7 @@ V9_WORKER_FUNCTION_IDENTITIES = {
         "runtime_activation_id": "durableScanWorkerControlV9-staged-runtime-20261111-v3"
     },
     "persistDurableScanAuthorityV9": {
-        "build_id": "9e4721a56939d07c9b70d354d609c421e08976a3f94d84b31b4b5857537693a6",
+        "build_id": "9a3f839c4c97699e30808ae93a095fa6a6157c4db08c83b9623eed24677e92e6",
         "runtime_activation_id": "persistDurableScanAuthorityV9-staged-runtime-20261111-v5"
     },
     "persistLimitedScanResultV9": {
@@ -17,6 +17,6 @@ V9_WORKER_FUNCTION_IDENTITIES = {
 }
 V9_WORKER_FUNCTION_ROUTES = {
     "durableScanWorkerControlV9": "durableScanWorkerControlV9B6190fcd1bdcf9a79",
-    "persistDurableScanAuthorityV9": "persistDurableScanAuthorityV9Bbd3b8404d6ea3946",
+    "persistDurableScanAuthorityV9": "persistDurableScanAuthorityV9B42ff88927d79017d",
     "persistLimitedScanResultV9": "persistLimitedScanResultV9B89dbbf4fb309c136"
 }

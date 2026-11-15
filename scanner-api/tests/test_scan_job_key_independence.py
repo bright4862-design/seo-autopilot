@@ -132,6 +132,11 @@ def test_every_scanner_key_route_is_still_guarded():
         elif path in durable:
             assert "require_cloud_tasks_oidc" in source, f"{path} lost its OIDC guard"
             assert "require_scanner_api_key" not in source, f"{path} gained a scanner-key dependency"
+        elif path == "/staged/base44-runtime":
+            # This read-only health probe uses the dedicated private worker's
+            # Cloud Run IAM gate and is absent on other deployments.
+            assert 'os.getenv("K_SERVICE") != "fixlist-standard150-worker"' in source
+            assert "not staged_control_configured()" in source
         elif path in open_routes:
             continue
         else:

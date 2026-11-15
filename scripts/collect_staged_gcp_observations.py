@@ -28,6 +28,7 @@ from staged_queue_guard import (
 )
 from verify_gateway_deployment import VerificationError as GatewayVerificationError, verify_runtime_health
 from verify_staged_scan_infra import validate_binding, validate_bucket, validate_queue, validate_task
+from verify_staged_worker_base44_runtime import matches_observation
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKER = "fixlist-standard150-worker"
@@ -256,6 +257,9 @@ def collect(args, client, now=lambda: datetime.now(timezone.utc)):
     worker_runtime = client.health(canary + "/revision", audience=worker_origin)
     require(worker_runtime.get("source_sha") == source and worker_runtime.get("fingerprint") == fingerprint
             and worker_runtime.get("component_versions") == components, "worker_runtime_mismatch")
+    base44_runtime = client.health(canary + "/staged/base44-runtime", audience=worker_origin)
+    require(matches_observation(base44_runtime, source_sha=source, revision=args.worker_revision)
+            and base44_runtime["release_fingerprint"] == fingerprint, "worker_base44_runtime_mismatch")
     health = client.health(gateway_origin + "/health")
     require(health.get("ok") is True and type(health.get("canary_owner_count")) is int
             and type(health.get("staged_owner_count")) is int, "gateway_runtime_invalid")
@@ -273,7 +277,8 @@ def collect(args, client, now=lambda: datetime.now(timezone.utc)):
     return {
         "schema_version": SCHEMA, "source_sha": source, "release_fingerprint": fingerprint, **times,
         "worker": {**times, "revision": worker, "service": worker_service, "probe_url": canary,
-                   "runtime": {"source_sha": worker_runtime["source_sha"], "fingerprint": worker_runtime["fingerprint"]}},
+                   "runtime": {"source_sha": worker_runtime["source_sha"], "fingerprint": worker_runtime["fingerprint"]},
+                   "base44_runtime": base44_runtime},
         "gateway": {**times, "revision": gateway, "service": gateway_service, "runtime": {
             key: health[key] for key in ("ok", "service", "contract_version", "source_sha", "revision", "queue",
                                         "drain_queue", "worker_origin", "canary_worker_origin", "canary_owner_count",

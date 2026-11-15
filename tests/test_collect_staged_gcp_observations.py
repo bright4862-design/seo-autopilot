@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
+from runpy import run_path
 import stat
 import subprocess
 import sys
@@ -13,10 +14,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 import collect_staged_gcp_observations as observed
+from verify_staged_worker_base44_runtime import IDENTITIES_FILE
 
 
 SOURCE = "1" * 40
-FINGERPRINT = "2" * 16
+GENERATED = run_path(str(IDENTITIES_FILE))
+FINGERPRINT = GENERATED["V9_WORKER_RELEASE_FINGERPRINT"]
 OWNER = "owner_01"
 WORKER_REV = "fixlist-standard150-worker-00106-8cf"
 GATEWAY_REV = "fixlist-dispatch-gateway-g11111111-20261114200400-120abc"
@@ -99,6 +102,15 @@ class FixtureCloud:
         }
         self.worker_health = {"source_sha": SOURCE, "fingerprint": FINGERPRINT,
                               "component_versions": COMPONENTS, "ignored": PRIVATE}
+        self.worker_base44_runtime = {
+            "source_sha": SOURCE, "worker_revision": WORKER_REV, "transport": "worker_signed_post",
+            "base44_app_id": "6a498732ec779dfaaeab0e53", "base44_origin": "https://base44.app",
+            "release_fingerprint": FINGERPRINT, "functions": [
+                {"protocol": "fixlist_worker_runtime_v1", "function_name": name, "action": "identity", "http_status": 200,
+                 "release_fingerprint": FINGERPRINT, **identity}
+                for name, identity in GENERATED["V9_WORKER_FUNCTION_IDENTITIES"].items()
+            ],
+        }
         self.gateway_health = {
             "ok": True, "service": observed.GATEWAY, "revision": GATEWAY_REV, "source_sha": SOURCE,
             "contract_version": GATEWAY_VERSION, "queue": observed.ENTRY_PATH, "drain_queue": observed.DRAIN_PATH,
@@ -133,6 +145,9 @@ class FixtureCloud:
         if url == CANARY + "/revision":
             assert audience == WORKER_URL
             return self.worker_health
+        if url == CANARY + "/staged/base44-runtime":
+            assert audience == WORKER_URL
+            return self.worker_base44_runtime
         assert url == GATEWAY_URL + "/health" and audience is None
         return self.gateway_health
 
@@ -149,6 +164,8 @@ def test_projection_is_packet_compatible_and_excludes_unrelated_data(tmp_path):
     assert receipt["source_sha"] == SOURCE and receipt["release_fingerprint"] == FINGERPRINT
     assert receipt["worker"]["probe_url"] == CANARY
     assert receipt["worker"]["runtime"] == {"source_sha": SOURCE, "fingerprint": FINGERPRINT}
+    assert receipt["worker"]["base44_runtime"] == cloud.worker_base44_runtime
+    assert ("health", CANARY + "/staged/base44-runtime", WORKER_URL) in cloud.calls
     assert receipt["gateway"]["runtime"]["revision"] == GATEWAY_REV
     assert receipt["infrastructure"]["task"]["httpRequest"] == {
         "url": STAGE + "/scan-batch", "httpMethod": "POST",
@@ -166,6 +183,14 @@ def test_absent_task_is_null_and_queue_is_not_searched(tmp_path):
     receipt = observed.collect(args(tmp_path), cloud, now=lambda: STAMP)
     assert receipt["infrastructure"]["task"] is None
     assert not any(call[:2] == ("tasks", "describe") for call in cloud.calls)
+
+
+def test_gcp_packet_rejects_wrong_worker_base44_receipt_before_gateway_probe(tmp_path):
+    cloud = FixtureCloud()
+    cloud.worker_base44_runtime["functions"][0]["build_id"] = "0" * 64
+    with pytest.raises(observed.ObservationError, match="worker_base44_runtime_mismatch"):
+        observed.collect(args(tmp_path), cloud, now=lambda: STAMP)
+    assert ("health", GATEWAY_URL + "/health", None) not in cloud.calls
 
 
 @pytest.mark.parametrize("failure", ["route", "mode", "revision", "source", "owner", "queue", "task", "task_audience"])

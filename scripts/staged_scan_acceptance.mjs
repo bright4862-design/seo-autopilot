@@ -7,6 +7,7 @@
 // schema_readback.entity_sources = exact pulled .jsonc file contents;
 // base44_configuration.intake_route = authenticated V9 intake configuration;
 // worker/gateway = Cloud Run revision+service exports and bound runtime probes;
+// worker.base44_runtime = authenticated worker readback of signed V9 POST receipts;
 // infrastructure = fresh bucket/queue/IAM plus a source-bound task observation.
 // Every observation has observed_at/expires_at, within a 15 minute window.
 // Assembly validates independent live observations and preserves their capture times.
@@ -19,7 +20,8 @@ import { buildManifest, STAGED_RELEASE_FUNCTIONS, STAGED_RELEASE_ENTITIES } from
 import { diffEntity } from "./base44_authority_schema.mjs";
 
 export const APP_ID = "6a498732ec779dfaaeab0e53";
-const REQUIRED_OBSERVATIONS = ["base44", "schema_readback", "base44_configuration", "worker", "gateway", "infrastructure", "stage_task"];
+const REQUIRED_OBSERVATIONS = ["base44", "schema_readback", "base44_configuration", "worker", "worker_base44_runtime", "gateway", "infrastructure", "stage_task"];
+const WORKER_V9_FUNCTIONS = ["durableScanWorkerControlV9", "persistDurableScanAuthorityV9", "persistLimitedScanResultV9"];
 const sha256 = value => createHash("sha256").update(value).digest("hex");
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
 const digest = value => sha256(JSON.stringify(canonical(value)));
@@ -49,6 +51,28 @@ function reviewedWorkerEnvironment(sourceSha, workerOrigin) {
     SCAN_PIPELINE_MODE: "monolith",
     SCAN_STAGED_OWNER_IDS: "",
   };
+}
+
+function matchesWorkerBase44Runtime(worker, expected) {
+  if (!worker?.base44_runtime || !WORKER_V9_FUNCTIONS.every(name => expected.functions?.[name])) return false;
+  const observation = {
+    source_sha: expected.sourceSha,
+    worker_revision: worker.revision?.metadata?.name,
+    transport: "worker_signed_post",
+    base44_app_id: APP_ID,
+    base44_origin: "https://base44.app",
+    release_fingerprint: expected.fingerprint,
+    functions: WORKER_V9_FUNCTIONS.map(name => ({
+      protocol: "fixlist_worker_runtime_v1",
+      function_name: name,
+      action: "identity",
+      http_status: 200,
+      release_fingerprint: expected.fingerprint,
+      build_id: expected.functions[name].build_id,
+      runtime_activation_id: expected.functions[name].runtime_activation_id,
+    })),
+  };
+  return JSON.stringify(canonical(worker.base44_runtime)) === JSON.stringify(canonical(observation));
 }
 
 export function validatePrerequisites(packet, expected) {
@@ -128,6 +152,7 @@ export function validatePrerequisites(packet, expected) {
     && row.tag === `staged-${expected.sourceSha?.slice(0, 12)}` && row.url === workerEnv.SCAN_STAGE_TARGET_URL), "stage_target_mapping_mismatch");
   add(workerEnv.SCAN_STAGE_TOKEN_AUDIENCE === worker?.service?.status?.url && Boolean(origin(worker?.service?.status?.url)) && workerEnv.SCAN_STAGE_TASKS_QUEUE_PATH === `projects/${workerEnv.SCAN_TASKS_PROJECT}/locations/${workerEnv.SCAN_TASKS_LOCATION}/queues/${workerEnv.SCAN_STAGE_QUEUE}`, "worker_stage_resource_identity_mismatch");
   add((worker?.runtime?.fingerprint || worker?.runtime?.beta_revision_fingerprint) === expected.fingerprint, "worker_fingerprint_mismatch");
+  add(matchesWorkerBase44Runtime(worker, expected), "worker_base44_runtime_mismatch");
   const health = gateway?.runtime || {};
   add(health.ok === true && health.revision === gateway?.revision?.metadata?.name && health.pipeline_mode === "staged" && health.staged_owner_count === 1 && health.staged_owner_cohort_sha256 === cohort, "gateway_runtime_identity_mismatch");
   const gatewayTraffic = gateway?.service?.status?.traffic || [];

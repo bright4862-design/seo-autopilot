@@ -156,6 +156,7 @@ case "$OPERATION" in
     test -z "${CLOUDSDK_AUTH_ACCESS_TOKEN_FILE:-}"
     test "$TARGET_REVISION" = "$GATEWAY_STAGED_SERVING_REVISION"
     test "$FIXLIST_WORKER_PROBE_URL" = "$WORKER_ORIGIN"
+    test "$FIXLIST_VERIFY_STAGED_BASE44_RUNTIME" = 1
     echo worker ;;
   *) exit 70 ;;
 esac

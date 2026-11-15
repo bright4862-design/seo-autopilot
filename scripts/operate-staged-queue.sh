@@ -213,6 +213,10 @@ activate_command() {
   target="$(sed -n 's/.*target=\([^ ]*\).*/\1/p' <<< "$found")"
   origin="$(sed -n 's/.*audience=\([^ ]*\).*/\1/p' <<< "$found")"
   verify_infra PAUSED "$target" "$origin"
+  OPERATION=verify-worker-runtime-revision TARGET_REVISION="$STAGED_REVISION" \
+    SOURCE_SHA="$SOURCE_SHA" FIXLIST_WORKER_PROBE_URL="$target" \
+    FIXLIST_WORKER_TOKEN_AUDIENCE="$origin" FIXLIST_VERIFY_STAGED_BASE44_RUNTIME=1 \
+    bash "$REPO_ROOT/scripts/fixlist-cloud-operator.sh"
   # The checks above take time. Re-read the queue and the barrier last, so a
   # task or admission that appeared meanwhile refuses instead of dispatching
   # uninspected. The read-to-resume gap remains; the closed, drained barrier

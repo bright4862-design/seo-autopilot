@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 import httpx
 from fastapi import Body, FastAPI, Header, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from .beta_revision import SCANNER_BUILD_REVISION, live_revision
@@ -241,6 +242,46 @@ def revision():
     """Live beta-revision fingerprint for verifying a deployed scanner against
     the recorded freeze in data/beta-crawler-revision.json."""
     return {**live_revision(), "source_sha": WORKER_SOURCE_SHA}
+
+
+@app.get("/staged/base44-runtime")
+async def staged_base44_runtime():
+    """Read worker-facing Base44 identities from the private staged worker."""
+    from .generated_v9_worker_runtime import V9_WORKER_FUNCTION_IDENTITIES, V9_WORKER_RELEASE_FINGERPRINT
+    from .scan_job import base44_api_url, base44_app_id, probe_worker_runtime_identity
+
+    # Cloud Run IAM restricts this service to invokers. This readback exists
+    # only on the private staged worker and cannot choose an outbound target.
+    if os.getenv("K_SERVICE") != "fixlist-standard150-worker" or not staged_control_configured():
+        raise HTTPException(status_code=404, detail="Staged runtime verification is unavailable.")
+    if (
+        base44_api_url() != "https://base44.app"
+        or base44_app_id() != "6a498732ec779dfaaeab0e53"
+        or live_revision()["fingerprint"] != V9_WORKER_RELEASE_FINGERPRINT
+    ):
+        raise HTTPException(status_code=503, detail="Staged runtime configuration does not match.")
+
+    async with httpx.AsyncClient() as client:
+        results = await asyncio.gather(*(
+            probe_worker_runtime_identity(client, name, timeout=10)
+            for name in V9_WORKER_FUNCTION_IDENTITIES
+        ))
+    functions = []
+    for name, result in zip(V9_WORKER_FUNCTION_IDENTITIES, results, strict=True):
+        body = result["body"]
+        if result["status_code"] != 200 or body.get("success") is not True:
+            raise HTTPException(status_code=503, detail=f"Staged runtime identity unavailable for {name}.")
+        receipt = body["_worker_runtime"]["receipt"]
+        functions.append({key: value for key, value in receipt.items() if key != "nonce"})
+    return JSONResponse({
+        "source_sha": WORKER_SOURCE_SHA,
+        "worker_revision": os.getenv("K_REVISION"),
+        "transport": "worker_signed_post",
+        "base44_app_id": base44_app_id(),
+        "base44_origin": base44_api_url(),
+        "release_fingerprint": V9_WORKER_RELEASE_FINGERPRINT,
+        "functions": functions,
+    }, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/chat")

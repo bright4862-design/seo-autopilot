@@ -18,6 +18,19 @@ const queue = "projects/seo-autopilot-501517/locations/europe-west1/queues/fixli
 const workerUrl = "https://canary-00105-abc---worker.run.app";
 const stageTag = `staged-${sha.slice(0, 12)}`, stageUrl = `https://${stageTag}---worker.run.app`;
 
+function workerBase44Runtime(expected, revision) {
+  return {
+    source_sha: expected.sourceSha, worker_revision: revision, transport: "worker_signed_post",
+    base44_app_id: "6a498732ec779dfaaeab0e53", base44_origin: "https://base44.app",
+    release_fingerprint: expected.fingerprint,
+    functions: names.slice(1, 4).map(function_name => ({
+      protocol: "fixlist_worker_runtime_v1", function_name, action: "identity", http_status: 200,
+      release_fingerprint: expected.fingerprint, build_id: expected.functions[function_name].build_id,
+      runtime_activation_id: expected.functions[function_name].runtime_activation_id,
+    })),
+  };
+}
+
 function prerequisites() {
   const env = { FIXLIST_WORKER_SOURCE_SHA: sha, SCAN_PIPELINE_MODE: "staged", SCAN_STAGED_OWNER_IDS: owner, SCAN_TASKS_PROJECT: "seo-autopilot-501517", SCAN_TASKS_LOCATION: "europe-west1", SCAN_STAGE_QUEUE: "fixlist-scan-stages", SCAN_STAGE_TASKS_QUEUE_PATH: queue, SCAN_STAGE_TARGET_URL: stageUrl, SCAN_STAGE_TOKEN_AUDIENCE: "https://worker.run.app", SCAN_WORKSPACE_BUCKET: "fixlist-scan-workspaces-seo-autopilot-501517" };
   const observedConfig = Object.fromEntries(Object.entries(env).filter(([key]) => key !== "FIXLIST_WORKER_SOURCE_SHA"));
@@ -50,6 +63,7 @@ function prerequisites() {
         oidc_audience: "https://worker.run.app", dispatch_deadline_seconds: 480, method: "POST" } },
       bucket_policy: { bindings: [{ role: "roles/storage.objectUser", members: ["serviceAccount:fixlist-standard150-worker@seo-autopilot-501517.iam.gserviceaccount.com"] }] }, queue_policy: { bindings: [{ role: "roles/cloudtasks.enqueuer", members: ["serviceAccount:fixlist-standard150-worker@seo-autopilot-501517.iam.gserviceaccount.com"] }] }, invoker_policy: { bindings: [{ role: "roles/iam.serviceAccountUser", members: ["serviceAccount:fixlist-standard150-worker@seo-autopilot-501517.iam.gserviceaccount.com"] }] } },
   };
+  data.worker.base44_runtime = workerBase44Runtime(local, data.worker.revision.metadata.name);
   return { data, local };
 }
 
@@ -92,6 +106,28 @@ test("prerequisites bind fresh runtime, package, schema, cohort and infrastructu
     assert.equal(validatePrerequisites(invalid, local).ready, false);
   }
   assert.equal(validatePrerequisites({ verified: true }, local).ready, false);
+});
+
+test("prerequisites require an exact worker-signed POST observation for all three runtime routes", () => {
+  const { data, local } = prerequisites();
+  for (const corrupt of [
+    worker => { delete worker.base44_runtime; },
+    worker => { worker.base44_runtime.transport = "public_get"; },
+    worker => { worker.base44_runtime.base44_origin = "https://staging.example"; },
+    worker => { worker.base44_runtime.base44_app_id = "other-app"; },
+    worker => { worker.base44_runtime.source_sha = "0".repeat(40); },
+    worker => { worker.base44_runtime.worker_revision = "fixlist-standard150-worker-99999-other"; },
+    worker => { worker.base44_runtime.release_fingerprint = "0".repeat(16); },
+    worker => { worker.base44_runtime.functions.pop(); },
+    worker => { worker.base44_runtime.functions[0].build_id = "0".repeat(64); },
+    worker => { worker.base44_runtime.functions[1].runtime_activation_id = "previous-activation"; },
+    worker => { worker.base44_runtime.functions[2].http_status = 405; },
+    worker => { worker.base44_runtime.functions[2].release_fingerprint = "0".repeat(16); },
+  ]) {
+    const invalid = structuredClone(data);
+    corrupt(invalid.worker);
+    assert.ok(validatePrerequisites(invalid, local).failures.includes("worker_base44_runtime_mismatch"));
+  }
 });
 
 test("the worker stamp binds inactive settings while active owner and route agree independently", () => {
@@ -161,6 +197,7 @@ test("prerequisite assembly uses fresh live reports and preserves the actual tas
     task: data.infrastructure.task };
   const packet = assemblePrerequisites(input, local, now);
   assert.equal(packet.expires_at, stamp.expires_at);
+  assert.deepEqual(packet.worker.base44_runtime, data.worker.base44_runtime);
   assert.equal(packet.infrastructure.task.observed_at, data.infrastructure.task.observed_at);
   for (const [key, value] of [
     ["observed_at", new Date(now - 25 * 3600_000).toISOString()],
@@ -693,6 +730,7 @@ test("the corpus CLI journals a failed child and preserves its report across a r
   Object.assign(data, freshness);
   data.infrastructure.task.observed_at = new Date(Date.now() - 3600_000).toISOString();
   data.base44.functions = names.map(name => ({ name, ...expected.functions[name], http_status: 405 }));
+  data.worker.base44_runtime = workerBase44Runtime(expected, data.worker.revision.metadata.name);
   data.schema_readback.entity_sources = expected.entitySources;
   Object.assign(data.base44_configuration.intake_route, { observed_at: freshness.observed_at,
     build_id: expected.functions[names[0]].build_id, runtime_activation_id: expected.functions[names[0]].runtime_activation_id });

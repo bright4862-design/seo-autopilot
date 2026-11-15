@@ -580,7 +580,6 @@ PY
     --output "$response" --write-out '%{http_code}' \
     --header "authorization: Bearer ${token}" \
     "${probe_url}/revision" || echo 000)"
-  token=""
 
   case "$code" in
     200) ;;
@@ -683,6 +682,23 @@ PY
     return 1
   fi
   echo "PASS: the running worker computes the release identity this commit records."
+  if [[ "${FIXLIST_VERIFY_STAGED_BASE44_RUNTIME:-}" == 1 ]]; then
+    local auth_file="$RUNTIME_PROBE_TMP/auth-header"
+    (umask 077; printf 'Authorization: Bearer %s\n' "$token" > "$auth_file")
+    token=""
+    # Use the same verified Cloud Run URL and canonical audience as /revision.
+    # The worker signs the three known Base44 requests with its mounted key.
+    if ! curl -q --silent --show-error --fail --proto '=https' --noproxy '*' \
+      --max-time 25 --max-filesize 16384 --header "@$auth_file" \
+      --output "$RUNTIME_PROBE_TMP/staged-base44-runtime.json" \
+      "${probe_url}/staged/base44-runtime"; then
+      echo "FAIL: the staged worker could not verify the signed Base44 routes." >&2
+      return 1
+    fi
+    python3 "$REPO_ROOT/scripts/verify_staged_worker_base44_runtime.py" \
+      --source-sha "$expected_sha" --revision "$revision" \
+      < "$RUNTIME_PROBE_TMP/staged-base44-runtime.json"
+  fi
 }
 
 # A candidate at 0% traffic has no address of its own, so its runtime identity

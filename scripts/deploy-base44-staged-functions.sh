@@ -30,6 +30,7 @@ if [[ "$CONFIRM" != "$EXPECTED_CONFIRM" ]]; then
   echo "Refusing V9 candidate operation: exact $EXPECTED_CONFIRM required." >&2
   exit 2
 fi
+command -v timeout >/dev/null || { echo "Refusing V9 candidate operation: timeout is required." >&2; exit 2; }
 fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$SOURCE_SHA"
 cd "$REPO_ROOT"
 
@@ -110,7 +111,7 @@ const packages = STAGED_RELEASE_FUNCTIONS.map(name => [
 fs.writeFileSync(output,JSON.stringify(Object.fromEntries(packages)));
 NODE
 
-SOURCE_SHA="$SOURCE_SHA" BASE44_APP_ID="$APP_ID" PROBE_REPORT="$TASK_TMP/runtime.json" \
+SOURCE_SHA="$SOURCE_SHA" BASE44_APP_ID="$APP_ID" BASE44_EXPECTED_OWNER="$BASE44_EXPECTED_OWNER" PROBE_REPORT="$TASK_TMP/runtime.json" \
   bash "$REPO_ROOT/scripts/verify-base44-staged-functions.sh"
 
 node --input-type=module - "$REPO_ROOT" "$SOURCE_SHA" "$APP_ID" "$TASK_TMP/packages.json" "$TASK_TMP/runtime.json" "$READINESS_OUTPUT" <<'NODE'
@@ -120,9 +121,16 @@ const [root,sourceSha,appId,packagesPath,runtimePath,output] = process.argv.slic
 const revision = JSON.parse(fs.readFileSync(path.join(root,'data/beta-crawler-revision.json'),'utf8'));
 const probes = JSON.parse(fs.readFileSync(runtimePath,'utf8'));
 const packages = JSON.parse(fs.readFileSync(packagesPath,'utf8'));
-if (probes.source_sha !== sourceSha || probes.app_id !== appId || probes.functions.length !== 6) throw new Error('V9 runtime verification identity mismatch');
+if (probes.source_sha !== sourceSha || probes.app_id !== appId
+    || probes.runtime_probe_transport !== 'base44_native_authenticated_sdk_get'
+    || probes.functions.length !== 6 || new Set(probes.functions.map(row => row.name)).size !== 6
+    || probes.functions.some(row => row.http_status !== 405 || !/^[a-f0-9]{64}$/.test(packages[row.name] || ''))
+    || probes.anonymous_probe?.transport !== 'base44_legacy_anonymous_get'
+    || probes.anonymous_probe.functions.length !== 6) throw new Error('V9 runtime verification identity mismatch');
 const result = {schema_version:'fixlist_staged_v9_readiness_v1',source_sha:sourceSha,app_id:appId,candidate_fingerprint:revision.fingerprint,
-  package_comparison:'matched',runtime_probe:'matched',production_activation:false,observed_at:new Date().toISOString(),
+  package_comparison:'matched',runtime_probe:'matched',runtime_probe_transport:probes.runtime_probe_transport,
+  anonymous_probe:probes.anonymous_probe,worker_signed_post_runtime_verified:false,production_activation:false,
+  observed_at:new Date().toISOString(),
   functions:probes.functions.map(row => ({...row,package_digest:packages[row.name]}))};
 fs.writeFileSync(output,JSON.stringify(result,null,2)+'\n',{flag:'wx',mode:0o600});
 NODE

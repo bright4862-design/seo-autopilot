@@ -19,10 +19,15 @@ class CandidateNotIsolated(ValueError):
     """Not an exact, zero-traffic, tagged candidate."""
 
 
-def verify_tagged_zero_traffic(service: dict, revision: str, tag: str = "candidate") -> str:
+def verify_tagged_zero_traffic(
+    service: dict, revision: str, tag: str = "candidate", *, source_sha: str = ""
+) -> str:
     if not REVISION.fullmatch(revision):
         raise CandidateNotIsolated("revision_not_exact")
-    if tag != "candidate" and tag != f"canary-{revision.removeprefix('fixlist-standard150-worker-')}":
+    if source_sha:
+        if not re.fullmatch(r"[0-9a-f]{40}", source_sha) or tag != f"staged-{source_sha[:12]}":
+            raise CandidateNotIsolated("source_tag_mismatch")
+    elif tag != "candidate" and tag != f"canary-{revision.removeprefix('fixlist-standard150-worker-')}":
         raise CandidateNotIsolated("canary_tag_revision_mismatch")
     if not isinstance(service, dict):
         raise CandidateNotIsolated("service_not_object")
@@ -41,10 +46,9 @@ def verify_tagged_zero_traffic(service: dict, revision: str, tag: str = "candida
         raise CandidateNotIsolated("candidate_not_addressable")
     urls: set[str] = set()
     for entry in candidates:
-        try:
-            percent = int(entry.get("percent") or 0)
-        except (ValueError, TypeError) as exc:
-            raise CandidateNotIsolated("candidate_percent_invalid") from exc
+        percent = entry.get("percent", 0)
+        if type(percent) is not int or not 0 <= percent <= 100:
+            raise CandidateNotIsolated("candidate_percent_invalid")
         if percent != 0:
             raise CandidateNotIsolated("candidate_receives_traffic")
         if entry.get("tag") == tag:
@@ -66,10 +70,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--revision", required=True)
     parser.add_argument("--tag", default="candidate")
+    parser.add_argument("--source-sha", default="")
     args = parser.parse_args()
     try:
         service = json.load(sys.stdin)
-        url = verify_tagged_zero_traffic(service, args.revision, args.tag)
+        url = verify_tagged_zero_traffic(service, args.revision, args.tag, source_sha=args.source_sha)
     except (OSError, json.JSONDecodeError, CandidateNotIsolated) as exc:
         print(f"STAGED_WORKER_PROBE_BLOCKED: {exc}", file=sys.stderr)
         return 2

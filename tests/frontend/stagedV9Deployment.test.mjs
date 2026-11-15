@@ -8,6 +8,8 @@ import { buildManifest } from "../../scripts/base44_release_manifest.mjs";
 const names=["startStandardScanJobV9","durableScanWorkerControlV9","persistDurableScanAuthorityV9","persistLimitedScanResultV9","getCustomerScanResultV9","deleteCustomerScanDataV9"];
 const sourceSha="a".repeat(40);
 const appId="6a498732ec779dfaaeab0e53";
+const ownerEmail="bright4862@gmail.com";
+const ownerId="6a498da58ef5cec1f5cd4486";
 const publisher="scripts/deploy-base44-staged-functions.sh";
 const verifier="scripts/verify-base44-staged-functions.sh";
 const collector="scripts/collect-base44-staged-observations.sh";
@@ -29,7 +31,28 @@ fs.writeFileSync(report, JSON.stringify({action: operation, source_sha: source})
   writeFileSync(fakeReadback,`#!${process.execPath}
 const fs=require('node:fs');const crypto=require('node:crypto');
 const name='startStandardScanJobV9';
-if (!fs.readFileSync(0,'utf8').includes('staged_runtime_status')) process.exit(12);
+const program=fs.readFileSync(0,'utf8');
+if (program.includes('FIXLIST_V9_NATIVE_GET=')) {
+ const mode=process.env.TEST_PROBE_MODE;
+ const base44={
+  auth:{me:async()=>({id:mode==='wrong_app_owner'?'unapproved':"${ownerId}",email:"${ownerEmail}",role:'admin'})},
+  functions:{fetch:async(path,options)=>{
+   if (!path.startsWith('/') || options.method!=='GET' || options.redirect!=='error' || options.cache!=='no-store') process.exit(11);
+   const name=path.slice(1);
+   fs.appendFileSync(process.env.TEST_EVENTS,'native-probe:'+name+'\\n');
+   const body={build_id:crypto.createHash('sha256').update(name).digest('hex'),runtime_activation_id:'staged-'+name,unexpected_secret:'do-not-copy'};
+   if(mode==='stale')body.build_id='f'.repeat(64);
+   if(mode==='activation')body.runtime_activation_id='old-activation';
+   const status=mode==='success200'?200:mode==='redirect'?302:405;
+   const url='https://'+(mode==='wrong_host'?'example.test':'getfixlist.base44.app')+'/api/functions/'+name;
+   return {status,url,text:async()=>mode==='malformed'?'not-json':JSON.stringify(body)};
+  }},
+ };
+ const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
+ new AsyncFunction('base44',program)(base44).catch(()=>{process.exitCode=12;});
+ return;
+}
+if (!program.includes('staged_runtime_status')) process.exit(12);
 const mode=process.env.TEST_INTAKE_MODE;
 const report={schema_version:'fixlist_staged_v9_intake_readback_v1',success:true,observed_at:new Date().toISOString(),
   build_id: mode==='stale' ? 'f'.repeat(64) : crypto.createHash('sha256').update(name).digest('hex'),
@@ -77,21 +100,25 @@ if (name === process.env.TEST_TAMPER_PULL) {
   const cli=join(bin,"base44");
   writeFileSync(cli,`#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' "$*" >> "$TEST_CLI_CALLS"\n[[ "$1" == --app-id && "$2" == ${appId} ]] || exit 9\nif [[ "$3" == exec && "$4" == --data-env && "$5" == prod ]]; then exec "$TEST_FAKE_READBACK"; fi\n[[ "$3" == functions ]] || exit 9\ncase "$4" in\n deploy) [[ "\${TEST_DEPLOY_FAIL:-}" != yes ]] ;;\n pull)\n  name="$5"\n  [[ "\${TEST_OMIT_PULL:-}" != "$name" ]] || exit 0\n  exec "$TEST_FAKE_PULL" "$name"\n  ;;\n *) exit 10;;\nesac\n`);chmodSync(cli,0o755);
   const curl=join(bin,"curl");
-  writeFileSync(curl,`#!${process.execPath}\nconst fs=require('node:fs');const crypto=require('node:crypto');\nconst args=process.argv.slice(2);const name=args.at(-1).split('/').at(-1);\nfs.appendFileSync(process.env.TEST_EVENTS,'probe:'+name+'\\n');\nconst body={build_id:crypto.createHash('sha256').update(name).digest('hex'),runtime_activation_id:'staged-'+name,unexpected_secret:'do-not-copy'};\nif(process.env.TEST_PROBE_MODE==='stale')body.build_id='f'.repeat(64);\nif(process.env.TEST_PROBE_MODE==='activation')body.runtime_activation_id='old-activation';\nfs.writeFileSync(args[args.indexOf('-o')+1],process.env.TEST_PROBE_MODE==='malformed'?'not-json':JSON.stringify(body));\nprocess.stdout.write(process.env.TEST_PROBE_MODE==='success200'?'200':process.env.TEST_PROBE_MODE==='redirect'?'302':'405');\n`);chmodSync(curl,0o755);
+  writeFileSync(curl,`#!${process.execPath}\nconst fs=require('node:fs');const crypto=require('node:crypto');\nconst args=process.argv.slice(2);const name=args.at(-1).split('/').at(-1);\nfs.appendFileSync(process.env.TEST_EVENTS,'anonymous-probe:'+name+'\\n');\nconst body={build_id:crypto.createHash('sha256').update(name).digest('hex'),runtime_activation_id:'staged-'+name,unexpected_secret:'do-not-copy'};\nif(process.env.TEST_ANONYMOUS_MODE==='down') process.exit(7);\nif(process.env.TEST_ANONYMOUS_MODE==='stale')body.build_id='f'.repeat(64);\nfs.writeFileSync(args[args.indexOf('-o')+1],process.env.TEST_ANONYMOUS_MODE==='malformed'?'not-json':JSON.stringify(body));\nprocess.stdout.write('405');\n`);chmodSync(curl,0o755);
   const readiness=join(tmpdir(),`${root.split('/').at(-1)}-readiness.json`);
-  const run=(extra={},args=[],script=publisher)=>spawnSync("bash",[join(root,script),...args],{cwd:root,encoding:"utf8",env:{...process.env,PATH:`${bin}:${process.env.PATH}`,SOURCE_SHA:sourceSha,CONFIRM:`PUBLISH-BASE44-STAGED-V9:${sourceSha}`,BASE44_APP_ID:appId,BASE44_EXPECTED_OWNER:"owner@example.com",BASE44_API_KEY:"",READINESS_OUTPUT:readiness,PROBE_ATTEMPTS:"1",PROBE_DELAY_SECONDS:"0",TEST_CLI_CALLS:calls,TEST_EVENTS:events,TEST_FAKE_CLI:cli,TEST_FAKE_READBACK:fakeReadback,TEST_FAKE_PULL:fakePull,TEST_FINGERPRINT:JSON.parse(text(join(root,"data/beta-crawler-revision.json"))).fingerprint,TEST_PACKAGES_ROOT:join(root,"base44/functions"),...extra}});
+  const run=(extra={},args=[],script=publisher)=>spawnSync("bash",[join(root,script),...args],{cwd:root,encoding:"utf8",env:{...process.env,PATH:`${bin}:${process.env.PATH}`,SOURCE_SHA:sourceSha,CONFIRM:`PUBLISH-BASE44-STAGED-V9:${sourceSha}`,BASE44_APP_ID:appId,BASE44_EXPECTED_OWNER:ownerEmail,BASE44_API_KEY:"",READINESS_OUTPUT:readiness,PROBE_ATTEMPTS:"1",PROBE_DELAY_SECONDS:"0",TEST_CLI_CALLS:calls,TEST_EVENTS:events,TEST_FAKE_CLI:cli,TEST_FAKE_READBACK:fakeReadback,TEST_FAKE_PULL:fakePull,TEST_FINGERPRINT:JSON.parse(text(join(root,"data/beta-crawler-revision.json"))).fingerprint,TEST_PACKAGES_ROOT:join(root,"base44/functions"),...extra}});
   return {root,calls,events,readiness,run,cleanup(){rmSync(root,{recursive:true,force:true});rmSync(readiness,{force:true});}};
 }
 
 test("isolated V9 publisher deploys six scoped names, fresh-pulls every package, and issues bounded readiness",()=>{
   const f=fixture();try{
     const result=f.run();assert.equal(result.status,0,result.stderr);
-    const calls=text(f.calls).trim().split('\n');assert.equal(calls.length,7);assert.equal(calls[0],`--app-id ${appId} functions deploy ${names.join(' ')}`);
+    const calls=text(f.calls).trim().split('\n');assert.equal(calls.length,8);assert.equal(calls[0],`--app-id ${appId} functions deploy ${names.join(' ')}`);
     for(const [index,name] of names.entries())assert.equal(calls[index+1],`--app-id ${appId} functions pull ${name}`);
+    assert.equal(calls.at(-1),`--app-id ${appId} exec --data-env prod`);
     assert.doesNotMatch(text(f.calls),/V8|secrets|entities|site|--force/);
     const events=text(f.events);assert.ok(events.indexOf('source-guard')<events.indexOf('owner-check'));assert.match(events,/generator:--check/);
     const readiness=JSON.parse(text(f.readiness));assert.equal(readiness.source_sha,sourceSha);assert.equal(readiness.app_id,appId);assert.match(readiness.candidate_fingerprint,/^[0-9a-f]{16}$/);assert.equal(readiness.production_activation,false);assert.equal(readiness.package_comparison,'matched');assert.equal(readiness.runtime_probe,'matched');assert.deepEqual(readiness.functions.map(row=>row.name),names);
     assert.ok(readiness.functions.every(row=>/^[a-f0-9]{64}$/.test(row.package_digest)&&/^[a-f0-9]{64}$/.test(row.build_id)&&row.http_status===405));assert.doesNotMatch(text(f.readiness),/unexpected_secret|do-not-copy/);
+    assert.equal(readiness.runtime_probe_transport,"base44_native_authenticated_sdk_get");
+    assert.equal(readiness.worker_signed_post_runtime_verified,false);
+    assert.deepEqual(readiness.anonymous_probe.functions,names.map(name=>({name,http_status:405,state:"matched"})));
     const local = buildManifest(names, "base44/functions", []);
     for (const row of readiness.functions) assert.equal(row.package_digest, local.functions[row.name].packageDigest);
     assert.match(result.stdout,/BASE44_STAGED_V9_CANDIDATE_VERIFIED/);
@@ -101,9 +128,25 @@ test("isolated V9 publisher deploys six scoped names, fresh-pulls every package,
 for(const [label,extra] of Object.entries({source_guard:{TEST_GUARD_FAIL:'yes'},owner:{TEST_OWNER_FAIL:'yes'},wrong_app:{BASE44_APP_ID:'wrong-app'},missing_sha:{SOURCE_SHA:''},confirmation:{CONFIRM:sourceSha}}))test(`V9 publication fails before deploy when ${label} is invalid`,()=>{
   const f=fixture();try{const result=f.run(extra);assert.notEqual(result.status,0);assert.equal(text(f.calls),'');assert.equal(existsSync(f.readiness),false);}finally{f.cleanup();}
 });
-for(const [label,extra] of Object.entries({deploy:{TEST_DEPLOY_FAIL:'yes'},missing_pull:{TEST_OMIT_PULL:names[0]},changed_pull:{TEST_TAMPER_PULL:names[0]},stale_runtime:{TEST_PROBE_MODE:'stale'},stale_activation:{TEST_PROBE_MODE:'activation'},malformed_runtime:{TEST_PROBE_MODE:'malformed'},http200:{TEST_PROBE_MODE:'success200'},redirect:{TEST_PROBE_MODE:'redirect'}}))test(`V9 ${label} failure suppresses readiness`,()=>{
+for(const [label,extra] of Object.entries({deploy:{TEST_DEPLOY_FAIL:'yes'},missing_pull:{TEST_OMIT_PULL:names[0]},changed_pull:{TEST_TAMPER_PULL:names[0]},stale_runtime:{TEST_PROBE_MODE:'stale'},stale_activation:{TEST_PROBE_MODE:'activation'},malformed_runtime:{TEST_PROBE_MODE:'malformed'},http200:{TEST_PROBE_MODE:'success200'},redirect:{TEST_PROBE_MODE:'redirect'},wrong_native_host:{TEST_PROBE_MODE:'wrong_host'},wrong_app_owner:{TEST_PROBE_MODE:'wrong_app_owner'}}))test(`V9 ${label} failure suppresses readiness`,()=>{
   const f=fixture();try{const result=f.run(extra);assert.notEqual(result.status,0);assert.equal(existsSync(f.readiness),false);assert.doesNotMatch(result.stdout,/BASE44_STAGED_V9_CANDIDATE_VERIFIED/);}finally{f.cleanup();}
 });
+
+for (const [mode,state,http_status] of [["stale","stale",405],["malformed","unavailable",405],["down","unavailable",null]]) {
+  test(`V9 reports ${mode} anonymous probes separately from exact native builds`, () => {
+    const f = fixture();
+    try {
+      const result = f.run({ TEST_ANONYMOUS_MODE: mode });
+      assert.equal(result.status, 0, result.stderr);
+      const report = JSON.parse(text(f.readiness));
+      assert.equal(report.runtime_probe_transport, "base44_native_authenticated_sdk_get");
+      assert.deepEqual(report.anonymous_probe, {
+        transport: "base44_legacy_anonymous_get",
+        functions: names.map(name => ({ name, http_status, state })),
+      });
+    } finally { f.cleanup(); }
+  });
+}
 
 for (const mode of ["entry", "config", "missing", "wrapper", "extra", "symlink"]) {
   test(`V9 rejects ${mode} drift in the pinned CLI's nested pull layout`, () => {
@@ -150,7 +193,9 @@ test("read-only V9 verification refreshes package and runtime evidence without p
     assert.equal(text(f.calls), "");
     const result = f.run({ CONFIRM: `VERIFY-BASE44-STAGED-V9:${sourceSha}`, TEST_FLAT_PULL: "yes" }, ["verify"]);
     assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(text(f.calls).trim().split("\n"), names.map(name => `--app-id ${appId} functions pull ${name}`));
+    assert.deepEqual(text(f.calls).trim().split("\n"), [
+      ...names.map(name => `--app-id ${appId} functions pull ${name}`), `--app-id ${appId} exec --data-env prod`,
+    ]);
     const readiness = JSON.parse(text(f.readiness));
     assert.equal(readiness.functions.length, names.length);
     assert.equal(readiness.production_activation, false);
@@ -167,6 +212,7 @@ test("Base44 observations bind owner intake to the deployed package and run only
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(text(f.calls).trim().split("\n"), [
       `--app-id ${appId} exec --data-env prod`, ...names.map(name => `--app-id ${appId} functions pull ${name}`),
+      `--app-id ${appId} exec --data-env prod`,
     ]);
     const intake = text(join(output, "intake.json"));
     const packages = JSON.parse(text(join(output, "packages.json")));

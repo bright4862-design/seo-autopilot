@@ -37,6 +37,7 @@ Supplied by `cloudbuild.durable-worker.yaml`.
 | `BASE44_API_URL` | optional-with-default | `scan_job.py:38` | `--set-env-vars` (`_BASE44_API_URL`) | Defaults to `https://base44.app`. Pinned explicitly so a deploy cannot silently target the public default. |
 | `GROK_PROXY_ENABLED` | feature-disabled | `main.py:52` | `--set-env-vars`, hardcoded `false` | Defaults `""` → `False`. Grok is off by default; pinned so a future default change cannot enable it. |
 | `FIXLIST_WORKER_SOURCE_SHA` | **required release provenance** | `main.py` health/revision payload | `--set-env-vars` (`_RELEASE_SHA`) | Missing does not change crawl behavior, but the revision is **not promotable** because its deployed bytes cannot be tied to the tested source SHA. |
+| `K_SERVICE`, `K_REVISION` | **injected by Cloud Run** | `GET /staged/base44-runtime` | Reserved runtime environment | The probe is available only from the staged configuration of the private durable worker service. It returns the worker revision and verifies the exact V9 worker-facing function identities using their signed POST transport. |
 | `GROK_MODEL_ID`, `GROK_TIMEOUT_SECONDS`, `GROK_MAX_ATTEMPTS`, `VERTEX_LOCATION` | feature-disabled | `grok_chat.py:14-17` | not supplied | Unreachable while `GROK_PROXY_ENABLED` is false. |
 | `GCP_PROJECT`, `GOOGLE_CLOUD_PROJECT` | unrelated | `grok_chat.py` (Vertex endpoint) | not supplied | Grok-only. Not on the Standard 150 path. |
 

@@ -672,7 +672,13 @@ def test_recover_resumes_a_stranded_scan_on_a_still_cohorted_tagged_worker(opera
     write_state(stage_tasks=tasks, earlier_sources=[OTHER_SOURCE], barrier=dict(ready="false", active=1, bound=1))
     result, calls, final = run("recover", RECOVER.format(sha=sha), BARRIER_EXPECTED_GENERATION="7")
     assert result.returncode == 0, result.stderr
-    assert f"verified=3 tags=staged-{OTHER_SOURCE[:12]}:2,staged-{sha[:12]}:1" in result.stdout
+    # The guard serializes tag counts in lexical order, not task/source order.
+    # A temporary Git SHA can sort either side of OTHER_SOURCE; assert the
+    # actual wire-order contract rather than depending on random fixture SHA.
+    expected_tags = ",".join(f"{tag}:{count}" for tag, count in sorted([
+        (f"staged-{OTHER_SOURCE[:12]}", 2), (f"staged-{sha[:12]}", 1),
+    ]))
+    assert f"verified=3 tags={expected_tags}" in result.stdout
     assert "pending_tasks=3 generation=7" in result.stdout and "active=1" in result.stdout
     assert [c[3] for c in mutations(calls)] == ["resume"]
     describes = [c for c in calls if c[1:3] == ["tasks", "describe"]]

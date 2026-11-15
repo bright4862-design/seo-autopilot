@@ -276,7 +276,7 @@ test("Base44 release deploy names the explicit durable functions and never recon
   for (const name of expected) assert.match(deployFunctions, new RegExp(`\\b${name}\\b`));
   assert.match(deployFunctions, /base44-public-routes\.mjs/);
   assert.match(deployFunctions, /functions deploy "\$\{CHECKOUT_FUNCTIONS\[@\]\}"/);
-  assert.match(deployFunctions, /deploy-base44-staged-functions\.sh" publish-active/);
+  assert.match(deployFunctions, /fixlist_publish_v9_packages active-preflight/);
   assert.match(deployFunctions, /base44_release_manifest\.mjs" verify/);
   assert.doesNotMatch(deployFunctions, /\bdeploy\s+--|\bsite\s+deploy|entities\s+push|--force/);
   for (const source of releaseMutationScripts) assert.doesNotMatch(source, /entities\s+push/);
@@ -293,7 +293,7 @@ test("Base44 site publication restores the durable backend after the site deploy
   assert.ok(buildIndex >= 0 && buildIndex < siteIndex, "exact source SHA must be compiled before the site deploy");
   assert.ok(siteIndex >= 0, "missing Base44 site deployment");
   assert.ok(functionsIndex > siteIndex, "release functions must deploy after the site");
-  assert.ok(deploySite.indexOf('deploy_active_v9 post-site') > functionsIndex, "V9 aliases must also be restored");
+  assert.ok(deploySite.indexOf('deploy_active_v9 active-restore') > functionsIndex, "V9 aliases must also be restored");
   assert.ok(verifyIndex > functionsIndex, "public source verification must run after backend restoration");
   // Prove the selected routes live before the site is cut over.
   assert.ok(provenIndex >= 0 && provenIndex < siteIndex, "release routes must be proven live before the site deploy");

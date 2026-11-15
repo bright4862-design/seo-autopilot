@@ -26,13 +26,22 @@ function fixture() {
   const upstream=join(root,"expected-packages");
   materializeStagedV9Packages(root,upstream);
   const calls=join(root,"calls");const events=join(root,"events");
-  writeFileSync(join(root,"scripts/lib/release-source-guard.sh"),`fixlist_require_exact_main() {\n printf 'source-guard\\n' >> "$TEST_EVENTS"\n if [[ "\${TEST_GUARD_FAIL:-}" == yes ]]; then return 2; fi\n FIXLIST_EXACT_SOURCE_SHA="$2"\n}\n`);
+  writeFileSync(join(root,"scripts/lib/release-source-guard.sh"),`fixlist_require_exact_main() {
+ printf 'source-guard\\n' >> "$TEST_EVENTS"
+ if [[ "\${TEST_GUARD_FAIL:-}" == yes ]]; then return 2; fi
+ FIXLIST_EXACT_SOURCE_SHA="$2"
+}
+fixlist_require_pinned_checkout() {
+ printf 'pinned-source\\n' >> "$TEST_EVENTS"
+ [[ "$2" == "$FIXLIST_EXACT_SOURCE_SHA" ]]
+}
+`);
   writeFileSync(join(root,"scripts/lib/base44-pinned-cli.sh"),`fixlist_install_base44_cli() { FIXLIST_BASE44_CLI="$TEST_FAKE_CLI"; export FIXLIST_BASE44_CLI; }\nfixlist_require_base44_owner() {\n printf 'owner-check\\n' >> "$TEST_EVENTS"\n [[ "\${TEST_OWNER_FAIL:-}" != yes ]]\n}\n`);
   writeFileSync(join(root, "scripts/assert_standard150_promotion_record.py"), `import json, os, sys
 with open(os.environ['TEST_EVENTS'], 'a') as events:
     events.write('promotion-guard\\n')
 with open('data/beta-crawler-revision.json') as source:
-    if json.load(source)['status'] != 'frozen_beta' or sys.argv[1:] != ['--source-sha', '${sourceSha}']:
+    if json.load(source)['status'] != 'frozen_beta' or sys.argv[1:3] != ['--source-sha', '${sourceSha}']:
         sys.exit(2)
 `);
   writeFileSync(join(root,"scripts/generate_release_contracts.mjs"),`import crypto from 'node:crypto';\nimport fs from 'node:fs';\nfs.appendFileSync(process.env.TEST_EVENTS,'generator:'+process.argv[2]+'\\n');\nif(process.argv[2]==='--build-id')process.stdout.write(crypto.createHash('sha256').update(process.argv[3]).digest('hex')+'\\n');\nif(process.argv[2]==='--activation-id')process.stdout.write('staged-'+process.argv[3]+'\\n');\n`);
@@ -47,6 +56,23 @@ const name='startStandardScanJobV9';
 const routes=Object.values(require(process.env.TEST_ROUTE_MANIFEST).functions);
 const identity=alias=>routes.find(row=>row.route_name===alias);
 const program=fs.readFileSync(0,'utf8');
+if (program.includes('BASE44_ACTIVE_V9_INTAKE_DISABLED')) {
+ const mode=process.env.TEST_ACTIVE_INTAKE;
+ const identity=routes.find(row=>row.route_name.startsWith(name));
+ const base44={
+  auth:{me:async()=>({id:mode==='wrong-owner'?'unapproved':"${ownerId}",email:"${ownerEmail}",role:'admin'})},
+  functions:{invoke:async(route, body)=>{
+   if (route!==identity.route_name || body.action!=='staged_runtime_status') process.exit(13);
+   fs.appendFileSync(process.env.TEST_EVENTS,'intake-probe:'+route+'\\n');
+   return {data:{success:true,schema_version:'fixlist_staged_v9_intake_readback_v1',observed_at:new Date().toISOString(),
+    release_fingerprint:process.env.TEST_FINGERPRINT,build_id:mode==='stale-build'?'b'.repeat(64):identity.build_id,
+    runtime_activation_id:identity.runtime_activation_id,intake_gate:mode==='open'?'enabled':'disabled'}};
+  }},
+ };
+ const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
+ new AsyncFunction('base44',program)(base44).catch(()=>{process.exitCode=12;});
+ return;
+}
 if (program.includes('FIXLIST_V9_NATIVE_GET=')) {
  const mode=process.env.TEST_PROBE_MODE;
  const base44={
@@ -169,8 +195,22 @@ fs.writeFileSync(output,process.env.TEST_ANONYMOUS_MODE==='malformed'?'not-json'
 process.stdout.write('405');
 `);chmodSync(curl,0o755);
   const readiness=join(tmpdir(),`${root.split('/').at(-1)}-readiness.json`);
+  const activeEntry = join(root, 'scripts/active-v9-wrapper.sh');
+  writeFileSync(activeEntry, `#!/usr/bin/env bash
+set -euo pipefail
+source scripts/lib/release-source-guard.sh
+fixlist_require_exact_main "$PWD" "$SOURCE_SHA" "$SOURCE_SHA"
+python3 scripts/assert_standard150_promotion_record.py --source-sha "$SOURCE_SHA"
+source scripts/deploy-base44-staged-functions.sh
+fixlist_publish_v9_packages active-preflight
+if [[ "\${TEST_RESTORE:-}" == yes ]]; then
+  export TEST_GUARD_FAIL=yes
+  export READINESS_OUTPUT="$READINESS_OUTPUT.restored"
+  fixlist_publish_v9_packages active-restore
+fi
+`);
   const run=(extra={},args=[],script=publisher)=>spawnSync("bash",[join(root,script),...args],{cwd:root,encoding:"utf8",env:{...process.env,PATH:`${bin}:${process.env.PATH}`,SOURCE_SHA:sourceSha,CONFIRM:`PUBLISH-BASE44-STAGED-V9:${sourceSha}`,BASE44_APP_ID:appId,BASE44_EXPECTED_OWNER:ownerEmail,BASE44_API_KEY:"",READINESS_OUTPUT:readiness,PROBE_ATTEMPTS:"1",PROBE_DELAY_SECONDS:"0",TEST_CLI_CALLS:calls,TEST_EVENTS:events,TEST_FAKE_CLI:cli,TEST_FAKE_READBACK:fakeReadback,TEST_FAKE_PULL:fakePull,TEST_FINGERPRINT:JSON.parse(text(join(root,"data/beta-crawler-revision.json"))).fingerprint,TEST_PACKAGES_ROOT:join(upstream,"base44/functions"),TEST_ROUTE_MANIFEST:join(root,routeManifest),TEST_REMOTE:remote,...extra}});
-  return {root,calls,events,readiness,run,cleanup(){rmSync(root,{recursive:true,force:true});rmSync(readiness,{force:true});}};
+  return {root,calls,events,readiness,run,cleanup(){rmSync(root,{recursive:true,force:true});rmSync(readiness,{force:true});rmSync(readiness + '.restored',{force:true});}};
 }
 
 const pullCall=route=>`--app-id ${appId} functions pull ${route}`;
@@ -265,7 +305,7 @@ for (const mode of ["entry", "config", "missing", "wrapper", "extra", "symlink"]
 test("V9 candidate scripts keep production promotion and global authority controls outside their mutation surface",()=>{
   const source=text(publisher);assert.match(source,/fixlist_require_exact_main/);assert.match(source,/fixlist_require_base44_owner/);assert.match(source,/functions deploy "\$route"/);assert.match(source,/functions pull "\$route"/);
   assert.doesNotMatch(source,/fixlist_set_base44_release_source_sha|secrets set|site deploy|entities push|functions deploy --force|functions delete/);
-  assert.match(source,/if \[\[ "\$OPERATION" == publish-active \]\]; then\s+python3 .*assert_standard150_promotion_record/);
+  assert.match(source,/publish\|verify\) fixlist_publish_v9_packages/);
   assert.match(text("scripts/deploy-base44-beta-functions.sh"),/assert_standard150_promotion_record/);
   assert.match(text(verifier),/--proto '=https'/);assert.doesNotMatch(text(verifier),/curl[^\n]* -L/);
 });
@@ -285,7 +325,7 @@ test("active V9 package publication requires frozen accepted source and restores
   t.after(f.cleanup);
   selectActiveV9(f.root);
   const confirm = { CONFIRM: `PUBLISH-BASE44-ACTIVE-V9:${sourceSha}` };
-  assert.notEqual(f.run(confirm, ["publish-active"]).status, 0);
+  assert.notEqual(f.run(confirm, [], "scripts/active-v9-wrapper.sh").status, 0);
   assert.equal(text(f.calls), "");
   assert.match(text(f.events), /promotion-guard/);
 
@@ -293,17 +333,44 @@ test("active V9 package publication requires frozen accepted source and restores
   const revision = JSON.parse(text(revisionPath));
   writeFileSync(revisionPath, JSON.stringify({ ...revision, status: "frozen_beta" }));
   assert.notEqual(f.run().status, 0);
+  assert.notEqual(f.run(confirm, ["active-preflight"]).status, 0);
   assert.equal(text(f.calls), "");
 
-  const result = f.run({ ...confirm, TEST_PREEXIST_ROUTE: aliases[0] }, ["publish-active"]);
+  const startEventCount = text(f.events).match(/source-guard/g)?.length ?? 0;
+  const result = f.run({ ...confirm, TEST_PREEXIST_ROUTE: aliases[0], TEST_RESTORE: "yes" }, [], "scripts/active-v9-wrapper.sh");
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(text(f.calls).trim().split("\n"), [
-    ...aliases.map(pullCall), ...aliases.slice(1).flatMap(route => [pullCall(route), deployCall(route), pullCall(route)]), execCall,
+    ...aliases.map(pullCall), execCall, ...aliases.slice(1).flatMap(route => [pullCall(route), deployCall(route), pullCall(route)]), execCall,
+    ...aliases.map(pullCall), execCall,
   ]);
+  assert.equal(text(f.events).match(/source-guard/g)?.length, startEventCount + 1);
+  assert.equal(text(f.events).match(/pinned-source/g)?.length, 4);
   assert.match(result.stdout, /BASE44_ACTIVE_V9_PACKAGES_VERIFIED/);
   assert.doesNotMatch(result.stdout, /BASE44_STAGED_V9_CANDIDATE_VERIFIED/);
   assert.deepEqual(JSON.parse(text(f.readiness)).functions.map(row => row.route_name), aliases);
 });
+
+for (const [failure, env] of Object.entries({
+  api_key: {BASE44_API_KEY: "not-permitted"},
+  owner: {TEST_OWNER_FAIL: "yes"},
+  collision: {TEST_PREEXIST: "yes", TEST_TAMPER_PULL: aliases[5]},
+  wrong_app_owner: {TEST_ACTIVE_INTAKE: "wrong-owner"},
+  open: {TEST_ACTIVE_INTAKE: "open"},
+  stale_intake: {TEST_ACTIVE_INTAKE: "stale-build"},
+})) {
+  test(`active V9 preflight refuses ${failure} before alias creation`, (t) => {
+    const f = fixture();
+    t.after(f.cleanup);
+    selectActiveV9(f.root);
+    const revisionPath = join(f.root, "data/beta-crawler-revision.json");
+    const revision = JSON.parse(text(revisionPath));
+    writeFileSync(revisionPath, JSON.stringify({ ...revision, status: "frozen_beta" }));
+    const result = f.run({ ...env, CONFIRM: `PUBLISH-BASE44-ACTIVE-V9:${sourceSha}` }, [], "scripts/active-v9-wrapper.sh");
+    assert.notEqual(result.status, 0);
+    assert.doesNotMatch(text(f.calls), /functions deploy/);
+    assert.equal(existsSync(f.readiness), false);
+  });
+}
 
 test("active V9 rejects a well-shaped but stale generated route before any CLI operation", (t) => {
   const f = fixture();
@@ -317,9 +384,24 @@ test("active V9 rejects a well-shaped but stale generated route before any CLI o
   record.functions[names[0]].route_name = `${names[0]}B${"f".repeat(16)}`;
   writeFileSync(generated, JSON.stringify(record));
 
-  const result = f.run({ CONFIRM: `PUBLISH-BASE44-ACTIVE-V9:${sourceSha}` }, ["publish-active"]);
+  const result = f.run({ CONFIRM: `PUBLISH-BASE44-ACTIVE-V9:${sourceSha}` }, [], "scripts/active-v9-wrapper.sh");
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /Generated staged V9 routes differ from package bytes/);
+  assert.equal(text(f.calls), "");
+});
+
+test("active V9 preflight checks timeout's required options before any CLI operation", (t) => {
+  const f = fixture();
+  t.after(f.cleanup);
+  selectActiveV9(f.root);
+  const unsupported = join(f.root, "bin/timeout");
+  writeFileSync(unsupported, "#!/usr/bin/env bash\nexit 2\n", { mode: 0o700 });
+  const revisionPath = join(f.root, "data/beta-crawler-revision.json");
+  const revision = JSON.parse(text(revisionPath));
+  writeFileSync(revisionPath, JSON.stringify({ ...revision, status: "frozen_beta" }));
+  const result = f.run({ CONFIRM: `PUBLISH-BASE44-ACTIVE-V9:${sourceSha}` }, [], "scripts/active-v9-wrapper.sh");
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /GNU-compatible timeout is required/);
   assert.equal(text(f.calls), "");
 });
 

@@ -65,13 +65,20 @@ appendFileSync(process.env.TEST_MUTATIONS, process.argv.slice(2).join(" ") + "\\
 `);
   // The production release guard is tested against accepted/candidate records in
   // Python tests; this isolated shell fixture stubs only its successful exit.
-  writeFileSync(join(root, "scripts", "assert_standard150_promotion_record.py"), `import os
+  writeFileSync(join(root, "scripts", "assert_standard150_promotion_record.py"), `import os, sys
 with open(os.environ["TEST_MUTATIONS"], "a") as out:
-    out.write("release-guard-ran\\n")
+    out.write("release-guard-ran " + " ".join(sys.argv[1:]) + "\\n")
+if os.environ.get("TEST_PROMOTION_FAIL"):
+    sys.exit(2)
 `);
 
   writeFileSync(join(root, "scripts", "lib", "release-source-guard.sh"), `
-fixlist_require_exact_main() { FIXLIST_EXACT_SOURCE_SHA="$2"; }
+fixlist_require_exact_main() {
+  [[ ! -e "$TEST_CLI_CALLS.main-advanced" ]] || return 2
+  printf 'current-main\\n' >> "$TEST_MUTATIONS"
+  FIXLIST_EXACT_SOURCE_SHA="$2"
+}
+fixlist_require_pinned_checkout() { [[ "$2" == "$FIXLIST_EXACT_SOURCE_SHA" ]]; }
 `);
   writeFileSync(join(root, "scripts", "lib", "base44-pinned-cli.sh"), `
 fixlist_install_base44_cli() { FIXLIST_BASE44_CLI="$TEST_FAKE_CLI"; export FIXLIST_BASE44_CLI; }
@@ -79,11 +86,21 @@ fixlist_require_base44_owner() { :; }
 fixlist_set_base44_release_source_sha() { printf 'set-release-source\\n' >> "$TEST_MUTATIONS"; }
 `);
   writeFileSync(join(root, "scripts", "deploy-base44-staged-functions.sh"), `#!/usr/bin/env bash
-set -euo pipefail
-[[ "$*" == publish-active && "$CONFIRM" == "PUBLISH-BASE44-ACTIVE-V9:$SOURCE_SHA" && ! -e "$READINESS_OUTPUT" ]]
-printf 'publish-active %s\\n' '${physicalV9.join(" ")}' >> "$TEST_CLI_CALLS"
-printf '%s\\n' ${physicalV9.join(" ")} >> "$TEST_CLI_CALLS.inventory"
-touch "$READINESS_OUTPUT"
+fixlist_assert_active_v9_intake_closed() {
+  [[ "\${TEST_INTAKE_CLOSED:-yes}" == yes && ! -e "$TEST_CLI_CALLS.intake-open" ]]
+}
+fixlist_publish_v9_packages() (
+  set -euo pipefail
+  fixlist_require_pinned_checkout "$PWD" "$SOURCE_SHA"
+  [[ "$CONFIRM" == "PUBLISH-BASE44-ACTIVE-V9:$SOURCE_SHA" && ! -e "$READINESS_OUTPUT" ]] || exit 2
+  if [[ "$1" == active-preflight ]]; then
+    [[ "\${TEST_PACKAGE_PREFLIGHT_FAIL:-}" != yes ]] || exit 2
+    fixlist_assert_active_v9_intake_closed
+  fi
+  printf '%s %s\\n' "$1" '${physicalV9.join(" ")}' >> "$TEST_CLI_CALLS"
+  printf '%s\\n' ${physicalV9.join(" ")} >> "$TEST_CLI_CALLS.inventory"
+  touch "$READINESS_OUTPUT"
+)
 `);
   if (publishSite) {
     cpSync(functionVerifier, join(root, functionVerifier));
@@ -92,6 +109,7 @@ printf 'site-verified\\n' >> "$TEST_MUTATIONS"
 `);
     writeFileSync(join(root, "bin", "npm"), `#!/usr/bin/env bash
 printf 'npm %s\\n' "$*" >> "$TEST_CLI_CALLS"
+if [[ "\${TEST_INTAKE_REOPEN_AFTER_BUILD:-}" == yes ]]; then touch "$TEST_CLI_CALLS.intake-open"; fi
 `, { mode: 0o755 });
     writeFileSync(join(root, "bin", "curl"), `#!/usr/bin/env bash
 set -euo pipefail
@@ -123,9 +141,17 @@ exit ${verifierExit}
   writeFileSync(fakeCli, `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$TEST_CLI_CALLS"
 case "$3 $4" in
-  'functions deploy') shift 4; printf '%s\\n' "$@" >> "$TEST_CLI_CALLS.inventory" ;;
+  'functions deploy')
+    if [[ -e "$TEST_CLI_CALLS.main-advanced" && "\${TEST_POST_LEGACY_FAIL:-}" == yes ]]; then exit 12; fi
+    shift 4
+    printf '%s\\n' "$@" >> "$TEST_CLI_CALLS.inventory"
+    ;;
   'functions list') cat "$TEST_CLI_CALLS.inventory" ;;
-  'site deploy') : > "$TEST_CLI_CALLS.inventory" ;;
+  'site deploy')
+    : > "$TEST_CLI_CALLS.inventory"
+    touch "$TEST_CLI_CALLS.main-advanced"
+    exit "\${TEST_SITE_STATUS:-0}"
+    ;;
 esac
 `);
   chmodSync(fakeCli, 0o755);
@@ -194,7 +220,8 @@ test("the functions-only publisher selects V9 and retains all V8 routes from the
     assert.equal(result.status, 0, result.stderr);
     const deploy = contents(f.calls).split("\n").find((line) => line.includes(" functions deploy "));
     assert.deepEqual(deploy.trim().split(/\s+/).slice(4), scannerFunctions);
-    assert.match(contents(f.calls), new RegExp(`publish-active ${physicalV9.join(" ")}`));
+    assert.match(contents(f.calls), new RegExp(`active-preflight ${physicalV9.join(" ")}`));
+    assert.match(contents(f.mutations), /release-guard-ran .*--base44-v9 scanner-functions/);
     assert.match(contents(f.mutations), /verify --staged/);
     assert.match(result.stdout, /function_count=12/);
   } finally { rmSync(f.root, { recursive: true, force: true }); }
@@ -209,20 +236,64 @@ test("site publisher deploys and probes exact V9 and retained V8 both before and
   const cli = `--app-id ${productionApp}`;
   const probes = expected.map((name) => `probe ${name}`);
   assert.deepEqual(contents(f.calls).trim().split("\n"), [
+    `active-preflight ${physicalV9.join(" ")}`,
     `${cli} functions deploy ${scannerFunctions.join(" ")}`,
-    `publish-active ${physicalV9.join(" ")}`,
     ...probes,
     "npm run build",
     `${cli} site deploy --no-build --yes`,
     `${cli} functions deploy ${[...scannerFunctions, ...checkoutFunctions].join(" ")}`,
-    `publish-active ${physicalV9.join(" ")}`,
+    `active-restore ${physicalV9.join(" ")}`,
     `${cli} functions list`,
     ...probes,
   ]);
   assert.match(contents(f.mutations), /verify --staged/);
+  assert.match(contents(f.mutations), /release-guard-ran .*--base44-v9 site-and-functions/);
+  assert.equal(contents(f.mutations).match(/current-main/g)?.length, 1);
   assert.match(contents(f.mutations), /site-verified/);
   assert.match(result.stdout, /BASE44_SITE_AND_BACKEND_DEPLOYED/);
 });
+
+test("a failed site upload still restores the pinned V9 and V8 inventory", (t) => {
+  const f = fixture({ editRoutes: selectV9, publishSite: true });
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  const result = f.run("site-and-functions", { TEST_SITE_STATUS: "17" });
+  assert.equal(result.status, 17, result.stderr);
+  assert.match(result.stderr, /selected function inventory was restored/);
+  assert.match(contents(f.calls), /site deploy[\s\S]*functions deploy[\s\S]*active-restore[\s\S]*functions list/);
+  assert.doesNotMatch(result.stdout, /BASE44_SITE_AND_BACKEND_DEPLOYED/);
+});
+
+test("a failed V8 restoration still attempts the active V9 restoration", (t) => {
+  const f = fixture({ editRoutes: selectV9, publishSite: true });
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  const result = f.run("site-and-functions", { TEST_POST_LEGACY_FAIL: "yes" });
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /restoration failed \(checkout=12, active_v9=0\)/);
+  assert.match(contents(f.calls), /site deploy[\s\S]*functions deploy[\s\S]*active-restore/);
+  assert.doesNotMatch(result.stdout, /BASE44_SITE_AND_BACKEND_DEPLOYED/);
+});
+
+test("site publish checks intake again after the build and before upload", (t) => {
+  const f = fixture({ editRoutes: selectV9, publishSite: true });
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  const result = f.run("site-and-functions", { TEST_INTAKE_REOPEN_AFTER_BUILD: "yes" });
+  assert.notEqual(result.status, 0);
+  assert.match(contents(f.calls), /active-preflight[\s\S]*npm run build/);
+  assert.doesNotMatch(contents(f.calls), /site deploy|active-restore/);
+});
+
+for (const publishSite of [false, true]) {
+  test(`${publishSite ? "site" : "functions-only"} runs V9 approval, package preflight, and closed intake before any writes`, (t) => {
+    for (const env of [{ TEST_PROMOTION_FAIL: "yes" }, { TEST_PACKAGE_PREFLIGHT_FAIL: "yes" }, { TEST_INTAKE_CLOSED: "no" }]) {
+      const f = fixture({ editRoutes: selectV9, publishSite });
+      t.after(() => rmSync(f.root, { recursive: true, force: true }));
+      const result = f.run(publishSite ? "site-and-functions" : "scanner-functions", env);
+      assert.notEqual(result.status, 0, JSON.stringify(env));
+      assert.equal(contents(f.calls), "");
+      assert.doesNotMatch(contents(f.mutations), /set-release-source/);
+    }
+  });
+}
 
 test("site publication aborts if a V9 handler serves the wrong activation for the exact build", (t) => {
   const staleFunction = physicalV9[0];

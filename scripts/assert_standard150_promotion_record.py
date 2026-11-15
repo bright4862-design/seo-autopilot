@@ -18,13 +18,61 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SHA40 = re.compile(r"[0-9a-f]{40}\Z")
 FINGERPRINT16 = re.compile(r"[0-9a-f]{16}\Z")
+BASE44_ROUTES = "data/base44-function-routes.json"
+GENERATED_V9_ROUTES = "data/generated-staged-v9-routes.json"
+SCANNER_FUNCTIONS = (
+    "startStandardScanJob", "durableScanWorkerControl", "persistDurableScanAuthority",
+    "persistLimitedScanResult", "getCustomerScanResult", "deleteCustomerScanData",
+)
 
 
 class PromotionRecordError(ValueError):
     """Release record cannot authorize promotion."""
 
 
-def verify_promotion_record(root: Path, source_sha: str) -> str:
+def verify_active_v9_packages(root: Path, accepted_sha: str, source_sha: str, deployment: str) -> None:
+    packages = [f"base44/functions/{name}{generation}" for generation in ("V8", "V9") for name in SCANNER_FUNCTIONS]
+    if deployment != "scanner-functions":
+        packages.extend(f"base44/functions/{name}" for name in ("createAccessCheckout", "stripeWebhook", "ownerScanDebugControl"))
+
+    def git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(["git", "-C", str(root), *args], check=check,
+                              capture_output=True, text=True, timeout=10)
+
+    def recorded_routes(commit: str, file: str) -> dict:
+        value = json.loads(git("show", f"{commit}:{file}").stdout)
+        if not isinstance(value, dict):
+            raise ValueError("invalid routes")
+        return value
+
+    def physical_v9(commit: str) -> dict:
+        functions = recorded_routes(commit, GENERATED_V9_ROUTES)["functions"]
+        return {name: functions[f"{name}V9"]["route_name"] for name in SCANNER_FUNCTIONS}
+
+    try:
+        comparison = git("diff", "--no-ext-diff", "--quiet", accepted_sha, source_sha, "--",
+                         GENERATED_V9_ROUTES, "base44/shared", *packages, check=False)
+        if comparison.returncode == 1:
+            raise PromotionRecordError("active_v9_packages_differ_from_accepted_source")
+        if comparison.returncode != 0:
+            raise PromotionRecordError("active_v9_accepted_packages_unverified")
+        if deployment == "site-and-functions":
+            if git("rev-parse", "--is-shallow-repository").stdout.strip() != "false":
+                raise PromotionRecordError("active_v9_public_route_history_unavailable")
+            current = physical_v9(source_sha)
+            history = git("log", "--full-history", "--format=%H", source_sha, "--",
+                          BASE44_ROUTES, GENERATED_V9_ROUTES).stdout.splitlines()
+            for prior in history:
+                if prior != source_sha and recorded_routes(prior, BASE44_ROUTES).get("generation") == "v9":
+                    if physical_v9(prior) != current:
+                        raise PromotionRecordError("active_v9_site_would_omit_earlier_public_aliases")
+    except PromotionRecordError:
+        raise
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError) as exc:
+        raise PromotionRecordError("active_v9_accepted_packages_or_history_unverified") from exc
+
+
+def verify_promotion_record(root: Path, source_sha: str, base44_v9: str | None = None) -> str:
     """Check frozen metadata and ancestry, without trusting runtime claims."""
     if not SHA40.fullmatch(source_sha):
         raise PromotionRecordError("source_sha_invalid")
@@ -75,6 +123,8 @@ def verify_promotion_record(root: Path, source_sha: str) -> str:
             or not FINGERPRINT16.fullmatch(fingerprint)
             or fingerprint != calculated):
         raise PromotionRecordError("release_fingerprint_inconsistent")
+    if base44_v9:
+        verify_active_v9_packages(root, accepted_sha, source_sha, base44_v9)
     return fingerprint
 
 
@@ -82,9 +132,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--repo-root", type=Path, default=ROOT)
+    parser.add_argument("--base44-v9", choices=("scanner-functions", "release-functions", "site-and-functions"))
     args = parser.parse_args()
     try:
-        fingerprint = verify_promotion_record(args.repo_root, args.source_sha)
+        fingerprint = verify_promotion_record(args.repo_root, args.source_sha, args.base44_v9)
     except (PromotionRecordError, UnicodeError, OSError) as exc:
         print(f"PROMOTION_RECORD_BLOCKED: {exc}", file=sys.stderr)
         return 2

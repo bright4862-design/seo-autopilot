@@ -28,10 +28,6 @@ source "$REPO_ROOT/scripts/lib/base44-pinned-cli.sh"
 fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$CONFIRM"
 SOURCE_SHA="$FIXLIST_EXACT_SOURCE_SHA"
 cd "$REPO_ROOT"
-# A site publish reconciles live Base44 scanner functions: it must not move
-# customer authority onto a release that is still explicitly a candidate.
-python3 "$REPO_ROOT/scripts/assert_standard150_promotion_record.py" --source-sha "$SOURCE_SHA"
-
 # The scanner and customer-data routes the published frontend and the Cloud Run
 # worker actually call. A V9 publish also keeps historical V8 routes serving
 # clients with the previous bundle and scans already admitted on V8.
@@ -39,6 +35,13 @@ ROUTE_SELECTION="$(node "$REPO_ROOT/scripts/lib/base44-public-routes.mjs")"
 read -r -a ROUTE_FIELDS <<<"$ROUTE_SELECTION"
 VERIFIED_FUNCTIONS=("${ROUTE_FIELDS[@]:1}")
 CHECKOUT_FUNCTIONS=("${VERIFIED_FUNCTIONS[@]}")
+PROMOTION_ARGS=()
+if [[ "${ROUTE_FIELDS[0]}" == "v9" ]]; then
+  PROMOTION_ARGS=(--base44-v9 site-and-functions)
+fi
+# A site publish can reconcile the live function inventory. Pin the accepted
+# package bytes and reject unpreserved earlier V9 routes before any mutation.
+python3 "$REPO_ROOT/scripts/assert_standard150_promotion_record.py" --source-sha "$SOURCE_SHA" ${PROMOTION_ARGS[@]+"${PROMOTION_ARGS[@]}"}
 RELEASE_CONTRACT_ROOT="$REPO_ROOT" node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --check
 node "$REPO_ROOT/scripts/base44_release_manifest.mjs" verify
 if [[ "${ROUTE_FIELDS[0]}" == "v9" ]]; then
@@ -49,6 +52,7 @@ if [[ "${ROUTE_FIELDS[0]}" == "v9" ]]; then
   node "$REPO_ROOT/scripts/base44_release_manifest.mjs" verify --staged
   # The first six routes are materialized from V9 source in a scratch project.
   CHECKOUT_FUNCTIONS=("${VERIFIED_FUNCTIONS[@]:6}")
+  source "$REPO_ROOT/scripts/deploy-base44-staged-functions.sh"
 fi
 # Deployed, but not build-ID verified. createAccessCheckout and stripeWebhook
 # keep their names because Stripe addresses stripeWebhook by URL from its own
@@ -62,9 +66,6 @@ UNVERIFIED_FUNCTIONS=(
 )
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
-fixlist_install_base44_cli "$TMP"
-fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TMP/whoami" "$APP_ID"
-fixlist_set_base44_release_source_sha "$APP_ID" "$SOURCE_SHA"
 
 deploy_functions() {
   local status=0 report
@@ -77,25 +78,46 @@ deploy_active_v9() {
   if [[ "${ROUTE_FIELDS[0]}" == "v9" ]]; then
     SOURCE_SHA="$SOURCE_SHA" CONFIRM="PUBLISH-BASE44-ACTIVE-V9:$SOURCE_SHA" BASE44_APP_ID="$APP_ID" \
       BASE44_EXPECTED_OWNER="$BASE44_EXPECTED_OWNER" READINESS_OUTPUT="$TMP/v9-$1.json" \
-      bash "$REPO_ROOT/scripts/deploy-base44-staged-functions.sh" publish-active
+      fixlist_publish_v9_packages "$1"
   fi
 }
 
+deploy_active_v9 active-preflight
+fixlist_install_base44_cli "$TMP"
+fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TMP/whoami" "$APP_ID"
+fixlist_set_base44_release_source_sha "$APP_ID" "$SOURCE_SHA"
 deploy_functions "${CHECKOUT_FUNCTIONS[@]}"
-deploy_active_v9 pre-site
 BASE44_APP_ID="$APP_ID" bash "$REPO_ROOT/scripts/verify-base44-functions.sh"
 printf 'BASE44_RELEASE_ROUTES_ACTIVE_PRE_SITE\n'
 
 # A fresh browser has no cached Base44 app ID; bind it to this deployment.
 VITE_SCAN_FUNCTION_GENERATION= VITE_BASE44_APP_ID="$APP_ID" VITE_FIXLIST_SOURCE_SHA="$SOURCE_SHA" npm run build
-"$FIXLIST_BASE44_CLI" --app-id "$APP_ID" site deploy --no-build --yes
+if [[ "${ROUTE_FIELDS[0]}" == "v9" ]]; then
+  fixlist_require_pinned_checkout "$REPO_ROOT" "$SOURCE_SHA"
+  fixlist_assert_active_v9_intake_closed "$REPO_ROOT" "$APP_ID" "$BASE44_EXPECTED_OWNER"
+fi
+SITE_STATUS=0
+"$FIXLIST_BASE44_CLI" --app-id "$APP_ID" site deploy --no-build --yes || SITE_STATUS=$?
 
 # Re-establish every function afterwards using the SAME authenticated CLI
 # session so a second interactive login can never strand production with the
 # older site-snapshot inventory.
 FUNCTIONS=("${VERIFIED_FUNCTIONS[@]}" "${UNVERIFIED_FUNCTIONS[@]}")
-deploy_functions "${CHECKOUT_FUNCTIONS[@]}" "${UNVERIFIED_FUNCTIONS[@]}"
-deploy_active_v9 post-site
+LEGACY_RESTORE_STATUS=0
+deploy_functions "${CHECKOUT_FUNCTIONS[@]}" "${UNVERIFIED_FUNCTIONS[@]}" || LEGACY_RESTORE_STATUS=$?
+V9_RESTORE_STATUS=0
+if [[ "${ROUTE_FIELDS[0]}" == "v9" ]]; then
+  # Keep errexit inside V9 restoration while collecting its independent result.
+  deploy_active_v9 active-restore &
+  wait "$!" || V9_RESTORE_STATUS=$?
+fi
+if (( LEGACY_RESTORE_STATUS != 0 || V9_RESTORE_STATUS != 0 )); then
+  echo "Base44 post-site restoration failed (checkout=$LEGACY_RESTORE_STATUS, active_v9=$V9_RESTORE_STATUS)." >&2
+  exit 2
+fi
+if [[ "${ROUTE_FIELDS[0]}" == "v9" ]]; then
+  fixlist_assert_active_v9_intake_closed "$REPO_ROOT" "$APP_ID" "$BASE44_EXPECTED_OWNER"
+fi
 
 INVENTORY="$($FIXLIST_BASE44_CLI --app-id "$APP_ID" functions list 2>&1)"
 printf '%s\n' "$INVENTORY"
@@ -106,8 +128,12 @@ for required in "${FUNCTIONS[@]}"; do
   }
 done
 
-EXPECTED_SOURCE_SHA="$SOURCE_SHA" bash "$REPO_ROOT/scripts/verify-base44-site.sh"
 BASE44_APP_ID="$APP_ID" bash "$REPO_ROOT/scripts/verify-base44-functions.sh"
+if (( SITE_STATUS != 0 )); then
+  echo 'Base44 site upload reported failure. The selected function inventory was restored.' >&2
+  exit "$SITE_STATUS"
+fi
+EXPECTED_SOURCE_SHA="$SOURCE_SHA" bash "$REPO_ROOT/scripts/verify-base44-site.sh"
 
 printf 'BASE44_SITE_AND_BACKEND_DEPLOYED\nsource_sha=%s\nbuild_verified=%s\nbuild_unverified=%s\n' \
   "$SOURCE_SHA" "${VERIFIED_FUNCTIONS[*]}" "${UNVERIFIED_FUNCTIONS[*]}"

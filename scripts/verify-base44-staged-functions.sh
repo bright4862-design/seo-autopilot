@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Read-only probes for the authenticated and external V9 candidate runtimes.
+# Read-only probes for the authenticated and external V9 runtimes.
+fixlist_verify_staged_functions() (
 set -euo pipefail
 umask 077
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -32,7 +33,11 @@ if [[ -n "${BASE44_API_KEY:-}" ]]; then
   exit 2
 fi
 command -v timeout >/dev/null || { echo "Refusing V9 verification: timeout is required." >&2; exit 2; }
-fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$SOURCE_SHA"
+if [[ "${1:-}" == pinned ]]; then
+  fixlist_require_pinned_checkout "$REPO_ROOT" "$SOURCE_SHA"
+else
+  fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$SOURCE_SHA"
+fi
 node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --check
 FUNCTIONS=(startStandardScanJobV9 durableScanWorkerControlV9 persistDurableScanAuthorityV9 persistLimitedScanResultV9 getCustomerScanResultV9 deleteCustomerScanDataV9)
 TASK_TMP="$(mktemp -d)"
@@ -182,3 +187,8 @@ fs.writeFileSync(output, JSON.stringify(report) + '\n', {flag:'wx',mode:0o600});
 NODE
 fi
 printf 'BASE44_STAGED_V9_RUNTIME_VERIFIED source_sha=%s production_activation=false\n' "$SOURCE_SHA"
+)
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  fixlist_verify_staged_functions
+fi

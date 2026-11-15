@@ -125,7 +125,7 @@ test("publish proves the release routes live before the site is cut over", () =>
   const at = (needle) => deploy.indexOf(needle);
 
   const preSiteDeploy = at('deploy_functions "${CHECKOUT_FUNCTIONS[@]}"');
-  const preSiteV9 = at("deploy_active_v9 pre-site");
+  const preSiteV9 = at("deploy_active_v9 active-preflight");
   const preSiteVerify = at("verify-base44-functions.sh");
   const siteDeploy = at("site deploy --no-build --yes");
   const successAt = at("BASE44_SITE_AND_BACKEND_DEPLOYED");

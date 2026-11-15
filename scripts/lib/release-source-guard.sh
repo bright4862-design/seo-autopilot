@@ -2,6 +2,18 @@
 # Shared exact-source guard for owner/release mutations.
 set -euo pipefail
 
+# Recheck a clean source after a guarded publish starts. A subsequent main
+# update must not strand the selected route set after the site upload.
+fixlist_require_pinned_checkout() {
+  local repo_root="$1" source="$2" head status
+  head="$(git -C "$repo_root" rev-parse HEAD)" || return 2
+  status="$(git -C "$repo_root" status --porcelain --untracked-files=all)" || return 2
+  if [[ ! "$source" =~ ^[a-f0-9]{40}$ || "$source" != "${FIXLIST_EXACT_SOURCE_SHA:-}" || "$head" != "$source" || -n "$status" ]]; then
+    echo 'Refusing: the checkout no longer matches the pinned clean release source.' >&2
+    return 2
+  fi
+}
+
 fixlist_require_exact_main() {
   local repo_root="$1"
   local expected_sha="${2:-}"

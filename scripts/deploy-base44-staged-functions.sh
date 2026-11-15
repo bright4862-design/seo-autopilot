@@ -1,5 +1,48 @@
 #!/usr/bin/env bash
 # Publish or verify the content-addressed V9 packages from the selected source.
+fixlist_assert_active_v9_intake_closed() (
+  set -euo pipefail
+  local root="$1" app="$2" owner="$3" tmp expected
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT
+  umask 077
+  expected="$(node - "$root" "$owner" <<'NODE'
+const [root, email] = process.argv.slice(2);
+const path = require('node:path');
+const {fingerprint} = require(path.join(root, 'data/beta-crawler-revision.json'));
+const {functions} = require(path.join(root, 'data/generated-staged-v9-routes.json'));
+const ids = {'bright4862@gmail.com':'6a498da58ef5cec1f5cd4486', 'londonparisbrussels@gmail.com':'6a498732ec779dfaaeab0e54'};
+if (!Object.hasOwn(ids, email)) process.exit(1);
+console.log(JSON.stringify({email, id: ids[email], fingerprint, ...functions.startStandardScanJobV9}));
+NODE
+)"
+  {
+    printf 'const expected = %s;\n' "$expected"
+    cat <<'NODE'
+const me = await base44.auth.me();
+if (me?.id !== expected.id || String(me.email || '').trim().toLowerCase() !== expected.email || me.role !== 'admin') {
+  throw new Error('unexpected_app_owner');
+}
+const response = await base44.functions.invoke(expected.route_name, {action: 'staged_runtime_status'});
+const status = response?.data ?? response;
+const age = Date.now() - Date.parse(status?.observed_at);
+if (status?.success !== true || status?.schema_version !== 'fixlist_staged_v9_intake_readback_v1'
+    || status.build_id !== expected.build_id || status.runtime_activation_id !== expected.runtime_activation_id
+    || status.release_fingerprint !== expected.fingerprint || status.intake_gate !== 'disabled'
+    || !Number.isFinite(age) || Math.abs(age) > 60000) throw new Error('active_v9_intake_not_verified_closed');
+console.log('BASE44_ACTIVE_V9_INTAKE_DISABLED');
+NODE
+  } > "$tmp/intake.js"
+  if ! timeout --signal=TERM --kill-after=5s 25 "$FIXLIST_BASE44_CLI" --app-id "$app" exec --data-env prod \
+      < "$tmp/intake.js" > "$tmp/intake.out" 2> "$tmp/intake.err" \
+      || [[ "$(grep -Fxc 'BASE44_ACTIVE_V9_INTAKE_DISABLED' "$tmp/intake.out")" != 1 ]]; then
+    echo 'Refusing active V9 publication: the exact launcher does not attest closed intake.' >&2
+    exit 2
+  fi
+  printf 'BASE44_ACTIVE_V9_INTAKE_DISABLED\n'
+)
+
+fixlist_publish_v9_packages() (
 set -euo pipefail
 umask 077
 
@@ -17,20 +60,22 @@ if [[ "$APP_ID" != "6a498732ec779dfaaeab0e53" || ! "$SOURCE_SHA" =~ ^[0-9a-f]{40
   exit 2
 fi
 if (( $# > 1 )); then
-  echo 'Usage: deploy-base44-staged-functions.sh [verify|publish-active]' >&2
+  echo 'Usage: deploy-base44-staged-functions.sh [verify]' >&2
   exit 2
 fi
 case "$OPERATION" in
   publish) EXPECTED_CONFIRM="PUBLISH-BASE44-STAGED-V9:$SOURCE_SHA" ;;
   verify) EXPECTED_CONFIRM="VERIFY-BASE44-STAGED-V9:$SOURCE_SHA" ;;
-  publish-active) EXPECTED_CONFIRM="PUBLISH-BASE44-ACTIVE-V9:$SOURCE_SHA" ;;
+  active-preflight|active-restore) EXPECTED_CONFIRM="PUBLISH-BASE44-ACTIVE-V9:$SOURCE_SHA" ;;
   *) echo 'Unsupported staged V9 operation.' >&2; exit 2 ;;
 esac
 if [[ "$CONFIRM" != "$EXPECTED_CONFIRM" ]]; then
   echo "Refusing V9 candidate operation: exact $EXPECTED_CONFIRM required." >&2
   exit 2
 fi
-command -v timeout >/dev/null || { echo "Refusing V9 candidate operation: timeout is required." >&2; exit 2; }
+timeout --signal=TERM --kill-after=5s 1 true >/dev/null 2>&1 || {
+  echo 'Refusing V9 publication: a GNU-compatible timeout is required.' >&2; exit 2;
+}
 case "$BASE44_EXPECTED_OWNER" in
   bright4862@gmail.com|londonparisbrussels@gmail.com) ;;
   *) echo 'Refusing V9 candidate operation: select an approved Base44 owner session.' >&2; exit 2 ;;
@@ -39,12 +84,14 @@ if [[ -n "${BASE44_API_KEY:-}" ]]; then
   echo 'Refusing V9 candidate operation: an authenticated Base44 owner session is required.' >&2
   exit 2
 fi
-fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$SOURCE_SHA"
 cd "$REPO_ROOT"
-if [[ "$OPERATION" == publish-active ]]; then
-  python3 "$REPO_ROOT/scripts/assert_standard150_promotion_record.py" --source-sha "$SOURCE_SHA"
+if [[ "$OPERATION" == active-* ]]; then
+  fixlist_require_pinned_checkout "$REPO_ROOT" "$SOURCE_SHA"
+  python3 "$REPO_ROOT/scripts/assert_standard150_promotion_record.py" --source-sha "$SOURCE_SHA" --base44-v9 scanner-functions
   ROUTE_SELECTION="$(node "$REPO_ROOT/scripts/lib/base44-public-routes.mjs")"
   [[ "$ROUTE_SELECTION" == v9\ * ]] || { echo 'Active V9 publication requires the public V9 manifest.' >&2; exit 2; }
+else
+  fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$SOURCE_SHA"
 fi
 
 FUNCTIONS=(
@@ -70,7 +117,7 @@ const [root, output, operation, ...expected] = process.argv.slice(2);
 const routes = JSON.parse(fs.readFileSync(path.join(root,'data/base44-function-routes.json'),'utf8'));
 const record = JSON.parse(fs.readFileSync(path.join(root,'data/beta-crawler-revision.json'),'utf8'));
 const generated = JSON.parse(fs.readFileSync(path.join(root,'data/generated-staged-v9-routes.json'),'utf8'));
-const active = operation === 'publish-active';
+const active = operation.startsWith('active-');
 const actual = Object.values((active ? routes.routes : routes.candidate_routes?.v9) || {});
 const occupied = new Set([
   ...Object.values(routes.routes || {}),
@@ -79,7 +126,8 @@ const occupied = new Set([
 ]);
 if (actual.length !== expected.length || new Set(actual).size !== expected.length || expected.some(name => !actual.includes(name))
     || (!active && (routes.generation !== 'v8' || Object.values(routes.routes || {}).some(name => expected.includes(name))))
-    || !['candidate','frozen_beta'].includes(record.status) || !/^[0-9a-f]{16}$/.test(record.fingerprint || '')
+    || !(active ? record.status === 'frozen_beta' : ['candidate','frozen_beta'].includes(record.status))
+    || !/^[0-9a-f]{16}$/.test(record.fingerprint || '')
     || generated.schema_version !== 'fixlist_staged_v9_routes_v1'
     || Object.keys(generated.functions ?? {}).length !== expected.length) {
   throw new Error('V9 publication does not match its selected six-function manifest.');
@@ -188,6 +236,10 @@ while IFS=$'\t' read -r name route; do
   fi
 done < "$TASK_TMP/routes.tsv"
 
+if [[ "$OPERATION" == active-preflight ]]; then
+  fixlist_assert_active_v9_intake_closed "$REPO_ROOT" "$APP_ID" "$BASE44_EXPECTED_OWNER"
+fi
+
 # Finish the entire collision preflight before the first creation; an existing
 # matching alias is reused. Recheck each absent alias immediately before deploy.
 make_readback_project "$TASK_TMP/recheck"
@@ -208,8 +260,14 @@ while IFS=$'\t' read -r name route; do
   printf '%s\t%s\n' "$name" "$digest" >> "$TASK_TMP/packages.tsv"
 done < "$TASK_TMP/create.tsv"
 
-SOURCE_SHA="$SOURCE_SHA" BASE44_APP_ID="$APP_ID" BASE44_EXPECTED_OWNER="$BASE44_EXPECTED_OWNER" PROBE_REPORT="$TASK_TMP/runtime.json" \
-  bash "$REPO_ROOT/scripts/verify-base44-staged-functions.sh"
+if [[ "$OPERATION" == active-* ]]; then
+  source "$REPO_ROOT/scripts/verify-base44-staged-functions.sh"
+  SOURCE_SHA="$SOURCE_SHA" BASE44_APP_ID="$APP_ID" BASE44_EXPECTED_OWNER="$BASE44_EXPECTED_OWNER" PROBE_REPORT="$TASK_TMP/runtime.json" \
+    fixlist_verify_staged_functions pinned
+else
+  SOURCE_SHA="$SOURCE_SHA" BASE44_APP_ID="$APP_ID" BASE44_EXPECTED_OWNER="$BASE44_EXPECTED_OWNER" PROBE_REPORT="$TASK_TMP/runtime.json" \
+    bash "$REPO_ROOT/scripts/verify-base44-staged-functions.sh"
+fi
 
 node --input-type=module - "$REPO_ROOT" "$SOURCE_SHA" "$APP_ID" "$TASK_TMP/packages.tsv" "$TASK_TMP/runtime.json" "$READINESS_OUTPUT" <<'NODE'
 import fs from 'node:fs';
@@ -241,8 +299,16 @@ const result = {schema_version:'fixlist_staged_v9_readiness_v2',source_sha:sourc
   functions:probes.functions.map(row => ({...row,package_digest:packages.get(row.name)}))};
 fs.writeFileSync(output,JSON.stringify(result,null,2)+'\n',{flag:'wx',mode:0o600});
 NODE
-if [[ "$OPERATION" == publish-active ]]; then
+if [[ "$OPERATION" == active-* ]]; then
   printf 'BASE44_ACTIVE_V9_PACKAGES_VERIFIED source_sha=%s\n' "$SOURCE_SHA"
 else
   printf 'BASE44_STAGED_V9_CANDIDATE_VERIFIED source_sha=%s readiness=%s production_activation=false\n' "$SOURCE_SHA" "$READINESS_OUTPUT"
+fi
+)
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  case "${1:-publish}" in
+    publish|verify) fixlist_publish_v9_packages "$@" ;;
+    *) echo 'Unsupported staged V9 operation.' >&2; exit 2 ;;
+  esac
 fi

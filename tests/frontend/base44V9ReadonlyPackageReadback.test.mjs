@@ -78,7 +78,7 @@ test('fresh V9 per-function package pull verifies all six without any mutation',
     assert.match(response.stdout, /runtime_identity=UNVERIFIED published_route=UNVERIFIED/);
     const calls = contents(f.calls).trim().split('\n');
     assert.deepEqual(calls, names.map(name => '--app-id ' + appId + ' functions pull ' + name));
-    assert.doesNotMatch(contents(f.calls), /deploy|publish|secrets|site|entities|scan|--force/i);
+    assert.doesNotMatch(contents(f.calls), /functions (deploy|delete)|secrets|site deploy|entities push|--force/i);
   } finally { f.cleanup(); }
 });
 

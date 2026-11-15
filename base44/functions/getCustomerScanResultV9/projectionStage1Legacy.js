@@ -6,7 +6,7 @@ import { sanitizeReportRawFindingEvidence, sanitizeScanCoverage } from "./repair
 import { PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION } from "./evidenceUrlIdentity.js";
 import { PUBLISHED_REVIEW_ATTESTATION_VERSION, publishedIdentityContext, publishedRepairEvidenceFields, publishedPriorityContext } from "./publishedRepairEvidence.js";
 import { sanitizeComparisonEvidence } from "./comparisonEvidence.js";
-import { buildLimitedResultSnapshot } from "./limitedResultIntegrity.js";
+import { buildLimitedResultSnapshot, LIMITED_RESULT_INTEGRITY_VERSION } from "./limitedResultIntegrity.js";
 const ENCODER = new TextEncoder();
 
 export const ACCESS_APP_ID = "6a498732ec779dfaaeab0e53";
@@ -703,7 +703,14 @@ function sanitizeLimitedCoverage(run) {
   // Reuse the proof snapshot's bounds and normalization for these signed fields.
   const review = pickFields(run, LIMITED_COVERAGE_FIELDS);
   const { scan } = buildLimitedResultSnapshot({ review });
-  return pickFields(scan, LIMITED_COVERAGE_FIELDS);
+  const fields = pickFields(scan, LIMITED_COVERAGE_FIELDS);
+  if (text(run?.result_integrity_version, 160) === LIMITED_RESULT_INTEGRITY_VERSION) {
+    const counters = sanitizeScanCoverage(run.scan_coverage);
+    if (Object.keys(counters).length > 0) {
+      return { ...fields, scan_coverage: counters, scan_coverage_verified: true };
+    }
+  }
+  return fields;
 }
 
 function failedAccessFields(run) {

@@ -30,6 +30,9 @@ import * as activePreview from "../../base44/functions/getCustomerScanResultV8/c
 import * as activeCompatibility from "../../base44/functions/getCustomerScanResultV8/releaseCompatibility.js";
 import { FUNCTION_BUILD_ID as ACTIVE_FUNCTION_BUILD_ID } from "../../base44/functions/getCustomerScanResultV8/generatedBuildId.js";
 import { buildAuthoritySnapshot as buildStagedAuthoritySnapshot } from "../../base44/functions/persistDurableScanAuthorityV9/authoritySnapshot.js";
+import { authorityRowsFromSnapshot as stagedAuthorityRowsFromSnapshot } from "../../base44/functions/persistDurableScanAuthorityV9/authorityRows.js";
+import { createAuthoritySeal as createStagedAuthoritySeal } from "../../base44/functions/persistDurableScanAuthorityV9/authoritySeal.js";
+import { PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION } from "../../base44/functions/persistDurableScanAuthorityV9/evidenceUrlIdentity.js";
 import { emptyGeoReadiness } from "../../base44/functions/persistDurableScanAuthorityV9/geoReadiness.js";
 
 const entrySource = readFileSync("base44/functions/getCustomerScanResult/entry.ts", "utf8");
@@ -42,6 +45,7 @@ const HISTORICAL_FINGERPRINT = "5d94e93c54a9efb6";
 // release advance that accidentally makes intact customer history unreadable.
 const PREVIOUS_CURRENT_FINGERPRINT = "01ebe8e90df1e6bd";
 const PREVIOUS_STAGED_FINGERPRINT = "118544dcf77d86cf";
+const PROTECTED_PLAN_STAGED_FINGERPRINT = "2678b7511b2c5190";
 const UNKNOWN_FINGERPRINT = "aaaaaaaaaaaaaaaa";
 let handlerInvocationSequence = 0;
 
@@ -55,7 +59,10 @@ async function importHandler(harnessName, source) {
 
 async function sealedRows(fingerprint, staged) {
   const buildSnapshot = staged ? buildStagedAuthoritySnapshot : buildAuthoritySnapshot;
+  const published = staged && fingerprint === PROTECTED_PLAN_STAGED_FINGERPRINT;
+  const evidencePage = "https://www.funbooker.com/fr/ville/paris";
   const snapshot = buildSnapshot({
+    ...(published ? { identityVersion: PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION } : {}),
     scan: {
       submitted_url: "https://www.funbooker.com/",
       website_url: "https://www.funbooker.com/",
@@ -133,9 +140,23 @@ async function sealedRows(fingerprint, staged) {
       ...(staged ? { geo_readiness: emptyGeoReadiness() } : {}),
       recommendations: [{
         fix_id: "fix_hist", rule: "missing_h1", issue_title: "Review this page heading",
-        priority: "medium", page_url: "https://www.funbooker.com/fr/ville/paris",
-        affected_pages: ["https://www.funbooker.com/fr/ville/paris"],
+        priority: "medium", page_url: evidencePage,
+        affected_pages: [evidencePage],
         recommended_value: "Keep the verified saved instruction.",
+        ...(published ? {
+          evidence_url_identity_version: PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION,
+          repair_coverage_version: "repair_coverage_v5_published_route_identity",
+          page_count: 1,
+          family_breakdown: { location_landing: 1 },
+          representative_pages_by_family: { location_landing: [evidencePage] },
+          affected_pages_complete: true,
+          affected_reported: 1,
+          affected_observed: 1,
+          affected_eligible: 1,
+          checked_eligible: 1,
+          indexable_affected: 1,
+          indexable_checked_eligible: 1,
+        } : {}),
       }],
     },
     identity: {
@@ -147,12 +168,17 @@ async function sealedRows(fingerprint, staged) {
     userId: "user_hist",
     now: "2026-08-31T10:24:00.000Z",
   });
-  const proof = await createAuthoritySeal(snapshot, SECRET);
-  const rows = authorityRowsFromSnapshot(snapshot, {
+  const seal = staged ? createStagedAuthoritySeal : createAuthoritySeal;
+  const rowsFromSnapshot = staged ? stagedAuthorityRowsFromSnapshot : authorityRowsFromSnapshot;
+  const proof = await seal(snapshot, SECRET);
+  const rows = rowsFromSnapshot(snapshot, {
     fixListId: "fixlist_hist",
     ownerUserId: "user_hist",
     proof,
   });
+  if (published) {
+    assert.equal(rows.scanRun.authority_seal_version, "standard_review_snapshot_hmac_identity_v1");
+  }
   return {
     run: { id: "scan_hist", project_id: "project_hist", owner_user_id: "user_hist", ...rows.scanRun },
     fixList: { id: "fixlist_hist", ...rows.fixList },
@@ -248,7 +274,7 @@ async function invokeWithFingerprint(fingerprint, {
   }
 }
 
-test("the next V9 reader opens the prior signed staged result without marking it current", async t => {
+test("the next V9 reader opens prior signed staged results without marking them current", async t => {
   const directory = mkdtempSync(join(tmpdir(), "next-v9-customer-reader-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   cpSync("base44/functions/getCustomerScanResultV9", directory, { recursive: true });
@@ -271,24 +297,28 @@ test("the next V9 reader opens the prior signed staged result without marking it
     },
   };
 
-  const response = await invokeWithFingerprint(PREVIOUS_STAGED_FINGERPRINT, { stagedReader });
-  const body = await response.json();
-  assert.equal(response.status, 200, body.error_code);
-  assert.equal(body.authority_verified, true);
-  assert.equal(body.release_contract_current, false);
-  assert.equal(body.run.beta_revision_fingerprint, PREVIOUS_STAGED_FINGERPRINT);
-  assert.equal(body.run.page_cap, 150);
-  assert.equal(body.fixItems[0].recommended_value, "Keep the verified saved instruction.");
+  assert.equal(stagedReader.modules.RELEASE_FINGERPRINT, nextFingerprint);
+  for (const fingerprint of [PREVIOUS_STAGED_FINGERPRINT, PROTECTED_PLAN_STAGED_FINGERPRINT]) {
+    const response = await invokeWithFingerprint(fingerprint, { stagedReader });
+    const body = await response.json();
+    assert.equal(response.status, 200, body.error_code);
+    assert.equal(body.authority_verified, true);
+    assert.equal(body.release_contract_current, false);
+    assert.equal(body.run.beta_revision_fingerprint, fingerprint);
+    assert.equal(body.run.page_cap, 150);
+    assert.equal(body.fixItems[0].recommended_value, "Keep the verified saved instruction.");
+
+    const invalid = await invokeWithFingerprint(fingerprint, { stagedReader, signingKey: "wrong-test-key" });
+    assert.equal(invalid.status, 409);
+    assert.equal((await invalid.json()).error_code, "result_authority_invalid");
+    const otherOwner = await invokeWithFingerprint(fingerprint, { stagedReader, callerUserId: "other_user" });
+    assert.equal(otherOwner.status, 404);
+    assert.equal((await otherOwner.json()).error_code, "scan_not_found");
+  }
 
   const unknown = await invokeWithFingerprint(UNKNOWN_FINGERPRINT, { stagedReader });
   assert.equal(unknown.status, 503);
   assert.equal((await unknown.json()).error_code, "result_release_mismatch");
-  const invalid = await invokeWithFingerprint(PREVIOUS_STAGED_FINGERPRINT, { stagedReader, signingKey: "wrong-test-key" });
-  assert.equal(invalid.status, 409);
-  assert.equal((await invalid.json()).error_code, "result_authority_invalid");
-  const otherOwner = await invokeWithFingerprint(PREVIOUS_STAGED_FINGERPRINT, { stagedReader, callerUserId: "other_user" });
-  assert.equal(otherOwner.status, 404);
-  assert.equal((await otherOwner.json()).error_code, "scan_not_found");
 });
 
 test("the actual customer reader opens a sealed known-compatible historical release", async () => {

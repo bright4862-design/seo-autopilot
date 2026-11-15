@@ -868,27 +868,41 @@ export default function FixList() {
   );
 }
 
+function verifiedLimitedCoverageLine(record) {
+  if (record.status !== "limited" || record.result_integrity_verified !== true || record.scan_coverage_verified !== true
+    || record.authority_verified === true || record.release_gate_eligible === true) return "";
+  const { usable_html_pages: usable, urls_attempted: attempted } = scanCoverageDisclosure(record);
+  const found = record.pages_found;
+  if (![usable, attempted, found].every(Number.isSafeInteger) || attempted < 1 || found < 1 || usable > attempted) return "";
+  return `We evaluated ${formatCount(usable)} usable HTML ${usable === 1 ? "page" : "pages"}. FixList attempted ${formatCount(attempted)} ${attempted === 1 ? "URL" : "URLs"} and found ${formatCount(found)} ${found === 1 ? "page" : "pages"}.`;
+}
+
 export function CustomerResultsSummary({
   scanRecord = {}, websiteHost = "", healthScore = null, scoreUnavailable = true,
   pagesScanned = 0, pagesFound = 0, repairCount = 0, children,
 }) {
+  const limitedCoverage = verifiedLimitedCoverageLine(scanRecord);
+  const hasPriorities = Array.isArray(scanRecord.top_fix_ids);
   return (
     <header className="pt-10 sm:pt-12">
       {scanRecord.status === "limited" ? (
         <p className="mb-4 inline-flex rounded-full bg-warnink/10 px-3 py-1 text-[12px] font-medium text-ink-muted">Limited scan</p>
       ) : null}
       <div className="flex items-center gap-4">
-        {!Array.isArray(scanRecord.top_fix_ids) ? <ScoreRing score={healthScore} unavailable={scoreUnavailable} size={64} /> : null}
+        {!hasPriorities ? <ScoreRing score={healthScore} unavailable={scoreUnavailable} size={64} /> : null}
         <div className="min-w-0">
           <h1 className="break-words text-[27px] font-semibold leading-tight tracking-[-0.03em] sm:text-[30px]">{websiteHost || safeHostname(scanRecord.website_url) || "Website scan"}</h1>
-          {Array.isArray(scanRecord.top_fix_ids) ? (
+          {limitedCoverage || hasPriorities ? (
             <p className="mt-2 text-[14px] leading-relaxed text-ink-muted">
-              {inventoryCoverageLine(scanRecord)} {scanRecord.top_fix_ids.length} {scanRecord.top_fix_ids.length === 1 ? "thing is" : "things are"} worth fixing first.
+              {limitedCoverage || inventoryCoverageLine(scanRecord)}
+              {hasPriorities ? ` ${scanRecord.top_fix_ids.length} ${scanRecord.top_fix_ids.length === 1 ? "thing is" : "things are"} worth fixing first.` : null}
             </p>
           ) : null}
           <p className="mt-2 text-[13px] leading-relaxed text-ink-muted tabular-nums sm:text-[14px]">
             Scanned {scanRecord.created_at ? formatDate(scanRecord.created_at) : "recently"}
-            {" · "}{formatCount(pagesScanned)}{pagesFound > 0 ? ` of ${formatCount(pagesFound)}` : ""} {(pagesFound > 0 ? pagesFound : pagesScanned) === 1 ? "page" : "pages"} checked
+            {!limitedCoverage ? (
+              <>{" · "}{formatCount(pagesScanned)}{pagesFound > 0 ? ` of ${formatCount(pagesFound)}` : ""} {(pagesFound > 0 ? pagesFound : pagesScanned) === 1 ? "page" : "pages"} checked</>
+            ) : null}
             {" · "}{formatCount(repairCount)} {repairCount === 1 ? "recommendation" : "recommendations"}
           </p>
         </div>
@@ -2224,6 +2238,15 @@ function getLimitationNote(record) {
   // showing -- but it is passed through rather than written here, so it goes
   // through the same gate as the limited-state copy.
   const limitation = customerSafeLimitationLine(record);
+  if (record?.status === "limited" && record.result_integrity_verified === true
+    && record.authority_verified !== true && record.release_gate_eligible !== true
+    && Array.isArray(record.coverage_reasons) && record.coverage_reasons.includes("staged_rate_limit")) {
+    // Select provider-neutral copy from the signed reason alone.
+    const { title, detail, nextStep } = durableScanStatePresentation({
+      status: "limited", coverage_reasons: ["staged_rate_limit"],
+    });
+    return `${title}. ${limitation || detail} ${nextStep}`;
+  }
   if (limitation) return limitation;
   if (isHealthScoreUnavailable(record)) return "We couldn't verify enough usable pages to calculate a reliable score. These findings describe the evidence collected, not a complete site assessment.";
   if (record?.score_is_provisional === true) return "Scan coverage was limited, so this score is provisional. Fix what's below, then scan again for a fuller picture.";

@@ -17,9 +17,92 @@ from app.scan_limits import scan_page_limit
 from app.staged_scan import StageDependencies, StagedScanRuntime
 from app.workspace import MemoryWorkspace
 from scripts.export_staged_500_fixture import export_fixture
+from tests import fixtures as fx
 
 
 EXPORTER = Path(__file__).resolve().parents[1] / "scripts" / "export_staged_500_fixture.py"
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_stage_finalizes_saved_evidence_without_more_requests(mock_network, monkeypatch):
+    origin = "https://staged-throttle.example"
+    page_urls = [f"{origin}/products/{index}" for index in range(60)]
+    routes = {
+        f"{origin}/robots.txt": {"body": "User-agent: *\nAllow: /", "content_type": "text/plain"},
+        f"{origin}/sitemap.xml": fx._xml(fx._sitemap(page_urls)),
+        f"{origin}/": fx._html(fx._page("Home")),
+        f"{origin}/late-canonical": fx._html(fx._page("Canonical target")),
+    }
+    for index, url in enumerate(page_urls):
+        canonical = f"{origin}/late-canonical" if index % 2 else f"{origin}/"
+        routes[url] = fx._html(fx._page("Shop page", h1="", canonical=canonical, links=[f"{origin}/late-link"]))
+    requests = mock_network(routes)
+    key = "integration-test-key"
+    monkeypatch.setenv("SCAN_EVIDENCE_SIGNING_KEY", key)
+    scan = {"id": "scan_throttled", "owner_user_id": "owner_150", "project_id": "project_150",
+            "request_id": "request_throttled", "attempt_count": 1, "scan_mode": "standard_150",
+            "page_cap": 150, "pipeline_mode": "staged", "website_url": origin + "/",
+            "respect_robots_txt": True, "owner_attested_robots_override": False, "status": "queued"}
+    job = {**scan, "scan_id": scan["id"]}
+    limited_writes = []
+
+    async def read(client, scan_id):
+        assert scan_id == scan["id"]
+        return dict(scan)
+
+    async def start(client, current):
+        scan.update(status="crawling", started_at=datetime.now(timezone.utc).isoformat())
+
+    async def progress(client, current, crawled, planned, batch=None):
+        scan.update(pages_crawled=crawled, pages_planned=planned, last_committed_batch=batch)
+
+    async def invoke(client, name, envelope):
+        assert name == "persistLimitedScanResultV9"
+        assert envelope["proof"] == scan_job.create_authority_seal(
+            {key: value for key, value in envelope.items() if key != "proof"}, key)
+        assert "staged_rate_limit" in envelope["review"]["coverage_reasons"]
+        limited_writes.append(envelope)
+        scan["status"] = "limited"
+        return {"status_code": 200, "body": {"success": True, "fixListId": "limited-list",
+            "resultIntegrityVerified": True}}
+
+    async def fail(*args, **kwargs):
+        pytest.fail(f"The staged scan failed instead of saving a limited result: {args[2]}")
+
+    class Dispatcher:
+        async def enqueue(self, current_job, stage, batch, *, limited=False, not_before=None):
+            return None
+
+    monkeypatch.setattr(scan_job, "read_scan_run", read)
+    monkeypatch.setattr(scan_job, "invoke_function", invoke)
+    store = MemoryWorkspace()
+    runtime = StagedScanRuntime(store, Dispatcher(), StageDependencies(
+        read, start, progress, scan_job.complete_authority, apply_post_crawl_transforms, fail,
+        scanner.ScanState, scanner.plan_scan, scanner.crawl_batch, scanner.finalize_scan,
+    ))
+    with scan_page_limit(150), scan_job.worker_function_generation("V9"):
+        assert (await runtime.process(None, "plan", job))["stage"] == "batch"
+        assert (await runtime.process(None, "batch", job, batch=0))["pages_crawled"] == 50
+        for url in page_urls:
+            routes[url] = {"status": 429, "body": "Please slow down", "headers": {"Retry-After": "3600"}}
+        tail = await runtime.process(None, "batch", job, batch=1)
+        assert tail["stage"] == "finalize" and tail["batch"] == 2
+        requests_before_finalize = len(requests)
+        assert (await runtime.process(None, "finalize", job, batch=2, limited=True))["success"] is True
+    assert [request.url.path for request in requests[requests_before_finalize:]] == []
+    result = (await store.read(runtime._prefix(job) + "result.json.gz")).value
+    assert result["pipeline_limit_reason"] == "rate_limit"
+    assert result["coverage_probe_evidence"]["stage2_orchestration_state"] == "not_verified"
+    assert result["coverage_probe_evidence"]["stage2_orchestration_reason"] == "crawl_rate_limited"
+    assert any(row["purpose"] == "internal_link" and row["state"] == "not_verified"
+               and row["reason"] == "crawl_rate_limited" for row in result["coverage_probe_evidence"]["observations"])
+    assert result["canonical_target_evidence"]["targets_fetched"] == 0
+    canonicals = {page["canonical_target_url"]: page for page in result["pages"] if page.get("canonical_target_url")}
+    assert canonicals[f"{origin}/"]["canonical_target_evidence_source"] == "crawl"
+    assert canonicals[f"{origin}/late-canonical"]["canonical_target_checked"] is False
+    assert canonicals[f"{origin}/late-canonical"]["canonical_target_evidence_source"] == "rate_limit"
+    assert result["findings"]
+    assert scan["status"] == "limited" and len(limited_writes) == 1
 
 
 def test_exporter_writes_deterministic_static_site_and_refuses_replacement(tmp_path):

@@ -107,7 +107,7 @@ def _evidence_from_page(page: dict, target: str, source: str = "crawl") -> dict:
     }
 
 
-async def _fetch_target(client, target: str, robots_policy, deadline: float | None) -> dict:
+async def _fetch_target(client, target: str, robots_policy, deadline: float | None, *, rate_limited: bool = False) -> dict:
     googlebot_allowed = robots_policy.allowed(SEARCH_USER_AGENT, target)
     scanner_allowed = robots_policy.allowed(SCANNER_USER_AGENT, target)
     if googlebot_allowed is False:
@@ -134,16 +134,16 @@ async def _fetch_target(client, target: str, robots_policy, deadline: float | No
         }
 
     remaining = None if deadline is None else deadline - time.monotonic()
-    if remaining is not None and remaining <= 0:
+    if rate_limited or (remaining is not None and remaining <= 0):
         return {
-            "state": "not_checked_due_to_deadline",
+            "state": "not_checked_due_to_limit" if rate_limited else "not_checked_due_to_deadline",
             "target_url": target,
             "status_code": 0,
             "indexability_state": "Unknown",
             "fetch_error": "",
             "location": "",
             "target_canonical": "",
-            "evidence_source": "budget",
+            "evidence_source": "rate_limit" if rate_limited else "budget",
         }
 
     timeout = DEFAULT_REQUEST_TIMEOUT_SECONDS if remaining is None else max(0.1, min(DEFAULT_REQUEST_TIMEOUT_SECONDS, remaining))
@@ -259,6 +259,7 @@ async def validate_canonical_targets(
     robots_policy,
     *,
     deadline: float | None = None,
+    rate_limited: bool = False,
     max_targets: int = DEFAULT_MAX_TARGETS,
     concurrency: int = DEFAULT_CONCURRENCY,
 ) -> dict:
@@ -325,7 +326,7 @@ async def validate_canonical_targets(
 
     async def inspect(target: str) -> tuple[str, dict]:
         async with semaphore:
-            return target, await _fetch_target(client, target, robots_policy, deadline)
+            return target, await _fetch_target(client, target, robots_policy, deadline, rate_limited=rate_limited)
 
     if selected:
         for target, evidence in await asyncio.gather(*(inspect(target) for target in selected)):

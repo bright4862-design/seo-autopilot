@@ -293,3 +293,44 @@ test("the actual limited saved-results page preserves the limitation and finding
   assert.match(html, /Keep the saved alpha instruction\./);
   assert.match(html, /Keep the separate beta instruction\./);
 });
+
+test("a signed rate-limited report explains why it stopped and keeps useful coverage distinct", () => {
+  const record = savedRecord({
+    status: "limited", authority_verified: false, release_gate_eligible: false,
+    is_authoritative: false, result_integrity_verified: true, score_is_provisional: true,
+    health_score: 55, health_score_status: "insufficient_evidence",
+    coverage_reasons: ["staged_rate_limit"],
+    access_limitation: { kind: "bot_challenge", provider: "cloudflare" },
+    limitation: "The scan stopped early. These findings cover only the pages checked.",
+    pages_crawled: 58, pages_found: 60, scan_coverage_verified: true,
+    scan_coverage: { urls_attempted: 58, usable_html_pages: 50, verified_http_failures: 8, access_unverified_pages: 8 },
+  });
+  const html = renderSavedPage(record);
+  assert.match(html, /The website rate-limited this scan\./);
+  assert.match(html, /Try again when the site(?:'|&#x27;)s rate limit clears\./);
+  assert.match(html, /These findings cover only the pages checked\./);
+  assert.match(html, /We evaluated 50 usable HTML pages\. FixList attempted 58 URLs and found 60 pages\./);
+  assert.match(html, /Usable HTML pages<\/dt>\s*<dd\b[^>]*>50<\/dd>/);
+  assert.match(html, /Could not fully verify access<\/dt>\s*<dd\b[^>]*>8<\/dd>/);
+  assert.match(html, /Site health score unavailable/);
+  assert.doesNotMatch(html, /Site health score 55|>55<|Cloudflare challenged this scan/);
+  assert.match(html, /Keep the saved alpha instruction\./);
+
+  const header = (value) => renderSavedPage(value).match(/<header\b[\s\S]*?<\/header>/)?.[0] || "";
+  const shortlisted = header({ ...record, top_fix_ids: ["alpha"] });
+  assert.match(shortlisted, /We evaluated 50 usable HTML pages\. FixList attempted 58 URLs and found 60 pages\./);
+  assert.match(shortlisted, /1 thing is worth fixing first/);
+  assert.doesNotMatch(shortlisted, /We checked 58 pages|58 of 60 pages checked/);
+  for (const historical of [
+    { ...record, scan_coverage_verified: undefined },
+    { ...record, scan_coverage: { urls_attempted: 58 } },
+  ]) {
+    const fallback = header({ ...historical, top_fix_ids: ["alpha"] });
+    assert.match(fallback, /We checked 58 pages out of 60 found/);
+    assert.doesNotMatch(fallback, /usable HTML pages/);
+  }
+  const complete = header(savedRecord({ status: "complete", scan_coverage_verified: true,
+    scan_coverage: record.scan_coverage, pages_crawled: 58, pages_found: 60, top_fix_ids: ["alpha"] }));
+  assert.match(complete, /We checked 58 pages out of 60 found/);
+  assert.doesNotMatch(complete, /usable HTML pages/);
+});

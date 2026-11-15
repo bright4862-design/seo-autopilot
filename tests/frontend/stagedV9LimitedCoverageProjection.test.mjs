@@ -58,6 +58,9 @@ test("V9 returns the exact signed limited coverage fields to a fully entitled re
   assert.equal(projection.run.score_is_provisional, true);
   assert.equal(projection.run.release_gate_eligible, false);
   assert.equal(Object.hasOwn(projection.run, "result_integrity_proof"), false);
+  assert.equal(projection.run.scan_coverage_verified, true);
+  assert.deepEqual(projection.run.scan_coverage, run.scan_coverage);
+  assert.equal(await verified({ ...run, scan_coverage: { ...run.scan_coverage, usable_html_pages: 49 } }), false);
 });
 
 test("V9 keeps limited coverage out of previews, locked or unverified results and other statuses", async () => {
@@ -77,7 +80,15 @@ test("V9 keeps limited coverage out of previews, locked or unverified results an
       run, fixList, fixItems, fullAccess: true, authorityVerified: false, resultIntegrityVerified: true, ...settings,
     });
     for (const field of Object.keys(coverage)) assert.equal(Object.hasOwn(projection.run, field), false);
+    assert.equal(Object.hasOwn(projection.run, "scan_coverage_verified"), false);
   }
+  const historical = buildCustomerProjection({
+    run: { ...run, result_integrity_version: "standard_limited_result_integrity_v4_focused_scope_effective_path",
+      scan_coverage_verified: true },
+    fixList, fixItems, fullAccess: true, authorityVerified: false, resultIntegrityVerified: true,
+  });
+  assert.equal(historical.run.coverage_state, "access_limited");
+  assert.equal(Object.hasOwn(historical.run, "scan_coverage_verified"), false);
   const [history] = buildScanHistoryProjection([run]);
   for (const field of Object.keys(coverage)) assert.equal(Object.hasOwn(history, field), false);
 });

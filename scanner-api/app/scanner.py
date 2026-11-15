@@ -64,7 +64,7 @@ from .security import is_public_http_url, safe_get
 from .sitemap import load_sitemap_urls
 from .url_frontier_policy import FRONTIER_POLICY_VERSION, classify_frontier_url
 
-VERSION = "python_scanner_v5_observed_finding_identity"
+VERSION = "python_scanner_v6_finalize_rate_limit_backoff"
 RENDER_EVIDENCE_VERSION = "render_evidence_v1"
 FINAL_URL_DEDUP_VERSION = "final_url_dedup_v1_normalized_identity"
 # How findings become customer repair cards. A change here changes what the
@@ -286,6 +286,7 @@ class _AdaptiveRateLimitPacer:
         self.saw_pressure = False
         self.saw_429 = False
         self.rate_limit_blocked_scan = False
+        self.rate_limit_cooldown_until = 0.0
         self.floor_interval_seconds = self.request_interval_seconds
         self._lock = asyncio.Lock()
 
@@ -326,6 +327,8 @@ class _AdaptiveRateLimitPacer:
             delay = RATE_LIMIT_COOLDOWN_SECONDS if first_pressure else self.request_interval_seconds
             delay = max(delay, retry_after)
             next_request_at = now + max(0.0, float(delay))
+            if kind == "429":
+                self.rate_limit_cooldown_until = max(self.rate_limit_cooldown_until, next_request_at)
             # Record the cause only when this HTTP 429 moves an available slot
             # past the full crawl budget. The per-batch budget can renew.
             if (kind == "429" and scan_deadline is not None and now < scan_deadline
@@ -367,9 +370,11 @@ class _AdaptiveRateLimitPacer:
     def to_dict(self) -> dict:
         offset = time.time() - time.monotonic()
         return {
-            **{key: value for key, value in vars(self).items() if key not in {"_lock", "deadline", "next_request_at"}},
+            **{key: value for key, value in vars(self).items()
+               if key not in {"_lock", "deadline", "next_request_at", "rate_limit_cooldown_until"}},
             "deadline_at": self.deadline + offset,
             "next_request_at": self.next_request_at + offset if self.next_request_at else 0.0,
+            "rate_limit_cooldown_until": self.rate_limit_cooldown_until + offset if self.rate_limit_cooldown_until else 0.0,
         }
 
     @classmethod
@@ -377,11 +382,14 @@ class _AdaptiveRateLimitPacer:
         offset = time.monotonic() - time.time()
         pacer = cls(deadline=float(value["deadline_at"]) + offset, enabled=value.get("enabled") is True)
         for key in vars(pacer):
-            if key not in {"_lock", "deadline", "next_request_at"} and key in value:
+            if key not in {"_lock", "deadline", "next_request_at", "rate_limit_cooldown_until"} and key in value:
                 setattr(pacer, key, value[key])
-        pacer.next_request_at = float(value.get("next_request_at") or 0.0)
-        if pacer.next_request_at:
-            pacer.next_request_at += offset
+        for key in ("next_request_at", "rate_limit_cooldown_until"):
+            timestamp = float(value.get(key) or 0.0)
+            setattr(pacer, key, timestamp + offset if timestamp else 0.0)
+        if "rate_limit_cooldown_until" not in value and pacer.saw_429:
+            # Older checkpoints could only preserve the next permitted slot.
+            pacer.rate_limit_cooldown_until = pacer.next_request_at
         return pacer
 
 
@@ -1153,9 +1161,16 @@ async def crawl_batch(state: ScanState, max_pages: int = 50) -> list[dict]:
                             pressure_kind = transient_pressure_kind(page)
                             if not pressure_kind:
                                 break
-                            if rate_limit_pacer.retry_count >= RATE_LIMIT_MAX_RETRIES:
-                                break
                             retry_after = parse_retry_after_seconds(page.pop("_retry_after", ""))
+                            if rate_limit_pacer.retry_count >= RATE_LIMIT_MAX_RETRIES:
+                                # The site can still impose a cooldown after our
+                                # last retry. No further retry is authorized here.
+                                if pressure_kind == "429":
+                                    await rate_limit_pacer.activate(
+                                        pressure_kind, retry_after_seconds=retry_after,
+                                        scan_deadline=timing_budget["crawl_deadline"],
+                                    )
+                                break
                             await rate_limit_pacer.activate(
                                 pressure_kind,
                                 retry_after_seconds=retry_after,
@@ -1265,7 +1280,6 @@ async def _finalize_scan(state: ScanState) -> dict:
     rate_limit_pacer = state.rate_limit_pacer
     pages.sort(key=lambda page: state._rank(str(page.get("url") or "")))
     path_of = lambda url: urlparse(url).path or "/"
-    kwargs = {"_render_page": state.render_page}
     crawl_started_monotonic = state.crawl_started_monotonic
     async with httpx.AsyncClient(
         timeout=fetch_timeout, follow_redirects=False,
@@ -1289,11 +1303,18 @@ async def _finalize_scan(state: ScanState) -> dict:
         # verify bounded discovered targets beyond its assessed sample without
         # quietly turning into a larger crawl.
         probe_started_at = time.monotonic()
+        probe_block_reason = ""
+        if initial_rate_limit_blocked:
+            probe_block_reason = "initial_rate_limited"
+        elif rate_limit_pacer.rate_limit_blocked_scan:
+            probe_block_reason = "crawl_rate_limited"
+        elif rate_limit_pacer.rate_limit_cooldown_until > probe_started_at:
+            probe_block_reason = "crawl_rate_limit_cooldown"
         remaining_crawl_seconds = max(0.0, timing_budget["crawl_deadline"] - probe_started_at)
         # Coverage is additive. It must not consume the whole remainder and
         # starve the pre-existing canonical validator that follows it.
         probe_time_budget_seconds = (
-            0.0 if initial_rate_limit_blocked else min(12.0, remaining_crawl_seconds * 0.25)
+            0.0 if probe_block_reason else min(12.0, remaining_crawl_seconds * 0.25)
         )
         probe_scheduler = SharedCoverageProbeScheduler(
             max_probe_requests=coverage_probe_request_limit(scan_mode),
@@ -1314,6 +1335,15 @@ async def _finalize_scan(state: ScanState) -> dict:
         link_probe_findings = []
         for candidate in probe_scheduler.candidates("internal_link"):
             target = candidate["url"]
+            if probe_block_reason:
+                probe_scheduler.record_skipped(
+                    "internal_link",
+                    target,
+                    reason=probe_block_reason,
+                    source_pages=candidate.get("source_pages") or [],
+                    link_text_samples=candidate.get("link_text_samples") or [],
+                )
+                continue
             if not probe_scheduler.can_start_candidate("internal_link", target):
                 probe_scheduler.record_exhausted(
                     "internal_link",
@@ -1414,11 +1444,11 @@ async def _finalize_scan(state: ScanState) -> dict:
                     "score_impact": 0,
                 })
 
-        if initial_rate_limit_blocked:
+        if probe_block_reason:
             coverage_probe_evidence = probe_scheduler.summary()
             coverage_probe_evidence.update({
                 "stage2_orchestration_state": "not_verified",
-                "stage2_orchestration_reason": "initial_rate_limited",
+                "stage2_orchestration_reason": probe_block_reason,
             })
         elif int(budget.get("max_pages") or 0) >= 150 and _supports_stage2_probe_fetch(fetch_and_extract):
             coverage_probe_evidence = await run_stage2_shared_probe_orchestration(
@@ -1443,7 +1473,8 @@ async def _finalize_scan(state: ScanState) -> dict:
             client,
             pages,
             robots_policy,
-            deadline=probe_started_at if initial_rate_limit_blocked else timing_budget["crawl_deadline"],
+            deadline=timing_budget["crawl_deadline"],
+            rate_limited=bool(probe_block_reason),
         )
         redirect_evidence = summarize_redirect_evidence(pages)
         for page in pages:
@@ -1464,9 +1495,11 @@ async def _finalize_scan(state: ScanState) -> dict:
     material_render_risk = render_evidence["evidence_state"] == "material_client_rendering_risk"
     render_followup = await run_render_followup(
         pages if material_render_risk else [],
-        render_page=kwargs.get("_render_page") if material_render_risk else None,
+        render_page=state.render_page if material_render_risk and not probe_block_reason else None,
         evidence_pages=pages,
     )
+    if material_render_risk and probe_block_reason:
+        render_followup["skip_reason"] = probe_block_reason
     render_evidence["browser_followup_version"] = RENDER_FOLLOWUP_VERSION
     render_evidence["browser_followup"] = render_followup
     elapsed_ms = round((time.monotonic() - scan_started_at) * 1000)

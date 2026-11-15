@@ -69,6 +69,7 @@ async def test_finalize_429_stops_optional_requests_without_changing_retained_pa
     paths = [request.url.path for request in requests]
 
     assert result["success"] is True
+    assert result["crawl_timing"]["optional_checks_notice_reason"] == "site_rate_limited"
     assert {page["url"]: page["status_code"] for page in result["pages"]} == retained
     assert result["crawl_timing"]["rate_limit_retry_count"] == 0
     assert state.rate_limit_pacer.rate_limit_blocked_scan is False

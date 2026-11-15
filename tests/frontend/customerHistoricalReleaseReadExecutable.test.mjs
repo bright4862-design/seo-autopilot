@@ -33,6 +33,17 @@ import { buildAuthoritySnapshot as buildStagedAuthoritySnapshot } from "../../ba
 import { authorityRowsFromSnapshot as stagedAuthorityRowsFromSnapshot } from "../../base44/functions/persistDurableScanAuthorityV9/authorityRows.js";
 import { createAuthoritySeal as createStagedAuthoritySeal } from "../../base44/functions/persistDurableScanAuthorityV9/authoritySeal.js";
 import { PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION } from "../../base44/functions/persistDurableScanAuthorityV9/evidenceUrlIdentity.js";
+import * as stagedProjection from "../../base44/functions/getCustomerScanResultV9/projection.js";
+import * as stagedLimited from "../../base44/functions/getCustomerScanResultV9/limitedResultIntegrity.js";
+import * as stagedPreview from "../../base44/functions/getCustomerScanResultV9/customerPreviewSeal.js";
+import * as stagedCompatibility from "../../base44/functions/getCustomerScanResultV9/releaseCompatibility.js";
+import * as stagedRelease from "../../base44/functions/getCustomerScanResultV9/generatedReleaseContract.js";
+import * as stagedBuild from "../../base44/functions/getCustomerScanResultV9/generatedBuildId.js";
+import { buildCustomerPreviewPayload as buildStagedPreviewPayload,
+  createCustomerPreviewProof as createStagedPreviewProof,
+  serializeCustomerPreviewPayload as serializeStagedPreviewPayload,
+} from "../../base44/functions/persistDurableScanAuthorityV9/customerPreviewSeal.js";
+import * as scanPresentation from "../../src/lib/scanPresentation.js";
 import { emptyGeoReadiness } from "../../base44/functions/persistDurableScanAuthorityV9/geoReadiness.js";
 
 const entrySource = readFileSync("base44/functions/getCustomerScanResult/entry.ts", "utf8");
@@ -57,7 +68,7 @@ async function importHandler(harnessName, source) {
   await import(`data:text/javascript;base64,${Buffer.from(`${prelude}\n${javascript}\n// harness:${harnessName}`).toString("base64")}`);
 }
 
-async function sealedRows(fingerprint, staged) {
+async function sealedRows(fingerprint, staged, notice) {
   const buildSnapshot = staged ? buildStagedAuthoritySnapshot : buildAuthoritySnapshot;
   const published = staged && fingerprint === PROTECTED_PLAN_STAGED_FINGERPRINT;
   const evidencePage = "https://www.funbooker.com/fr/ville/paris";
@@ -82,7 +93,7 @@ async function sealedRows(fingerprint, staged) {
       default_route_page_count: 0,
       discovery_quality_state: "representative",
       evidence_quality_gate_version: "evidence_quality_gate_v2_shared_coverage_decision",
-      crawl_timing: { queue_exhausted: false, sitemap_fetch_count: 1 },
+      crawl_timing: { queue_exhausted: false, sitemap_fetch_count: 1, ...(notice ? { optional_checks_notice_reason: notice } : {}) },
       sampling_evidence: { sitemap_urls_discovered: 5000 },
       coverage_authority_evidence_version: "coverage_authority_evidence_v2_authoritative",
       coverage_authority_evidence: {
@@ -192,11 +203,12 @@ function matches(record, query) {
 
 async function invokeWithFingerprint(fingerprint, {
   active = false, stagedReader, mutateRows = () => {}, callerUserId = "user_hist", signingKey = SECRET,
+  notice, paid = true,
 } = {}) {
   const invocationId = ++handlerInvocationSequence;
   const harnessName = `__customerHistoricalReaderHarness_${invocationId}`;
-  const rows = await sealedRows(fingerprint, Boolean(stagedReader));
-  mutateRows(rows);
+  const rows = await sealedRows(fingerprint, Boolean(stagedReader), notice);
+  await mutateRows(rows);
   const access = {
     id: "access_hist",
     owner_user_id: "user_hist",
@@ -219,7 +231,7 @@ async function invokeWithFingerprint(fingerprint, {
             : null,
         },
         Access: {
-          filter: async (query) => matches(access, query) ? [structuredClone(access)] : [],
+          filter: async (query) => paid && matches(access, query) ? [structuredClone(access)] : [],
         },
         FixList: {
           get: async (id) => id === rows.fixList.id ? structuredClone(rows.fixList) : null,
@@ -379,3 +391,94 @@ for (const active of [false, true]) {
     });
   }
 }
+
+const currentStagedReader = {
+  entry: readFileSync("base44/functions/getCustomerScanResultV9/entry.ts", "utf8"),
+  modules: { ...stagedProjection, ...stagedLimited, ...stagedPreview, ...stagedCompatibility, ...stagedRelease, ...stagedBuild },
+};
+
+async function readStagedNotice(options = {}) {
+  const response = await invokeWithFingerprint(PREVIOUS_STAGED_FINGERPRINT, { stagedReader: currentStagedReader, ...options });
+  return { response, body: await response.json() };
+}
+
+test("the actual V9 reader discloses authenticated skipped checks without changing result authority", async () => {
+  for (const reason of ["site_rate_limited", "repeat_requests_avoided"]) {
+    const { response, body } = await readStagedNotice({ notice: reason });
+    assert.equal(response.status, 200, body.error_code);
+    assert.equal(body.authority_verified, true);
+    assert.equal(body.run.status, "complete");
+    assert.equal(body.run.health_score, 48);
+    assert.notEqual(body.run.score_is_provisional, true);
+    assert.equal(body.run.optional_checks_notice_reason, reason);
+    assert.equal(body.fixItems.length, 1);
+    assert.ok(scanPresentation.optionalChecksNotice({ ...body.run, authority_verified: body.authority_verified }));
+  }
+
+  for (const reason of [undefined, "unknown_unpublished_reason"]) {
+    const { response, body } = await readStagedNotice({
+      notice: reason,
+      mutateRows: rows => { rows.run.optional_checks_notice_reason = "site_rate_limited"; },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(body.authority_verified, true);
+    assert.equal(Object.hasOwn(body.run, "optional_checks_notice_reason"), false);
+    assert.equal(scanPresentation.optionalChecksNotice({ ...body.run, authority_verified: true }), "");
+  }
+});
+
+test("changing a signed V9 skipped-check reason invalidates its full authority", async () => {
+  const { response, body } = await readStagedNotice({
+    notice: "site_rate_limited",
+    mutateRows: rows => { rows.run.crawl_timing.optional_checks_notice_reason = "repeat_requests_avoided"; },
+  });
+  assert.equal(response.status, 409);
+  assert.equal(body.error_code, "result_authority_invalid");
+});
+
+test("unsigned v1 timing cannot create a V9 skipped-check notice", async () => {
+  const { response, body } = await readStagedNotice({
+    mutateRows: async rows => {
+      rows.run.authority_seal_version = "standard_review_snapshot_hmac_v1";
+      const historical = stagedProjection.authoritySnapshotFromRows({ ...rows, userId: rows.run.owner_user_id });
+      assert.equal(Object.hasOwn(historical.scan, "crawl_timing"), false);
+      const proof = await createStagedAuthoritySeal(historical, SECRET);
+      for (const row of [rows.run, rows.fixList, ...rows.fixItems]) row.authority_proof = proof;
+      rows.run.crawl_timing = { optional_checks_notice_reason: "site_rate_limited" };
+    },
+  });
+  assert.equal(response.status, 200, body.error_code);
+  assert.equal(body.authority_verified, true);
+  assert.equal(Object.hasOwn(body.run, "optional_checks_notice_reason"), false);
+  assert.equal(Object.hasOwn(body.run.crawl_timing, "optional_checks_notice_reason"), false);
+});
+
+test("signed V9 previews carry only the bounded notice and reject a modified reason", async () => {
+  for (const tamper of [false, true]) {
+    const { response, body } = await readStagedNotice({
+      notice: "site_rate_limited", paid: false,
+      mutateRows: async rows => {
+        const snapshot = stagedProjection.authoritySnapshotFromRows({ ...rows, userId: rows.run.owner_user_id });
+        assert.equal(await stagedProjection.verifyAuthoritySeal(snapshot, SECRET, rows.run.authority_proof), true);
+        const payload = buildStagedPreviewPayload({
+          ...rows, ownerUserId: rows.run.owner_user_id, fullAuthorityProof: rows.run.authority_proof,
+          verifiedOptionalChecksNoticeReason: snapshot.scan.crawl_timing.optional_checks_notice_reason,
+        });
+        rows.run.customer_preview_seal_version = stagedPreview.CUSTOMER_PREVIEW_SEAL_VERSION;
+        rows.run.customer_preview_sealed_at = rows.run.authority_sealed_at;
+        rows.run.customer_preview_proof = await createStagedPreviewProof(payload, SECRET);
+        if (tamper) payload.run.optional_checks_notice_reason = "repeat_requests_avoided";
+        rows.run.customer_preview_payload = serializeStagedPreviewPayload(payload);
+      },
+    });
+    if (tamper) {
+      assert.equal(response.status, 409);
+      assert.equal(body.error_code, "result_preview_invalid");
+    } else {
+      assert.equal(response.status, 200, body.error_code);
+      assert.equal(body.access, "preview");
+      assert.equal(body.run.optional_checks_notice_reason, "site_rate_limited");
+      assert.equal(Object.hasOwn(body.run, "crawl_timing"), false);
+    }
+  }
+});

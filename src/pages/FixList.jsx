@@ -41,7 +41,7 @@ import { displayPathPrefix, focusedPathSections, focusedSectionOnboardingPath, o
 import { buildPageAccounting } from "@/lib/pageAccounting";
 import { customerSafeLimitationLine, durableScanStatePresentation } from "@/lib/durableScanStatePresentation";
 import { readSiteOwnership, resolveScanOwnership } from "@/lib/siteOwnershipPolicy";
-import { pageCapFromRecord, inventoryCoverageLine, serverSelectedPriorityCards } from "@/lib/scanPresentation";
+import { pageCapFromRecord, inventoryCoverageLine, optionalChecksNotice, serverSelectedPriorityCards } from "@/lib/scanPresentation";
 import { healthScoreExplanation } from "@/lib/healthScoreExplanation";
 
 const CMS_OPTIONS = [
@@ -615,6 +615,8 @@ export default function FixList() {
               {!Array.isArray(scanRecord.top_fix_ids) ? <ScoreExplanation explanation={healthScoreExplanation(scanRecord)} /> : null}
             </CustomerResultsSummary>
 
+            <OptionalChecksNotice scanRecord={scanRecord} />
+
             {displayedRepairCount === 0 ? (
               <p className="mt-6 max-w-[60ch] text-[14px] leading-relaxed text-ink-muted">
                 {getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount: displayedRepairCount })}
@@ -1108,6 +1110,11 @@ export function ScanExportControls({
       ) : null}
     </div>
   );
+}
+
+function OptionalChecksNotice({ scanRecord }) {
+  const notice = optionalChecksNotice(scanRecord);
+  return notice ? <p className="mt-4 max-w-[60ch] text-[13.5px] leading-relaxed text-ink-muted">{notice}</p> : null;
 }
 
 function ObservedScanCoverage({ coverage = {} }) {
@@ -1853,6 +1860,8 @@ function PreviewResultState({ scanRecord = {} }) {
           </p>
         </div>
       </div>
+
+      <OptionalChecksNotice scanRecord={scanRecord} />
 
       <GeoReadinessPanel
         geoReadiness={scanRecord?.geo_readiness}

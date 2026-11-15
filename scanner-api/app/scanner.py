@@ -28,7 +28,7 @@ from .coverage_probes import (
 )
 from .redirect_validation import apply_redirect_evidence, fetch_with_redirect_evidence, summarize_redirect_evidence
 from .extract import classify_template, extract_links, extract_page
-from .finalize_probe_guard import FINALIZE_OPTIONAL_PROBES_UNAVAILABLE, FinalizeProbeGuard
+from .finalize_probe_guard import FINALIZE_OPTIONAL_PROBES_UNAVAILABLE, FINALIZE_RATE_LIMITED, FinalizeProbeGuard
 from .market_scope import MARKET_SEGMENT_RE, market_pair_prefix, path_within_scope
 from .page_evidence_gate import (
     ACCESS_BLOCK_HEADER_ALLOWLIST,
@@ -1534,6 +1534,13 @@ async def _finalize_scan(state: ScanState, *, allow_optional_probes: bool) -> di
         "final_url_duplicates_deduped": crawl_state["final_url_duplicates_deduped"],
         "final_url_duplicate_examples": crawl_state["final_url_duplicate_examples"],
     }
+    if probe_guard.reason == FINALIZE_OPTIONAL_PROBES_UNAVAILABLE:
+        crawl_timing["optional_checks_notice_reason"] = "repeat_requests_avoided"
+    elif probe_guard.reason in {
+        "initial_rate_limited", "crawl_rate_limited", "crawl_rate_limit_cooldown", FINALIZE_RATE_LIMITED,
+    }:
+        crawl_timing["optional_checks_notice_reason"] = "site_rate_limited"
+
     crawl_warnings = []
     if deadline_reached:
         crawl_warnings.append(f"The {scan_mode} scan reached its bounded {budget['timeout']}-second backend budget and returned collected evidence.")

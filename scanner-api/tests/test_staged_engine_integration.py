@@ -194,6 +194,7 @@ async def test_500_page_scan_commits_ten_batches_and_duplicate_finalization_is_i
         assert len({page["url"] for page in result["pages"]}) == 500
         assert result["page_cap"] == 500
         assert result["pipeline_limited"] is False
+        assert "optional_checks_notice_reason" not in result["crawl_timing"]
         completions.append(result)
         scan["status"] = "complete"
         return {"ok": True, "fix_list_id": "list_500"}
@@ -241,7 +242,7 @@ async def test_500_page_scan_commits_ten_batches_and_duplicate_finalization_is_i
       import {buildAuthoritySnapshot, firstFailedAuthorityPredicate} from './base44/functions/persistDurableScanAuthorityV9/authoritySnapshot.js';
       import {stagedCompletionTime} from './base44/functions/persistDurableScanAuthorityV9/completionTimestamp.js';
       import {authorityRowsFromSnapshot} from './base44/functions/persistDurableScanAuthorityV9/authorityRows.js';
-      import {authoritySnapshotFromRows, createAuthoritySeal, verifyAuthoritySeal} from './base44/functions/getCustomerScanResultV9/projection.js';
+      import {authoritySnapshotFromRows, buildCustomerProjection, createAuthoritySeal, verifyAuthoritySeal} from './base44/functions/getCustomerScanResultV9/projection.js';
       const {body, original, scan} = JSON.parse(readFileSync(0, 'utf8'));
       const finishedAt = stagedCompletionTime(scan, body.scan);
       assert.ok(Date.parse(finishedAt) > Date.parse(scan.started_at));
@@ -258,6 +259,18 @@ async def test_500_page_scan_commits_ten_batches_and_duplicate_finalization_is_i
       assert.equal(await verifyAuthoritySeal(restored,'integration-test-key',proof,webcrypto),true);
       assert.equal(snapshot.scan.pages_crawled,500);
       assert.equal(snapshot.scan.page_cap,500);
+      const timing = {...options.scan.crawl_timing, optional_checks_notice_reason:'site_rate_limited'};
+      const notified = buildAuthoritySnapshot({...options, scan:{...options.scan, crawl_timing:timing}});
+      assert.equal(notified.scan.health_score, snapshot.scan.health_score);
+      assert.deepEqual(notified.recommendations, snapshot.recommendations);
+      const notifiedRows = authorityRowsFromSnapshot(notified,{fixListId:'list_500',ownerUserId:options.userId});
+      const notifiedRun = {...notifiedRows.scanRun,id:body.identity.scan_id,project_id:body.identity.project_id};
+      const notifiedFixList = {...notifiedRows.fixList,id:'list_500'};
+      const notifiedReadback = authoritySnapshotFromRows({run:notifiedRun,fixList:notifiedFixList,fixItems:notifiedRows.fixItems,userId:options.userId});
+      assert.equal(await verifyAuthoritySeal(notifiedReadback,'integration-test-key',await createAuthoritySeal(notified,'integration-test-key',webcrypto),webcrypto),true);
+      const projection = buildCustomerProjection({run:notifiedRun,fixList:notifiedFixList,fixItems:notifiedRows.fixItems,fullAccess:true,authorityVerified:true,verifiedOptionalChecksNoticeReason:notifiedReadback.scan.crawl_timing.optional_checks_notice_reason});
+      assert.equal(projection.run.optional_checks_notice_reason,'site_rate_limited');
+      assert.equal(projection.run.health_score,snapshot.scan.health_score);
     """
     checked = subprocess.run(["node", "--input-type=module", "-e", script],
                              input=json.dumps({"body": envelope, "original": original_envelope, "scan": scan}), text=True, capture_output=True,
@@ -321,6 +334,7 @@ async def test_finalize_reentry_saves_one_seal_without_repeating_contact_after_w
     async def invoke(client, name, envelope, **kwargs):
         assert name == "persistDurableScanAuthorityV9"
         assert envelope["identity"]["attempt_count"] == "1"
+        assert envelope["scan"]["crawl_timing"]["optional_checks_notice_reason"] == "repeat_requests_avoided"
         assert envelope["proof"] == scan_job.create_authority_seal(
             {key: value for key, value in envelope.items() if key != "proof"}, signing_key,
         )
@@ -372,6 +386,7 @@ async def test_finalize_reentry_saves_one_seal_without_repeating_contact_after_w
     assert scan["status"] == "complete" and len(seals) == 1
     result = (await store.read(prefix + "result.json.gz")).value
     assert result["pipeline_limited"] is False and result["pages_crawled"] == 150
+    assert result["crawl_timing"]["optional_checks_notice_reason"] == "repeat_requests_avoided"
     assert result["coverage_probe_evidence"]["stage2_orchestration_reason"] == "finalize_optional_probes_unavailable"
     assert result["canonical_target_evidence"]["targets_fetched"] == 0
     canonicals = {page.get("canonical_target_url"): page for page in result["pages"]}

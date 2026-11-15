@@ -324,6 +324,7 @@ Deno.serve(async (req) => {
       }
       return Response.json(buildCustomerProjection({
         signedPreview: true,
+        verifiedOptionalChecksNoticeReason: previewPayload.run?.optional_checks_notice_reason,
         run: previewPayload.run,
         fixList: previewPayload.fixList,
         fixItems: previewPayload.fixItems,
@@ -360,6 +361,7 @@ Deno.serve(async (req) => {
       fullAccess: access.ok,
       previewAccess: !access.ok,
       authorityVerified: true,
+      verifiedOptionalChecksNoticeReason: snapshot.scan?.crawl_timing?.optional_checks_notice_reason,
     }));
   } catch (error) {
     if (error instanceof RequestProblem) return problemResponse(error);

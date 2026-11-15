@@ -10,6 +10,10 @@ const fingerprint = '1470ccb6398a7f4f';
 const ownerId = 'owner_123';
 const projectId = 'project_123';
 const requestId = 'staged_canary_123';
+const routeManifest = 'data/generated-staged-v9-routes.json';
+const {functions} = JSON.parse(readFileSync(new URL('../../' + routeManifest, import.meta.url), 'utf8'));
+const launchRoute = functions.startStandardScanJobV9.route_name;
+const resultRoute = functions.getCustomerScanResultV9.route_name;
 const confirm = `RUN-ONE-STAGED-OWNER-CANARY:${sourceSha}:${ownerId}:${projectId}:${requestId}`;
 
 function fixture(t) {
@@ -18,6 +22,8 @@ function fixture(t) {
   t.after(() => { rmSync(root, {recursive:true, force:true}); rmSync(artifactRoot, {recursive:true, force:true}); });
   mkdirSync(join(root, 'scripts/lib'), {recursive:true});
   mkdirSync(join(root, 'bin'));
+  mkdirSync(join(root, 'data'));
+  copyFileSync(routeManifest, join(root, routeManifest));
   mkdirSync(join(root, 'base44/functions/startStandardScanJobV9'), {recursive:true});
   writeFileSync(join(root, 'package.json'), '{"type":"module"}');
   copyFileSync('scripts/run-staged-owner-canary.sh', join(root, 'scripts/run-staged-owner-canary.sh'));
@@ -49,7 +55,7 @@ const base44={auth:{me:async()=>{track('auth.me');return{id:scenario==='wrongOwn
 BusinessProject:{get:async(id)=>{track('BusinessProject.get',id);return{id,owner_user_id:scenario==='wrongProject'?'other_123':owner,website_url:url};},create:denied,update:denied},
 Access:{filter:async(query)=>{track('Access.filter',query);return scenario==='duplicateGrant'?[grant,{...grant,id:'access_456'}]:[grant];},create:denied,update:denied},
 ScanRun:{get:async(id)=>{track('ScanRun.get',id);return run;},create:denied,update:denied}
-},functions:{invoke:async(name,payload)=>{track(name,payload);if(name==='startStandardScanJobV9')return{data:{success:true,accepted:true,scan_id:run.id,scan_mode:'standard_150',page_cap:150,pipeline_mode:scenario==='monolith'?'monolith':'staged'}};if(name==='getCustomerScanResultV9')return{data:{success:true,scan_id:run.id,authority_verified:true,release_contract_current:true,run:projected}};throw new Error('Unexpected function');}}};
+},functions:{invoke:async(name,payload)=>{track(name,payload);if(name==='${launchRoute}')return{data:{success:true,accepted:true,scan_id:run.id,scan_mode:'standard_150',page_cap:150,pipeline_mode:scenario==='monolith'?'monolith':'staged'}};if(name==='${resultRoute}')return{data:{success:true,scan_id:run.id,authority_verified:true,release_contract_current:true,run:projected}};throw new Error('Unexpected function');}}};
 const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
 await new AsyncFunction('base44',readFileSync(0,'utf8'))(base44);
 `);
@@ -88,6 +94,18 @@ test('initial canary refuses a 500-page requested cap', t => {
   assert.equal(result.calls.length,0);
 });
 
+test('canary refuses the old launcher route before CLI authentication', t => {
+  const canary=fixture(t);
+  const invalid=structuredClone(functions);
+  invalid.startStandardScanJobV9.route_name='startStandardScanJobV9';
+  writeFileSync(join(canary.root,routeManifest),JSON.stringify({functions:invalid}));
+  const result=canary.run();
+  assert.notEqual(result.status,0);
+  assert.match(result.stderr,/staged scan routes unavailable/);
+  assert.deepEqual(result.calls,[]);
+  assert.equal(result.report,null);
+});
+
 test('authenticated identity mismatch stops before project lookup or scan start', t => {
   const result=fixture(t).run('wrongOwner');
   assert.equal(result.status,1);
@@ -99,7 +117,7 @@ test('canary verifies the existing project owner without modifying it', t => {
   const result=fixture(t).run('wrongProject');
   assert.equal(result.status,1);
   assert.equal(result.report.failure_code,'project_owner_mismatch');
-  assert.equal(result.calls.filter(row=>row.name==='startStandardScanJobV9').length,0);
+  assert.equal(result.calls.filter(row=>row.name===launchRoute).length,0);
   assert.equal(result.calls.some(row=>row.name==='forbidden_mutation'),false);
 });
 
@@ -107,7 +125,7 @@ for (const scenario of ['grant500','duplicateGrant','revokedGrant']) {
   test(`canary refuses ${scenario} before scan creation`, t => {
     const result=fixture(t).run(scenario);
     assert.equal(result.status,1);
-    assert.equal(result.calls.filter(row=>row.name==='startStandardScanJobV9').length,0);
+    assert.equal(result.calls.filter(row=>row.name===launchRoute).length,0);
     assert.equal(result.calls.some(row=>row.name==='forbidden_mutation'),false);
   });
 }
@@ -115,8 +133,9 @@ for (const scenario of ['grant500','duplicateGrant','revokedGrant']) {
 test('one stable request produces a filtered verified staged-150 acceptance report', t => {
   const result=fixture(t).run();
   assert.equal(result.status,0,result.stderr);
-  const starts=result.calls.filter(row=>row.name==='startStandardScanJobV9');
+  const starts=result.calls.filter(row=>row.name===launchRoute);
   assert.equal(starts.length,1);
+  assert.equal(result.calls.filter(row=>row.name===resultRoute).length,1);
   assert.equal(starts[0].payload.request_id,requestId);
   assert.equal(starts[0].payload.idempotency_key,requestId);
   assert.equal(starts[0].payload.scan_mode,'standard_150');
@@ -148,7 +167,7 @@ for (const [scenario, missing] of [['missingProgress','batch_progress'],['missin
     assert.equal(result.status,1);
     assert.equal(result.report.acceptance_verified,false);
     assert.ok(result.report.unverified.includes(missing));
-    assert.equal(result.calls.filter(row=>row.name==='startStandardScanJobV9').length,1);
+    assert.equal(result.calls.filter(row=>row.name===launchRoute).length,1);
   });
 }
 
@@ -156,7 +175,7 @@ test('a still-running scan stops polling at the configured deadline without resu
   const result=fixture(t).run('timeout');
   assert.equal(result.status,1);
   assert.equal(result.report.failure_code,'canary_timeout');
-  assert.equal(result.calls.filter(row=>row.name==='startStandardScanJobV9').length,1);
+  assert.equal(result.calls.filter(row=>row.name===launchRoute).length,1);
   assert.equal(result.report.acceptance_verified,false);
 });
 
@@ -165,7 +184,7 @@ test('nonadmin authenticated owner fails before any scan because evidence RLS re
   const result=fixture(t).run('nonAdmin');
   assert.equal(result.status,1);
   assert.equal(result.report.failure_code,'authenticated_owner_not_admin');
-  assert.equal(result.calls.some(row=>row.name==='startStandardScanJobV9'),false);
+  assert.equal(result.calls.some(row=>row.name===launchRoute),false);
   assert.deepEqual(result.calls.map(row=>row.name),['cli_args','auth.me']);
 });
 
@@ -176,7 +195,7 @@ test('existing acceptance evidence is never overwritten or followed by another s
   const second=canary.run();
   assert.equal(second.status,2);
   assert.deepEqual(second.report,first.report);
-  assert.equal(second.calls.filter(row=>row.name==='startStandardScanJobV9').length,1);
+  assert.equal(second.calls.filter(row=>row.name===launchRoute).length,1);
 });
 
 

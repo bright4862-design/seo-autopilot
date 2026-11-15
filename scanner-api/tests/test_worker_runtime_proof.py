@@ -8,7 +8,9 @@ import pytest
 
 from app import scan_job
 from app.authority_seal import create_authority_seal
-from app.generated_v9_worker_runtime import V9_WORKER_FUNCTION_IDENTITIES, V9_WORKER_RELEASE_FINGERPRINT
+from app.generated_v9_worker_runtime import (
+    V9_WORKER_FUNCTION_IDENTITIES, V9_WORKER_FUNCTION_ROUTES, V9_WORKER_RELEASE_FINGERPRINT,
+)
 
 
 PROTOCOL = "fixlist_worker_runtime_v1"
@@ -47,7 +49,7 @@ async def test_all_v9_routes_wrap_legacy_payload_and_accept_signed_business_erro
 
     def send(outgoing):
         assert outgoing.method == "POST"
-        assert str(outgoing.url) == f"https://fixture.example/api/apps/test-app/functions/{function}"
+        assert str(outgoing.url) == f"https://fixture.example/api/apps/test-app/functions/{V9_WORKER_FUNCTION_ROUTES[function]}"
         assert outgoing.headers["X-FixList-Worker"] == scan_job.WORKER_VERSION
         assert "authorization" not in outgoing.headers
         wire = json.loads(outgoing.content)
@@ -93,15 +95,23 @@ async def test_identity_probe_keeps_verified_receipt_and_sends_no_legacy_payload
 
 
 @pytest.mark.asyncio
-async def test_python_invoke_round_trips_actual_javascript_runtime_proof(runtime_env):
+async def test_python_invoke_round_trips_actual_javascript_runtime_proof(runtime_env, tmp_path):
+    root = Path(__file__).resolve().parents[2]
+    deployed = tmp_path / "deploy"
+    subprocess.run(["node", "scripts/materialize-base44-staged-functions.mjs", str(deployed)],
+                   capture_output=True, cwd=root, check=True, timeout=10)
+    package = deployed / "base44/functions" / V9_WORKER_FUNCTION_ROUTES[CONTROL]
     script = r'''
 import { readFileSync } from "node:fs";
 import { webcrypto } from "node:crypto";
-import { handleWorkerRuntime } from "./base44/functions/durableScanWorkerControlV9/workerRuntime.js";
-import { createAuthoritySeal, verifyAuthoritySeal } from "./base44/functions/durableScanWorkerControlV9/authoritySeal.js";
-import { FUNCTION_BUILD_ID } from "./base44/functions/durableScanWorkerControlV9/generatedBuildId.js";
-import { RELEASE_FINGERPRINT } from "./base44/functions/durableScanWorkerControlV9/generatedReleaseContract.js";
-const source = readFileSync("./base44/functions/durableScanWorkerControlV9/entry.ts", "utf8");
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+const packageFile = name => pathToFileURL(join(process.argv[1], name));
+const { handleWorkerRuntime } = await import(packageFile("workerRuntime.js"));
+const { createAuthoritySeal, verifyAuthoritySeal } = await import(packageFile("authoritySeal.js"));
+const { FUNCTION_BUILD_ID } = await import(packageFile("generatedBuildId.js"));
+const { RELEASE_FINGERPRINT } = await import(packageFile("generatedReleaseContract.js"));
+const source = readFileSync(packageFile("entry.ts"), "utf8");
 const activation = source.match(/BASE44_RUNTIME_ACTIVATION_ID\s*=\s*"([^"]+)"/)[1];
 const response = await handleWorkerRuntime(JSON.parse(readFileSync(0, "utf8")), {
   function_name: "durableScanWorkerControlV9", build_id: FUNCTION_BUILD_ID,
@@ -116,8 +126,8 @@ process.stdout.write(JSON.stringify({ status: response.status, body: await respo
         issued_at = json.loads(outgoing.content)["runtime_request"]["issued_at"]
         clock = f"Date.now = () => {issued_at * 1000};\n"
         result = subprocess.run(
-            ["node", "--input-type=module", "-e", clock + script], input=outgoing.content,
-            capture_output=True, cwd=Path(__file__).resolve().parents[2], check=True, timeout=10,
+            ["node", "--input-type=module", "-e", clock + script, str(package)], input=outgoing.content,
+            capture_output=True, cwd=root, check=True, timeout=10,
         )
         response = json.loads(result.stdout)
         return httpx.Response(response["status"], json=response["body"])
@@ -169,7 +179,10 @@ async def test_missing_v9_identity_or_key_fails_before_sending_and_v8_keeps_lega
         with monkeypatch.context() as isolated:
             isolated.delenv("SCAN_EVIDENCE_SIGNING_KEY")
             assert await scan_job.invoke_function(client, CONTROL, payload) == UNVERIFIED
-        monkeypatch.setattr(scan_job, "V9_WORKER_FUNCTION_IDENTITIES", {})
+        with monkeypatch.context() as isolated:
+            isolated.setattr(scan_job, "V9_WORKER_FUNCTION_IDENTITIES", {})
+            assert await scan_job.invoke_function(client, CONTROL, payload) == UNVERIFIED
+        monkeypatch.setattr(scan_job, "V9_WORKER_FUNCTION_ROUTES", {CONTROL: CONTROL})
         assert await scan_job.invoke_function(client, CONTROL, payload) == UNVERIFIED
         assert await scan_job.probe_worker_runtime_identity(client, "durableScanWorkerControlV8") == UNVERIFIED
         assert await scan_job.invoke_function(client, "durableScanWorkerControlV8", payload) == {

@@ -8,7 +8,9 @@ import httpx
 import pytest
 
 from app.authority_seal import create_authority_seal
-from app.generated_v9_worker_runtime import V9_WORKER_FUNCTION_IDENTITIES, V9_WORKER_RELEASE_FINGERPRINT
+from app.generated_v9_worker_runtime import (
+    V9_WORKER_FUNCTION_IDENTITIES, V9_WORKER_FUNCTION_ROUTES, V9_WORKER_RELEASE_FINGERPRINT,
+)
 from app.scan_job import invoke_function
 from app.staged_telemetry import DeliveryReceipt, active_delivery
 from app.workspace import MemoryWorkspace
@@ -33,7 +35,7 @@ async def test_receipt_measures_exact_completion_transport_bytes(function, trans
         assert request.headers["content-type"] == "application/json"
         assert int(request.headers["content-length"]) == len(request.content)
         assert request.extensions["timeout"]["read"] == 1.25
-        assert request.url.path.endswith("/" + function)
+        assert request.url.path.endswith("/" + V9_WORKER_FUNCTION_ROUTES[function])
         if transport == "connection_failed":
             raise httpx.ConnectError("test connection failed", request=request)
         data = {"success": True}

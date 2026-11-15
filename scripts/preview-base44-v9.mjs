@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import stagedDeployments from "../data/generated-staged-v9-routes.json" with { type: "json" };
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const APP_ID = "6a498732ec779dfaaeab0e53";
@@ -15,10 +16,12 @@ const APP_API_PATH = new RegExp(`^/api/apps/${APP_ID}/[A-Za-z0-9_-]+(?:/[A-Za-z0
 const FRONTEND_INPUTS = [
   "index.html", "src", "public", "base44", "package.json", "package-lock.json",
   "vite.config.js", "postcss.config.js", "tailwind.config.js", "data/base44-function-routes.json",
+  "data/generated-staged-v9-routes.json",
 ];
 const BUNDLE_MARKERS = [
-  "__FIXLIST_SOURCE_SHA__", "startStandardScanJobV9",
-  "getCustomerScanResultV9", "deleteCustomerScanDataV9",
+  "__FIXLIST_SOURCE_SHA__",
+  ...["startStandardScanJobV9", "getCustomerScanResultV9", "deleteCustomerScanDataV9"]
+    .map(name => stagedDeployments.functions[name].route_name),
 ];
 
 function assert(condition, message) {

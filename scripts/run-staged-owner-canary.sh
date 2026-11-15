@@ -63,6 +63,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 node --input-type=module - "$REPO_ROOT" "$APP_ID" "$SOURCE_SHA" "$EXPECTED_OWNER_USER_ID" "$PROJECT_ID" "$TARGET_URL" "$REQUEST_ID" "$MAX_WAIT_SECONDS" "$POLL_SECONDS" > "$TMP/config.js" <<'NODE'
+import fs from 'node:fs';
 import {pathToFileURL} from 'node:url';
 import {join} from 'node:path';
 const [root, appId, sourceSha, ownerId, projectId, rawTarget, requestId, maxWait, pollSeconds] = process.argv.slice(2);
@@ -71,7 +72,11 @@ try { target = new URL(rawTarget); } catch { throw new Error('Refusing invalid T
 if (target.protocol !== 'https:' || target.username || target.password || target.hash) throw new Error('Refusing: TARGET_URL must be an HTTPS URL without credentials or fragment');
 const {RELEASE_FINGERPRINT} = await import(pathToFileURL(join(root, 'base44/functions/startStandardScanJobV9/generatedReleaseContract.js')));
 if (!/^[a-f0-9]{16}$/.test(RELEASE_FINGERPRINT)) throw new Error('Refusing: release fingerprint unavailable');
-console.log('const config = ' + JSON.stringify({appId, sourceSha, ownerId, projectId, targetUrl:target.href, requestId, maxWait:Number(maxWait), pollSeconds:Number(pollSeconds), expectedFingerprint:RELEASE_FINGERPRINT}) + ';');
+const {functions} = JSON.parse(fs.readFileSync(join(root, 'data/generated-staged-v9-routes.json'), 'utf8'));
+const launchRoute = functions.startStandardScanJobV9?.route_name;
+const resultRoute = functions.getCustomerScanResultV9?.route_name;
+if (!/^startStandardScanJobV9B[a-f0-9]{16}$/.test(launchRoute) || !/^getCustomerScanResultV9B[a-f0-9]{16}$/.test(resultRoute)) throw new Error('Refusing: staged scan routes unavailable');
+console.log('const config = ' + JSON.stringify({appId, sourceSha, ownerId, projectId, targetUrl:target.href, requestId, maxWait:Number(maxWait), pollSeconds:Number(pollSeconds), expectedFingerprint:RELEASE_FINGERPRINT, launchRoute, resultRoute}) + ';');
 NODE
 
 fixlist_install_base44_cli "$TMP/pinned-cli"
@@ -146,7 +151,7 @@ try {
   requireCondition(paidGrant || manualGrant || ownerGrant, 'access_grant_unverified');
 
   // One start call only. The operator must reuse REQUEST_ID to recover a lost response.
-  const accepted = body(await bounded(() => base44.functions.invoke('startStandardScanJobV9', {
+  const accepted = body(await bounded(() => base44.functions.invoke(config.launchRoute, {
     request_id:config.requestId, idempotency_key:config.requestId,
     project_id:config.projectId, website_url:config.targetUrl, submitted_url:config.targetUrl,
     scan_mode:'standard_150', source:'staged_owner_canary',
@@ -159,7 +164,7 @@ try {
   let projection;
   let run;
   while (Date.now() < deadline) {
-    projection = body(await bounded(() => base44.functions.invoke('getCustomerScanResultV9', {scan_id:report.scan_id})));
+    projection = body(await bounded(() => base44.functions.invoke(config.resultRoute, {scan_id:report.scan_id})));
     requireCondition(projection?.success === true && projection.scan_id === report.scan_id, 'customer_result_unavailable');
     run = await bounded(() => base44.entities.ScanRun.get(report.scan_id));
     observe(run);

@@ -6,6 +6,7 @@ import { durableScanStatePresentation } from "../../src/lib/durableScanStatePres
 import { resolveScanFunctionRoute } from "../../src/lib/scanFunctionRouting.js";
 import { resolveScanOwnership } from "../../src/lib/siteOwnershipPolicy.js";
 import publicRouteContract from "../../data/base44-function-routes.json" with { type: "json" };
+import deployments from "../../data/generated-staged-v9-routes.json" with { type: "json" };
 
 const respectRobots = { respect_robots_txt: true, owner_attested_robots_override: false, site_ownership_answer: "not_owner" };
 const overrideRobots = { respect_robots_txt: false, owner_attested_robots_override: true, site_ownership_answer: "owner_or_manager" };
@@ -43,7 +44,7 @@ function browserReader(result, generation) {
 
 test("the browser uses the V9 reader only when configured and preserves the exact failed run", async () => {
   const result = projection({ ...failedRun, ...respectRobots, status_detail: workerDetail("Cloudflare", "a bot challenge") });
-  for (const [generation, name] of [[undefined, "getCustomerScanResultV8"], ["V9", "getCustomerScanResultV9"]]) {
+  for (const [generation, name] of [[undefined, "getCustomerScanResultV8"], ["V9", deployments.functions.getCustomerScanResultV9.route_name]]) {
     const response = generation === "V9" ? result : { ...result, run: { ...failedRun } };
     const { calls, read } = browserReader(response, generation);
     const bundle = await read(failedRun.id);
@@ -64,8 +65,8 @@ test("the public manifest selects start, result, and deletion routes together", 
   for (const name of ["startStandardScanJob", "getCustomerScanResult", "deleteCustomerScanData"]) {
     const entry = `${name}V8`;
     assert.equal(resolveScanFunctionRoute(entry), entry);
-    assert.equal(resolveScanFunctionRoute(entry, undefined, v9), `${name}V9`);
-    assert.equal(resolveScanFunctionRoute(entry, "V8", v9), `${name}V9`);
+    assert.equal(resolveScanFunctionRoute(entry, undefined, v9), deployments.functions[`${name}V9`].route_name);
+    assert.equal(resolveScanFunctionRoute(entry, "V8", v9), deployments.functions[`${name}V9`].route_name);
   }
   assert.equal(resolveScanFunctionRoute("createAccessCheckout", undefined, v9), "createAccessCheckout");
 });

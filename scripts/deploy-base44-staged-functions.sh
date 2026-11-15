@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Publish or verify only the isolated V9 candidate packages. This never promotes V8,
-# publishes the site, updates entities/secrets, or changes the release-source stamp.
+# Publish or verify only the isolated, content-addressed V9 candidate packages.
 set -euo pipefail
 umask 077
 
@@ -31,6 +30,14 @@ if [[ "$CONFIRM" != "$EXPECTED_CONFIRM" ]]; then
   exit 2
 fi
 command -v timeout >/dev/null || { echo "Refusing V9 candidate operation: timeout is required." >&2; exit 2; }
+case "$BASE44_EXPECTED_OWNER" in
+  bright4862@gmail.com|londonparisbrussels@gmail.com) ;;
+  *) echo 'Refusing V9 candidate operation: select an approved Base44 owner session.' >&2; exit 2 ;;
+esac
+if [[ -n "${BASE44_API_KEY:-}" ]]; then
+  echo 'Refusing V9 candidate operation: an authenticated Base44 owner session is required.' >&2
+  exit 2
+fi
 fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$SOURCE_SHA"
 cd "$REPO_ROOT"
 
@@ -44,21 +51,44 @@ FUNCTIONS=(
 )
 # Candidate permission is restricted to these unreferenced function names. The
 # ordinary V8 publisher retains its separate production acceptance guard.
-node --input-type=module - "$REPO_ROOT" "${FUNCTIONS[@]}" <<'NODE'
-import fs from 'node:fs';
-import path from 'node:path';
-const [root, ...expected] = process.argv.slice(2);
-const routes = JSON.parse(fs.readFileSync(path.join(root,'data/base44-function-routes.json'),'utf8'));
-const record = JSON.parse(fs.readFileSync(path.join(root,'data/beta-crawler-revision.json'),'utf8'));
-const actual = Object.values(routes.candidate_routes?.v9 || {});
-if (actual.length !== expected.length || new Set(actual).size !== expected.length || expected.some(name => !actual.includes(name))
-    || Object.values(routes.routes || {}).some(name => expected.includes(name))
-    || !['candidate','frozen_beta'].includes(record.status) || !/^[0-9a-f]{16}$/.test(record.fingerprint || '')) {
-  throw new Error('V9 publication requires an isolated six-function candidate manifest.');
-}
-NODE
 node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --check
 node "$REPO_ROOT/scripts/base44_release_manifest.mjs" verify --staged
+
+TASK_TMP="$(mktemp -d)"
+trap 'rm -rf "$TASK_TMP"' EXIT
+chmod 700 "$TASK_TMP"
+node --input-type=module - "$REPO_ROOT" "$TASK_TMP/routes.tsv" "${FUNCTIONS[@]}" <<'NODE'
+import fs from 'node:fs';
+import path from 'node:path';
+const [root, output, ...expected] = process.argv.slice(2);
+const routes = JSON.parse(fs.readFileSync(path.join(root,'data/base44-function-routes.json'),'utf8'));
+const record = JSON.parse(fs.readFileSync(path.join(root,'data/beta-crawler-revision.json'),'utf8'));
+const generated = JSON.parse(fs.readFileSync(path.join(root,'data/generated-staged-v9-routes.json'),'utf8'));
+const actual = Object.values(routes.candidate_routes?.v9 || {});
+const occupied = new Set([
+  ...Object.values(routes.routes || {}),
+  ...Object.values(routes.historical_routes || {}).flatMap(Object.values),
+  ...actual,
+]);
+if (actual.length !== expected.length || new Set(actual).size !== expected.length || expected.some(name => !actual.includes(name))
+    || Object.values(routes.routes || {}).some(name => expected.includes(name))
+    || !['candidate','frozen_beta'].includes(record.status) || !/^[0-9a-f]{16}$/.test(record.fingerprint || '')
+    || generated.schema_version !== 'fixlist_staged_v9_routes_v1'
+    || Object.keys(generated.functions ?? {}).length !== expected.length) {
+  throw new Error('V9 publication requires an isolated six-function candidate manifest.');
+}
+const aliases = expected.map(name => {
+  const row = generated.functions[name];
+  if (!row || typeof row.route_name !== 'string' || row.route_name.length > 63
+      || !new RegExp(`^${name}B[0-9a-f]{16}$`).test(row.route_name) || occupied.has(row.route_name)
+      || !/^[a-f0-9]{64}$/.test(row.package_digest ?? '')) {
+    throw new Error(`V9 candidate alias is invalid for ${name}.`);
+  }
+  occupied.add(row.route_name);
+  return `${name}\t${row.route_name}\n`;
+});
+fs.writeFileSync(output, aliases.join(''));
+NODE
 
 READINESS_OUTPUT="${READINESS_OUTPUT:-/tmp/fixlist-staged-v9-${SOURCE_SHA}.json}"
 if [[ "$READINESS_OUTPUT" != /* || -L "$READINESS_OUTPUT" || -e "$READINESS_OUTPUT" ]]; then
@@ -70,68 +100,138 @@ if [[ ! -d "$(dirname "$READINESS_OUTPUT")" || "$READINESS_OUTPUT" == "$REPO_ROO
   exit 2
 fi
 
-TASK_TMP="$(mktemp -d)"
-trap 'rm -rf "$TASK_TMP"' EXIT
-chmod 700 "$TASK_TMP"
+node "$REPO_ROOT/scripts/materialize-base44-staged-functions.mjs" "$TASK_TMP/candidate"
 fixlist_install_base44_cli "$TASK_TMP/cli"
 fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TASK_TMP/whoami" "$APP_ID"
 
-# Naming every function is essential: an empty list means "all", and --force
-# would prune other generations. Neither operation belongs in this lane.
-if [[ "$OPERATION" == publish ]]; then
-  "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions deploy "${FUNCTIONS[@]}" > "$TASK_TMP/deploy.log" 2>&1 || {
-    echo "V9 candidate function publication failed. No readiness artifact was issued." >&2
-    exit 1
-  }
-fi
-
-# The pinned CLI supports one name per pull. Pull into a fresh temporary
-# project so a missing route (which can return exit 0) cannot match stale files.
-mkdir -p "$TASK_TMP/pulled/base44/functions" "$TASK_TMP/pulled/base44/entities"
-cat > "$TASK_TMP/pulled/base44/config.jsonc" <<'JSON'
+make_readback_project() {
+  mkdir -p "$1/base44/functions" "$1/base44/entities"
+  cat > "$1/base44/config.jsonc" <<'JSON'
 {"name":"fixlist-staged-readback","functionsDir":"functions","entitiesDir":"entities"}
 JSON
-for name in "${FUNCTIONS[@]}"; do
-  (cd "$TASK_TMP/pulled" && "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions pull "$name") > "$TASK_TMP/pull-$name.log" 2>&1
-  test -f "$TASK_TMP/pulled/base44/functions/$name/function.jsonc" || {
-    echo "V9 deployed readback is missing $name." >&2
-    exit 1
-  }
-done
-node --input-type=module - "$REPO_ROOT" "$TASK_TMP/pulled/base44/functions" "$TASK_TMP/packages.json" <<'NODE'
+}
+
+pull_route() {
+  local project="$1" route="$2" log="$1/$2.log"
+  if ! (cd "$project" && NO_COLOR=1 timeout --signal=TERM --kill-after=5s 60 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions pull "$route") > "$log" 2>&1; then
+    echo "V9 package readback failed for $route." >&2
+    return 1
+  fi
+}
+
+unregistered_alias() {
+  local project="$1" route="$2"
+  # A targeted pull may return success for a missing function. Require the
+  # pinned CLI's explicit missing result, as well as a fresh empty destination.
+  [[ ! -e "$project/base44/functions/$route" && ! -L "$project/base44/functions/$route" ]] &&
+    grep -Fq "Function \"$route\" not found on remote" "$project/$route.log"
+}
+
+assert_pulled_package() {
+  node --input-type=module - "$REPO_ROOT" "$TASK_TMP/candidate" "$@" <<'NODE'
 import fs from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
-const [root, pulled, output] = process.argv.slice(2);
-const {assertPulledFunctionPackage, STAGED_RELEASE_FUNCTIONS} = await import(pathToFileURL(path.join(root,'scripts/base44_release_manifest.mjs')));
-const packages = STAGED_RELEASE_FUNCTIONS.map(name => [
-  name,
-  assertPulledFunctionPackage(name, path.join(root,'base44/functions',name), path.join(pulled,name)),
-]);
-fs.writeFileSync(output,JSON.stringify(Object.fromEntries(packages)));
+const [root, candidate, pulled, name, route] = process.argv.slice(2);
+const { assertPulledFunctionPackage } = await import(pathToFileURL(path.join(root,'scripts/base44_release_manifest.mjs')));
+const generated = JSON.parse(fs.readFileSync(path.join(root,'data/generated-staged-v9-routes.json'),'utf8'));
+const localDir = path.join(candidate,'base44/functions',route);
+const pulledDir = path.join(pulled,'base44/functions',route);
+const pulledConfig = path.join(pulledDir,'function.jsonc');
+// CLI 0.1.8 generates flat function.jsonc without a trailing newline. Restore
+// the source newline in the scratch copy only when the rest is byte-identical.
+if (!fs.lstatSync(path.join(pulledDir,'base44'), {throwIfNoEntry:false})
+    && fs.lstatSync(pulledConfig, {throwIfNoEntry:false})?.isFile()) {
+  const config = fs.readFileSync(path.join(localDir,'function.jsonc'));
+  if (config.at(-1) === 10 && fs.readFileSync(pulledConfig).equals(config.subarray(0,-1))) {
+    fs.writeFileSync(pulledConfig, config);
+  }
+}
+const digest = assertPulledFunctionPackage(route, localDir, pulledDir);
+if (digest !== generated.functions[name].package_digest) throw new Error(`Unexpected package digest for ${route}`);
+console.log(digest);
 NODE
+}
+
+assert_public_alias_absent() {
+  local route="$1" status
+  status="$(curl -q -sS --proto '=https' --max-time 8 --max-filesize 16384 --header 'Cache-Control: no-cache' \
+    -o /dev/null -w '%{http_code}' "https://base44.app/api/apps/$APP_ID/functions/$route" 2>/dev/null)" || status=000
+  if [[ "$status" != 404 ]]; then
+    echo "V9 public alias absence could not be proven for $route (HTTP $status)." >&2
+    return 1
+  fi
+}
+
+make_readback_project "$TASK_TMP/preflight"
+: > "$TASK_TMP/packages.tsv"
+: > "$TASK_TMP/create.tsv"
+while IFS=$'\t' read -r name route; do
+  pull_route "$TASK_TMP/preflight" "$route"
+  if unregistered_alias "$TASK_TMP/preflight" "$route"; then
+    if [[ "$OPERATION" == verify ]]; then
+      echo "V9 deployed readback is missing $route." >&2
+      exit 1
+    fi
+    assert_public_alias_absent "$route"
+    printf '%s\t%s\n' "$name" "$route" >> "$TASK_TMP/create.tsv"
+  else
+    digest="$(assert_pulled_package "$TASK_TMP/preflight" "$name" "$route")"
+    printf '%s\t%s\n' "$name" "$digest" >> "$TASK_TMP/packages.tsv"
+  fi
+done < "$TASK_TMP/routes.tsv"
+
+# Finish the entire collision preflight before the first creation; an existing
+# matching alias is reused. Recheck each absent alias immediately before deploy.
+make_readback_project "$TASK_TMP/recheck"
+make_readback_project "$TASK_TMP/deployed"
+while IFS=$'\t' read -r name route; do
+  pull_route "$TASK_TMP/recheck" "$route"
+  if unregistered_alias "$TASK_TMP/recheck" "$route"; then
+    assert_public_alias_absent "$route"
+    if ! (cd "$TASK_TMP/candidate" && timeout --signal=TERM --kill-after=5s 120 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions deploy "$route") > "$TASK_TMP/deploy-$route.log" 2>&1; then
+      echo "V9 candidate function publication failed for $route." >&2
+      exit 1
+    fi
+    pull_route "$TASK_TMP/deployed" "$route"
+    digest="$(assert_pulled_package "$TASK_TMP/deployed" "$name" "$route")"
+  else
+    digest="$(assert_pulled_package "$TASK_TMP/recheck" "$name" "$route")"
+  fi
+  printf '%s\t%s\n' "$name" "$digest" >> "$TASK_TMP/packages.tsv"
+done < "$TASK_TMP/create.tsv"
 
 SOURCE_SHA="$SOURCE_SHA" BASE44_APP_ID="$APP_ID" BASE44_EXPECTED_OWNER="$BASE44_EXPECTED_OWNER" PROBE_REPORT="$TASK_TMP/runtime.json" \
   bash "$REPO_ROOT/scripts/verify-base44-staged-functions.sh"
 
-node --input-type=module - "$REPO_ROOT" "$SOURCE_SHA" "$APP_ID" "$TASK_TMP/packages.json" "$TASK_TMP/runtime.json" "$READINESS_OUTPUT" <<'NODE'
+node --input-type=module - "$REPO_ROOT" "$SOURCE_SHA" "$APP_ID" "$TASK_TMP/packages.tsv" "$TASK_TMP/runtime.json" "$READINESS_OUTPUT" <<'NODE'
 import fs from 'node:fs';
 import path from 'node:path';
 const [root,sourceSha,appId,packagesPath,runtimePath,output] = process.argv.slice(2);
 const revision = JSON.parse(fs.readFileSync(path.join(root,'data/beta-crawler-revision.json'),'utf8'));
 const probes = JSON.parse(fs.readFileSync(runtimePath,'utf8'));
-const packages = JSON.parse(fs.readFileSync(packagesPath,'utf8'));
+const entries = fs.readFileSync(packagesPath,'utf8').trim().split('\n').map(row => row.split('\t'));
+const packages = new Map(entries);
+const { functions: expected } = JSON.parse(fs.readFileSync(path.join(root,'data/generated-staged-v9-routes.json'),'utf8'));
+function matches(row) {
+  const identity = expected[row.name];
+  return identity && row.route_name === identity.route_name && row.build_id === identity.build_id
+    && row.runtime_activation_id === identity.runtime_activation_id && row.http_status === 405;
+}
 if (probes.source_sha !== sourceSha || probes.app_id !== appId
     || probes.runtime_probe_transport !== 'base44_native_authenticated_sdk_get'
+    || entries.length !== 6 || packages.size !== 6
     || probes.functions.length !== 6 || new Set(probes.functions.map(row => row.name)).size !== 6
-    || probes.functions.some(row => row.http_status !== 405 || !/^[a-f0-9]{64}$/.test(packages[row.name] || ''))
+    || probes.functions.some(row => !matches(row) || packages.get(row.name) !== expected[row.name].package_digest)
     || probes.anonymous_probe?.transport !== 'base44_legacy_anonymous_get'
-    || probes.anonymous_probe.functions.length !== 6) throw new Error('V9 runtime verification identity mismatch');
-const result = {schema_version:'fixlist_staged_v9_readiness_v1',source_sha:sourceSha,app_id:appId,candidate_fingerprint:revision.fingerprint,
+    || probes.anonymous_probe.functions.length !== 6
+    || new Set(probes.anonymous_probe.functions.map(row => row.name)).size !== 6
+    || probes.anonymous_probe.functions.some(row => !matches(row) || row.state !== 'matched')) throw new Error('V9 runtime verification identity mismatch');
+const result = {schema_version:'fixlist_staged_v9_readiness_v2',source_sha:sourceSha,app_id:appId,candidate_fingerprint:revision.fingerprint,
   package_comparison:'matched',runtime_probe:'matched',runtime_probe_transport:probes.runtime_probe_transport,
   anonymous_probe:probes.anonymous_probe,worker_signed_post_runtime_verified:false,production_activation:false,
   observed_at:new Date().toISOString(),
-  functions:probes.functions.map(row => ({...row,package_digest:packages[row.name]}))};
+  functions:probes.functions.map(row => ({...row,package_digest:packages.get(row.name)}))};
 fs.writeFileSync(output,JSON.stringify(result,null,2)+'\n',{flag:'wx',mode:0o600});
 NODE
 printf 'BASE44_STAGED_V9_CANDIDATE_VERIFIED source_sha=%s readiness=%s production_activation=false\n' "$SOURCE_SHA" "$READINESS_OUTPUT"

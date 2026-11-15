@@ -1,0 +1,41 @@
+{
+  "schema_version": "fixlist_staged_v9_routes_v1",
+  "functions": {
+    "startStandardScanJobV9": {
+      "route_name": "startStandardScanJobV9B58a529456bd43875",
+      "build_id": "3ce80bf25cce9f7bbc8df03ef722acd0004abb45f875d5fda7ef8b29e3b2926a",
+      "runtime_activation_id": "startStandardScanJobV9-staged-runtime-20261111-v5",
+      "package_digest": "1ef83f1b181c6782d3ff9afa73bd282c45b35911ede98da4aef7d9a0da3b0e2d"
+    },
+    "durableScanWorkerControlV9": {
+      "route_name": "durableScanWorkerControlV9Bc05f4cfe7a9118b4",
+      "build_id": "9d265764fd3c9a0163d3a5ad12b27eeb175f6b03597591af7fd10086c260927b",
+      "runtime_activation_id": "durableScanWorkerControlV9-staged-runtime-20261111-v3",
+      "package_digest": "3314d0652b32b04d1b165ef593e402376d01e2f478dd7dc2cce0723c681df351"
+    },
+    "persistDurableScanAuthorityV9": {
+      "route_name": "persistDurableScanAuthorityV9B65712977d9996dee",
+      "build_id": "f1fd5eaa65575183cef1fd22666558ef3f2f4d2c3b9424c386075e29b543f160",
+      "runtime_activation_id": "persistDurableScanAuthorityV9-staged-runtime-20261111-v5",
+      "package_digest": "a6c85cd1044c2177e2b73fa37f39f5f7c839f0db71881853273a8177d234e30b"
+    },
+    "persistLimitedScanResultV9": {
+      "route_name": "persistLimitedScanResultV9B694a1468b7b209eb",
+      "build_id": "0211d2b69e42951f600b7164dff39bb63ed83019ff4da03dadb92c0f47a2b8af",
+      "runtime_activation_id": "persistLimitedScanResultV9-staged-runtime-20261111-v4",
+      "package_digest": "8d0e3e35e616428c48ad2ad0811945c2a4ee0ed06b9e613edaa4b92da0f11d63"
+    },
+    "getCustomerScanResultV9": {
+      "route_name": "getCustomerScanResultV9Bc02f0fdf188f33c0",
+      "build_id": "6b79d8b01701cd4c08bb256194a3267c4a228ac93a3dd5c02896cde014da87ce",
+      "runtime_activation_id": "getCustomerScanResultV9-staged-runtime-20261111-v5",
+      "package_digest": "55968dc30bc0269b27fed1d535df32b786fb422c7feab108a92384f3dd737b59"
+    },
+    "deleteCustomerScanDataV9": {
+      "route_name": "deleteCustomerScanDataV9B537a39ee2f9815d1",
+      "build_id": "cd241fc4ad410fda4525588e1c70118424166cced3b07259c7812c22386bc98f",
+      "runtime_activation_id": "deleteCustomerScanDataV9-staged-runtime-20261111-v2",
+      "package_digest": "b4ff5b832f3b2fd83c418b5db6f0913a507100d2752edd57e2ec3eb55d2f73bc"
+    }
+  }
+}

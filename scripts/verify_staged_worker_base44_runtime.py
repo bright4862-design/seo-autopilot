@@ -33,6 +33,7 @@ def matches_observation(observed, *, source_sha, revision):
                 "protocol": "fixlist_worker_runtime_v1",
                 "action": "identity",
                 "function_name": name,
+                "route_name": generated["V9_WORKER_FUNCTION_ROUTES"][name],
                 "http_status": 200,
                 "release_fingerprint": fingerprint,
                 **identity,

@@ -247,7 +247,9 @@ def revision():
 @app.get("/staged/base44-runtime")
 async def staged_base44_runtime():
     """Read worker-facing Base44 identities from the private staged worker."""
-    from .generated_v9_worker_runtime import V9_WORKER_FUNCTION_IDENTITIES, V9_WORKER_RELEASE_FINGERPRINT
+    from .generated_v9_worker_runtime import (
+        V9_WORKER_FUNCTION_IDENTITIES, V9_WORKER_FUNCTION_ROUTES, V9_WORKER_RELEASE_FINGERPRINT,
+    )
     from .scan_job import base44_api_url, base44_app_id, probe_worker_runtime_identity
 
     # Cloud Run IAM restricts this service to invokers. This readback exists
@@ -272,7 +274,10 @@ async def staged_base44_runtime():
         if result["status_code"] != 200 or body.get("success") is not True:
             raise HTTPException(status_code=503, detail=f"Staged runtime identity unavailable for {name}.")
         receipt = body["_worker_runtime"]["receipt"]
-        functions.append({key: value for key, value in receipt.items() if key != "nonce"})
+        functions.append({
+            **{key: value for key, value in receipt.items() if key != "nonce"},
+            "route_name": V9_WORKER_FUNCTION_ROUTES[name],
+        })
     return JSONResponse({
         "source_sha": WORKER_SOURCE_SHA,
         "worker_revision": os.getenv("K_REVISION"),

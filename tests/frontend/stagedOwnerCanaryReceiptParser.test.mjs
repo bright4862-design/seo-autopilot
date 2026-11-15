@@ -99,6 +99,9 @@ for (const [label, mutate, reason] of [
   ['unverified output despite success claim', r => {r.unverified=['customer_reopen'];}, 'cli_success_unsubstantiated'],
   ['unknown secret field', r => {r.token='NEVER-SAVE';}, 'cli_report_invalid'],
   ['nested secret field', r => {r.progress[0].token='NEVER-SAVE';}, 'cli_report_invalid'],
+  ['injected failure code', r => {r.failure_code='PRIVATE SECRET';}, 'cli_report_invalid'],
+  ['injected progress status', r => {r.progress[0].status='PRIVATE SECRET';}, 'cli_report_invalid'],
+  ['injected deployment metadata', r => {r.deployed_git_source_sha.reason='PRIVATE SECRET';}, 'cli_report_invalid'],
 ]) {
   test('fail-closed receipt rejects '+label, () => {
     const result = apply(mutate);

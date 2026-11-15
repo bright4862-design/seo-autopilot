@@ -287,18 +287,20 @@ function parseCanaryReceipt(stdout, expected) {
       || !plain(report.deployed_git_source_sha)
       || report.deployed_git_source_sha.state !== 'unverified'
       || Object.keys(report.deployed_git_source_sha).some(key => !['state','reason'].includes(key))
-      || typeof report.deployed_git_source_sha.reason !== 'string'
+      || report.deployed_git_source_sha.reason !== 'The customer API does not attest a deployed Git SHA.'
       || !Array.isArray(report.progress) || report.progress.length > 2000
       || !report.progress.every(row => plain(row)
         && Object.keys(row).every(key => ['observed_at','status','pages_crawled','pages_planned','last_committed_batch'].includes(key))
-        && typeof row.observed_at === 'string' && !Number.isNaN(Date.parse(row.observed_at))
-        && typeof row.status === 'string'
+        && typeof row.observed_at === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(row.observed_at)
+        && !Number.isNaN(Date.parse(row.observed_at))
+        && typeof row.status === 'string' && /^[a-z_]{1,32}$/.test(row.status)
         && ['pages_crawled','pages_planned','last_committed_batch'].every(key =>
           row[key] === null || (Number.isSafeInteger(row[key]) && row[key] >= 0)))
       || !Array.isArray(report.unverified) || report.unverified.length > 100
-      || !report.unverified.every(value => typeof value === 'string' && value.length <= 128)
+      || !report.unverified.every(value => typeof value === 'string' && /^[a-z][a-z0-9_]{0,127}$/.test(value))
       || !Array.isArray(report.ownership_evidence) || report.ownership_evidence.length > 32
-      || !report.ownership_evidence.every(value => typeof value === 'string' && value.length <= 128)
+      || !report.ownership_evidence.every(value => typeof value === 'string' && /^[a-z][a-z0-9_]{0,127}$/.test(value))
+      || (report.failure_code !== null && (typeof report.failure_code !== 'string' || !/^[a-z][a-z0-9_]{0,127}$/.test(report.failure_code)))
       || typeof report.acceptance_verified !== 'boolean') {
     return makeFailure('cli_report_invalid');
   }

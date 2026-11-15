@@ -184,6 +184,24 @@ test("exact scan reload and owner-scoped history cannot drift to a different res
   assert.ok(result.failures.some((value) => value.includes("history does not include")));
 });
 
+test("rollback must not select the currently serving revision", () => {
+  const record = validRecord();
+  assert.equal(evaluateStage4ReleaseAcceptance(record).pass, true);
+
+  record.deployment.worker.rollback_target = record.deployment.worker.revision;
+  let result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.status, "failed");
+  assert.ok(result.failures.some((message) => message.includes("rollback target must differ")));
+
+  record.deployment.worker.rollback_target = ` ${record.deployment.worker.revision} `;
+  result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.pass, false, "whitespace must not disguise a self-rollback");
+
+  record.deployment.worker.rollback_target = "fixlist-standard150-worker-00122-old";
+  assert.equal(evaluateStage4ReleaseAcceptance(record).pass, true,
+    "a distinct rollback target retains the baseline verdict");
+});
+
 test("rescan comparison and rollback readiness are explicit rather than inferred", () => {
   const record = validRecord();
   record.deployment.worker.rollback_ready = false;

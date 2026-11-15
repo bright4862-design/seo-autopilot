@@ -130,6 +130,7 @@ console.log(JSON.stringify({
         CONFIRM: options.confirm ?? confirm, STAGED_OPERATOR_USER_ID: options.operatorId || "",
         BASE44_EXPECTED_OWNER: options.expectedCli || "", TEST_CLI_USER: options.actualCli || options.expectedCli || "",
         STAGED_OWNER_USER_ID: selected, EXPECTED_OWNER_USER_ID: selected, BASE44_OBSERVATIONS_DIR: output,
+        EXPECTED_OPERATOR_USER_ID: options.intakeOperatorId || "",
         STAGED_COHORT_TARGET_ROLE: options.targetRole || "user",
         TEST_CLI: cli, TEST_TRACE: trace, TEST_USER: JSON.stringify(user),
         TEST_PROBE: JSON.stringify(options.probe || {}), TEST_V9: JSON.stringify(options.v9 || {}),
@@ -363,4 +364,35 @@ test("the collector refuses a different app identity before any V9 call", t => {
   assert.notEqual(result.status, 0);
   assert.deepEqual(result.calls, [["exec", "--data-env", "prod"], ["auth.me"]]);
   assert.equal(existsSync(join(result.output, "intake.json")), false);
+});
+
+test("the collector binds an ordinary cohort to separate operator-only V9 readback", t => {
+  const result = fixture(t)(collector, "status", customer.id, london, {
+    intakeOperatorId: london.id,
+    v9: { pipeline_mode: "monolith", staged_owner_enabled: false, staged_owner_cohort_sha256: customerDigest },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.calls, [
+    ["exec", "--data-env", "prod"], ["auth.me"], ["invoke", intakeRoute, "staged_runtime_status"],
+  ]);
+  const intake = JSON.parse(readFileSync(join(result.output, "intake.json"), "utf8"));
+  assert.equal(intake.observer_user_id, london.id);
+  assert.equal(intake.route_name, intakeRoute);
+  assert.equal(intake.staged_owner_cohort_sha256, customerDigest);
+  assert.equal(intake.staged_rollout_scope, "off");
+  assert.equal(intake.staged_500_entitled_enabled, false);
+});
+
+test("ordinary collection fails closed on operator or isolation mismatch", t => {
+  const options = { intakeOperatorId: london.id, v9: {
+    pipeline_mode: "monolith", staged_owner_enabled: false, staged_owner_cohort_sha256: customerDigest,
+  } };
+  const wrongOperator = fixture(t)(collector, "status", customer.id, bright, options);
+  assert.notEqual(wrongOperator.status, 0);
+  assert.deepEqual(wrongOperator.calls, [["exec", "--data-env", "prod"], ["auth.me"]]);
+  const widened = fixture(t)(collector, "status", customer.id, london, {
+    ...options, v9: { ...options.v9, staged_500_entitled_enabled: true },
+  });
+  assert.notEqual(widened.status, 0);
+  assert.equal(existsSync(join(widened.output, "intake.json")), false);
 });

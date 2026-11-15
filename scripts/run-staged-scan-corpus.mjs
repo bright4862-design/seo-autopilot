@@ -122,7 +122,7 @@ export function verifyCorpusSelection(comparison, manifest, manifestDigest, obse
       omitted500 += Number(larger === 0);
       rows.push([hash, count, larger]);
     }
-    if (discovered > 5000 || chosenV7 > 149 || chosen150 > 149 || chosen500 > 499
+    if (discovered < 1 || discovered > 5000 || chosenV7 > 149 || chosen150 > 149 || chosen500 > 499
         || evidence.inventory_urls !== discovered || !Number.isInteger(evidence.candidate_selected_urls_500)
         || evidence.candidate_selected_urls_500 < chosen500 || evidence.candidate_selected_urls_500 > 499) return null;
     if (site.expectation !== "throttled_limited") {

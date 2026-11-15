@@ -174,6 +174,8 @@ node scripts/run-staged-scan-corpus.mjs --verify-completed \
 
 The verifier matches each saved plan to its scan attempt and verified receipt. It replays v7 and current selection at the same 150-page cap against each frozen inventory. It requires fewer omitted sections overall and preserves every section v7 selected on Funbooker, Pretto, Center Street Lending, and Norris Wines. The current 500-page selection is also compared against the signed selection readback for complete results. For throttled results, the signed limitation and priority order, completion receipt, and matched saved plan provide the evidence.
 
+Review a corpus with sitemap inventories on all 50 sites so each can contribute to the coverage comparison. A crawl based on internal links can still produce a valid scan. If it has no sitemap inventory, preserve its terminal result and report the corpus comparison as unverified. Include a throttling case where the crawl can capture its sitemap inventory before the throttle forces a limited result.
+
 Phase 7 (5,000-page scans), adaptive sampling, weekly monitoring and the separate signed targeted-verification product are future extensions. The 30-day lifecycle must be revisited before introducing a longer-lived monitoring baseline.
 
 ## Rollback and recovery

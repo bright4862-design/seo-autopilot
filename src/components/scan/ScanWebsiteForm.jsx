@@ -174,7 +174,7 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
     setSubmitting(false);
     setActiveStep("");
     setWatchedScanId("");
-    setError(terminalScanFailureMessage(durableScan.status));
+    setError(message);
     setErrorAction("open_dashboard");
   }, [durableScan.status]);
 

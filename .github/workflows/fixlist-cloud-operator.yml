@@ -1536,6 +1536,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Checkout immutable diagnostic helper
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
         with:
@@ -1591,25 +1597,31 @@ jobs:
             --format='yaml(name,state,schedule,httpTarget.uri,httpTarget.httpMethod,httpTarget.oidcToken.serviceAccountEmail,httpTarget.oidcToken.audience)'
           echo "reconciler_exit=$?"
 
-          echo '=== SIGNING SECRET ACCESS CHECK ==='
+          # Incident #378: a diagnostic operator need not read signing KEY BYTES.
+          # Inspect the actually 100%-serving Ready revision, not the service's
+          # desired template or a tagged 0%-traffic candidate. This is only
+          # metadata; HMAC validation and Base44 persistence remain UNVERIFIED.
+          echo '=== SERVING SIGNING REFERENCE (METADATA ONLY) ==='
           TMP_DIR="$(mktemp -d)"
-          gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > "$TMP_DIR/worker.json"
-          read -r SECRET_NAME SECRET_VERSION < <(python3 - "$TMP_DIR/worker.json" <<'PY'
-          import json, sys
-          value=json.load(open(sys.argv[1]))
-          envs=value.get('spec',{}).get('template',{}).get('spec',{}).get('containers',[{}])[0].get('env',[])
-          for item in envs:
-              if item.get('name')=='SCAN_EVIDENCE_SIGNING_KEY':
-                  ref=item.get('valueFrom',{}).get('secretKeyRef',{})
-                  print(ref.get('name',''), ref.get('key',''))
-                  break
-          PY
-          )
-          if [ -n "$SECRET_NAME" ] && [ -n "$SECRET_VERSION" ] && gcloud secrets versions access "$SECRET_VERSION" --secret="$SECRET_NAME" --project="$GCP_PROJECT" > /dev/null 2>"$TMP_DIR/secret.err"; then
-            echo 'secret_access=YES'
+          if gcloud run services describe "$CLOUD_RUN_SERVICE" \
+            --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json \
+            > "$TMP_DIR/service.json"; then
+            SERVING_REVISION="$(python3 scripts/read_only_signing_ref.py --service "$TMP_DIR/service.json")"
+            if [ "$?" -eq 0 ] && [ -n "$SERVING_REVISION" ]; then
+              if gcloud run revisions describe "$SERVING_REVISION" \
+                --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json \
+                > "$TMP_DIR/revision.json"; then
+                python3 scripts/read_only_signing_ref.py \
+                  --service "$TMP_DIR/service.json" --revision "$TMP_DIR/revision.json" \
+                  || echo 'signing_reference_observation=INDETERMINATE'
+              else
+                echo 'signing_reference=INDETERMINATE reason=revision_describe_unavailable'
+              fi
+            else
+              echo 'signing_reference=INDETERMINATE reason=serving_revision_unresolved'
+            fi
           else
-            echo 'secret_access=NO'
-            sed -n '1,4p' "$TMP_DIR/secret.err"
+            echo 'signing_reference=INDETERMINATE reason=service_describe_unavailable'
           fi
           rm -rf "$TMP_DIR"
 
@@ -1658,7 +1670,7 @@ jobs:
             --project="$GCP_PROJECT" --freshness=8h --limit=200 --order=asc \
             --format='table(timestamp,resource.labels.revision_name,severity,textPayload,jsonPayload.event,jsonPayload.error,jsonPayload.error_code,httpRequest.status)' || true
 
-          echo 'READONLY_DIAGNOSTIC_COMPLETE'
+          echo 'READONLY_DIAGNOSTIC_COLLECTION_FINISHED__NOT_RELEASE_ACCEPTANCE'
 
   incident378-serving-revision-readonly:
     if: >-

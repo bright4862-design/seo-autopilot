@@ -11,6 +11,9 @@
 // infrastructure = fresh bucket/queue/IAM plus a source-bound task observation.
 // Every observation has observed_at/expires_at, within a 15 minute window.
 // Assembly validates independent live observations and preserves their capture times.
+// For a first ordinary pilot, pass "-" as the assembly task path. Capture
+// that scan's task metadata and pass ORDINARY_TASK_OBSERVATION_FILE for the
+// terminal browser render and receipt collection.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -75,6 +78,18 @@ function matchesWorkerBase44Runtime(worker, expected) {
     })),
   };
   return JSON.stringify(canonical(worker.base44_runtime)) === JSON.stringify(canonical(observation));
+}
+
+function matchesStageTaskObservation(task, contract) {
+  const sample = task?.sample;
+  return task?.schema_version === "staged_scan_task_observation_v1" && task.status === "verified_task_metadata"
+    && task.source_sha === contract.sourceSha && task.worker_revision === contract.revision
+    && task.worker_config_sha256 === contract.configDigest && task.queue_path === contract.queueName
+    && /^scan-[a-f0-9]{64}$/.test(sample?.task_id || "")
+    && ["batch", "finalize"].includes(sample?.stage)
+    && sample.target === `${contract.target}/scan-${sample.stage}`
+    && sample.dispatch_deadline_seconds === 480 && sample.method === "POST"
+    && sample.oidc_invoker === invokerAccount && sample.oidc_audience === contract.audience;
 }
 
 export function validatePrerequisites(packet, expected) {
@@ -191,23 +206,19 @@ export function validatePrerequisites(packet, expected) {
     add(typeof workerSa === "string" && policy?.bindings?.some(row => row.role === role && !row.condition && row.members?.includes(`serviceAccount:${workerSa}`)) && !policy?.bindings?.some(row => row.members?.some(member => ["allUsers", "allAuthenticatedUsers"].includes(member))), `infrastructure_iam_mismatch:${role}`);
   }
   const task = infra?.task;
-  const sample = task?.sample;
   const taskObserved = Date.parse(task?.observed_at);
-  add(task?.schema_version === "staged_scan_task_observation_v1" && task.status === "verified_task_metadata"
-    && task.source_sha === expected.sourceSha && task.worker_revision === worker?.revision?.metadata?.name
-    && task.worker_config_sha256 === configDigest && task.queue_path === stageQueue?.name
-    && Number.isFinite(taskObserved) && taskObserved <= now && now - taskObserved <= taskSampleLifetimeMs
-    && /^scan-[a-f0-9]{64}$/.test(sample?.task_id || "")
-    && ["batch", "finalize"].includes(sample?.stage)
-    && sample?.target === `${workerEnv.SCAN_STAGE_TARGET_URL}/scan-${sample?.stage}`
-    && sample?.dispatch_deadline_seconds === 480 && sample?.method === "POST"
-    && sample?.oidc_invoker === invokerAccount && sample?.oidc_audience === workerEnv.SCAN_STAGE_TOKEN_AUDIENCE,
-  "stage_task_contract_mismatch");
-  return { ready: failures.length === 0, failures: [...new Set(failures)], provenance: failures.length ? null : {
+  const taskContract = { sourceSha: expected.sourceSha, revision: worker?.revision?.metadata?.name, configDigest,
+    queueName: stageQueue?.name, target: workerEnv.SCAN_STAGE_TARGET_URL, audience: workerEnv.SCAN_STAGE_TOKEN_AUDIENCE };
+  const taskDeferred = ordinaryPilot && expected.allowDeferredOrdinaryTask === true
+    && packet?.ordinary_task_observation === "deferred" && task === null;
+  add(taskDeferred || (matchesStageTaskObservation(task, taskContract)
+    && Number.isFinite(taskObserved) && taskObserved <= now && now - taskObserved <= taskSampleLifetimeMs), "stage_task_contract_mismatch");
+  return { ready: failures.length === 0, failures: [...new Set(failures)], taskDeferred, taskContract, provenance: failures.length ? null : {
     source_sha: expected.sourceSha, release_fingerprint: expected.fingerprint, observed_at: packet.observed_at, expires_at: packet.expires_at,
     worker_revision: worker.revision.metadata.name, gateway_revision: gateway.revision.metadata.name,
     worker_config_sha256: configDigest, staged_owner_cohort_sha256: cohort,
     ...(ordinaryPilot ? { ordinary_pilot: { operator_user_id: expected.ordinaryOperatorId, owner_user_id: owner } } : {}),
+    ...(taskDeferred ? { ordinary_task_observation: "deferred" } : {}),
     base44_functions: functions.map(({ name, route_name, build_id, package_digest, runtime_activation_id }) => ({ name, route_name, build_id, package_digest, runtime_activation_id })),
     schema_readback_sha256: digest(packet.schema_readback.entity_sources), infrastructure_sha256: digest(infra), prerequisite_sha256: digest(packet),
   } };
@@ -316,6 +327,10 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
       require(typeof config.ordinaryScanId === "string" && /^[A-Za-z0-9_-]{6,160}$/.test(config.ordinaryScanId)
         && pilot?.owner_user_id === config.ownerId && pilot.operator_user_id !== config.ownerId
         && ["6a498da58ef5cec1f5cd4486", "6a498732ec779dfaaeab0e54"].includes(pilot.operator_user_id), "ordinary_pilot_identity_mismatch");
+      if (config.provenance.ordinary_task_observation === "deferred") {
+        require(/^[a-f0-9]{64}$/.test(config.provenance.ordinary_stage_task_observation_sha256 || ""),
+          "ordinary_stage_task_observation_required");
+      }
       require(operator?.schema_version === "staged_500_ordinary_operator_readback_v1"
         && operator.operator_user_id === pilot.operator_user_id && operator.source_sha === config.sourceSha
         && operator.prerequisite_sha256 === config.provenance.prerequisite_sha256
@@ -535,10 +550,10 @@ function operatorReadbackFromExec(input) {
   return JSON.parse(lines[0].slice(prefix.length));
 }
 
-function ordinaryReadbackContext(packet, expected, operator, env, now = Date.now()) {
-  if (!ordinaryTerminalWindow(operator, now)) throw new Error("ordinary_operator_window_invalid");
+function ordinaryReadbackContext(packet, expected, operator, env, { verifyTask = false } = {}) {
+  if (!ordinaryTerminalWindow(operator, Date.now())) throw new Error("ordinary_operator_window_invalid");
   const observed = persistedTimestamp(operator.observed_at);
-  const validation = validatePrerequisites(packet, { ...expected, now: observed });
+  const validation = validatePrerequisites(packet, { ...expected, now: observed, allowDeferredOrdinaryTask: true });
   if (!validation.ready) throw new Error(validation.failures.join(","));
   const provenance = validation.provenance;
   const run = operator.run;
@@ -567,6 +582,30 @@ function ordinaryReadbackContext(packet, expected, operator, env, now = Date.now
       || (complete ? run.authority_proof_present !== true || !/^[a-zA-Z0-9_]{1,120}$/.test(run.authority_seal_version || "")
         : run.result_integrity_proof_present !== true || !/^[a-zA-Z0-9_]{1,120}$/.test(run.result_integrity_version || ""))) {
     throw new Error("ordinary_operator_readback_identity_mismatch");
+  }
+  if (verifyTask && validation.taskDeferred) {
+    if (!env.ORDINARY_TASK_OBSERVATION_FILE) throw new Error("ordinary_stage_task_observation_required");
+    const task = readObservation(env.ORDINARY_TASK_OBSERVATION_FILE);
+    const taskTime = persistedTimestamp(task?.observed_at);
+    const started = persistedTimestamp(run.started_at);
+    // Existing task observations use whole seconds. Match a sample made in
+    // the run's first second while keeping later/fractional times exact.
+    const earliest = /T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})$/.test(task?.observed_at || "")
+      ? Math.floor(started / 1000) * 1000 : started;
+    if (!matchesStageTaskObservation(task, validation.taskContract)
+        || !(taskTime >= earliest && taskTime <= persistedTimestamp(operator.terminal_observed_at))) {
+      throw new Error("ordinary_stage_task_observation_mismatch");
+    }
+    // Match StageTaskDispatcher's IDs for a committed batch or the finalizer,
+    // without requesting Cloud Tasks' full view or exposing the signed task body.
+    const { stage, task_id: taskId } = task.sample;
+    const prefix = `${run.id}:${run.attempt_count}:${stage}:`;
+    const identities = stage === "batch" ? Array.from({ length: batches }, (_, batch) => prefix + batch)
+      : [prefix + batches, `${prefix}${batches}:recovery:1`];
+    if (!identities.some(identity => taskId === `scan-${sha256(identity)}`)) {
+      throw new Error("ordinary_stage_task_attempt_mismatch");
+    }
+    provenance.ordinary_stage_task_observation_sha256 = digest(task);
   }
   const runFields = [
     "id", "owner_user_id", "project_id", "request_id", "idempotency_key", "website_url",
@@ -688,6 +727,7 @@ export function assemblePrerequisites({ base44, schema, intake, cloud, task }, e
   const expires_at = new Date(expires).toISOString();
   const packet = {
     schema_version: "staged_scan_acceptance_prerequisites_v1", source_sha: expected.sourceSha,
+    ...(expected.allowDeferredOrdinaryTask === true && task === null ? { ordinary_task_observation: "deferred" } : {}),
     release_fingerprint: expected.fingerprint, observed_at, expires_at,
     base44: { ...base44, expires_at },
     schema_readback: { observed_at: schema.observed_at, expires_at, source_sha: schema.source_sha, app_id: schema.app_id,
@@ -700,6 +740,13 @@ export function assemblePrerequisites({ base44, schema, intake, cloud, task }, e
   const check = validatePrerequisites(packet, { ...expected, now });
   if (!check.ready) throw new Error(check.failures.join(","));
   return packet;
+}
+
+function readObservation(file) {
+  if (typeof file !== "string" || !path.isAbsolute(file) || !fs.lstatSync(file).isFile() || fs.realpathSync(file) !== file) {
+    throw new Error("observation_path_invalid");
+  }
+  return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
 export function writeNewArtifact(output, value, root) {
@@ -718,13 +765,13 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
       const [base44File, schemaFile, intakeFile, cloudFile, taskFile, output] = process.argv.slice(3);
       const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
       const expected = localAcceptanceIdentity(root, process.env.SOURCE_SHA, process.env.EXPECTED_OWNER_USER_ID);
-      if (mode === "assemble-ordinary-prerequisites") expected.ordinaryOperatorId = process.env.EXPECTED_OPERATOR_USER_ID || "";
-      const read = file => {
-        if (!path.isAbsolute(file) || !fs.lstatSync(file).isFile() || fs.realpathSync(file) !== file) throw new Error("observation_path_invalid");
-        return JSON.parse(fs.readFileSync(file, "utf8"));
-      };
-      const packet = assemblePrerequisites({ base44: read(base44File), schema: read(schemaFile), intake: read(intakeFile),
-        cloud: read(cloudFile), task: read(taskFile) }, expected);
+      if (mode === "assemble-ordinary-prerequisites") {
+        expected.ordinaryOperatorId = process.env.EXPECTED_OPERATOR_USER_ID || "";
+        expected.allowDeferredOrdinaryTask = taskFile === "-";
+      }
+      const packet = assemblePrerequisites({ base44: readObservation(base44File), schema: readObservation(schemaFile),
+        intake: readObservation(intakeFile), cloud: readObservation(cloudFile),
+        task: expected.allowDeferredOrdinaryTask ? null : readObservation(taskFile) }, expected);
       writeNewArtifact(output, packet, root);
       console.log("STAGED_500_PREREQUISITES_ASSEMBLED");
     }
@@ -733,10 +780,11 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
       const ordinary = mode !== "render";
       const expected = localAcceptanceIdentity(root, env.SOURCE_SHA, env.EXPECTED_OWNER_USER_ID);
       if (ordinary) expected.ordinaryOperatorId = env.EXPECTED_OPERATOR_USER_ID || "";
+      if (mode === "render-ordinary-operator-readback") expected.allowDeferredOrdinaryTask = true;
       const packet = JSON.parse(fs.readFileSync(env.PREREQUISITES_FILE, "utf8"));
       const browser = mode === "render-ordinary-readback";
       const readback = browser
-        ? ordinaryReadbackContext(packet, expected, JSON.parse(fs.readFileSync(env.ORDINARY_OPERATOR_READBACK_FILE, "utf8")), env)
+        ? ordinaryReadbackContext(packet, expected, readObservation(env.ORDINARY_OPERATOR_READBACK_FILE), env, { verifyTask: true })
         : null;
       const validation = readback ?? validatePrerequisites(packet, expected);
       if (!validation.provenance) throw new Error(validation.failures.join(","));
@@ -790,7 +838,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
         const expected = localAcceptanceIdentity(root, env.SOURCE_SHA, env.EXPECTED_OWNER_USER_ID);
         expected.ordinaryOperatorId = env.EXPECTED_OPERATOR_USER_ID || "";
         const operator = JSON.parse(fs.readFileSync(env.ORDINARY_OPERATOR_READBACK_FILE, "utf8"));
-        report = collectOrdinaryBrowserReport(report, ordinaryReadbackContext(packet, expected, operator, env));
+        report = collectOrdinaryBrowserReport(report, ordinaryReadbackContext(packet, expected, operator, env, { verifyTask: true }));
       }
       if (!ordinary && Number(cliStatus) !== 0) { report.terminal_outcome_verified = false; report.failure_code = "cli_execution_failed"; }
       writeNewArtifact(output, report, path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."));

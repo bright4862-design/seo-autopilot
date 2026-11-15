@@ -99,6 +99,20 @@ async def simulated_canary(monkeypatch, *, limited=False, fail_first_finalize=Fa
 
 
 @pytest.mark.asyncio
+async def test_deferred_ordinary_task_must_be_bound_before_gcs_receipt_collection(monkeypatch):
+    _, report, _, _ = await simulated_canary(monkeypatch)
+    report["execution_mode"] = "ordinary_user_readback"
+    report["provenance"]["ordinary_task_observation"] = "deferred"
+    with pytest.raises(collector.EvidenceError, match="ordinary_stage_task_observation_unverified"):
+        collector.canary_identity(report)
+    report["provenance"]["ordinary_stage_task_observation_sha256"] = "b" * 64
+    assert collector.canary_identity(report).scan_id == report["scan_id"]
+    del report["execution_mode"]
+    with pytest.raises(collector.EvidenceError, match="ordinary_stage_task_observation_unverified"):
+        collector.canary_identity(report)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("limited", [False, True])
 async def test_collects_committed_chain_and_an_earlier_review_producer(monkeypatch, limited):
     harness, report, frontier, body = await simulated_canary(monkeypatch, limited=limited, fail_first_finalize=True)

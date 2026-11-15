@@ -109,6 +109,11 @@ class Canary:
 def canary_identity(report: dict) -> Canary:
     require(isinstance(report, dict), "canary_report_invalid")
     provenance = mapping(report.get("provenance"))
+    if "ordinary_task_observation" in provenance:
+        require(report.get("execution_mode") == "ordinary_user_readback"
+                and provenance["ordinary_task_observation"] == "deferred"
+                and matches(SHA256, provenance.get("ordinary_stage_task_observation_sha256")),
+                "ordinary_stage_task_observation_unverified")
     scan_id, request_id = report.get("scan_id"), report.get("request_id")
     attempt, pages, planned, batches = (report.get(name) for name in (
         "attempt_count", "pages_crawled", "pages_planned", "committed_batch_count",

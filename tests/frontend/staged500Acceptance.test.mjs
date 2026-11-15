@@ -164,12 +164,16 @@ test("the ordinary-user packet verifies the separate operator readback for only 
   assert.ok(validatePrerequisites(legacyPacket, expected).failures.includes("base44_readiness_identity_mismatch"));
 });
 
-test("the authenticated ordinary account can verify a completed native V9 scan without launching work", async t => {
+test("the first ordinary V9 scan supplies its own exact task evidence without needing a rehearsal scan", async t => {
   const receiptTime = Date.now();
   const observationTime = receiptTime - 20 * 60_000;
   const { entitySources } = localAcceptanceIdentity(process.cwd(), sha, owner);
   const { data, expected } = ordinaryPacket(observationTime, entitySources);
-  const { provenance } = validatePrerequisites(data, expected);
+  const ownTask = structuredClone(data.infrastructure.task);
+  data.infrastructure.task = null;
+  data.ordinary_task_observation = "deferred";
+  assert.ok(validatePrerequisites(data, expected).failures.includes("stage_task_contract_mismatch"));
+  const { provenance } = validatePrerequisites(data, { ...expected, allowDeferredOrdinaryTask: true });
   assert.ok(provenance);
   assert.ok(Date.parse(data.expires_at) < receiptTime);
   const fake = fakeSdk("notAdmin");
@@ -204,7 +208,10 @@ test("the authenticated ordinary account can verify a completed native V9 scan w
     return { data: projection };
   };
   delete fake.sdk.entities.ScanRun;
-  const report = await executeStaged500Canary(fake.sdk, ordinary, () => receiptTime);
+  const unproven = await executeStaged500Canary({}, ordinary, () => receiptTime);
+  assert.equal(unproven.failure_code, "ordinary_stage_task_observation_required");
+  const staged = { ...ordinary, provenance: { ...provenance, ordinary_stage_task_observation_sha256: "4".repeat(64) } };
+  let report = await executeStaged500Canary(fake.sdk, staged, () => receiptTime);
   assert.equal(report.terminal_outcome_verified, true, report.failure_code);
   assert.equal(report.execution_mode, "ordinary_user_readback");
   assert.equal(report.scan_id, fake.run.id);
@@ -214,15 +221,15 @@ test("the authenticated ordinary account can verify a completed native V9 scan w
   assert.equal(report.committed_batch_count, 10);
   assert.ok(fake.calls.some(call => call.name === resultRoute));
   assert.ok(!fake.calls.some(call => call.name === launchRoute));
-  const unversioned = await executeStaged500Canary({}, { ...ordinary, resultRoute: "getCustomerScanResultV9" }, () => receiptTime);
+  const unversioned = await executeStaged500Canary({}, { ...staged, resultRoute: "getCustomerScanResultV9" }, () => receiptTime);
   assert.equal(unversioned.failure_code, "staged_scan_routes_unverified");
   projection.run.pages_crawled = 499;
-  const discrepant = await executeStaged500Canary(fake.sdk, ordinary, () => receiptTime);
+  const discrepant = await executeStaged500Canary(fake.sdk, staged, () => receiptTime);
   assert.equal(discrepant.failure_code, "ordinary_customer_projection_mismatch");
   projection.run.pages_crawled = 500;
 
   const importReadback = config => import(`data:text/javascript;base64,${Buffer.from(renderOrdinaryReadback(config)).toString("base64")}`);
-  const browser = await importReadback(ordinary);
+  const browser = await importReadback(staged);
   assert.deepEqual(await browser.verifyOrdinaryStaged500Readback(fake.sdk), report);
 
   const staleConfig = { ...ordinary, provenance: { ...provenance, expires_at: "1970-01-01T00:00:00.000Z" } };
@@ -236,19 +243,60 @@ test("the authenticated ordinary account can verify a completed native V9 scan w
   const operatorFile = path.join(directory, "operator.json");
   const browserFile = path.join(directory, "browser.json");
   const reportFile = path.join(directory, "report.json");
+  const taskFile = path.join(directory, "task.json");
   const prerequisitesFile = path.join(directory, "prerequisites.json");
   writeFileSync(prerequisitesFile, JSON.stringify(data));
   const env = { ...process.env, SOURCE_SHA: sha, EXPECTED_OWNER_USER_ID: owner, EXPECTED_OPERATOR_USER_ID: pilotOperator,
     PROJECT_ID: project, REQUEST_ID: fake.run.request_id, TARGET_URL: fake.run.website_url,
-    ORDINARY_SCAN_ID: fake.run.id, ORDINARY_OPERATOR_READBACK_FILE: operatorFile, PREREQUISITES_FILE: prerequisitesFile };
+    ORDINARY_SCAN_ID: fake.run.id, ORDINARY_OPERATOR_READBACK_FILE: operatorFile, PREREQUISITES_FILE: prerequisitesFile,
+    ORDINARY_TASK_OBSERVATION_FILE: "" };
   const collect = (mode, input, output) => spawnSync(process.execPath,
     ["scripts/staged_scan_acceptance.mjs", mode, input, output], { env, encoding: "utf8" });
+  const preflightClock = `data:text/javascript,${encodeURIComponent(`Date.now = () => ${observationTime}`)}`;
+  const operatorRender = spawnSync(process.execPath, ["--import", preflightClock, "scripts/staged_scan_acceptance.mjs",
+    "render-ordinary-operator-readback"], { env, encoding: "utf8" });
+  assert.equal(operatorRender.status, 0, operatorRender.stderr);
+  assert.match(operatorRender.stdout, /FIXLIST_STAGED_500_ORDINARY_OPERATOR=/);
   writeFileSync(operatorExec, "CLI banner\nFIXLIST_STAGED_500_ORDINARY_OPERATOR=" + JSON.stringify(operatorReadback) + "\n");
   const collected = collect("collect-ordinary-operator-readback", operatorExec, operatorFile);
   assert.equal(collected.status, 0, collected.stderr);
-  const rendered = spawnSync(process.execPath, ["scripts/staged_scan_acceptance.mjs", "render-ordinary-readback"], { env, encoding: "utf8" });
+  const renderBrowser = () => spawnSync(process.execPath, ["scripts/staged_scan_acceptance.mjs", "render-ordinary-readback"], { env, encoding: "utf8" });
+  assert.match(renderBrowser().stderr, /ordinary_stage_task_observation_required/);
+  env.ORDINARY_TASK_OBSERVATION_FILE = taskFile;
+  ownTask.observed_at = new Date(observationTime + 60_000).toISOString();
+  ownTask.sample.task_id = `scan-${hash(`${fake.run.id}:${fake.run.attempt_count}:batch:0`)}`;
+  for (const identity of ["another_scan:2:batch:0", `${fake.run.id}:1:batch:0`]) {
+    writeFileSync(taskFile, JSON.stringify({ ...ownTask, sample: { ...ownTask.sample, task_id: `scan-${hash(identity)}` } }));
+    assert.match(renderBrowser().stderr, /ordinary_stage_task_attempt_mismatch/);
+  }
+  for (const wrongTime of [observationTime - 26_000, receiptTime + 1000]) {
+    writeFileSync(taskFile, JSON.stringify({ ...ownTask, observed_at: new Date(wrongTime).toISOString() }));
+    assert.match(renderBrowser().stderr, /ordinary_stage_task_observation_mismatch/);
+  }
+  const startedSecond = new Date(Date.parse(fake.run.started_at)).toISOString().replace(/\.\d{3}Z$/, "Z");
+  writeFileSync(taskFile, JSON.stringify({ ...ownTask, observed_at: startedSecond }));
+  assert.equal(renderBrowser().status, 0, "whole-second metadata can be captured in the first partial second of the run");
+  const recoveredFinalizer = { ...ownTask, sample: {
+    ...ownTask.sample, stage: "finalize", target: stageUrl + "/scan-finalize",
+    task_id: `scan-${hash(`${fake.run.id}:${fake.run.attempt_count}:finalize:10:recovery:1`)}`,
+  }};
+  writeFileSync(taskFile, JSON.stringify(recoveredFinalizer));
+  assert.equal(renderBrowser().status, 0, "the exact recovery finalizer can supply proof for the same terminal attempt");
+  writeFileSync(taskFile, JSON.stringify(ownTask));
+  const rendered = renderBrowser();
   assert.equal(rendered.status, 0, rendered.stderr);
   assert.ok(rendered.stdout.includes(resultRoute));
+  const withTask = await import(`data:text/javascript;base64,${Buffer.from(rendered.stdout).toString("base64")}`);
+  report = await withTask.verifyOrdinaryStaged500Readback(fake.sdk);
+  assert.equal(report.terminal_outcome_verified, true, report.failure_code);
+  assert.equal(report.provenance.prerequisite_sha256, provenance.prerequisite_sha256);
+  assert.match(report.provenance.ordinary_stage_task_observation_sha256, /^[a-f0-9]{64}$/);
+  writeFileSync(browserFile, JSON.stringify(report));
+  writeFileSync(taskFile, JSON.stringify(recoveredFinalizer));
+  assert.match(collect("collect-ordinary-readback", browserFile, reportFile).stderr, /ordinary_operator_report_mismatch/);
+  writeFileSync(taskFile, JSON.stringify({ ...ownTask, worker_config_sha256: "0".repeat(64) }));
+  assert.match(collect("collect-ordinary-readback", browserFile, reportFile).stderr, /ordinary_stage_task_observation_mismatch/);
+  writeFileSync(taskFile, JSON.stringify(ownTask));
   for (const change of [{ committed_batch_count: 9 }, { terminal_outcome_verified: "yes" }, { full_500_gate: true },
     { acceptance_verified: true }, { production_freeze: true }, { duration_ms: 1 }, { release_fingerprint: "b".repeat(16) }]) {
     writeFileSync(browserFile, JSON.stringify({ ...report, ...change }));
@@ -450,6 +498,13 @@ test("prerequisite assembly uses fresh live reports and preserves the actual tas
     /base44_intake_cohort_mismatch/);
   assert.throws(() => assemblePrerequisites({ ...input, cloud: { ...input.cloud, expires_at: stamp.observed_at } }, local, now),
     /live_observations_stale/);
+  assert.throws(() => assemblePrerequisites({ ...input, task: null }, { ...local, allowDeferredOrdinaryTask: true }, now),
+    /stage_task_contract_mismatch/);
+  const ordinary = ordinaryPacket();
+  const firstPilot = assemblePrerequisites({ ...input, intake: ordinary.data.base44_configuration.intake_route, task: null },
+    { ...ordinary.expected, allowDeferredOrdinaryTask: true }, now);
+  assert.equal(firstPilot.ordinary_task_observation, "deferred");
+  assert.equal(firstPilot.infrastructure.task, null);
 });
 
 test("raw schema readbacks compare the migration contract rather than JSON formatting", () => {

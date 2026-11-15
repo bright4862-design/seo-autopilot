@@ -12,9 +12,10 @@ const london = { id: "6a498732ec779dfaaeab0e54", email: "londonparisbrussels@gma
 const customer = { id: "6aaaaaaaaaaaaaaaaaaaaaaa", email: "customer@example.test", role: "user" };
 const operator = "scripts/operate-base44-staged-runtime.sh";
 const collector = "scripts/collect-base44-staged-observations.sh";
-const buildId = "1".repeat(64);
+const routeManifest = "data/generated-staged-v9-routes.json";
+const { functions } = JSON.parse(readFileSync(new URL("../../" + routeManifest, import.meta.url), "utf8"));
+const { route_name: intakeRoute, build_id: buildId, runtime_activation_id: activationId } = functions.startStandardScanJobV9;
 const fingerprint = "2".repeat(16);
-const activationId = "v9-activation";
 const customerDigest = createHash("sha256").update(JSON.stringify([customer.id])).digest("hex");
 const gatewayOrigin = "https://fixlist-dispatch-gateway-tpucgyfewa-ew.a.run.app";
 const gatewayRevision = "fixlist-dispatch-gateway-staged-fixture";
@@ -30,6 +31,7 @@ function fixture(t) {
   mkdirSync(join(root, "scripts/lib"), { recursive: true });
   mkdirSync(join(root, "data"));
   writeFileSync(join(root, "data/beta-crawler-revision.json"), JSON.stringify({ fingerprint }));
+  copyFileSync(routeManifest, join(root, routeManifest));
   for (const file of [operator, collector]) copyFileSync(file, join(root, file));
   writeFileSync(join(root, "scripts/lib/release-source-guard.sh"), "fixlist_require_exact_main() { [[ \"$2\" == \"$SOURCE_SHA\" ]]; }\n");
   writeFileSync(join(root, "scripts/lib/base44-pinned-cli.sh"), `
@@ -38,16 +40,17 @@ fixlist_require_base44_owner() { [[ "$1" == "$TEST_CLI_USER" ]] || return 2; }
 `);
   writeFileSync(join(root, "scripts/base44_release_manifest.mjs"),
     "export function assertPulledFunctionPackage() {}\n");
-  writeFileSync(join(root, "scripts/generate_release_contracts.mjs"), `
-if (process.argv[3] !== "startStandardScanJobV9") process.exit(1);
-const outputs = {"--build-id": "${buildId}", "--activation-id": "${activationId}"};
-if (!Object.hasOwn(outputs, process.argv[2])) process.exit(1);
-console.log(outputs[process.argv[2]]);
-`);
+  const readiness = { schema_version: "fixlist_staged_v9_readiness_v2", candidate_fingerprint: fingerprint,
+    functions: Object.entries(functions).map(([name, row]) => ({ name, ...row, http_status: 405 })),
+    runtime_probe_transport: "base44_native_authenticated_sdk_get",
+    anonymous_probe: { transport: "base44_legacy_anonymous_get",
+      functions: Object.entries(functions).map(([name, { route_name, build_id, runtime_activation_id }]) => ({
+        name, route_name, build_id, runtime_activation_id, state: "matched", http_status: 405,
+      })) } };
   writeFileSync(join(root, "scripts/deploy-base44-staged-functions.sh"), `
 #!/usr/bin/env bash
 [[ "$1" == verify ]] || exit 1
-printf '%s\\n' '{"candidate_fingerprint":"${fingerprint}","functions":[{"name":"startStandardScanJobV9","build_id":"${buildId}","runtime_activation_id":"${activationId}"}]}' > "$READINESS_OUTPUT"
+printf '%s\\n' '${JSON.stringify(readiness)}' > "$READINESS_OUTPUT"
 `);
   writeFileSync(join(root, "scripts/base44_staged_schema.mjs"), `
 import { writeFileSync } from "node:fs";
@@ -79,6 +82,7 @@ if (args[2] === "exec") {
         env_mode: "staged", owner_match: true, cohort_count: 1, intake_disabled_verified: true,
         ...JSON.parse(process.env.TEST_PROBE)
       };
+      if (name !== "${intakeRoute}" || payload.action !== "staged_runtime_status") throw new Error("unexpected intake route");
       return {
         success: true, schema_version: "fixlist_staged_v9_intake_readback_v1",
         observed_at: new Date().toISOString(), build_id: "${buildId}", runtime_activation_id: "${activationId}",
@@ -149,7 +153,7 @@ test("the new London staged cohort uses the signed-in app identity before any Ba
   assert.deepEqual(result.calls.slice(0, 2), [["exec", "--data-env", "prod"], ["auth.me"]]);
   assert.equal(result.calls.filter(([name]) => name === "secrets").length, 2);
   assert.ok(result.calls.some(row => row.includes(`SCAN_STAGED_OWNER_IDS=${london.id}`)));
-  assert.equal(result.calls.filter(row => row[1] === "startStandardScanJobV9").length, 2);
+  assert.equal(result.calls.filter(row => row[1] === intakeRoute).length, 2);
 });
 
 for (const [operation, user] of [
@@ -185,7 +189,7 @@ for (const [name, admin] of [["London", london], ["Bright", bright]]) {
     const result = fixture(t)(operator, "prepare-owner", customer.id, admin, pilotOptions(admin));
     assert.equal(result.status, 0, result.stderr);
     const { calls } = result;
-    const intakeReadbacks = calls.flatMap((row, index) => row[1] === "startStandardScanJobV9" ? [index] : []);
+    const intakeReadbacks = calls.flatMap((row, index) => row[1] === intakeRoute ? [index] : []);
     const mutations = calls.flatMap((row, index) => row[0] === "secrets" ? [index] : []);
     assert.deepEqual(calls.slice(0, 2), [["exec", "--data-env", "prod"], ["auth.me"]]);
     assert.equal(intakeReadbacks.length, 2);
@@ -238,7 +242,7 @@ test("customer-cohort disable is available with a stale V9 route", t => {
   const options = pilotOptions(london, { probe: { env_mode: "monolith", owner_match: false, cohort_count: 0 } });
   const result = fixture(t)(operator, "disable", customer.id, london, options);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.calls.some(row => row[1] === "startStandardScanJobV9"), false);
+  assert.equal(result.calls.some(row => row[1] === intakeRoute), false);
   assert.ok(result.calls.some(row => row.includes("SCAN_PIPELINE_MODE=monolith") && row.includes("SCAN_STAGED_OWNER_IDS=")));
   assert.ok(result.calls.some(row => row.includes("SCAN_STAGED_ROLLOUT_SCOPE=off") && row.includes("SCAN_STAGED_500_ENTITLED_ENABLED=false")));
 });
@@ -286,13 +290,13 @@ for (const cap of ["150", "500"]) {
   test(`paid ${cap} preparation proves both runtimes and keeps intake closed`, t => {
     const result = fixture(t)(operator, "prepare-paid", "", london, paidOptions(cap));
     assert.equal(result.status, 0, result.stderr);
-    const relevant = result.calls.filter(([name, fn]) => name === "secrets" || name === "gateway.health" || fn === "startStandardScanJobV9");
+    const relevant = result.calls.filter(([name, fn]) => name === "secrets" || name === "gateway.health" || fn === intakeRoute);
     assert.deepEqual(relevant, [
-      ["invoke", "startStandardScanJobV9", "staged_runtime_status"], ["gateway.health"],
+      ["invoke", intakeRoute, "staged_runtime_status"], ["gateway.health"],
       ["secrets", "set", "BETA_SCAN_INTAKE_ENABLED=false"], ["gateway.health"],
       ["secrets", "set", "SCAN_PIPELINE_MODE=staged", "SCAN_STAGED_OWNER_IDS=", "SCAN_PIPELINE_OWNER_IDS=",
         "SCAN_STAGED_ROLLOUT_SCOPE=paid", `SCAN_STAGED_500_ENTITLED_ENABLED=${cap === "500"}`],
-      ["invoke", "startStandardScanJobV9", "staged_runtime_status"], ["gateway.health"],
+      ["invoke", intakeRoute, "staged_runtime_status"], ["gateway.health"],
     ]);
     assert.match(result.stdout, /BASE44_STAGED_PAID_READBACK_VERIFIED.*public_intake=closed/);
   });
@@ -349,7 +353,7 @@ test("the collector reads V9 for the selected London app identity", t => {
   const result = fixture(t)(collector, "status", london.id, london);
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(result.calls, [
-    ["exec", "--data-env", "prod"], ["auth.me"], ["invoke", "startStandardScanJobV9", "staged_runtime_status"],
+    ["exec", "--data-env", "prod"], ["auth.me"], ["invoke", intakeRoute, "staged_runtime_status"],
   ]);
   assert.equal(JSON.parse(readFileSync(join(result.output, "intake.json"), "utf8")).staged_owner_enabled, true);
 });

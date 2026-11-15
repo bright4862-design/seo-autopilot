@@ -4,6 +4,7 @@ import { pageCapFromRecord, inventoryCoverageLine, serverSelectedPriorityCards }
 import { scanProgressModel } from "../../src/lib/scanProgressPresentation.js";
 import { resolveScanFunctionRoute } from "../../src/lib/scanFunctionRouting.js";
 import { buildRepairCard, whereLine } from "../../src/lib/repairCardModel.js";
+import deployments from "../../data/generated-staged-v9-routes.json" with { type: "json" };
 
 test("the saved cap controls presentation while historical scans keep their cap", () => {
   assert.equal(pageCapFromRecord({}), 150);
@@ -50,7 +51,7 @@ test("priority cards follow only the server shortlist and preserve all other car
 test("V9 routing is an explicit deployment opt-in for admission, read and delete together", () => {
   for (const name of ["startStandardScanJob", "getCustomerScanResult", "deleteCustomerScanData"]) {
     assert.equal(resolveScanFunctionRoute(`${name}V8`), `${name}V8`);
-    assert.equal(resolveScanFunctionRoute(`${name}V8`, "V9"), `${name}V9`);
+    assert.equal(resolveScanFunctionRoute(`${name}V8`, "V9"), deployments.functions[`${name}V9`].route_name);
     assert.equal(resolveScanFunctionRoute(`${name}V8`, "v9"), `${name}V8`);
   }
   assert.equal(resolveScanFunctionRoute("createAccessCheckout", "V9"), "createAccessCheckout");

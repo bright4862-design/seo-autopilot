@@ -162,6 +162,8 @@ test("operator shell only changes staged config and intake, never admission rele
   assert.match(src,/functions pull fixlistStagedRuntimeControl/);
   assert.match(src,/BASE44_STAGED_OPERATOR_PACKAGE_MATCHED/);
   assert.match(src,/assertPulledFunctionPackage\(name, path\.join\(root, 'base44\/functions', name\), path\.join\(remote, name\)\)/);
+  assert.match(src,/data\/generated-staged-v9-routes\.json/);
+  assert.match(src,/base44\.functions\.invoke\(intakeRoute, \{action:"staged_runtime_status"\}\)/);
   assert.match(src,/SCAN_PIPELINE_MODE=monolith/);
   assert.match(src,/SCAN_STAGED_OWNER_IDS=/);
   assert.match(src,/BETA_SCAN_INTAKE_ENABLED=false/);

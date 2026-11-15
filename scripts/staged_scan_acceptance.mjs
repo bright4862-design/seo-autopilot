@@ -3,7 +3,7 @@
 // this module deploys, changes a grant/cohort, or calls a cloud API.
 //
 // Prerequisite packet v1 contains fresh raw observations, not verified:true:
-// base44 = existing fixlist_staged_v9_readiness_v1 report;
+// base44 = exact versioned publication's fixlist_staged_v9_readiness_v2 report;
 // schema_readback.entity_sources = exact pulled .jsonc file contents;
 // base44_configuration.intake_route = authenticated V9 intake configuration;
 // worker/gateway = Cloud Run revision+service exports and bound runtime probes;
@@ -16,7 +16,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { buildManifest, STAGED_RELEASE_FUNCTIONS, STAGED_RELEASE_ENTITIES } from "./base44_release_manifest.mjs";
+import { STAGED_RELEASE_FUNCTIONS, STAGED_RELEASE_ENTITIES } from "./base44_release_manifest.mjs";
 import { diffEntity } from "./base44_authority_schema.mjs";
 
 export const APP_ID = "6a498732ec779dfaaeab0e53";
@@ -65,6 +65,7 @@ function matchesWorkerBase44Runtime(worker, expected) {
     functions: WORKER_V9_FUNCTIONS.map(name => ({
       protocol: "fixlist_worker_runtime_v1",
       function_name: name,
+      route_name: expected.functions[name].route_name,
       action: "identity",
       http_status: 200,
       release_fingerprint: expected.fingerprint,
@@ -88,12 +89,23 @@ export function validatePrerequisites(packet, expected) {
   add(/^[a-f0-9]{16}$/.test(expected.fingerprint) && packet?.release_fingerprint === expected.fingerprint, "prerequisite_fingerprint_mismatch");
   const base44 = packet?.base44;
   fresh(base44, "base44_runtime_stale", true);
-  add(base44?.schema_version === "fixlist_staged_v9_readiness_v1" && base44?.source_sha === expected.sourceSha && base44?.app_id === APP_ID && base44?.candidate_fingerprint === expected.fingerprint, "base44_readiness_identity_mismatch");
+  add(base44?.schema_version === "fixlist_staged_v9_readiness_v2" && base44?.source_sha === expected.sourceSha
+    && base44?.app_id === APP_ID && base44?.candidate_fingerprint === expected.fingerprint
+    && base44?.runtime_probe_transport === "base44_native_authenticated_sdk_get"
+    && base44?.anonymous_probe?.transport === "base44_legacy_anonymous_get", "base44_readiness_identity_mismatch");
   const functions = Array.isArray(base44?.functions) ? base44.functions : [];
+  const external = Array.isArray(base44?.anonymous_probe?.functions) ? base44.anonymous_probe.functions : [];
   add(functions.length === STAGED_RELEASE_FUNCTIONS.length && new Set(functions.map(row => row?.name)).size === functions.length, "base44_function_inventory_mismatch");
+  add(external.length === STAGED_RELEASE_FUNCTIONS.length && new Set(external.map(row => row?.name)).size === external.length, "base44_external_inventory_mismatch");
   for (const name of STAGED_RELEASE_FUNCTIONS) {
     const actual = functions.find(row => row?.name === name), local = expected.functions?.[name];
-    add(Boolean(local) && actual?.build_id === local.build_id && actual?.package_digest === local.package_digest && actual?.runtime_activation_id === local.runtime_activation_id && actual?.http_status === 405, `base44_package_mismatch:${name}`);
+    const direct = external.find(row => row?.name === name);
+    add(Boolean(local) && actual?.route_name === local.route_name && actual?.build_id === local.build_id
+      && actual?.package_digest === local.package_digest && actual?.runtime_activation_id === local.runtime_activation_id
+      && actual?.http_status === 405, `base44_package_mismatch:${name}`);
+    add(Boolean(local) && direct?.route_name === local.route_name && direct?.state === "matched"
+      && direct?.build_id === local.build_id && direct?.runtime_activation_id === local.runtime_activation_id
+      && direct?.http_status === 405, `base44_external_runtime_mismatch:${name}`);
   }
   fresh(packet?.schema_readback, "schema_readback_missing_or_stale");
   add(packet?.schema_readback?.source_sha === expected.sourceSha && packet?.schema_readback?.app_id === APP_ID, "schema_readback_identity_mismatch");
@@ -187,7 +199,7 @@ export function validatePrerequisites(packet, expected) {
     source_sha: expected.sourceSha, release_fingerprint: expected.fingerprint, observed_at: packet.observed_at, expires_at: packet.expires_at,
     worker_revision: worker.revision.metadata.name, gateway_revision: gateway.revision.metadata.name,
     worker_config_sha256: configDigest, staged_owner_cohort_sha256: cohort,
-    base44_functions: functions.map(({ name, build_id, package_digest, runtime_activation_id }) => ({ name, build_id, package_digest, runtime_activation_id })),
+    base44_functions: functions.map(({ name, route_name, build_id, package_digest, runtime_activation_id }) => ({ name, route_name, build_id, package_digest, runtime_activation_id })),
     schema_readback_sha256: digest(packet.schema_readback.entity_sources), infrastructure_sha256: digest(infra), prerequisite_sha256: digest(packet),
   } };
 }
@@ -261,6 +273,13 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
   }
   try {
     require(config.appId === "6a498732ec779dfaaeab0e53" && config.provenance?.source_sha === config.sourceSha && config.provenance?.release_fingerprint === config.expectedFingerprint && Date.parse(config.provenance?.expires_at) > now(), "prerequisites_invalid_or_expired");
+    const published = Array.isArray(config.provenance.base44_functions) ? config.provenance.base44_functions : [];
+    const launcher = published.find(row => row?.name === "startStandardScanJobV9");
+    const reader = published.find(row => row?.name === "getCustomerScanResultV9");
+    require(/^startStandardScanJobV9B[a-f0-9]{16}$/.test(config.launchRoute)
+      && /^getCustomerScanResultV9B[a-f0-9]{16}$/.test(config.resultRoute)
+      && config.launchRoute === launcher?.route_name && config.resultRoute === reader?.route_name,
+    "staged_scan_routes_unverified");
     const me = await bounded(() => base44.auth.me());
     require(me?.id === config.ownerId && me.role === "admin", "authenticated_owner_not_admin");
     const email = String(me.email || "").trim().toLowerCase(); require(email, "owner_email_missing");
@@ -275,12 +294,12 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
     require(grant.owner_user_id === config.ownerId && String(grant.user_email || "").trim().toLowerCase() === email && grant.app_id === config.appId && grant.has_full_access === true && grant.access_status === "active" && grant.plan_id === "standard150_lifetime" && grant.page_cap === 500, "existing_entitlement_not_500");
     const dated = Number.isFinite(Date.parse(grant.granted_at || ""));
     require((grant.grant_source === "manual_grant" && dated) || (grant.grant_source === "stripe_checkout" && Boolean(grant.stripe_checkout_session_id) && Number.isFinite(Date.parse(grant.paid_at || ""))) || (grant.grant_source === "owner_test" && dated && me.id === "6a498da58ef5cec1f5cd4486" && email === "bright4862@gmail.com"), "access_grant_unverified");
-    const accepted = unwrap(await bounded(() => base44.functions.invoke("startStandardScanJobV9", { request_id: config.requestId, idempotency_key: config.requestId, project_id: config.projectId, website_url: config.targetUrl, submitted_url: config.targetUrl, scan_mode: "standard_500", source: "staged_500_acceptance" })));
+    const accepted = unwrap(await bounded(() => base44.functions.invoke(config.launchRoute, { request_id: config.requestId, idempotency_key: config.requestId, project_id: config.projectId, website_url: config.targetUrl, submitted_url: config.targetUrl, scan_mode: "standard_500", source: "staged_500_acceptance" })));
     require(accepted?.success === true && accepted.accepted === true && accepted.scan_mode === "standard_500" && accepted.page_cap === 500 && accepted.pipeline_mode === "staged", "scan_not_accepted_as_staged_500");
     report.scan_id = String(accepted.scan_id || accepted.scan_run_id || ""); require(/^[A-Za-z0-9_-]{6,160}$/.test(report.scan_id), "scan_id_missing");
     let run, projection;
     while (now() < deadline) {
-      projection = unwrap(await bounded(() => base44.functions.invoke("getCustomerScanResultV9", { scan_id: report.scan_id })));
+      projection = unwrap(await bounded(() => base44.functions.invoke(config.resultRoute, { scan_id: report.scan_id })));
       run = await bounded(() => base44.entities.ScanRun.get(report.scan_id));
       require(projection?.success === true && projection.scan_id === report.scan_id && run?.id === report.scan_id && run.owner_user_id === config.ownerId && run.project_id === config.projectId && run.request_id === config.requestId && (run.idempotency_key || run.request_id) === config.requestId && url(run.website_url) === config.targetUrl, "scan_identity_mismatch");
       require(run.page_cap === 500 && run.scan_mode === "standard_500" && run.pipeline_mode === "staged", "scan_contract_mismatch");
@@ -376,13 +395,14 @@ export function renderRemoteCanary(config) {
 }
 
 export function localAcceptanceIdentity(root, sourceSha, ownerId) {
-  const manifest = buildManifest(STAGED_RELEASE_FUNCTIONS, path.join(root, "base44/functions"), STAGED_RELEASE_ENTITIES, path.join(root, "base44/entities"));
-  const functions = {};
+  const { schema_version, functions } = JSON.parse(fs.readFileSync(path.join(root, "data/generated-staged-v9-routes.json"), "utf8"));
+  if (schema_version !== "fixlist_staged_v9_routes_v1" || !functions
+    || Object.keys(functions).length !== STAGED_RELEASE_FUNCTIONS.length) throw new Error("staged_deployment_manifest_invalid");
   for (const name of STAGED_RELEASE_FUNCTIONS) {
-    const directory = path.join(root, "base44/functions", name), identity = createHash("sha256");
-    for (const file of fs.readdirSync(directory).sort().filter(file => file !== "generatedBuildId.js" && fs.statSync(path.join(directory, file)).isFile())) identity.update(file).update("\0").update(fs.readFileSync(path.join(directory, file))).update("\0");
-    const entry = fs.readFileSync(path.join(directory, manifest.functions[name].entry), "utf8");
-    functions[name] = { build_id: identity.digest("hex"), package_digest: manifest.functions[name].packageDigest, runtime_activation_id: entry.match(/BASE44_RUNTIME_ACTIVATION_ID\s*=\s*"([^"]+)"/)?.[1] };
+    const identity = functions[name];
+    if (!identity || !new RegExp(`^${name}B[a-f0-9]{16}$`).test(identity.route_name)
+      || !/^[a-f0-9]{64}$/.test(identity.build_id) || !/^[a-f0-9]{64}$/.test(identity.package_digest)
+      || !/^[A-Za-z0-9._-]{1,120}$/.test(identity.runtime_activation_id)) throw new Error("staged_deployment_identity_invalid");
   }
   return { sourceSha, ownerId, fingerprint: JSON.parse(fs.readFileSync(path.join(root, "data/beta-crawler-revision.json"), "utf8")).fingerprint, functions, entitySources: Object.fromEntries(STAGED_RELEASE_ENTITIES.map(name => [name, fs.readFileSync(path.join(root, "base44/entities", `${name}.jsonc`), "utf8")])) };
 }
@@ -452,7 +472,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
       if (!id(env.EXPECTED_OWNER_USER_ID) || !id(env.PROJECT_ID) || !id(env.REQUEST_ID) || !origin(env.TARGET_URL)) throw new Error("scan_input_invalid");
       const maxWait = Number(env.MAX_WAIT_SECONDS || 900), pollSeconds = Number(env.POLL_SECONDS || 5);
       if (!Number.isInteger(maxWait) || maxWait < 1 || maxWait > 1800 || !Number.isInteger(pollSeconds) || pollSeconds < 1 || pollSeconds > 60) throw new Error("scan_timeout_invalid");
-      process.stdout.write(renderRemoteCanary({ appId: APP_ID, sourceSha: env.SOURCE_SHA, ownerId: env.EXPECTED_OWNER_USER_ID, projectId: env.PROJECT_ID, requestId: env.REQUEST_ID, targetUrl: origin(env.TARGET_URL), expectedFingerprint: expected.fingerprint, maxWait, pollSeconds, provenance: validation.provenance }));
+      const launchRoute = expected.functions.startStandardScanJobV9.route_name;
+      const resultRoute = expected.functions.getCustomerScanResultV9.route_name;
+      process.stdout.write(renderRemoteCanary({ appId: APP_ID, sourceSha: env.SOURCE_SHA, ownerId: env.EXPECTED_OWNER_USER_ID, projectId: env.PROJECT_ID, requestId: env.REQUEST_ID, targetUrl: origin(env.TARGET_URL), expectedFingerprint: expected.fingerprint, maxWait, pollSeconds, provenance: validation.provenance, launchRoute, resultRoute }));
     } else if (mode === "collect") {
       const [input, output, cliStatus] = process.argv.slice(3), prefix = "FIXLIST_STAGED_500_CANARY=";
       const lines = fs.readFileSync(input, "utf8").split("\n").filter(line => line.startsWith(prefix));

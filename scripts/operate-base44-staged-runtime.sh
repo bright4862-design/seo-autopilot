@@ -158,8 +158,9 @@ NODE
 v9_intake_readback() {
   local phase="$1"
   cp "$TMP/app-owner.js" "$TMP/v9-pilot.js"
+  printf 'const intakeRoute = "%s";\n' "$V9_INTAKE_ROUTE" >> "$TMP/v9-pilot.js"
   cat >> "$TMP/v9-pilot.js" <<'NODE'
-const result = await base44.functions.invoke("startStandardScanJobV9", {action:"staged_runtime_status"});
+const result = await base44.functions.invoke(intakeRoute, {action:"staged_runtime_status"});
 const value = result?.data && typeof result.data === "object" ? result.data : result;
 const fields = ["schema_version", "success", "observed_at", "build_id", "runtime_activation_id",
   "release_fingerprint", "configured_pipeline_mode", "pipeline_mode", "staged_owner_cohort_state",
@@ -248,8 +249,11 @@ NODE
 
 if [[ "$PAID" == true || "$OPERATION" == prepare-owner || "$OPERATION" == status-off || ( "$PILOT" == true && "$OPERATION" == status ) ]]; then
   command -v timeout >/dev/null || refuse "timeout is required for customer pilot readback"
-  V9_BUILD_ID="$(node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --build-id startStandardScanJobV9)"
-  V9_ACTIVATION_ID="$(node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --activation-id startStandardScanJobV9)"
+  v9_intake_identity="$(node -p 'const row = require(process.argv[1]).functions.startStandardScanJobV9; [row.route_name, row.build_id, row.runtime_activation_id].join(" ")' \
+    "$REPO_ROOT/data/generated-staged-v9-routes.json")"
+  read -r V9_INTAKE_ROUTE V9_BUILD_ID V9_ACTIVATION_ID <<< "$v9_intake_identity"
+  [[ "$V9_INTAKE_ROUTE" =~ ^startStandardScanJobV9B[0-9a-f]{16}$ && "$V9_BUILD_ID" =~ ^[0-9a-f]{64}$ \
+    && "$V9_ACTIVATION_ID" =~ ^[A-Za-z0-9._-]{1,120}$ ]] || refuse "exact staged intake identity required"
 fi
 
 case "$OPERATION" in

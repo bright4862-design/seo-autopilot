@@ -1,5 +1,9 @@
 """Zero-traffic candidate attribution and the separate owner-only probe path."""
+import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 
 import pytest
@@ -106,6 +110,68 @@ def test_source_bound_tag_needs_exact_source_revision_and_zero_traffic():
     service["status"]["traffic"][-1]["percent"] = 0.5
     with pytest.raises(CandidateNotIsolated, match="candidate_percent_invalid"):
         verify_tagged_zero_traffic(service, REVISION, tag, source_sha=source)
+
+
+@pytest.mark.parametrize("has_drain_route", [True, False])
+def test_worker_route_probe_reads_large_source_without_sigpipe(tmp_path, has_drain_route):
+    source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    source_file = tmp_path / "main.py"
+    decorators = '@app.post("/scan-job")\n'
+    if has_drain_route:
+        decorators += '@app.post("/scan-job-drain")\n'
+    # The early match and trailing data larger than a pipe buffer reproduce
+    # the Git writer's SIGPIPE when the reader quits at the first match.
+    source_file.write_text(decorators + "# padding after the route decorators\n" * 65_536)
+
+    git = tmp_path / "git"
+    git.write_text('''#!/bin/bash
+if [[ "$1" == show && "$2" == "$PROBE_SHA:scanner-api/app/main.py" ]]; then
+  exec cat "$PROBE_SOURCE"
+fi
+exec "$REAL_GIT" "$@"
+''')
+    git.chmod(0o755)
+
+    gcloud = tmp_path / "gcloud"
+    gcloud.write_text('''#!/bin/bash
+case "$1 $2 $3 ${!#}" in
+  "config set project test-project") ;;
+  "run revisions describe --format=value(spec.containers[0].image)") printf '%s\\n' "$PROBE_IMAGE" ;;
+  "run revisions describe --format=value(spec.timeoutSeconds)") echo 480 ;;
+  "builds list "*) printf '%s\\n' "$PROBE_BUILDS" ;;
+  *) exit 99 ;;
+esac
+''')
+    gcloud.chmod(0o755)
+    digest = "sha256:" + "a" * 64
+    env = {
+        **os.environ,
+        "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"],
+        "REAL_GIT": shutil.which("git"),
+        "PROBE_SOURCE": str(source_file),
+        "PROBE_SHA": source_sha,
+        "PROBE_IMAGE": "test.example/worker@" + digest,
+        "PROBE_BUILDS": json.dumps([{
+            "substitutions": {"_RELEASE_SHA": source_sha},
+            "results": {"images": [{"digest": digest}]},
+        }]),
+        "GCP_PROJECT": "test-project",
+        "GCP_REGION": "test-region",
+        "CLOUD_RUN_SERVICE": "fixlist-standard150-worker",
+        "CLOUD_TASKS_QUEUE": "test-queue",
+        "TASKS_INVOKER_SERVICE_ACCOUNT": "test-invoker",
+        "TARGET_REVISION": REVISION,
+        "OPERATION": "verify-worker-routes",
+    }
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts/fixlist-cloud-operator.sh")], cwd=ROOT, env=env,
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == (0 if has_drain_route else 1), result.stdout + result.stderr
+    if has_drain_route:
+        assert "WORKER ROUTES VERIFIED" in result.stdout
+    else:
+        assert "does NOT declare both durable routes" in result.stdout
 
 
 def test_workflow_separates_tag_mutation_from_read_only_candidate_probe():

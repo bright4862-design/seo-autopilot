@@ -34,7 +34,11 @@ from .acceptance_evidence import (
     build_classification_integrity,
     measure_worker_peak_memory_bytes,
 )
-from .generated_v9_worker_runtime import V9_WORKER_FUNCTION_IDENTITIES, V9_WORKER_RELEASE_FINGERPRINT
+from .generated_v9_worker_runtime import (
+    V9_WORKER_FUNCTION_IDENTITIES,
+    V9_WORKER_FUNCTION_ROUTES,
+    V9_WORKER_RELEASE_FINGERPRINT,
+)
 from .observability import emit
 from .page_output_privacy import project_scan_result_for_external_boundary
 from .scan_limits import current_page_cap, page_cap_for_mode, scan_page_limit, standard_scan_contract
@@ -174,10 +178,12 @@ async def _invoke_v9_worker_function(
     timeout: float,
 ) -> dict[str, Any]:
     identity = V9_WORKER_FUNCTION_IDENTITIES.get(name, {})
+    route_name = V9_WORKER_FUNCTION_ROUTES.get(name)
     build_id = identity.get("build_id")
     activation_id = identity.get("runtime_activation_id")
     signing_key = str(os.getenv("SCAN_EVIDENCE_SIGNING_KEY") or "")
     if (name not in V9_WORKER_FUNCTIONS or not signing_key
+            or not isinstance(route_name, str) or not re.fullmatch(re.escape(name) + r"B[0-9a-f]{16}", route_name)
             or not isinstance(build_id, str) or not re.fullmatch(r"[0-9a-f]{64}", build_id)
             or not isinstance(activation_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", activation_id)
             or not re.fullmatch(r"[0-9a-f]{16}", V9_WORKER_RELEASE_FINGERPRINT)):
@@ -199,7 +205,7 @@ async def _invoke_v9_worker_function(
             "runtime_request": runtime_request,
             "runtime_proof": create_authority_seal(runtime_request, signing_key),
         }
-        request = client.build_request("POST", _function_url(name), headers=_service_headers(), json=envelope, timeout=timeout)
+        request = client.build_request("POST", _function_url(route_name), headers=_service_headers(), json=envelope, timeout=timeout)
         request.headers.pop("Authorization", None)
         if delivery is not None:
             delivery.observe_completion_request(name, request.content)

@@ -11,6 +11,10 @@ import { openCorpusJournal, readSitePrerequisites, validateCorpusManifest, runCo
 const now = Date.parse("2026-11-12T10:00:00.000Z");
 const sha = "a".repeat(40), fingerprint = "b".repeat(16), owner = "owner_123", project = "project_123";
 const names = ["startStandardScanJobV9", "durableScanWorkerControlV9", "persistDurableScanAuthorityV9", "persistLimitedScanResultV9", "getCustomerScanResultV9", "deleteCustomerScanDataV9"];
+const routeManifest = "data/generated-staged-v9-routes.json";
+const { functions: stagedFunctions } = JSON.parse(readFileSync(new URL("../../" + routeManifest, import.meta.url), "utf8"));
+const launchRoute = stagedFunctions.startStandardScanJobV9.route_name;
+const resultRoute = stagedFunctions.getCustomerScanResultV9.route_name;
 const hash = value => createHash("sha256").update(value).digest("hex");
 const stable = value => JSON.stringify(value, Object.keys(value).sort());
 const stamp = { observed_at: new Date(now - 1000).toISOString(), expires_at: new Date(now + 600000).toISOString() };
@@ -24,7 +28,8 @@ function workerBase44Runtime(expected, revision) {
     base44_app_id: "6a498732ec779dfaaeab0e53", base44_origin: "https://base44.app",
     release_fingerprint: expected.fingerprint,
     functions: names.slice(1, 4).map(function_name => ({
-      protocol: "fixlist_worker_runtime_v1", function_name, action: "identity", http_status: 200,
+      protocol: "fixlist_worker_runtime_v1", function_name, route_name: expected.functions[function_name].route_name,
+      action: "identity", http_status: 200,
       release_fingerprint: expected.fingerprint, build_id: expected.functions[function_name].build_id,
       runtime_activation_id: expected.functions[function_name].runtime_activation_id,
     })),
@@ -39,12 +44,20 @@ function prerequisites() {
   env.FIXLIST_STAGED_CONFIG_SHA256 = configDigest;
   const revision = (name, environment) => ({ metadata: { name }, spec: { serviceAccountName: "fixlist-standard150-worker@seo-autopilot-501517.iam.gserviceaccount.com", containers: [{ env: Object.entries(environment).map(([name, value]) => ({ name, value })) }] }, status: { imageDigest: `image@sha256:${"c".repeat(64)}`, conditions: [{ type: "Ready", status: "True" }] } });
   const local = { sourceSha: sha, fingerprint, ownerId: owner, now,
-    functions: Object.fromEntries(names.map(name => [name, { build_id: "d".repeat(64), package_digest: "e".repeat(64), runtime_activation_id: `${name}-runtime` }])),
+    functions: structuredClone(stagedFunctions),
     entitySources: Object.fromEntries(["ScanRun", "FixList", "FixItem", "Access"].map(name => [name, JSON.stringify({ name })])),
   };
   const data = { schema_version: "staged_scan_acceptance_prerequisites_v1", ...stamp, source_sha: sha, release_fingerprint: fingerprint,
-    base44: { schema_version: "fixlist_staged_v9_readiness_v1", source_sha: sha, app_id: "6a498732ec779dfaaeab0e53", candidate_fingerprint: fingerprint, observed_at: stamp.observed_at,
-      functions: names.map(name => ({ name, ...local.functions[name], http_status: 405 })) },
+    base44: { schema_version: "fixlist_staged_v9_readiness_v2", source_sha: sha, app_id: "6a498732ec779dfaaeab0e53", candidate_fingerprint: fingerprint, observed_at: stamp.observed_at,
+      functions: names.map(name => ({ name, ...local.functions[name], http_status: 405 })),
+      runtime_probe_transport: "base44_native_authenticated_sdk_get",
+      anonymous_probe: {
+        transport: "base44_legacy_anonymous_get",
+        functions: names.map(name => {
+          const { route_name, build_id, runtime_activation_id } = local.functions[name];
+          return { name, route_name, build_id, runtime_activation_id, state: "matched", http_status: 405 };
+        }),
+      } },
     schema_readback: { ...stamp, source_sha: sha, app_id: "6a498732ec779dfaaeab0e53", entity_sources: { ...local.entitySources } },
     base44_configuration: { ...stamp, source_sha: sha, intake_route: {
       schema_version: "fixlist_staged_v9_intake_readback_v1", success: true, observed_at: stamp.observed_at,
@@ -87,7 +100,12 @@ function fakeSdk(scenario = "complete") {
     BusinessProject: { get: async id => { track("project", id); return { id, owner_user_id: owner, website_url: "https://example.com/" }; } },
     Access: { filter: async query => { track("access", query); return scenario === "duplicateGrant" ? [grant, { ...grant, id: "grant_456" }] : [grant]; } },
     ScanRun: { get: async () => { track("run"); return run; } },
-  }, functions: { invoke: async (name, body) => { track(name, body); return name === "startStandardScanJobV9" ? { data: { success: true, accepted: true, scan_id: run.id, scan_mode: "standard_500", page_cap: 500, pipeline_mode: "staged" } } : { data: projection }; } } };
+  }, functions: { invoke: async (name, body) => {
+    track(name, body);
+    if (name === launchRoute) return { data: { success: true, accepted: true, scan_id: run.id, scan_mode: "standard_500", page_cap: 500, pipeline_mode: "staged" } };
+    if (name === resultRoute) return { data: projection };
+    throw new Error("unexpected scan route");
+  } } };
   return { sdk, calls, run, projection };
 }
 
@@ -95,7 +113,7 @@ function config() {
   const { data, local } = prerequisites();
   const prerequisite = validatePrerequisites(data, local);
   assert.equal(prerequisite.ready, true, prerequisite.failures.join(","));
-  return { appId: "6a498732ec779dfaaeab0e53", sourceSha: sha, ownerId: owner, projectId: project, targetUrl: "https://example.com/", requestId: "request_500_123", expectedFingerprint: fingerprint, maxWait: 600, pollSeconds: 1, provenance: prerequisite.provenance };
+  return { appId: "6a498732ec779dfaaeab0e53", sourceSha: sha, ownerId: owner, projectId: project, targetUrl: "https://example.com/", requestId: "request_500_123", expectedFingerprint: fingerprint, maxWait: 600, pollSeconds: 1, provenance: prerequisite.provenance, launchRoute, resultRoute };
 }
 
 test("prerequisites bind fresh runtime, package, schema, cohort and infrastructure facts", () => {
@@ -106,6 +124,25 @@ test("prerequisites bind fresh runtime, package, schema, cohort and infrastructu
     assert.equal(validatePrerequisites(invalid, local).ready, false);
   }
   assert.equal(validatePrerequisites({ verified: true }, local).ready, false);
+});
+
+test("prerequisites require identical versioned routes on SDK and anonymous HTTP runtime evidence", () => {
+  const { data, local } = prerequisites();
+  for (const [mutate, failure] of [
+    [base44 => { base44.schema_version = "fixlist_staged_v9_readiness_v1"; }, "base44_readiness_identity_mismatch"],
+    [base44 => { base44.functions[0].route_name = names[0]; }, `base44_package_mismatch:${names[0]}`],
+    [base44 => { base44.anonymous_probe.transport = "sdk"; }, "base44_readiness_identity_mismatch"],
+    [base44 => { base44.anonymous_probe.functions.pop(); }, "base44_external_inventory_mismatch"],
+    [base44 => { base44.anonymous_probe.functions[0].route_name = names[0]; }, `base44_external_runtime_mismatch:${names[0]}`],
+    [base44 => { base44.anonymous_probe.functions[0].build_id = "0".repeat(64); }, `base44_external_runtime_mismatch:${names[0]}`],
+    [base44 => { base44.anonymous_probe.functions[0].runtime_activation_id = "previous-activation"; }, `base44_external_runtime_mismatch:${names[0]}`],
+    [base44 => { base44.anonymous_probe.functions[0].state = "mismatch"; }, `base44_external_runtime_mismatch:${names[0]}`],
+    [base44 => { base44.anonymous_probe.functions[0].http_status = 200; }, `base44_external_runtime_mismatch:${names[0]}`],
+  ]) {
+    const invalid = structuredClone(data);
+    mutate(invalid.base44);
+    assert.ok(validatePrerequisites(invalid, local).failures.includes(failure));
+  }
 });
 
 test("prerequisites require an exact worker-signed POST observation for all three runtime routes", () => {
@@ -119,6 +156,7 @@ test("prerequisites require an exact worker-signed POST observation for all thre
     worker => { worker.base44_runtime.worker_revision = "fixlist-standard150-worker-99999-other"; },
     worker => { worker.base44_runtime.release_fingerprint = "0".repeat(16); },
     worker => { worker.base44_runtime.functions.pop(); },
+    worker => { worker.base44_runtime.functions[0].route_name = names[1]; },
     worker => { worker.base44_runtime.functions[0].build_id = "0".repeat(64); },
     worker => { worker.base44_runtime.functions[1].runtime_activation_id = "previous-activation"; },
     worker => { worker.base44_runtime.functions[2].http_status = 405; },
@@ -245,7 +283,7 @@ test("complete500 requires ten committed batches and retains truthful measuremen
   assert.equal(report.payload_bytes.completion_request, null);
   assert.equal(report.memory.scope, "finalize_only");
   assert.equal(report.memory.all_stages_verified, false);
-  const starts = fake.calls.filter(call => call.name === "startStandardScanJobV9");
+  const starts = fake.calls.filter(call => call.name === launchRoute);
   assert.equal(starts.length, 1);
   assert.equal(starts[0].value.scan_mode, "standard_500");
   assert.equal("page_cap" in starts[0].value, false);
@@ -330,7 +368,7 @@ for (const scenario of ["grant150", "duplicateGrant", "notAdmin", "nineBatches",
   const report = await executeStaged500Canary(fake.sdk, config(), () => now);
   assert.equal(report.terminal_outcome_verified, false);
   assert.equal(report.full_500_gate, false);
-  if (["grant150", "duplicateGrant", "notAdmin"].includes(scenario)) assert.equal(fake.calls.some(call => call.name === "startStandardScanJobV9"), false);
+  if (["grant150", "duplicateGrant", "notAdmin"].includes(scenario)) assert.equal(fake.calls.some(call => call.name === launchRoute), false);
 });
 
 test("integrity-verified limited evidence is classified separately and cannot pass the full500 gate", async () => {
@@ -421,7 +459,7 @@ test("polling timeout preserves one accepted request and does not start another 
   assert.equal(report.scan_id, fake.run.id);
   assert.equal(report.attempt_count, null);
   assert.equal(report.scan_completed_at, null);
-  assert.equal(fake.calls.filter(call => call.name === "startStandardScanJobV9").length, 1);
+  assert.equal(fake.calls.filter(call => call.name === launchRoute).length, 1);
   assert.equal(report.terminal_outcome_verified, false);
 });
 
@@ -429,7 +467,17 @@ test("a stalled SDK operation is bounded before scan admission", async () => {
   const fake = fakeSdk(); fake.sdk.auth.me = () => new Promise(() => {});
   const report = await executeStaged500Canary(fake.sdk, { ...config(), maxWait: 1 }, () => now);
   assert.equal(report.failure_code, "operation_timeout");
-  assert.equal(fake.calls.some(call => call.name === "startStandardScanJobV9"), false);
+  assert.equal(fake.calls.some(call => call.name === launchRoute), false);
+});
+
+test("a stale versioned launcher or reader is rejected before any SDK call", async () => {
+  const fake = fakeSdk();
+  for (const [key, logicalName] of [["launchRoute", names[0]], ["resultRoute", names[4]]]) {
+    const report = await executeStaged500Canary(fake.sdk, { ...config(), [key]: logicalName + "B" + "0".repeat(16) }, () => now);
+    assert.equal(report.failure_code, "staged_scan_routes_unverified");
+    assert.equal(report.scan_id, null);
+  }
+  assert.deepEqual(fake.calls, []);
 });
 
 test("SDK exceptions never copy private error strings into acceptance reports", async () => {
@@ -714,6 +762,7 @@ test("the corpus CLI journals a failed child and preserves its report across a r
     copyFileSync(path.join("scripts", script), path.join(repo, "scripts", script));
   }
   symlinkSync(path.resolve("base44"), path.join(repo, "base44"), "dir");
+  copyFileSync(routeManifest, path.join(repo, routeManifest));
   writeFileSync(path.join(repo, "data/beta-crawler-revision.json"), JSON.stringify({ fingerprint }));
   const input = manifest(), [first] = input.sites;
   input.reviewed_at = new Date(Date.now() - 1000).toISOString();

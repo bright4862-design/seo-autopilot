@@ -200,6 +200,13 @@ export function auditAll(fns = RELEASE_FUNCTIONS) {
   return fns.map(auditFunction);
 }
 
+export function functionPackageDigest(files) {
+  // Hash "name\0sha256" lines in sorted order, independent of metadata.
+  return crypto.createHash("sha256").update(
+    Object.entries(files).map(([name, file]) => `${name}\0${file.sha256}`).join("\n"),
+  ).digest("hex");
+}
+
 function readFunctionPackage(directory) {
   const files = {};
   for (const file of fs.readdirSync(directory).sort()) {
@@ -211,11 +218,11 @@ function readFunctionPackage(directory) {
       sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
     };
   }
-  // Hash "name\0sha256" lines in sorted order, independent of metadata.
-  const packageDigest = crypto.createHash("sha256").update(
-    Object.entries(files).map(([name, file]) => `${name}\0${file.sha256}`).join("\n"),
-  ).digest("hex");
-  return { entry: readJsonc(path.join(directory, "function.jsonc")).entry, files, packageDigest };
+  return {
+    entry: readJsonc(path.join(directory, "function.jsonc")).entry,
+    files,
+    packageDigest: functionPackageDigest(files),
+  };
 }
 
 function pullMismatch(name, detail) {

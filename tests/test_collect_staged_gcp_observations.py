@@ -107,6 +107,7 @@ class FixtureCloud:
             "base44_app_id": "6a498732ec779dfaaeab0e53", "base44_origin": "https://base44.app",
             "release_fingerprint": FINGERPRINT, "functions": [
                 {"protocol": "fixlist_worker_runtime_v1", "function_name": name, "action": "identity", "http_status": 200,
+                 "route_name": GENERATED["V9_WORKER_FUNCTION_ROUTES"][name],
                  "release_fingerprint": FINGERPRINT, **identity}
                 for name, identity in GENERATED["V9_WORKER_FUNCTION_IDENTITIES"].items()
             ],

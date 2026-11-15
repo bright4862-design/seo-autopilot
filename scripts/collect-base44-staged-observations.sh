@@ -36,13 +36,17 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 fixlist_install_base44_cli "$TMP/cli"
 fixlist_require_base44_owner "${BASE44_EXPECTED_OWNER:-}" "$TMP/whoami" "$APP_ID"
+INTAKE_ROUTE="$(node -p 'require(process.argv[1]).functions.startStandardScanJobV9.route_name' \
+  "$ROOT/data/generated-staged-v9-routes.json")"
+[[ "$INTAKE_ROUTE" =~ ^startStandardScanJobV9B[0-9a-f]{16}$ ]] || exit 2
 {
   printf 'const expectedId = "%s";\nconst expectedEmail = "%s";\n' "$OWNER_ID" "$OWNER_EMAIL"
+  printf 'const intakeRoute = "%s";\n' "$INTAKE_ROUTE"
   cat <<'JS'
 const me = await base44.auth.me();
 if (me?.id !== expectedId || String(me?.email || "").trim().toLowerCase() !== expectedEmail
     || me?.role !== "admin") throw new Error("owner_identity_mismatch");
-const reply = await base44.functions.invoke("startStandardScanJobV9", { action: "staged_runtime_status" });
+const reply = await base44.functions.invoke(intakeRoute, { action: "staged_runtime_status" });
 const body = reply?.data && typeof reply.data === "object" ? reply.data : reply;
 if (body?.schema_version !== "fixlist_staged_v9_intake_readback_v1" || body?.success !== true) {
   throw new Error("V9 intake readback unavailable");

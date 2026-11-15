@@ -1552,24 +1552,33 @@ jobs:
         shell: bash
         run: |
           set +e
+          # Record exit codes even if a best-effort read fails. The receipt at
+          # the end distinguishes observed reads from unknown production state.
+          STATUS_FILE="$(mktemp)"
+          trap 'rm -f "$STATUS_FILE"' EXIT
+          record_read() {
+            local check="$1" code="$2"
+            printf '%s_exit=%s\n' "$check" "$code"
+            printf '%s\t%s\n' "$check" "$code" >> "$STATUS_FILE"
+          }
           echo '=== AUTH ==='
           gcloud auth list --filter=status:ACTIVE --format='value(account)'
 
           echo '=== WORKER ==='
           gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format='yaml(metadata.name,status.url,status.latestReadyRevisionName,status.latestCreatedRevisionName,status.traffic,spec.template.spec.serviceAccountName,spec.template.spec.timeoutSeconds)'
-          echo "worker_exit=$?"
+          record_read worker "$?"
 
           echo '=== GATEWAY ==='
           gcloud run services describe "$GATEWAY_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format='yaml(metadata.name,status.url,status.latestReadyRevisionName,status.latestCreatedRevisionName,status.traffic,spec.template.spec.serviceAccountName)'
-          echo "gateway_exit=$?"
+          record_read gateway "$?"
 
           echo '=== QUEUE ==='
           gcloud tasks queues describe "$CLOUD_TASKS_QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --format='yaml(name,state,rateLimits,retryConfig)'
-          echo "queue_exit=$?"
+          record_read queue "$?"
 
           echo '=== RECENT STANDARD150 TASKS ==='
           gcloud tasks list --queue="$CLOUD_TASKS_QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --limit=20 --format='table(name.basename(),scheduleTime,dispatchCount,responseCount,lastAttempt.responseStatus.code)'
-          echo "tasks_list_exit=$?"
+          record_read tasks_list "$?"
 
           echo '=== EXACT ACTIVE TASKS ==='
           for TASK in \
@@ -1578,20 +1587,20 @@ jobs:
             standard150-6a8363d1762f91317dcd1b53-a1; do
             echo "--- $TASK ---"
             gcloud tasks describe "$TASK" --queue="$CLOUD_TASKS_QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --format='yaml(name,scheduleTime,dispatchCount,responseCount,firstAttempt,lastAttempt)'
-            echo "task_describe_exit=$?"
+            record_read task_describe "$?"
           done
 
           echo '=== DRAIN QUEUE ==='
           gcloud tasks queues describe "$CLOUD_TASKS_DRAIN_QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --format='yaml(name,state,rateLimits,retryConfig)'
-          echo "drain_queue_exit=$?"
+          record_read drain_queue "$?"
 
           echo '=== RECONCILER ==='
           gcloud scheduler jobs describe fixlist-standard150-reconcile \
             --project="$GCP_PROJECT" --location="$GCP_REGION" \
             --format='yaml(name,state,schedule,httpTarget.uri,httpTarget.httpMethod,httpTarget.oidcToken.serviceAccountEmail,httpTarget.oidcToken.audience)'
-          echo "reconciler_exit=$?"
+          record_read reconciler "$?"
 
-          echo '=== SIGNING SECRET ACCESS CHECK ==='
+          echo '=== SIGNING SECRET REFERENCE (NO KEY ACCESS) ==='
           TMP_DIR="$(mktemp -d)"
           gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > "$TMP_DIR/worker.json"
           read -r SECRET_NAME SECRET_VERSION < <(python3 - "$TMP_DIR/worker.json" <<'PY'
@@ -1605,11 +1614,15 @@ jobs:
                   break
           PY
           )
-          if [ -n "$SECRET_NAME" ] && [ -n "$SECRET_VERSION" ] && gcloud secrets versions access "$SECRET_VERSION" --secret="$SECRET_NAME" --project="$GCP_PROJECT" > /dev/null 2>"$TMP_DIR/secret.err"; then
-            echo 'secret_access=YES'
+          # The operator does not need to read signing key bytes. A configured
+          # desired-template reference is metadata, NOT proof that a Ready
+          # worker can sign or that Base44 verified a signed result.
+          if [ -n "$SECRET_NAME" ] && [ -n "$SECRET_VERSION" ]; then
+            echo 'signing_secret_reference=CONFIGURED_DESIRED_ONLY'
+            record_read signing_reference 0
           else
-            echo 'secret_access=NO'
-            sed -n '1,4p' "$TMP_DIR/secret.err"
+            echo 'signing_secret_reference=UNVERIFIED'
+            record_read signing_reference 1
           fi
           rm -rf "$TMP_DIR"
 
@@ -1658,7 +1671,57 @@ jobs:
             --project="$GCP_PROJECT" --freshness=8h --limit=200 --order=asc \
             --format='table(timestamp,resource.labels.revision_name,severity,textPayload,jsonPayload.event,jsonPayload.error,jsonPayload.error_code,httpRequest.status)' || true
 
-          echo 'READONLY_DIAGNOSTIC_COMPLETE'
+          echo '=== READ-ONLY DIAGNOSTIC RESOURCE RECEIPT ==='
+          python3 - "$STATUS_FILE" <<'PY'
+          import os
+          import sys
+          
+          required = ("worker", "gateway", "queue", "tasks_list", "drain_queue", "reconciler")
+          rows = {}
+          with open(sys.argv[1], encoding="utf-8") as stream:
+              for line in stream:
+                  name, separator, code = line.rstrip("\n").partition("\t")
+                  if separator:
+                      rows.setdefault(name, []).append(code)
+          
+          def state(name):
+              values = rows.get(name, [])
+              # Duplicate, absent and invalid observations must not collapse to success.
+              return "OBSERVED" if values == ["0"] else "UNKNOWN"
+          
+          missing = [name for name in required if state(name) != "OBSERVED"]
+          historical = rows.get("task_describe", [])
+          historical_unknown = sum(code != "0" for code in historical)
+          reference = state("signing_reference")
+          lines = [
+              "### Standard 150 read-only diagnostic — resource-read receipt",
+              "",
+              "**Core resource readback: " + ("PARTIAL / UNKNOWN" if missing else "OBSERVED") + "**",
+              "",
+              "| Read | State | Exit observation |",
+              "| --- | --- | --- |",
+          ]
+          for name in required:
+              values = rows.get(name, [])
+              lines.append(f"| {name} | {state(name)} | {','.join(values) if values else 'missing'} |")
+          lines.extend([
+              "",
+              f"Historical named-task lookups: {len(historical) - historical_unknown}/{len(historical)} succeeded (supplemental; old task IDs may expire).",
+              f"Desired-template signing reference: {'OBSERVED' if reference == 'OBSERVED' else 'UNKNOWN'}; signing/key-use proof: **UNVERIFIED**.",
+              "Best-effort log queries and gateway /health are not complete release evidence.",
+              "**NOT release acceptance.** Authenticated worker /revision, Base44 package identity, signed owner canary, customer read-back and rollback still require independent proof.",
+          ])
+          report = "\n".join(lines) + "\n"
+          print(report)
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as stream:
+                  stream.write(report)
+          if missing:
+              print("READONLY_DIAGNOSTIC_PARTIAL")
+              sys.exit(1)
+          print("READONLY_DIAGNOSTIC_CORE_READS_OK_NOT_RELEASE_ACCEPTED")
+          PY
 
   incident378-serving-revision-readonly:
     if: >-

@@ -67,7 +67,18 @@ test("V8 is active and V7/V6/V5/V4/V3/V2 remain historical", () => {
   }
 });
 
-test("V8 packages preserve V7 behavior outside route identity and the isolated compare action", () => {
+function withoutStandard500RefreshGuard(value) {
+  return value
+    .replace(/^  statusAdmission,\n/m, "")
+    .replace(/^  scan_client_refresh_required: [^\n]+\n/m, "")
+    .replace(/^    if \(hasStandard500Grant\(entitlement\.record\)[\s\S]*?^      : await ensureFrozenScanRobotsPolicy\(\{ base44, context \}\);\n/m,
+      "    const scanRobotsPolicy = await ensureFrozenScanRobotsPolicy({ base44, context });\n")
+    .replace("if (readOnlyReplay || scanIsTerminal(context.scan))", "if (scanIsTerminal(context.scan))")
+    .replace(/^function hasStandard500Grant\(access\) \{[\s\S]*?(?=^async function admitServerOwnedScan)/m, "")
+    .replace(/^  if \(hasStandard500Grant\(access\)\) \{\n    return replayStandard150For500Grant[^\n]+\n  \}\n\n/m, "");
+}
+
+test("V8 packages preserve V7 behavior outside route identity, comparison, and the 500 refresh guard", () => {
   for (const canonical of canonicals) {
     const v7dir = "base44/functions/" + canonical + "V7";
     const v8dir = "base44/functions/" + canonical + "V8";
@@ -93,6 +104,7 @@ test("V8 packages preserve V7 behavior outside route identity and the isolated c
       if (file === "function.jsonc") actual = actual.replace(canonical + "V8", canonical + "V7");
       if (file === "entry.ts" || file === "index.ts") {
         if (canonical === "getCustomerScanResult") actual = withoutComparisonOperation(actual);
+        if (canonical === "startStandardScanJob") actual = withoutStandard500RefreshGuard(actual);
         actual = normalizeActivation(actual);
         expected = normalizeActivation(expected);
       }

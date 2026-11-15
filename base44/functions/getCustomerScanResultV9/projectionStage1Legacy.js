@@ -149,6 +149,14 @@ const DETAILED_RUN_FIELDS = [
 ];
 
 const LIMITED_COVERAGE_FIELDS = ["coverage_state", "coverage_reasons", "coverage_authority_version"];
+const ACCESS_PROVIDER_IDS = new Map([
+  ["Cloudflare", "cloudflare"], ["SiteGround", "siteground"], ["DataDome", "datadome"],
+  ["Imperva", "imperva"], ["Sucuri", "sucuri"], ["Akamai", "akamai"], ["Wordfence", "wordfence"],
+]);
+const ACCESS_KIND_BY_DETAIL = new Map([
+  ["a bot challenge", "bot_challenge"], ["an automated-access block", "access_block"], ["a rate limit", "rate_limit"],
+]);
+const WORKER_ACCESS_DETAIL = /^(Cloudflare|SiteGround|DataDome|Imperva|Sucuri|Akamai|Wordfence|The site) returned (a bot challenge|an automated-access block|a rate limit) to the scanner, so FixList could not collect enough verified HTML /;
 
 const FIX_LIST_FIELDS = [
   "id",
@@ -698,8 +706,35 @@ function sanitizeLimitedCoverage(run) {
   return pickFields(scan, LIMITED_COVERAGE_FIELDS);
 }
 
+function failedAccessFields(run) {
+  if (run?.status !== "failed") return {};
+  const respected = run.respect_robots_txt === true && run.owner_attested_robots_override === false;
+  const overridden = run.respect_robots_txt === false && run.owner_attested_robots_override === true
+    && run.site_ownership_answer === "owner_or_manager";
+  const fields = {};
+  if (respected || overridden) {
+    fields.respect_robots_txt = respected;
+    fields.owner_attested_robots_override = overridden;
+  }
+  if (run.error_code === "blocked_by_robots_txt" && respected) {
+    fields.access_limitation = { kind: "robots_blocked" };
+  } else if (run.error_code === "scan_access_limited") {
+    const match = text(run.status_detail, 500).match(WORKER_ACCESS_DETAIL);
+    const provider = match ? ACCESS_PROVIDER_IDS.get(match[1]) : undefined;
+    fields.access_limitation = {
+      kind: match ? ACCESS_KIND_BY_DETAIL.get(match[2]) : "access_limited",
+      ...(provider ? { provider } : {}),
+    };
+  }
+  return fields;
+}
+
 function sanitizeRun(run, { detailed, healthScoreStatus = "" }) {
   const result = pickFields(run, detailed ? [...PUBLIC_RUN_FIELDS, ...DETAILED_RUN_FIELDS] : PUBLIC_RUN_FIELDS);
+  if (run?.status === "failed" && ["scan_access_limited", "blocked_by_robots_txt"].includes(run.error_code)) {
+    delete result.status_detail;
+  }
+  Object.assign(result, failedAccessFields(run));
   result.id = text(run?.id, 160);
   result.scan_id = result.id;
   if (detailed && healthScoreStatus) {

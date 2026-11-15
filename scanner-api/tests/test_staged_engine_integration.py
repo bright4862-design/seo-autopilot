@@ -1,7 +1,12 @@
 """Exercise the real extracted engine through a durable ten-batch chain."""
 import json
-from pathlib import Path
 import subprocess
+import sys
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import urlsplit
+from xml.etree import ElementTree
 
 import pytest
 
@@ -11,19 +16,65 @@ from app.main import apply_post_crawl_transforms
 from app.scan_limits import scan_page_limit
 from app.staged_scan import StageDependencies, StagedScanRuntime
 from app.workspace import MemoryWorkspace
+from scripts.export_staged_500_fixture import export_fixture
+
+
+EXPORTER = Path(__file__).resolve().parents[1] / "scripts" / "export_staged_500_fixture.py"
+
+
+def test_exporter_writes_deterministic_static_site_and_refuses_replacement(tmp_path):
+    origin = "https://staged-engine.example"
+    first, second = tmp_path / "first", tmp_path / "second"
+
+    def export(destination, supplied_origin=origin):
+        return subprocess.run([sys.executable, EXPORTER, "--origin", supplied_origin, "--output", destination],
+                              cwd=tmp_path, capture_output=True, text=True, timeout=10)
+
+    for destination, supplied_origin in ((first, origin), (second, f"{origin}/")):
+        result = export(destination, supplied_origin)
+        assert result.returncode == 0, result.stderr
+    tree = ElementTree.parse(first / "sitemap.xml")
+    urls = [loc.text for loc in tree.findall(".//{http://www.sitemaps.org/schemas/sitemap/0.9}loc")]
+    assert len(urls) == len(set(urls)) == 640
+    assert (first / "robots.txt").read_text() == f"User-agent: *\nAllow: /\nSitemap: {origin}/sitemap.xml\n"
+    assert Counter(urlsplit(url).path.split("/")[1] for url in urls) == {
+        "solutions": 160, "products": 160, "stores": 160, "insights": 160,
+    }
+    for url in urls:
+        parsed = urlsplit(url)
+        assert (parsed.scheme, parsed.netloc) == ("https", "staged-engine.example")
+        page_path = parsed.path.removeprefix("/")
+        page = (first / page_path).read_text()
+        assert f'<link rel="canonical" href="{url}">' in page
+        assert page == (second / page_path).read_text()
+    files = {item.relative_to(first): item.read_bytes() for item in first.rglob("*") if item.is_file()}
+    assert len(files) == 643
+    assert files == {item.relative_to(second): item.read_bytes() for item in second.rglob("*") if item.is_file()}
+    assert export(first).returncode == 2
+    assert files == {item.relative_to(first): item.read_bytes() for item in first.rglob("*") if item.is_file()}
+    invalid = tmp_path / "invalid"
+    assert export(invalid, origin + "/not-an-origin").returncode == 2
+    assert not invalid.exists()
+    alias = tmp_path / "alias"
+    alias.symlink_to(tmp_path, target_is_directory=True)
+    assert export(alias / "invalid").returncode == 2
+    assert export(Path("invalid")).returncode == 2
+    assert not invalid.exists()
 
 
 @pytest.mark.asyncio
 async def test_500_page_scan_commits_ten_batches_and_duplicate_finalization_is_inert(mock_network, monkeypatch, tmp_path):
-    from tests import fixtures as fx
     origin = "https://staged-engine.example"
-    urls = [f"{origin}/{section}/{i}" for section in ("solutions", "products", "stores", "insights") for i in range(160)]
-    mock_network({
-        origin + "/": fx._html(fx._page("Home")),
-        origin + "/robots.txt": {"body": "User-agent: *\nAllow: /", "content_type": "text/plain"},
-        origin + "/sitemap.xml": fx._xml(fx._sitemap(urls)),
-        **{url: fx._html(fx._page(url)) for url in urls},
-    })
+    exported_site = tmp_path / "site"
+    export_fixture(origin, exported_site)
+    content_types = {".html": "text/html", ".txt": "text/plain", ".xml": "application/xml"}
+    routes = {}
+    for file in exported_site.rglob("*"):
+        if file.is_file():
+            relative = file.relative_to(exported_site).as_posix()
+            url_path = "" if relative == "index.html" else relative
+            routes[f"{origin}/{url_path}"] = {"body": file.read_text(), "content_type": content_types[file.suffix]}
+    mock_network(routes)
     monkeypatch.setenv("SCAN_EVIDENCE_SIGNING_KEY", "integration-test-key")
     scan = {"id": "scan_500", "owner_user_id": "owner_500", "project_id": "project_500",
             "request_id": "request_500", "idempotency_key": "request_500", "attempt_count": 1,
@@ -39,6 +90,7 @@ async def test_500_page_scan_commits_ten_batches_and_duplicate_finalization_is_i
 
     async def start(client, current):
         scan["status"] = "crawling"
+        scan["started_at"] = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
         return dict(scan)
 
     async def progress(client, current, crawled, planned, batch=None):
@@ -97,28 +149,34 @@ async def test_500_page_scan_commits_ten_batches_and_duplicate_finalization_is_i
     with scan_job.worker_function_generation("V9"):
         envelope = scan_job.build_completion_envelope(scan, result, review, "integration-test-key")
     assert len(json.dumps(envelope)) < len(json.dumps(original_envelope))
+    assert envelope["scan"]["result_ready_at"] == result["result_ready_at"]
     (tmp_path / "completion-500.json").write_text(json.dumps(envelope))
     script = """
       import assert from 'node:assert/strict';
       import {readFileSync} from 'node:fs';
       import {webcrypto} from 'node:crypto';
       import {buildAuthoritySnapshot, firstFailedAuthorityPredicate} from './base44/functions/persistDurableScanAuthorityV9/authoritySnapshot.js';
+      import {stagedCompletionTime} from './base44/functions/persistDurableScanAuthorityV9/completionTimestamp.js';
       import {authorityRowsFromSnapshot} from './base44/functions/persistDurableScanAuthorityV9/authorityRows.js';
       import {authoritySnapshotFromRows, createAuthoritySeal, verifyAuthoritySeal} from './base44/functions/getCustomerScanResultV9/projection.js';
-      const {body, original} = JSON.parse(readFileSync(0, 'utf8'));
-      const options = {scan:body.scan,review:body.review,identity:body.identity,userId:body.identity.owner_user_id,now:'2026-11-11T12:00:00.000Z',identityVersion:'evidence_url_identity_v2_published_route'};
+      const {body, original, scan} = JSON.parse(readFileSync(0, 'utf8'));
+      const finishedAt = stagedCompletionTime(scan, body.scan);
+      assert.ok(Date.parse(finishedAt) > Date.parse(scan.started_at));
+      const options = {scan:body.scan,review:body.review,identity:body.identity,userId:body.identity.owner_user_id,now:finishedAt,identityVersion:'evidence_url_identity_v2_published_route'};
       assert.equal(firstFailedAuthorityPredicate(body.scan,body.review,{identityVersion:options.identityVersion}),'');
       const snapshot = buildAuthoritySnapshot(options);
       assert.deepEqual(snapshot,buildAuthoritySnapshot({...options,scan:original.scan,review:original.review}));
       const rows = authorityRowsFromSnapshot(snapshot,{fixListId:'list_500',ownerUserId:options.userId});
       const restored = authoritySnapshotFromRows({run:{...rows.scanRun,id:body.identity.scan_id,project_id:body.identity.project_id},fixList:{...rows.fixList,id:'list_500'},fixItems:rows.fixItems,userId:options.userId});
       assert.deepEqual(restored,snapshot);
+      assert.equal(restored.scan.completed_at, finishedAt);
+      assert.equal(restored.sealed_at, finishedAt);
       const proof = await createAuthoritySeal(snapshot,'integration-test-key',webcrypto);
       assert.equal(await verifyAuthoritySeal(restored,'integration-test-key',proof,webcrypto),true);
       assert.equal(snapshot.scan.pages_crawled,500);
       assert.equal(snapshot.scan.page_cap,500);
     """
     checked = subprocess.run(["node", "--input-type=module", "-e", script],
-                             input=json.dumps({"body": envelope, "original": original_envelope}), text=True, capture_output=True,
+                             input=json.dumps({"body": envelope, "original": original_envelope, "scan": scan}), text=True, capture_output=True,
                              cwd=Path(__file__).resolve().parents[2], timeout=30)
     assert checked.returncode == 0, checked.stderr

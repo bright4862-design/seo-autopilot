@@ -92,6 +92,37 @@ def task(*, scan_id="scan_abc123", drain=False, attempt=1, respect_robots_txt=Tr
 
 
 class ValidateDispatchTests(unittest.TestCase):
+    def test_watchdog_and_cleanup_preserve_the_frozen_contract(self):
+        staged = [{"scan_mode": f"standard_{cap}", "page_cap": cap, "pipeline_mode": "staged"} for cap in (150, 500)]
+        monolith = {**staged[0], "pipeline_mode": "monolith"}
+        malformed = [
+            {"scan_mode": "standard_150"}, {"pipeline_mode": "staged"}, {"page_cap": 500},
+            {**staged[1], "page_cap": True}, {**staged[1], "page_cap": "500"},
+            {**staged[1], "page_cap": None}, {**staged[0], "page_cap": 500},
+            {**staged[0], "pipeline_mode": "unknown"}, {**staged[1], "pipeline_mode": "monolith"},
+        ]
+        for is_cleanup in (False, True):
+            original = task(drain=True)
+            job = json.loads(base64.b64decode(original["httpRequest"]["body"]))
+            if is_cleanup:
+                original["name"] = f"{main.DRAIN_QUEUE_PATH}/tasks/standard150-cleanup-scan_abc123-a1"
+                original["httpRequest"]["url"] = main.WORKSPACE_DELETE_URL
+                del original["scheduleTime"]
+                del job["drain_after"]
+                job["workspace_cleanup"] = True
+            valid = [{}, *staged] if is_cleanup else [{}, *staged, monolith]
+            invalid = [*malformed, monolith] if is_cleanup else malformed
+            for contract in [*valid, *invalid]:
+                with self.subTest(is_cleanup=is_cleanup, contract=contract):
+                    value = deepcopy(original)
+                    value["httpRequest"]["body"] = encoded({**job, **contract})
+                    accepted, error = self.validate(value, queue_path=main.DRAIN_QUEUE_PATH)
+                    if contract in valid:
+                        self.assertIsNone(error)
+                        self.assertEqual(accepted, value)
+                    else:
+                        self.assertEqual((accepted, error), (None, "invalid_scan_mode"))
+
     def test_workspace_cleanup_is_pinned_to_control_queue_and_delete_route(self):
         value = task()
         value["name"] = f"{main.DRAIN_QUEUE_PATH}/tasks/standard150-cleanup-scan_abc123-a1"
@@ -364,6 +395,142 @@ class OwnerCanaryRoutingTests(unittest.TestCase):
                     main._validate_canary_config(origin, allow)
 
 
+class PaidStagedRoutingTests(unittest.TestCase):
+    PAID = {"SCAN_STAGED_ROLLOUT_SCOPE": "paid", "SCAN_PIPELINE_MODE": "staged", "SCAN_STAGED_500_ENTITLED_ENABLED": ""}
+    PAID_500 = {**PAID, "SCAN_STAGED_500_ENTITLED_ENABLED": "true"}
+
+    def paid_task(self, cap=150, **changes):
+        value = task(attempt=2)
+        job = json.loads(base64.b64decode(value["httpRequest"]["body"]))
+        job.update(scan_mode=f"standard_{cap}", page_cap=cap, pipeline_mode="staged", staged_rollout_scope="paid",
+                   owner_user_id="ordinary_customer_01", project_id="project_123", idempotency_key=job["request_id"], attempt_count=2)
+        job.update(changes)
+        value["httpRequest"]["body"] = encoded(job)
+        return value
+
+    def test_paid_scope_is_exclusive_and_requires_the_canonical_worker(self):
+        for config in (
+            {"SCAN_STAGED_ROLLOUT_SCOPE": "everyone"}, {"SCAN_PIPELINE_MODE": "monolith"},
+            {"SCAN_STAGED_OWNER_IDS": CANARY_OWNER}, {"SCAN_PIPELINE_OWNER_IDS": CANARY_OWNER},
+        ):
+            with self.subTest(config=config), patch.dict(os.environ, {**self.PAID, **config}):
+                with self.assertRaises(RuntimeError):
+                    main._staged_configuration()
+        with patch.dict(os.environ, self.PAID):
+            with patch.multiple(main, CANARY_WORKER_ORIGIN=CANARY_ORIGIN, CANARY_OWNER_USER_IDS=frozenset({CANARY_OWNER})):
+                with self.assertRaises(RuntimeError):
+                    main._staged_configuration()
+            for target in (f"{CANARY_ORIGIN}/scan-job", f"{main.WORKER_URL}?x=1", main.DRAIN_URL):
+                with self.subTest(target=target), patch.object(main, "WORKER_URL", target):
+                    with self.assertRaises(RuntimeError):
+                        main._staged_configuration()
+            health = main.app.test_client().get("/health").get_json()
+        self.assertEqual(health["staged_rollout_scope"], "paid")
+        self.assertEqual(health["staged_500_entitled_enabled"], False)
+        self.assertEqual(health["pipeline_mode"], "staged")
+        self.assertEqual(health["staged_owner_count"], 0)
+        self.assertEqual(health["staged_owner_cohort_sha256"], hashlib.sha256(b"[]").hexdigest())
+        self.assertIsNone(health["canary_worker_origin"])
+
+    def test_signed_paid_150_and_500_preserve_the_canonical_task_and_audience(self):
+        credentials = Mock(valid=True, token="unit-test-token")
+        upstream = Mock(status_code=200, ok=True)
+        upstream.json.return_value = {}
+        client = main.app.test_client()
+        with patch.dict(os.environ, self.PAID_500), patch.object(main.google.auth, "default", return_value=(credentials, None)), \
+                patch.object(main.requests, "post", return_value=upstream) as enqueue:
+            for cap in (150, 500):
+                value = self.paid_task(cap)
+                raw = json.dumps({"queue_path": main.QUEUE_PATH, "task": value}).encode()
+                timestamp = str(int(time.time()))
+                headers = {"x-fixlist-timestamp": timestamp, "x-fixlist-signature": main._expected_signature(timestamp, raw)}
+                response = client.post("/dispatch", data=raw, headers=headers)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(enqueue.call_args.kwargs["json"], {"task": value})
+                self.assertEqual(value["httpRequest"]["url"], main.WORKER_URL)
+                self.assertEqual(value["httpRequest"]["oidcToken"]["audience"], main.WORKER_ORIGIN)
+                enqueue.reset_mock()
+                changed = json.dumps({"queue_path": main.QUEUE_PATH, "task": self.paid_task(cap, staged_rollout_scope="off")}).encode()
+                bad_signature = client.post("/dispatch", data=changed, headers=headers)
+                self.assertEqual(bad_signature.status_code, 401)
+                enqueue.assert_not_called()
+
+    def test_paid_scope_rejects_malformed_staged_contracts_and_alternate_endpoints(self):
+        with patch.dict(os.environ, self.PAID_500):
+            for cap in (150, 500):
+                for changes, reason in (
+                    ({"staged_rollout_scope": None}, "invalid_scan_mode"),
+                    ({"staged_rollout_scope": "owner-canary"}, "invalid_scan_mode"),
+                    ({"pipeline_mode": "monolith"}, "invalid_scan_mode"),
+                    ({"page_cap": True}, "invalid_scan_mode"),
+                    ({"page_cap": str(cap)}, "invalid_scan_mode"),
+                    ({"scan_mode": "standard_5000"}, "invalid_scan_mode"),
+                    ({"owner_user_id": ""}, "scan_identity_mismatch"),
+                    ({"project_id": None}, "scan_identity_mismatch"),
+                    ({"idempotency_key": "other-request"}, "scan_identity_mismatch"),
+                    ({"attempt_count": "2"}, "scan_identity_mismatch"),
+                    ({"attempt_count": 3}, "scan_identity_mismatch"),
+                ):
+                    with self.subTest(cap=cap, changes=changes):
+                        self.assertEqual(main.validate_dispatch({"queue_path": main.QUEUE_PATH, "task": self.paid_task(cap, **changes)}),
+                                         (None, reason))
+                value = self.paid_task(cap, has_full_access=True)
+                job = json.loads(base64.b64decode(value["httpRequest"]["body"]))
+                del job["staged_rollout_scope"]
+                value["httpRequest"]["body"] = encoded(job)
+                self.assertEqual(main.validate_dispatch({"queue_path": main.QUEUE_PATH, "task": value}), (None, "invalid_scan_mode"))
+            value = self.paid_task()
+            value["httpRequest"]["url"] = f"{CANARY_ORIGIN}/scan-job"
+            self.assertEqual(main.validate_dispatch({"queue_path": main.QUEUE_PATH, "task": value}), (None, "invalid_worker_target"))
+            value["httpRequest"]["url"] = main.WORKER_URL
+            value["httpRequest"]["oidcToken"]["audience"] = CANARY_ORIGIN
+            self.assertEqual(main.validate_dispatch({"queue_path": main.QUEUE_PATH, "task": value}), (None, "invalid_audience"))
+
+    def test_rollback_blocks_paid_entry_and_preserves_legacy_and_control_tasks(self):
+        off = {"SCAN_STAGED_ROLLOUT_SCOPE": "off", "SCAN_PIPELINE_MODE": "monolith", "SCAN_STAGED_500_ENTITLED_ENABLED": ""}
+        for settings in (off, self.PAID, self.PAID_500):
+            with self.subTest(settings=settings), patch.dict(os.environ, settings):
+                for value in (task(), self.paid_task(150, pipeline_mode="monolith", staged_rollout_scope=None)):
+                    job = json.loads(base64.b64decode(value["httpRequest"]["body"]))
+                    job.pop("staged_rollout_scope", None)
+                    value["httpRequest"]["body"] = encoded(job)
+                    self.assertEqual(main.validate_dispatch({"queue_path": main.QUEUE_PATH, "task": value}), (value, None))
+                for cap in (150, 500):
+                    value = self.paid_task(cap)
+                    current = main.validate_dispatch({"queue_path": main.QUEUE_PATH, "task": value})
+                    allowed = settings == self.PAID_500 or (settings == self.PAID and cap == 150)
+                    self.assertEqual(current, (value, None) if allowed else (None, "invalid_scan_mode"))
+                    watchdog = task(drain=True)
+                    job = json.loads(base64.b64decode(watchdog["httpRequest"]["body"]))
+                    job.update(scan_mode=f"standard_{cap}", page_cap=cap, pipeline_mode="staged")
+                    watchdog["httpRequest"]["body"] = encoded(job)
+                    self.assertEqual(main.validate_dispatch({"queue_path": main.DRAIN_QUEUE_PATH, "task": watchdog}), (watchdog, None))
+                    cleanup = deepcopy(watchdog)
+                    cleanup["name"] = f"{main.DRAIN_QUEUE_PATH}/tasks/standard150-cleanup-scan_abc123-a1"
+                    cleanup["httpRequest"]["url"] = main.WORKSPACE_DELETE_URL
+                    del cleanup["scheduleTime"], job["drain_after"]
+                    cleanup["httpRequest"]["body"] = encoded({**job, "workspace_cleanup": True})
+                    self.assertEqual(main.validate_dispatch({"queue_path": main.DRAIN_QUEUE_PATH, "task": cleanup}), (cleanup, None))
+
+    def test_paid_500_requires_exact_true_and_paid_scope(self):
+        for value in (None, "", "false", "TRUE", " true", "1", "true"):
+            with self.subTest(value=value), patch.dict(os.environ, self.PAID):
+                if value is None:
+                    del os.environ["SCAN_STAGED_500_ENTITLED_ENABLED"]
+                else:
+                    os.environ["SCAN_STAGED_500_ENTITLED_ENABLED"] = value
+                for cap in (150, 500):
+                    value_task = self.paid_task(cap)
+                    received = main.validate_dispatch({"queue_path": main.QUEUE_PATH, "task": value_task})
+                    expected = (value_task, None) if cap == 150 or value == "true" else (None, "invalid_scan_mode")
+                    self.assertEqual(received, expected)
+                health = main.app.test_client().get("/health").get_json()
+                self.assertIs(health["staged_500_entitled_enabled"], value == "true")
+        off = {**self.PAID_500, "SCAN_STAGED_ROLLOUT_SCOPE": "off", "SCAN_PIPELINE_MODE": "monolith"}
+        with patch.dict(os.environ, off), self.assertRaises(RuntimeError):
+            main._staged_configuration()
+
+
 class SignatureTests(unittest.TestCase):
     def test_signature_is_bound_to_timestamp_and_body(self):
         timestamp = str(int(time.time()))
@@ -383,6 +550,8 @@ class SignatureTests(unittest.TestCase):
         self.assertEqual(payload["queue"], main.QUEUE_PATH)
         self.assertEqual(payload["drain_queue"], main.DRAIN_QUEUE_PATH)
         self.assertEqual(payload["worker_origin"], main.WORKER_ORIGIN)
+        self.assertEqual(payload["staged_rollout_scope"], "off")
+        self.assertIs(payload["staged_500_entitled_enabled"], False)
 
     def test_dispatch_rejects_oversized_body_before_auth(self):
         client = main.app.test_client()

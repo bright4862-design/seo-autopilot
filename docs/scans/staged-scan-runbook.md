@@ -154,6 +154,8 @@ Base44 grants `page_cap=500` only from an active server-owned entitlement; the b
 
 `scripts/run-staged-owner-canary.sh` submits one explicitly confirmed staged-150 request through the authenticated pinned CLI. Supply the exact source SHA, expected administrator owner ID, an existing matching project and target URL, `EXPECTED_PAGE_CAP=150`, a stable request ID and a new acceptance-output path. Its confirmation binds that source, owner, project and request ID. It verifies the authenticated user, project and existing active entitlement before starting, and never creates a project or grant. Reuse the request ID after a lost response. The filtered report requires verified authority, the current release fingerprint, staged batch progress, duration and measured memory; absent evidence prevents an acceptance claim. This canary does not configure a cohort, open public claims or freeze a production release.
 
+An approved administrator can prepare the other approved administrator's exact cohort for a controlled browser startup scan. Use `prepare-owner` with the authenticated `STAGED_OPERATOR_USER_ID`, the exact `STAGED_OWNER_USER_ID` signed in to the scanner, and `STAGED_COHORT_TARGET_ROLE=admin`. A regular customer pilot uses a separate normal-role account.
+
 Before expanding the cohort, verify:
 
 - The four reference sites finish end to end with `durable_worker_owned: true`; compare 150-page monolith/staged fixtures and the expected signed authority bounds.
@@ -178,8 +180,24 @@ Review a corpus with sitemap inventories on all 50 sites so each can contribute 
 
 Phase 7 (5,000-page scans), adaptive sampling, weekly monitoring and the separate signed targeted-verification product are future extensions. The 30-day lifecycle must be revisited before introducing a longer-lived monitoring baseline.
 
+## Paid rollout
+
+Rehearse the V9 route manifest with intake closed before switching the public site to V9. The publisher verifies the new V9 routes and keeps V8 available for earlier clients and in-flight results. Establish the ordinary-customer pilot on the exact V9 build before enabling the paid scope.
+
+After draining all three queues and verifying the staged-capable canonical worker, use gateway configuration `paid` for staged 150. The gateway verifies the closed barrier and exact serving revision before promoting. Use `OPERATION=prepare-paid` in `scripts/operate-base44-staged-runtime.sh` with the exact merged `SOURCE_SHA`, approved `STAGED_OPERATOR_USER_ID`, serving `STAGED_GATEWAY_REVISION`, and `STAGED_PAID_PAGE_CAP=150`. Confirm with `PREPARE-BASE44-STAGED-PAID:<source>:<gateway-revision>:150`. The command checks the gateway that V9 actually uses, proves Base44 intake is closed before setting the paid scope, and reads both runtimes back. `OPERATION=status-paid` performs the same final checks without changing settings.
+
+A named non-administrator pilot can exercise 500 with an approved, active 500-page grant. Verify the full scan and saved result on the existing staged pilot path. If an approved site lacks enough pages, `scanner-api/scripts/export_staged_500_fixture.py` prepares a 640-page synthetic site with a sitemap and robots file. It takes the controlled host's final HTTPS `--origin` and a new absolute `--output` directory. Host those files on the approved test origin to prove full-cap execution. The representative site corpus measures coverage and quality separately.
+
+Once the 500 corpus and production checks pass, `paid-500` enables already-entitled 500 launches. Run `prepare-paid` for cap 500 after the gateway verifies its matching flag. New requests from a verified 500 holder receive a clear pause response if the 500 tier is disabled. Existing grants and in-flight attempts keep their original cap.
+
 ## Rollback and recovery
 
-Remove cohort owners or set `SCAN_PIPELINE_MODE=monolith` consistently across Base44/gateway/worker to stop new staged admissions. Do not disable stage endpoints, delete the stage queue, remove V9 functions or delete the bucket while admitted scans remain active. Let them finish or finalize committed evidence through the reconciler, then verify terminal records before removing infrastructure. Existing sealed authority remains immutable.
+Close staged intake to stop new admissions. Keep the stage endpoints, queue, V9 functions and workspace available for attempts that already own a staged contract. Wait for the admission barrier and entry, stage, and drain queues to clear before changing the serving worker or removing its source tag. Existing sealed authority remains immutable.
+
+When rolling back paid settings, run the Base44 operator's `disable` operation, then use `OPERATION=status-off` to verify that the exact V9 launcher sees both paid switches off and intake closed. Keep intake closed if that readback fails.
+
+The periodic Scheduler calls the canonical service. Before opening normal staged intake, verify the promoted stage-capable worker with `scripts/verify-standard150-reconciler.sh`. Set `RECONCILER_EXPECTED_SOURCE_SHA` and `RECONCILER_EXPECTED_STAGED_CONFIG_SHA256` to the reviewed build values, with the same `TASKS_INVOKER_SERVICE_ACCOUNT` used by the Scheduler. The verifier checks that the canonical service and source-bound tag resolve to the same revision and that the Scheduler uses the canonical OIDC audience.
+
+For a stalled attempt with committed batches, the watchdog records one replacement finalization task. A finished crawl reuses its saved result and review. An interrupted crawl finalizes its committed pages as limited. The watchdog retries finalization for 30 minutes, lets any outstanding save drain, then verifies the exact attempt's terminal state before acknowledging a timeout.
 
 Watch committed batch count and heartbeat timestamps, enqueue errors, retry counts, workspace generation conflicts, limited-completion reasons and deletion cleanup failures. A stored page object by itself is not proof of a committed batch: only artifacts referenced by the committed frontier belong to the final result. Do not manually assemble or reseal results from orphan objects.

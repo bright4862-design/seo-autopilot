@@ -17,7 +17,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const APP_ID = '6a498732ec779dfaaeab0e53';
 export const STAGED_SCHEMA_ENTITIES = Object.freeze(['ScanRun', 'FixList', 'FixItem', 'Access']);
 const ADDITIONS = Object.freeze({
-  ScanRun: ['page_cap', 'pipeline_mode', 'pages_planned', 'workspace_cleanup_state', 'workspace_cleanup_completed_at', 'last_committed_batch'],
+  ScanRun: ['page_cap', 'pipeline_mode', 'staged_rollout_scope', 'pages_planned', 'workspace_cleanup_state', 'workspace_cleanup_completed_at', 'last_committed_batch'],
   FixItem: ['affected_page_count', 'affected_page_count_is_lower_bound', 'template_impact_estimates'],
   Access: ['page_cap'],
 });
@@ -93,7 +93,7 @@ export function assertRollbackRows(evidence, operations) {
         requireCondition(['complete', 'limited', 'failed', 'cancelled'].includes(row.status), 'active or unknown ScanRun status blocks rollback');
         requireCondition(!row.pipeline_mode || row.pipeline_mode === 'monolith', 'staged ScanRun blocks rollback');
         requireCondition(row.scan_mode !== 'standard_500' && (row.page_cap == null || row.page_cap === 150), 'large-cap ScanRun blocks rollback');
-        requireCondition(['pages_planned', 'last_committed_batch', 'workspace_cleanup_state', 'workspace_cleanup_completed_at'].every(key => row[key] == null || row[key] === ''), 'retained staged ScanRun evidence blocks rollback');
+        requireCondition(['staged_rollout_scope', 'pages_planned', 'last_committed_batch', 'workspace_cleanup_state', 'workspace_cleanup_completed_at'].every(key => row[key] == null || row[key] === ''), 'retained staged ScanRun evidence blocks rollback');
       } else if (name === 'Access') {
         requireCondition(row.page_cap == null || row.page_cap === 150, '500 or unknown Access entitlement blocks rollback');
       } else {

@@ -48,6 +48,45 @@ async def test_duplicate_task_creation_is_success_and_does_not_change_identity()
     assert stage_task_id(job, "finalize", 2) != stage_task_id({**job, "attempt_count": 2}, "finalize", 2)
 
 
+@pytest.mark.asyncio
+async def test_finalize_recovery_has_one_distinct_task_despite_a_deleted_initial_task_name():
+    class TombstoningClient(Client):
+        def __init__(self):
+            super().__init__()
+            self.seen_names = set()
+            self.created = []
+
+        def create_task(self, *, request, timeout, retry):
+            super().create_task(request=request, timeout=timeout, retry=retry)
+            task = request["task"]
+            if task["name"] in self.seen_names:
+                raise AlreadyExists("active task or tombstone")
+            self.seen_names.add(task["name"])
+            self.created.append(task)
+
+    client = TombstoningClient()
+    dispatcher = StageTaskDispatcher(
+        "projects/project/locations/europe-west1/queues/stages", "https://worker.example",
+        "invoker@project.iam.gserviceaccount.com", client=client,
+    )
+    job = {"scan_id": "scan_test", "attempt_count": 2}
+    await dispatcher.enqueue(job, "finalize", 3)
+    await dispatcher.enqueue(job, "finalize", 3)
+    await dispatcher.enqueue(job, "finalize", 3, recovery_generation=1)
+    await dispatcher.enqueue(job, "finalize", 3, recovery_generation=1)
+
+    original, replacement = client.created
+    assert original["name"] != replacement["name"]
+    assert "recovery_generation" not in json.loads(original["http_request"]["body"])
+    assert json.loads(replacement["http_request"]["body"]) == {
+        **job, "batch": 3, "limited": False, "recovery_generation": 1,
+    }
+    assert replacement["http_request"]["url"] == original["http_request"]["url"]
+    assert replacement["http_request"]["oidc_token"] == original["http_request"]["oidc_token"]
+    with pytest.raises(ValueError, match="recovery generation"):
+        await dispatcher.enqueue(job, "batch", 3, recovery_generation=1)
+
+
 @pytest.mark.parametrize("origin", ["http://worker.example", "https://worker.example/scan-batch", "https://worker.example?target=evil", "https://user:pass@worker.example"])
 def test_unpinned_worker_origins_are_rejected(origin):
     with pytest.raises(RuntimeError):

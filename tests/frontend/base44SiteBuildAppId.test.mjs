@@ -10,7 +10,7 @@ const appParams = readFileSync("src/lib/app-params.js", "utf8");
 const appId = "6a498732ec779dfaaeab0e53";
 const sourceSha = "1111111111111111111111111111111111111111";
 
-function captureBuildEnvironment({ targetAppId = appId, ambientAppId } = {}) {
+function captureBuildEnvironment({ targetAppId = appId, ambientAppId, ambientScannerGeneration } = {}) {
   // Execute the release script's real build command in bash. Only npm is
   // intercepted: no CLI authentication, function deployment or site mutation.
   const commands = deploy.split("\n").filter((line) =>
@@ -21,9 +21,10 @@ function captureBuildEnvironment({ targetAppId = appId, ambientAppId } = {}) {
   delete env.VITE_BASE44_APP_ID;
   delete env.VITE_FIXLIST_SOURCE_SHA;
   if (ambientAppId !== undefined) env.VITE_BASE44_APP_ID = ambientAppId;
+  if (ambientScannerGeneration !== undefined) env.VITE_SCAN_FUNCTION_GENERATION = ambientScannerGeneration;
   const command = `npm() {
     test "$#" -eq 2 && test "$1" = run && test "$2" = build || return 70
-    "$FIXLIST_TEST_NODE" -e 'process.stdout.write(JSON.stringify({appId:process.env.VITE_BASE44_APP_ID ?? null,sourceSha:process.env.VITE_FIXLIST_SOURCE_SHA ?? null}))'
+    "$FIXLIST_TEST_NODE" -e 'process.stdout.write(JSON.stringify({appId:process.env.VITE_BASE44_APP_ID ?? null,sourceSha:process.env.VITE_FIXLIST_SOURCE_SHA ?? null,scannerGeneration:process.env.VITE_SCAN_FUNCTION_GENERATION ?? null}))'
   }
   ${commands[0]}`;
   return JSON.parse(execFileSync("bash", ["-e", "-c", command], { env, encoding: "utf8" }));
@@ -68,6 +69,11 @@ test("release build cannot inherit an app ID belonging to another deployment", (
   const build = captureBuildEnvironment({ ambientAppId: "aaaaaaaaaaaaaaaaaaaaaaaa" });
   assert.equal(build.appId, appId);
   assert.equal(evaluateFreshVisitor(build).appId, appId);
+});
+
+test("release build cannot inherit the scanner preview override", () => {
+  const build = captureBuildEnvironment({ ambientScannerGeneration: "V9" });
+  assert.equal(build.scannerGeneration, "");
 });
 
 test("release build uses the resolved deployment APP_ID rather than a second hardcoded app", () => {

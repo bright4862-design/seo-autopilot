@@ -193,6 +193,8 @@ def verify_runtime_health(
     staged_owner_ids: str = "",
     staged_owner_cohort_sha256: str | None = None,
     staged_owner_count: int | None = None,
+    staged_rollout_scope: str | None = None,
+    staged_500_entitled_enabled: bool | None = None,
 ) -> dict[str, str]:
     def require(name: str, actual: Any, expected: Any) -> None:
         if actual != expected:
@@ -222,6 +224,11 @@ def verify_runtime_health(
         require("staged_owner_count", health.get("staged_owner_count"),
                 staged_owner_count if staged_owner_count is not None else len(selected))
         require("staged_owner_cohort_sha256", health.get("staged_owner_cohort_sha256"), expected_hash)
+    if staged_rollout_scope is not None:
+        require("staged_rollout_scope", health.get("staged_rollout_scope"), staged_rollout_scope)
+    if staged_500_entitled_enabled is not None:
+        if health.get("staged_500_entitled_enabled") is not staged_500_entitled_enabled:
+            raise VerificationError("Gateway /health does not attest the expected 500-page launch flag")
     require("contract_version", health.get("contract_version"), expected_contract_version)
     require("source_sha", health.get("source_sha"), expected_source_sha)
     # The one field that distinguishes two revisions built from the same commit.
@@ -257,6 +264,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--canary-owner-count", type=int, default=None)
     parser.add_argument("--pipeline-mode", choices=("monolith", "staged"), default=None)
     parser.add_argument("--staged-owner-ids", default="")
+    parser.add_argument("--staged-rollout-scope", choices=("off", "paid"), default=None)
+    parser.add_argument("--staged-500-entitled-enabled", choices=("false", "true"))
     args = parser.parse_args(argv)
 
     if not args.plan_revision:
@@ -284,6 +293,8 @@ def main(argv: list[str] | None = None) -> int:
                 args.canary_owner_count,
                 pipeline_mode=args.pipeline_mode,
                 staged_owner_ids=args.staged_owner_ids,
+                staged_rollout_scope=args.staged_rollout_scope,
+                staged_500_entitled_enabled=None if args.staged_500_entitled_enabled is None else args.staged_500_entitled_enabled == "true",
             )
         elif args.created_revision_json:
             proven = verify_created_revision(

@@ -114,6 +114,21 @@ def test_definitive_blocked_crawl_short_circuits_before_full_review():
     }) is None
 
 
+def test_robots_failure_requires_a_frozen_respect_policy_and_only_denied_pages():
+    result = {
+        "respect_robots_txt": True,
+        "owner_attested_robots_override": False,
+        "pages": [{"url": "https://example.com/", "status_code": 0, "fetch_error": "blocked_by_robots_txt"}],
+    }
+    assert terminal_crawl_limitation(result)["code"] == "blocked_by_robots_txt"
+    assert terminal_crawl_limitation({
+        **result, "respect_robots_txt": False, "owner_attested_robots_override": True,
+    }) is None
+    assert terminal_crawl_limitation({
+        **result, "pages": [*result["pages"], {"status_code": 500}],
+    }) is None
+
+
 def test_blocked_review_gets_truthful_access_limited_terminal_code():
     limitation = terminal_review_limitation({
         "release_gate_eligible": False,
@@ -234,6 +249,42 @@ async def test_isolated_review_timeout_maps_to_customer_safe_failure(monkeypatch
 
     assert outcome["ok"] is False
     assert outcome["failure_code"] == "review_wall_timeout"
+
+
+@pytest.mark.parametrize("mode,cap,pipeline,expected", [
+    ("advanced", None, "staged", "review_wall_timeout"),
+    ("standard_150", None, "staged", "review_wall_timeout"),
+    ("standard_500", None, "staged", "scan_page_cap_invalid"),
+    ("standard_500", 500, "monolith", "scan_page_cap_invalid"),
+])
+@pytest.mark.asyncio
+async def test_v9_completion_normalizes_historical_caps_before_review(monkeypatch, mode, cap, pipeline, expected):
+    from app import scan_job
+
+    scan = {
+        "id": "scan-1", "status": "crawling", "attempt_count": 1,
+        "scan_mode": mode, "page_cap": cap, "pipeline_mode": pipeline,
+        "respect_robots_txt": True, "owner_attested_robots_override": False,
+    }
+
+    async def read(*args):
+        return dict(scan)
+
+    def normalized_review(result, *args):
+        assert (result["scan_mode"], result["canonical_mode"], result["page_cap"]) == ("standard_150", "standard_150", 150)
+        raise LocalReviewProcessTimeout("test timeout")
+
+    monkeypatch.setattr(scan_job, "read_scan_run", read)
+    monkeypatch.setattr(scan_job, "run_local_review_isolated", normalized_review)
+    result = {
+        "respect_robots_txt": True, "owner_attested_robots_override": False,
+        "pages_crawled": 1, "crawled_pages": [{
+            "url": "https://example.com/", "status_code": 200, "page_evidence_class": "usable_html",
+        }],
+    }
+    with scan_job.worker_function_generation("V9"):
+        outcome = await scan_job.complete_authority(None, scan, result, "test-signing-key")
+    assert outcome["failure_code"] == expected
 
 
 @pytest.mark.asyncio

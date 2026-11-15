@@ -23,6 +23,7 @@ export const FAILURE_STATE_PRESENTATION_VERSION = "failure_state_presentation_v2
  */
 export const LIMITATION_KINDS = Object.freeze([
   "access_limited",
+  "robots_blocked",
   "too_few_usable_pages",
   "deadline_reached",
   "rendering_not_verified",
@@ -130,6 +131,10 @@ function renderingUnverified(record) {
 export function durableScanLimitationKind(record) {
   const source = plainObject(record);
   const text = failureText(source);
+  const errorCode = cleanText(source.error_code);
+  if (errorCode === "scan_access_limited") return "access_limited";
+  if (errorCode === "blocked_by_robots_txt" && source.respect_robots_txt === true
+    && source.owner_attested_robots_override === false) return "robots_blocked";
   const states = new Set([
     cleanText(source.evidence_quality_state).toLowerCase(),
     cleanText(source.coverage_state).toLowerCase(),
@@ -140,7 +145,7 @@ export function durableScanLimitationKind(record) {
     ...codeSet(source.coverage_reasons),
   ]);
 
-  if (intersects(states, ACCESS_LIMITED_STATES) || intersects(reasons, ACCESS_LIMITED_REASONS)) {
+  if (reasons.has("staged_rate_limit") || intersects(states, ACCESS_LIMITED_STATES) || intersects(reasons, ACCESS_LIMITED_REASONS)) {
     return "access_limited";
   }
   if (deadlineReached(source)) return "deadline_reached";
@@ -174,9 +179,15 @@ const COPY = {
   },
   security_service_blocked: {
     title: "Your site's security service is blocking FixList.",
-    detail: "Your site answered FixList with a bot challenge or rate limit instead of your pages, so there was not enough to publish a FixList. This is your firewall or bot protection doing its job — it cannot tell FixList apart from the traffic it exists to stop. It is not your robots.txt: FixList always respects that, and this block happened before those rules came into it.",
-    nextStep: "Temporarily allow FixList in your firewall/bot protection, then Rescan.",
-    retryAdvice: "Rescanning before that will be blocked the same way, because nothing about the site has changed yet.",
+    detail: "Your site limited automated access before FixList could check enough pages to publish a complete report. Your site's security controls apply independently of its robots.txt policy.",
+    nextStep: "Ask your site administrator to review the restriction and approve this scan before trying again.",
+    retryAdvice: "A rate limit may clear after traffic drops. For a bot challenge, ask the site administrator to review the restriction first.",
+  },
+  robots_blocked: {
+    title: "The site's robots.txt limited this scan",
+    detail: "FixList respected the site's crawl instructions and skipped disallowed pages. There was too little accessible evidence to publish a report.",
+    nextStep: "Choose a section the site's robots.txt allows, or ask the site administrator to review its crawl rules.",
+    retryAdvice: "Try again after choosing an allowed section or after the crawl rules change.",
   },
   too_few_usable_pages: {
     title: "Too few usable pages to judge the site",
@@ -233,6 +244,39 @@ const COPY = {
     retryAdvice: "Nothing here says the site is at fault, so a new scan is worth running.",
   },
 };
+
+const ACCESS_PROVIDERS = new Map([
+  ["cloudflare", "Cloudflare"], ["siteground", "SiteGround"], ["datadome", "DataDome"],
+  ["imperva", "Imperva"], ["sucuri", "Sucuri"], ["akamai", "Akamai"], ["wordfence", "Wordfence"],
+]);
+
+function accessCopy(record, ownership) {
+  const recorded = record.status === "failed" && record.error_code === "scan_access_limited"
+    ? plainObject(record.access_limitation) : {};
+  const providerName = ACCESS_PROVIDERS.get(recorded.provider);
+  const source = providerName || "The website";
+  if (recorded.kind === "rate_limit" || codeSet(record.coverage_reasons).has("staged_rate_limit")) {
+    return {
+      title: `${source} rate-limited this scan`,
+      detail: `${source} slowed automated requests before FixList could check enough pages to publish a complete report.`,
+      nextStep: "Try again when the site's rate limit clears.",
+      retryAdvice: "If the rate limit recurs, ask the site administrator to review the scan time and their request limits.",
+    };
+  }
+  if (recorded.kind !== "bot_challenge" && recorded.kind !== "access_block") return null;
+
+  const challenge = recorded.kind === "bot_challenge";
+  const administrator = isOwnerManaged(ownership) ? "your site administrator" : "the site administrator";
+  const service = providerName ? `${providerName} security events` : "the site's security logs";
+  return {
+    title: challenge ? `${source} challenged this scan` : `${source} blocked this scan`,
+    detail: challenge
+      ? `${source} returned a bot verification challenge before FixList could check enough pages to publish a report.`
+      : `${source} blocked automated access before FixList could check enough pages to publish a report.`,
+    nextStep: `Ask ${administrator} to review ${service} at the time of the scan and approve the scan if appropriate.`,
+    retryAdvice: "Try again after the site administrator confirms the scan is allowed.",
+  };
+}
 
 /**
  * How long a run may take before saying so, and how fresh a heartbeat must be
@@ -327,9 +371,13 @@ export function durableScanStatePresentation(record, { now = Date.now(), ownersh
   if (RUNNING_STATUSES.has(status)) return inProgressPresentation(source, now);
   // Every branch returns the same keys, so the page never has to guard a
   // progress field that only exists on one of them.
-  const settled = (kind) => ({ kind, ...COPY[kind], countLabel: "", percent: null, canLeavePage: false, slowNote: "" });
+  const settled = (kind, copy = COPY[kind]) => ({ kind, ...copy, countLabel: "", percent: null, canLeavePage: false, slowNote: "" });
   if (status === "cancelled") return settled("cancelled");
-  if (status === "limited" || status === "failed") return settled(presentedKind(source, ownership));
+  if (status === "limited" || status === "failed") {
+    const kind = presentedKind(source, ownership);
+    const specific = kind === "access_limited" || kind === "security_service_blocked" ? accessCopy(source, ownership) : null;
+    return settled(kind, specific || COPY[kind]);
+  }
   return settled("no_results");
 }
 

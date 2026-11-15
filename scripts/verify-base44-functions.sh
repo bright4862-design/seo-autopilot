@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prove that every active Standard 150 Base44 scanner/customer route is executing
+# Prove that every required Base44 scanner/customer route is executing
 # the exact canonical package bytes from this source tree. Inventory membership and the site
 # bundle are not enough: Base44 can report a function as "unchanged" while an
 # older compiled handler continues serving.
@@ -15,17 +15,6 @@ PROBE_ATTEMPTS="${PROBE_ATTEMPTS:-12}"
 PROBE_DELAY_SECONDS="${PROBE_DELAY_SECONDS:-5}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# The live routes. Each one's expected build ID is resolved through the alias
-# table by the generator, so this list no longer carries the canonical name.
-FUNCTION_ROUTES=(
-  startStandardScanJobV8
-  durableScanWorkerControlV8
-  persistDurableScanAuthorityV8
-  persistLimitedScanResultV8
-  getCustomerScanResultV8
-  deleteCustomerScanDataV8
-)
-
 command -v curl >/dev/null 2>&1 || {
   echo "Refusing Base44 function verification: curl is required." >&2
   exit 2
@@ -34,6 +23,10 @@ command -v node >/dev/null 2>&1 || {
   echo "Refusing Base44 function verification: node is required." >&2
   exit 2
 }
+
+ROUTE_SELECTION="$(node "$REPO_ROOT/scripts/lib/base44-public-routes.mjs")"
+read -r -a ROUTE_FIELDS <<<"$ROUTE_SELECTION"
+FUNCTION_ROUTES=("${ROUTE_FIELDS[@]:1}")
 
 if ! printf '%s' "$PROBE_ATTEMPTS" | grep -Eq '^[1-9][0-9]*$'; then
   echo "Refusing Base44 function verification: PROBE_ATTEMPTS must be a positive integer." >&2
@@ -71,19 +64,13 @@ NODE
 }
 
 for name in "${FUNCTION_ROUTES[@]}"; do
-  # The build ID resolves through the alias, because an alias is stamped with
-  # the identity of the package it mirrors. The activation marker does not:
-  # each package carries its own. That asymmetry is the whole point of checking
-  # both -- deleteCustomerScanDataV8's canonical package was unchanged by the
-  # activation refresh, so its expected build ID still equals the one the stale
-  # handler serves, and a build-only check calls that route current while it is
-  # running canonical-era code.
-  expected="$(node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --build-id "$name")"
+  # Both package bytes and activation must match this checked-out source.
+  expected="$(RELEASE_CONTRACT_ROOT="$REPO_ROOT" node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --build-id "$name")"
   if ! printf '%s' "$expected" | grep -Eq '^[0-9a-f]{64}$'; then
     echo "Refusing Base44 function verification: local build ID for $name is invalid." >&2
     exit 2
   fi
-  expected_activation="$(node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --activation-id "$name")"
+  expected_activation="$(RELEASE_CONTRACT_ROOT="$REPO_ROOT" node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --activation-id "$name")"
   if ! printf '%s' "$expected_activation" | grep -Eq '^[A-Za-z0-9._-]{1,120}$'; then
     echo "Refusing Base44 function verification: local activation marker for $name is invalid." >&2
     exit 2

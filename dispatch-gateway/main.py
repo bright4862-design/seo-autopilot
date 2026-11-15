@@ -114,11 +114,34 @@ def _validate_canary_config(origin: str, owners: frozenset[str]) -> None:
 _validate_canary_config(CANARY_WORKER_ORIGIN, CANARY_OWNER_USER_IDS)
 
 
+def _staged_rollout_scope() -> str:
+    scope = os.getenv("SCAN_STAGED_ROLLOUT_SCOPE") or "off"
+    if scope not in {"off", "paid"}:
+        raise RuntimeError("staged rollout scope must be off or paid")
+    return scope
+
+
+def _staged_500_entitled_enabled() -> bool:
+    return os.getenv("SCAN_STAGED_500_ENTITLED_ENABLED") == "true"
+
+
 def _staged_configuration() -> tuple[str, frozenset[str]]:
     mode = os.getenv("SCAN_PIPELINE_MODE", "monolith").strip() or "monolith"
     raw = os.getenv("SCAN_STAGED_OWNER_IDS", "")
     values = raw.split(",") if raw else []
     owners = frozenset(values)
+    scope = _staged_rollout_scope()
+    if scope != "paid" and _staged_500_entitled_enabled():
+        raise RuntimeError("entitled 500 staging requires paid rollout scope")
+    if scope == "paid":
+        if (mode != "staged" or owners or CANARY_WORKER_ORIGIN or CANARY_OWNER_USER_IDS
+                or os.getenv("SCAN_PIPELINE_OWNER_IDS")):
+            raise RuntimeError("paid staging requires staged mode without any owner-canary route")
+        host = worker_parts.hostname or ""
+        if (not re.fullmatch(r"[a-z0-9.-]+\.run\.app", host) or "---" in host
+                or WORKER_URL != f"https://{host}/scan-job"):
+            raise RuntimeError("paid staging requires the canonical Cloud Run scan-job URL")
+        return mode, owners
     if mode == "monolith" and not owners:
         return mode, owners
     if (mode != "staged" or not 1 <= len(values) <= CANARY_MAX_OWNERS
@@ -135,7 +158,7 @@ _staged_configuration()
 def route_task(task: dict[str, Any], job: dict[str, Any], is_drain: bool) -> tuple[dict[str, Any], str]:
     """Re-target an already validated task to the canary only for allowlisted owners."""
     owner = str(job.get("owner_user_id") or "").strip()
-    if not CANARY_WORKER_ORIGIN or owner not in CANARY_OWNER_USER_IDS:
+    if _staged_rollout_scope() == "paid" or not CANARY_WORKER_ORIGIN or owner not in CANARY_OWNER_USER_IDS:
         return task, "serving"
     routed = deepcopy(task)
     path = urlsplit(task["httpRequest"]["url"]).path
@@ -221,23 +244,62 @@ def _valid_robots_policy(job: dict[str, Any]) -> bool:
 
 
 def _valid_scan_mode(job: dict[str, Any]) -> bool:
-    """The signed V9 intake may grant 500 only to a staged owner cohort.
-
-    The worker independently rechecks the durable entitlement before fetching;
-    this gate cannot grant a larger cap by itself.
-    """
-    if job.get("scan_mode") == "standard_150":
-        return job.get("page_cap", 150) == 150
     try:
         mode, owners = _staged_configuration()
+        scope = _staged_rollout_scope()
     except RuntimeError:
         return False
+    paid_marker = "staged_rollout_scope" in job
+    if scope == "paid":
+        if paid_marker or job.get("pipeline_mode") == "staged":
+            # Only Base44 can sign a marker from a newly admitted paid ScanRun.
+            # Cloud Run independently checks the durable cap and task identity.
+            return (
+                job.get("staged_rollout_scope") == "paid" and job.get("pipeline_mode") == "staged"
+                and _valid_control_scan_contract(job, is_cleanup=False)
+                and (job["page_cap"] == 150 or _staged_500_entitled_enabled())
+            )
+        cap = job.get("page_cap", 150)
+        return (job.get("scan_mode") == "standard_150" and job.get("pipeline_mode") in (None, "monolith")
+                and type(cap) is int and cap == 150)
+    if paid_marker:
+        return False
+    if job.get("scan_mode") == "standard_150":
+        return job.get("page_cap", 150) == 150
     return (
         job.get("scan_mode") == "standard_500"
         and type(job.get("page_cap")) is int and job["page_cap"] == 500
         and job.get("pipeline_mode") == "staged"
         and mode == "staged"
         and str(job.get("owner_user_id") or "") in owners
+    )
+
+
+def _valid_control_scan_contract(job: dict[str, Any], *, is_cleanup: bool) -> bool:
+    fields = {"scan_mode", "page_cap", "pipeline_mode"}
+    if fields.isdisjoint(job):
+        return True  # Tasks already minted by an older launcher.
+    if not fields.issubset(job) or type(job["page_cap"]) is not int:
+        return False
+    pipeline = job["pipeline_mode"]
+    if pipeline != "staged" and (pipeline != "monolith" or is_cleanup):
+        return False
+    contract = (job["scan_mode"], job["page_cap"])
+    return contract == ("standard_150", 150) or (pipeline == "staged" and contract == ("standard_500", 500))
+
+
+def _valid_paid_launch_identity(job: dict[str, Any], scan_id: str, name_attempt: str) -> bool:
+    owner = job.get("owner_user_id")
+    project = job.get("project_id")
+    request_id = job.get("request_id")
+    attempt = job.get("attempt_count")
+    return (
+        job.get("scan_id") == scan_id
+        and type(attempt) is int and str(attempt) == name_attempt
+        and isinstance(owner, str) and CANARY_OWNER_ID_RE.fullmatch(owner) is not None
+        and isinstance(project, str) and re.fullmatch(r"[A-Za-z0-9_-]{6,128}", project) is not None
+        and isinstance(request_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{8,180}", request_id) is not None
+        and job.get("idempotency_key") == request_id
     )
 
 
@@ -297,6 +359,8 @@ def validate_dispatch(payload: Any) -> tuple[dict[str, Any] | None, str | None]:
     if not scan_id or scan_id != name_scan_id:
         return None, "scan_identity_mismatch"
 
+    if (is_cleanup or is_drain) and not _valid_control_scan_contract(job, is_cleanup=is_cleanup):
+        return None, "invalid_scan_mode"
     if is_cleanup:
         if job.get("workspace_cleanup") is not True or task.get("scheduleTime"):
             return None, "invalid_workspace_cleanup"
@@ -310,6 +374,8 @@ def validate_dispatch(payload: Any) -> tuple[dict[str, Any] | None, str | None]:
             return None, "unexpected_scan_schedule"
         if not _valid_scan_mode(job):
             return None, "invalid_scan_mode"
+        if job.get("staged_rollout_scope") == "paid" and not _valid_paid_launch_identity(job, name_scan_id, match.group(3)):
+            return None, "scan_identity_mismatch"
         if not _valid_robots_policy(job):
             if "respect_robots_txt" not in job or "owner_attested_robots_override" not in job:
                 return None, "robots_policy_missing"
@@ -337,6 +403,8 @@ def health():
         "canary_worker_origin": CANARY_WORKER_ORIGIN or None,
         "canary_owner_count": len(CANARY_OWNER_USER_IDS),
         "pipeline_mode": mode,
+        "staged_rollout_scope": _staged_rollout_scope(),
+        "staged_500_entitled_enabled": _staged_500_entitled_enabled(),
         "staged_owner_count": len(owners),
         "staged_owner_cohort_sha256": hashlib.sha256(cohort).hexdigest(),
     })

@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { getScanRunWithFixList } from "@/lib/scanRuns";
+import { durableScanStatePresentation } from "@/lib/durableScanStatePresentation";
+import { readSiteOwnership, resolveScanOwnership } from "@/lib/siteOwnershipPolicy";
 
 const POLL_INTERVAL_MS = 3000;
 const STALLED_AFTER_MS = 150_000;
@@ -16,7 +18,7 @@ const EMPTY_STATE = {
   status: "",
   stalled: false,
   domain: "",
-  statusDetail: "",
+  failureMessage: "",
   pagesFound: 0,
   pagesCrawled: 0,
   pagesPlanned: 0,
@@ -29,7 +31,6 @@ const EMPTY_STATE = {
 function progressFrom(run) {
   return {
     domain: String(run?.normalized_domain || ""),
-    statusDetail: String(run?.status_detail || ""),
     pagesFound: Number(run?.pages_found) || 0,
     pagesCrawled: Number(run?.pages_crawled) || 0,
     pagesPlanned: Number.isInteger(run?.pages_planned) && run.pages_planned > 0 && run.pages_planned <= 500 ? run.pages_planned : 0,
@@ -57,12 +58,14 @@ export default function useDurableScanCompletion(scanId, active) {
       const status = String(run?.status || "");
 
       if (["complete", "limited"].includes(status) && fixListId) {
-        setState({ status, stalled: false, ...progressFrom(run) });
+        setState({ status, stalled: false, failureMessage: "", ...progressFrom(run) });
         navigate(`/dashboard?scan=complete&scan_id=${encodeURIComponent(scanId)}`);
         return;
       }
       if (TERMINAL_FAILURE_STATUSES.has(status)) {
-        setState({ status, stalled: false, ...progressFrom(run) });
+        const ownership = resolveScanOwnership(run, readSiteOwnership(run.website_url));
+        const { detail, nextStep } = durableScanStatePresentation(run, { ownership });
+        setState({ status, stalled: false, failureMessage: `${detail} ${nextStep}`, ...progressFrom(run) });
         return;
       }
       // A transient null read never ends the watch; it just waits for the
@@ -75,7 +78,7 @@ export default function useDurableScanCompletion(scanId, active) {
           status,
           stalled: Date.now() - startedAt >= STALLED_AFTER_MS,
           domain: next.domain || previous.domain,
-          statusDetail: next.statusDetail || previous.statusDetail,
+          failureMessage: "",
           pagesFound: Math.max(previous.pagesFound, next.pagesFound),
           pagesCrawled: Math.max(previous.pagesCrawled, next.pagesCrawled),
           pagesPlanned: next.pagesPlanned || previous.pagesPlanned,

@@ -2,7 +2,7 @@ import { secrets } from "base44:runtime";
 import { ensureWorkspaceCleanup } from "./workspaceCleanup.js";
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.41";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "deleteCustomerScanDataV9-staged-runtime-20261111-v1";
+const BASE44_RUNTIME_ACTIVATION_ID = "deleteCustomerScanDataV9-staged-runtime-20261111-v2";
 
 export const SCAN_HISTORY_DELETE_VERSION = "scan_history_delete_v2_drain_children";
 

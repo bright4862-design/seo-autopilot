@@ -33,10 +33,23 @@ fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$CONFIRM"
 STAGED_PLAN="$(python3 "$REPO_ROOT/scripts/gateway_staged_config.py" \
   --config "${GATEWAY_STAGED_CONFIG:-off}" --owners "${GATEWAY_STAGED_OWNER_IDS:-}" \
   --canary-owners "${GATEWAY_CANARY_OWNER_USER_IDS:-}")"
-read -r GATEWAY_PIPELINE_MODE STAGED_OWNER_COUNT STAGED_COHORT_SHA < <(python3 -c \
-  'import json,sys; p=json.loads(sys.argv[1]); print(p["pipeline_mode"],p["staged_owner_count"],p["staged_owner_cohort_sha256"])' "$STAGED_PLAN")
+read -r GATEWAY_PIPELINE_MODE STAGED_ROLLOUT_SCOPE STAGED_500_ENABLED STAGED_OWNER_COUNT STAGED_COHORT_SHA < <(python3 -c \
+  'import json,sys; p=json.loads(sys.argv[1]); print(p["pipeline_mode"],p["staged_rollout_scope"],str(p["staged_500_entitled_enabled"]).lower(),p["staged_owner_count"],p["staged_owner_cohort_sha256"])' "$STAGED_PLAN")
 STAGED_OWNER_IDS="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["owner_ids"])' "$STAGED_PLAN")"
-if [[ "$GATEWAY_PIPELINE_MODE" == staged ]]; then
+if [[ "$STAGED_ROLLOUT_SCOPE" == paid ]]; then
+  STAGED_PAID_CAP=150
+  if [[ "$STAGED_500_ENABLED" == true ]]; then STAGED_PAID_CAP=500; fi
+  [[ -z "${GATEWAY_CANARY_REVISION:-}" ]] || { echo 'Paid staging cannot use a canary revision.' >&2; exit 2; }
+  [[ "${GATEWAY_STAGED_SERVING_REVISION:-}" =~ ^${WORKER}-[a-z0-9-]+$ ]] || {
+    echo 'Paid staging requires an exact serving worker revision.' >&2; exit 2;
+  }
+  [[ "${GATEWAY_STAGED_CONFIRM:-}" == "ENABLE-PAID-STAGED-GATEWAY:${SOURCE_SHA}:${GATEWAY_STAGED_SERVING_REVISION}:${STAGED_PAID_CAP}" ]] || {
+    echo 'Paid staging requires exact source, serving revision and tier confirmation.' >&2; exit 2;
+  }
+  [[ -s "${GATEWAY_ADMISSION_ACCESS_TOKEN_FILE:-}" && -n "${GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT:-}" ]] || {
+    echo 'Paid staging requires the scoped admission operator read credential.' >&2; exit 2;
+  }
+elif [[ "$GATEWAY_PIPELINE_MODE" == staged ]]; then
   [[ -n "${GATEWAY_CANARY_REVISION:-}" ]] || { echo 'Staging requires an exact canary revision.' >&2; exit 2; }
   [[ "${GATEWAY_STAGED_CONFIRM:-}" == "ENABLE-STAGED-GATEWAY:${SOURCE_SHA}:${STAGED_COHORT_SHA}" ]] || {
     echo 'Staging requires exact source and cohort confirmation.' >&2; exit 2;
@@ -64,6 +77,7 @@ done
 gcloud config set project "$PROJECT" >/dev/null
 
 WORKER_JSON="$(mktemp)"
+SERVING_WORKER_JSON="$(mktemp)"
 GATEWAY_JSON="$(mktemp)"
 HEALTH_JSON="$(mktemp)"
 PRE_JSON="$(mktemp)"
@@ -80,7 +94,7 @@ finish_gateway_deploy() {
   set +e
   gateway_rollback_on_failure "$status"
   status=$?
-  rm -f "$WORKER_JSON" "$GATEWAY_JSON" "$HEALTH_JSON" "$PRE_JSON" "$REVISION_JSON" "$CREATED_JSON" "$GATEWAY_ROLLBACK_BASELINE" "$PRE_REVISION_JSON"
+  rm -f "$WORKER_JSON" "$SERVING_WORKER_JSON" "$GATEWAY_JSON" "$HEALTH_JSON" "$PRE_JSON" "$REVISION_JSON" "$CREATED_JSON" "$GATEWAY_ROLLBACK_BASELINE" "$PRE_REVISION_JSON"
   rm -rf "$SOURCE_ARCHIVE_DIR"
   exit "$status"
 }
@@ -107,14 +121,28 @@ gcloud run services describe "$WORKER" \
   --region="$REGION" \
   --format=json > "$WORKER_JSON"
 
-read -r WORKER_ORIGIN SIGNING_SECRET SIGNING_VERSION < <(python3 - "$WORKER_JSON" <<'PY'
-import json, sys
+if [[ "$STAGED_ROLLOUT_SCOPE" == paid ]]; then
+  gcloud run revisions describe "$GATEWAY_STAGED_SERVING_REVISION" \
+    --project="$PROJECT" --region="$REGION" --format=json > "$SERVING_WORKER_JSON"
+fi
+
+read -r WORKER_ORIGIN SIGNING_SECRET SIGNING_VERSION < <(python3 - "$WORKER_JSON" "$SERVING_WORKER_JSON" \
+  "$STAGED_ROLLOUT_SCOPE" "${GATEWAY_STAGED_SERVING_REVISION:-}" <<'PY'
+import json, re, sys
 with open(sys.argv[1], encoding='utf-8') as handle:
     service = json.load(handle)
 origin = str(service.get('status', {}).get('url') or '').strip().rstrip('/')
 if not origin.startswith('https://'):
     raise SystemExit('Worker canonical URL is missing or invalid')
-containers = service.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
+scope, expected_revision = sys.argv[3:]
+if scope == 'paid':
+    with open(sys.argv[2], encoding='utf-8') as handle:
+        worker = json.load(handle)
+    if worker.get('metadata', {}).get('name') != expected_revision:
+        raise SystemExit('Serving worker revision readback mismatch')
+    containers = worker.get('spec', {}).get('containers', [])
+else:
+    containers = service.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
 if not containers:
     raise SystemExit('Worker has no container configuration')
 for item in containers[0].get('env', []):
@@ -123,7 +151,7 @@ for item in containers[0].get('env', []):
     ref = item.get('valueFrom', {}).get('secretKeyRef', {})
     name = str(ref.get('name') or '').strip()
     version = str(ref.get('key') or '').strip()
-    if not name or not version or version == 'latest':
+    if not name or not version or version == 'latest' or (scope == 'paid' and not re.fullmatch(r'[1-9][0-9]*', version)):
         raise SystemExit('Worker signing secret must be pinned to an exact Secret Manager version')
     print(origin, name, version)
     break
@@ -182,22 +210,71 @@ PY
     --service-json "$PRE_JSON" --revision-json "$PRE_REVISION_JSON" \
     --health-json "$GATEWAY_ROLLBACK_BASELINE" --baseline-json "$GATEWAY_ROLLBACK_BASELINE" \
     --expected-revision "$PRE_DEPLOY_REVISION" --expected-source-sha "$GATEWAY_ROLLBACK_SOURCE_SHA"
-elif [[ -n "${GATEWAY_CANARY_REVISION:-}" || -n "${GATEWAY_CANARY_OWNER_USER_IDS:-}" ]]; then
-  echo 'Owner canary requires a verified existing gateway rollback target.' >&2; exit 2
+elif [[ "$GATEWAY_PIPELINE_MODE" == staged || -n "${GATEWAY_CANARY_REVISION:-}" || -n "${GATEWAY_CANARY_OWNER_USER_IDS:-}" ]]; then
+  echo 'Staging requires a verified existing gateway rollback target.' >&2; exit 2
 fi
 if [[ "$GATEWAY_PIPELINE_MODE" == staged ]]; then
   # First deploy and verify the zero-owner revision. Enabling staging is then
   # a separate deployment with its own exact source/cohort confirmation.
-  python3 - "$GATEWAY_ROLLBACK_BASELINE" "$SOURCE_SHA" <<'PY'
+  python3 - "$GATEWAY_ROLLBACK_BASELINE" "$SOURCE_SHA" "$STAGED_ROLLOUT_SCOPE" <<'PY'
 import hashlib,json,sys
 previous=json.load(open(sys.argv[1]))
 empty_hash=hashlib.sha256(b'[]').hexdigest()
-if (previous.get('source_sha') != sys.argv[2]
-        or previous.get('pipeline_mode') != 'monolith' or previous.get('staged_owner_count') != 0
+previous_mode = (previous.get('pipeline_mode'), previous.get('staged_rollout_scope', 'off'))
+allowed = {('monolith', 'off')}
+if sys.argv[3] == 'paid' and previous.get('canary_owner_count') == 0:
+    allowed.add(('staged', 'paid'))
+if (previous.get('source_sha') != sys.argv[2] or previous_mode not in allowed
+        or previous.get('staged_owner_count') != 0
+        or (sys.argv[3] == 'paid' and (previous.get('canary_owner_count') != 0 or previous.get('canary_worker_origin')))
         or previous.get('staged_owner_cohort_sha256') != empty_hash):
     raise SystemExit('Staging requires a freshly verified zero-owner gateway baseline')
 PY
 fi
+
+verify_paid_cutover() {
+  [[ "$STAGED_ROLLOUT_SCOPE" == paid ]] || return 0
+  local stage_queue="fixlist-scan-stages" stage_digest queue queue_config tasks
+  CLOUDSDK_AUTH_ACCESS_TOKEN_FILE="$GATEWAY_ADMISSION_ACCESS_TOKEN_FILE" \
+    GCP_OPERATOR_SERVICE_ACCOUNT="$GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT" \
+    GCP_PROJECT="$PROJECT" GCP_REGION="$REGION" CLOUD_RUN_SERVICE="$WORKER" \
+    CLOUD_TASKS_QUEUE="$QUEUE" CLOUD_TASKS_DRAIN_QUEUE="$DRAIN_QUEUE" TASKS_INVOKER_SERVICE_ACCOUNT="$INVOKER_SA" \
+    OPERATION=verify-zero-admission-obligations BARRIER_EXPECTED_PRIOR_MODE=closed \
+    CONFIRM="VERIFY-ZERO-ADMISSION:${SOURCE_SHA}:${BARRIER_EXPECTED_GENERATION:-}" \
+    bash "$REPO_ROOT/scripts/fixlist-cloud-operator.sh"
+  for queue in "$QUEUE" "$DRAIN_QUEUE" "$stage_queue"; do
+    queue_config="$(gcloud tasks queues describe "$queue" --project="$PROJECT" --location="$REGION" --format=json)"
+    python3 -c 'import json,sys; q=json.loads(sys.argv[1]); sys.exit(0 if q.get("state") == "RUNNING" and not q.get("httpTarget") else 1)' "$queue_config" || {
+      echo "Paid staged cutover requires the $queue queue to be running without HTTP overrides." >&2; return 1;
+    }
+    tasks="$(gcloud tasks list --queue="$queue" --project="$PROJECT" --location="$REGION" --limit=1 --format=json)"
+    python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]) == [] else 1)' "$tasks" || {
+      echo "Paid staged cutover requires an empty $queue queue." >&2; return 1;
+    }
+  done
+  stage_digest="$(PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$REPO_ROOT/scripts" python3 - \
+    "$SOURCE_SHA" "$PROJECT" "$REGION" "$stage_queue" "$WORKER_ORIGIN" <<'PY'
+import sys
+from staged_candidate_cloudbuild import digest_for, environment
+sha, project, region, queue, origin = sys.argv[1:]
+env = environment(sha, project, region, f"fixlist-scan-workspaces-{project}",
+                  f"projects/{project}/locations/{region}/queues/{queue}", origin)
+print(digest_for(sha, env))
+PY
+)"
+  CLOUDSDK_AUTH_ACCESS_TOKEN_FILE="$GATEWAY_ADMISSION_ACCESS_TOKEN_FILE" \
+    GCP_PROJECT="$PROJECT" GCP_REGION="$REGION" CLOUD_RUN_SERVICE="$WORKER" \
+    TASKS_INVOKER_SERVICE_ACCOUNT="$INVOKER_SA" RECONCILER_EXPECTED_SOURCE_SHA="$SOURCE_SHA" \
+    RECONCILER_EXPECTED_REVISION="$GATEWAY_STAGED_SERVING_REVISION" \
+    RECONCILER_EXPECTED_STAGED_CONFIG_SHA256="$stage_digest" \
+    bash "$REPO_ROOT/scripts/verify-standard150-reconciler.sh"
+  GCP_PROJECT="$PROJECT" GCP_REGION="$REGION" CLOUD_RUN_SERVICE="$WORKER" \
+    CLOUD_TASKS_QUEUE="$QUEUE" TASKS_INVOKER_SERVICE_ACCOUNT="$INVOKER_SA" \
+    OPERATION=verify-worker-runtime-revision TARGET_REVISION="$GATEWAY_STAGED_SERVING_REVISION" \
+    FIXLIST_WORKER_PROBE_URL="$WORKER_ORIGIN" \
+    bash "$REPO_ROOT/scripts/fixlist-cloud-operator.sh"
+}
+verify_paid_cutover
 
 # Optional owner-only release canary. Off unless BOTH an exact zero-traffic
 # tagged worker revision and an owner allowlist are supplied. The canary origin
@@ -235,8 +312,8 @@ verify_canary_mapping() {
   [[ "${check##* tag_url=}" == "$CANARY_WORKER_ORIGIN" ]]
 }
 ENV_VARS="^|^SCAN_TASKS_QUEUE_PATH=$QUEUE_PATH|SCAN_DRAIN_QUEUE_PATH=$DRAIN_QUEUE_PATH|SCAN_WORKER_URL=$WORKER_URL|TASKS_INVOKER_SERVICE_ACCOUNT=$INVOKER_SA|DISPATCH_MAX_CLOCK_SKEW_SECONDS=300|DISPATCH_MAX_BODY_BYTES=262144|FIXLIST_GATEWAY_SOURCE_SHA=$SOURCE_SHA"
-ENV_VARS="${ENV_VARS}|SCAN_PIPELINE_MODE=$GATEWAY_PIPELINE_MODE"
-if [[ "$GATEWAY_PIPELINE_MODE" == staged ]]; then
+ENV_VARS="${ENV_VARS}|SCAN_PIPELINE_MODE=$GATEWAY_PIPELINE_MODE|SCAN_STAGED_ROLLOUT_SCOPE=$STAGED_ROLLOUT_SCOPE|SCAN_STAGED_500_ENTITLED_ENABLED=$STAGED_500_ENABLED"
+if [[ -n "$STAGED_OWNER_IDS" ]]; then
   ENV_VARS="${ENV_VARS}|SCAN_STAGED_OWNER_IDS=$STAGED_OWNER_IDS"
 fi
 if [[ -n "$CANARY_WORKER_ORIGIN" ]]; then
@@ -249,7 +326,7 @@ echo "drain_queue_path=$DRAIN_QUEUE_PATH"
 echo "signing_secret_ref=${SIGNING_SECRET}:${SIGNING_VERSION} (value not read)"
 echo "source_sha=$SOURCE_SHA"
 echo "canary_worker_origin=${CANARY_WORKER_ORIGIN:-<off>} canary_owner_count=$CANARY_OWNER_COUNT"
-echo "pipeline_mode=$GATEWAY_PIPELINE_MODE staged_owner_count=$STAGED_OWNER_COUNT staged_cohort_sha256=$STAGED_COHORT_SHA"
+echo "pipeline_mode=$GATEWAY_PIPELINE_MODE staged_rollout_scope=$STAGED_ROLLOUT_SCOPE staged_500_entitled_enabled=$STAGED_500_ENABLED staged_owner_count=$STAGED_OWNER_COUNT staged_cohort_sha256=$STAGED_COHORT_SHA"
 
 echo
 echo "=== Reserve this deployment's revision name ==="
@@ -321,6 +398,7 @@ python3 "$REPO_ROOT/scripts/verify_gateway_deployment.py" \
 # keeps serving and the deploy still exits 0. Promotion is therefore explicit
 # and is never inferred from a successful deploy.
 verify_canary_mapping
+verify_paid_cutover
 GATEWAY_PROMOTION_ATTEMPTED=1
 gcloud run services update-traffic "$GATEWAY" \
   --project="$PROJECT" \
@@ -340,10 +418,10 @@ gcloud run revisions describe "$NEW_REVISION" \
   --region="$REGION" \
   --format=json > "$REVISION_JSON"
 
-GATEWAY_URL="$(python3 - "$GATEWAY_JSON" "$DISPATCHER_SA" "$QUEUE_PATH" "$DRAIN_QUEUE_PATH" "$WORKER_URL" "$INVOKER_SA" "$SOURCE_SHA" "$SIGNING_SECRET" "$SIGNING_VERSION" "$CANARY_WORKER_ORIGIN" "$GATEWAY_CANARY_OWNER_USER_IDS" "$GATEWAY_PIPELINE_MODE" "$STAGED_OWNER_IDS" "$REVISION_JSON" <<'PY'
+GATEWAY_URL="$(python3 - "$GATEWAY_JSON" "$DISPATCHER_SA" "$QUEUE_PATH" "$DRAIN_QUEUE_PATH" "$WORKER_URL" "$INVOKER_SA" "$SOURCE_SHA" "$SIGNING_SECRET" "$SIGNING_VERSION" "$CANARY_WORKER_ORIGIN" "$GATEWAY_CANARY_OWNER_USER_IDS" "$GATEWAY_PIPELINE_MODE" "$STAGED_ROLLOUT_SCOPE" "$STAGED_500_ENABLED" "$STAGED_OWNER_IDS" "$REVISION_JSON" <<'PY'
 import json, sys
 (path, expected_sa, queue_path, drain_queue_path, worker_url, invoker_sa, source_sha, secret_name, secret_version,
- canary_origin, canary_owners, pipeline_mode, staged_owners, revision_path) = sys.argv[1:]
+ canary_origin, canary_owners, pipeline_mode, rollout_scope, entitled_500, staged_owners, revision_path) = sys.argv[1:]
 with open(path, encoding='utf-8') as handle:
     service = json.load(handle)
 url = str(service.get('status', {}).get('url') or '').strip()
@@ -365,8 +443,10 @@ expected_values = {
     'DISPATCH_MAX_BODY_BYTES': '262144',
     'FIXLIST_GATEWAY_SOURCE_SHA': source_sha,
     'SCAN_PIPELINE_MODE': pipeline_mode,
+    'SCAN_STAGED_ROLLOUT_SCOPE': rollout_scope,
+    'SCAN_STAGED_500_ENTITLED_ENABLED': entitled_500,
 }
-if pipeline_mode == 'staged':
+if staged_owners:
     expected_values['SCAN_STAGED_OWNER_IDS'] = staged_owners
 elif 'SCAN_STAGED_OWNER_IDS' in env:
     raise SystemExit('Inactive gateway unexpectedly carries staged owners')
@@ -444,6 +524,8 @@ while :; do
       --canary-worker-origin "$CANARY_WORKER_ORIGIN" \
       --canary-owner-count "$CANARY_OWNER_COUNT" \
       --pipeline-mode "$GATEWAY_PIPELINE_MODE" \
+      --staged-rollout-scope "$STAGED_ROLLOUT_SCOPE" \
+      --staged-500-entitled-enabled "$STAGED_500_ENABLED" \
       --staged-owner-ids "$STAGED_OWNER_IDS" 2>/dev/null)"; then
       break
     fi
@@ -462,6 +544,10 @@ while :; do
       --drain-queue-path "$DRAIN_QUEUE_PATH" \
       --worker-origin "$WORKER_ORIGIN" \
       --canary-worker-origin "$CANARY_WORKER_ORIGIN" \
+      --pipeline-mode "$GATEWAY_PIPELINE_MODE" \
+      --staged-owner-ids "$STAGED_OWNER_IDS" \
+      --staged-rollout-scope "$STAGED_ROLLOUT_SCOPE" \
+      --staged-500-entitled-enabled "$STAGED_500_ENABLED" \
       --canary-owner-count "$CANARY_OWNER_COUNT" >&2 || true
     exit 2
   fi
@@ -477,6 +563,7 @@ if [[ "$RUNTIME_REVISION" != "$NEW_REVISION" || "$RUNTIME_SOURCE_SHA" != "$SOURC
 fi
 echo "Gateway health contract verified."
 verify_canary_mapping
+verify_paid_cutover
 GATEWAY_DEPLOY_VERIFIED=1
 
 echo

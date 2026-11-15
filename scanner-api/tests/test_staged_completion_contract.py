@@ -78,8 +78,9 @@ def test_importance_ranks_repairs_without_overriding_verified_gsc():
     ("rate_limit", "monolith", "staged_partial_evidence"),
 ])
 async def test_partial_staged_result_seals_only_the_actual_limit(monkeypatch, limit, mode, signed_reason):
+    cap = 500 if mode == "staged" else 150
     scan = {"id": "scan-partial", "attempt_count": 1, "status": "crawling",
-            "scan_mode": "standard_500", "page_cap": 500, "pipeline_mode": mode,
+            "scan_mode": f"standard_{cap}", "page_cap": cap, "pipeline_mode": mode,
             "respect_robots_txt": True, "owner_attested_robots_override": False}
     async def read(client, scan_id):
         return scan

@@ -1,11 +1,11 @@
-const V9_ROUTES = Object.freeze({
-  startStandardScanJobV8: "startStandardScanJobV9",
-  getCustomerScanResultV8: "getCustomerScanResultV9",
-  deleteCustomerScanDataV8: "deleteCustomerScanDataV9",
-});
+import contract from "../../data/base44-function-routes.json" with { type: "json" };
 
-// Deployment opt-in only. This does not grant a page entitlement: admission
-// still chooses the mode and cap using the authenticated account on the server.
-export function resolveScanFunctionRoute(name, generation = "V8") {
-  return generation === "V9" ? V9_ROUTES[name] || name : name;
+const CUSTOMER_ROUTES = ["startStandardScanJob", "getCustomerScanResult", "deleteCustomerScanData"];
+
+export function resolveScanFunctionRoute(name, previewGeneration, routes = contract) {
+  const selected = previewGeneration === "V9" && routes.generation === "v8"
+    ? routes.candidate_routes.v9
+    : routes.routes;
+  const key = CUSTOMER_ROUTES.find((canonical) => name === `${canonical}V8`);
+  return key ? selected[key] : name;
 }

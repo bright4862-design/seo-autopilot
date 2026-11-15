@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 
 import { RELEASE_FUNCTIONS } from "../../scripts/base44_release_manifest.mjs";
 
@@ -33,12 +34,13 @@ function bashArray(source, name) {
     .filter(Boolean);
 }
 
-const verified = bashArray(DEPLOY, "VERIFIED_FUNCTIONS");
+const resolver = "scripts/lib/base44-public-routes.mjs";
+const [generation, ...verified] = execFileSync(process.execPath, [resolver], { encoding: "utf8" }).trim().split(" ");
 const unverified = bashArray(DEPLOY, "UNVERIFIED_FUNCTIONS");
 const deployed = [...verified, ...unverified];
 
-test("the guarded site deploy names exactly the Standard 150 release functions", () => {
-  assert.deepEqual(deployed, RELEASE_FUNCTIONS);
+test("the guarded site deploy preserves the Standard 150 V8 release inventory", () => {
+  assert.deepEqual(deployed.filter((name) => !name.endsWith("V9")), RELEASE_FUNCTIONS);
 });
 
 test("workflow-backed blog publisher is not sent through legacy functions deploy", () => {
@@ -62,13 +64,17 @@ test("every deployed function is checked present in the post-deploy inventory", 
 });
 
 test("every function the deploy script calls verified is probed by the verifier", () => {
-  const probed = bashArray(VERIFIER, "FUNCTION_ROUTES").map((name) => name.replace(/^"|"$/g, ""));
-  assert.deepEqual(probed, verified);
+  assert.ok(DEPLOY.includes(resolver));
+  assert.ok(VERIFIER.includes(resolver));
+  assert.match(DEPLOY, /VERIFIED_FUNCTIONS=\("\$\{ROUTE_FIELDS\[@\]:1\}"\)/);
+  assert.match(VERIFIER, /FUNCTION_ROUTES=\("\$\{ROUTE_FIELDS\[@\]:1\}"\)/);
 });
 
 test("the routes the customer scan path depends on are all in the verified set", () => {
   const routes = JSON.parse(
     readFileSync(new URL("../../data/base44-function-routes.json", import.meta.url), "utf8"),
   );
-  assert.deepEqual(Object.values(routes.routes).sort(), [...verified].sort());
+  const retained = generation === "v9" ? Object.values(routes.historical_routes.v8) : [];
+  assert.equal(generation, routes.generation);
+  assert.deepEqual([...Object.values(routes.routes), ...retained].sort(), [...verified].sort());
 });

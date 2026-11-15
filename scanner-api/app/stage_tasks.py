@@ -49,10 +49,14 @@ def _validate_token_audience(worker_url: str, token_audience: str | None) -> str
     return audience
 
 
-def stage_task_id(job: dict[str, Any], stage: str, batch: int) -> str:
+def stage_task_id(job: dict[str, Any], stage: str, batch: int, *, recovery_generation: int = 0) -> str:
     if stage not in STAGE_ROUTES or isinstance(batch, bool) or int(batch) < 0:
         raise ValueError("Invalid scan stage")
+    if type(recovery_generation) is not int or recovery_generation not in (0, 1) or (recovery_generation and stage != "finalize"):
+        raise ValueError("Invalid finalize recovery generation")
     identity = f"{job['scan_id']}:{int(job.get('attempt_count') or 1)}:{stage}:{int(batch)}"
+    if recovery_generation:
+        identity += f":recovery:{recovery_generation}"
     return "scan-" + hashlib.sha256(identity.encode()).hexdigest()
 
 
@@ -67,8 +71,11 @@ class StageTaskDispatcher:
         self.queue_path, self.worker_url, self.invoker = queue_path, worker_url.rstrip("/"), invoker
         self.client = client
 
-    async def enqueue(self, job: dict[str, Any], stage: str, batch: int, *, limited: bool = False, not_before: float | None = None) -> None:
-        task_id = stage_task_id(job, stage, batch)
+    async def enqueue(self, job: dict[str, Any], stage: str, batch: int, *, limited: bool = False, not_before: float | None = None, recovery_generation: int = 0) -> None:
+        task_id = stage_task_id(job, stage, batch, recovery_generation=recovery_generation)
+        payload = {**job, "batch": int(batch), "limited": bool(limited)}
+        if recovery_generation:
+            payload["recovery_generation"] = recovery_generation
         task = {
             "name": f"{self.queue_path}/tasks/{task_id}",
             "dispatch_deadline": {"seconds": 480},
@@ -76,7 +83,7 @@ class StageTaskDispatcher:
                 "http_method": 1,
                 "url": self.worker_url + STAGE_ROUTES[stage],
                 "headers": {"Content-Type": "application/json"},
-                "body": json.dumps({**job, "batch": int(batch), "limited": bool(limited)}, sort_keys=True).encode(),
+                "body": json.dumps(payload, sort_keys=True).encode(),
                 "oidc_token": {"service_account_email": self.invoker, "audience": self.token_audience},
             },
         }
@@ -89,6 +96,8 @@ class StageTaskDispatcher:
             try:
                 client.create_task(request={"parent": self.queue_path, "task": task}, timeout=20, retry=None)
             except AlreadyExists:
+                # This also covers a recently deleted task. It does not
+                # establish that the task is still awaiting delivery.
                 pass
         await asyncio.to_thread(create)
 

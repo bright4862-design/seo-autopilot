@@ -4,7 +4,8 @@ import { secrets } from "base44:runtime";
 import { verifyAuthoritySeal } from "./workerEnvelope.js";
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "persistLimitedScanResultV9-staged-runtime-20261111-v1";
+import { stagedCompletionTime } from "./completionTimestamp.js";
+const BASE44_RUNTIME_ACTIVATION_ID = "persistLimitedScanResultV9-staged-runtime-20261111-v3";
 import {
   buildLimitedResultSnapshot,
   createLimitedResultProof,
@@ -125,7 +126,13 @@ Deno.serve(async (req) => {
       );
     }
 
-    const sealedAt = cleanText(scan.result_integrity_sealed_at, 80) || stableTimestamp(scan);
+    let completionTime;
+    try {
+      completionTime = stagedCompletionTime(scan, scanResult);
+    } catch {
+      throw new RequestProblem(409, "worker_completion_time_invalid", "The durable worker completion time is invalid.");
+    }
+    const sealedAt = cleanText(scan.result_integrity_sealed_at, 80) || completionTime || stableTimestamp(scan);
     const workerScope = scanResult?.technical_audit_summary?.crawl_scope
       && typeof scanResult.technical_audit_summary.crawl_scope === "object"
       ? scanResult.technical_audit_summary.crawl_scope
@@ -188,7 +195,11 @@ Deno.serve(async (req) => {
     await reconcileFixItems(entities, fixList.id, rows.fixItems);
     await assertAttemptStillActive(entities, identity.scan_id, claimedAttempt);
 
-    await entities.ScanRun.update(identity.scan_id, rows.scanRun);
+    const completedAt = (scanStatus === "limited" ? scan.completed_at : "") || (completionTime ? sealedAt : "");
+    await entities.ScanRun.update(identity.scan_id, {
+      ...rows.scanRun,
+      ...(completedAt ? { completed_at: completedAt } : {}),
+    });
     const persistedScan = await entities.ScanRun.get(identity.scan_id);
     const persistedFixList = await entities.FixList.get(fixList.id);
     const persistedItems = rows.fixItems.length > 0
@@ -197,6 +208,7 @@ Deno.serve(async (req) => {
 
     const persisted = Boolean(
       persistedScan?.status === "limited"
+      && (!completedAt || persistedScan?.completed_at === completedAt)
       && persistedScan?.release_gate_eligible === false
       && persistedScan?.score_is_provisional === true
       && !cleanProof(persistedScan?.authority_proof)
@@ -277,6 +289,9 @@ async function assertAttemptStillActive(entities, scanId, claimedAttempt) {
   const fresh = await entities.ScanRun.get(scanId).catch(() => null);
   if (!fresh || normalizeAttempt(fresh.attempt_count) !== claimedAttempt) {
     throw new RequestProblem(409, "superseded_attempt", "A newer attempt took over while saving.");
+  }
+  if (["complete", "failed", "cancelled"].includes(String(fresh.status || "").toLowerCase())) {
+    throw new RequestProblem(409, "terminal_result_rejected", "This scan attempt is already terminal.");
   }
 }
 

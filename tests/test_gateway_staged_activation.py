@@ -2,6 +2,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -112,6 +113,9 @@ def test_rollback_requires_previous_staging_configuration(gateway, monkeypatch):
     wrong = {**baseline, "staged_owner_cohort_sha256": cohort_hash([OTHER])}
     with pytest.raises(rollback.VerificationError, match="cohort"):
         rollback.verify(service, revision, wrong, baseline, revision_name, source)
+    wrong = {**baseline, "staged_500_entitled_enabled": True}
+    with pytest.raises(rollback.VerificationError, match="500-page launch flag"):
+        rollback.verify(service, revision, wrong, baseline, revision_name, source)
 
 
 @pytest.mark.parametrize("config,owners,canary,ok", [
@@ -119,6 +123,8 @@ def test_rollback_requires_previous_staging_configuration(gateway, monkeypatch):
     ("owner-canary", OWNER, OTHER, False), ("owner-canary", "*", "*", False),
     ("owner-canary", "", OWNER, False), ("off", OWNER, OWNER, False),
     ("all", OWNER, OWNER, False), ("owner-canary", f"{OWNER},{OWNER}", OWNER, False),
+    ("paid", "", "", True), ("paid-500", "", "", True),
+    ("paid", OWNER, "", False), ("paid-500", "", OWNER, False),
 ])
 def test_deploy_config_planner_is_bounded(config, owners, canary, ok):
     result = subprocess.run([sys.executable, str(ROOT / "scripts/gateway_staged_config.py"),
@@ -127,5 +133,68 @@ def test_deploy_config_planner_is_bounded(config, owners, canary, ok):
     assert (result.returncode == 0) is ok, result.stderr
     if ok:
         plan = json.loads(result.stdout)
-        assert plan["pipeline_mode"] == ("staged" if config == "owner-canary" else "monolith")
+        assert plan["pipeline_mode"] == ("monolith" if config == "off" else "staged")
         assert plan["owner_ids"] == owners
+        assert plan["staged_rollout_scope"] == ("paid" if config.startswith("paid") else "off")
+        assert plan["staged_500_entitled_enabled"] is (config == "paid-500")
+
+
+@pytest.mark.parametrize("queue_target", ["null", '{"uriOverride":{"host":"other.example"}}'])
+def test_paid_cutover_checks_barrier_queue_targets_and_worker_runtime(tmp_path, queue_target):
+    (tmp_path / "scripts").mkdir()
+    helpers = tmp_path / "scripts"
+    (helpers / "staged_candidate_cloudbuild.py").write_text(
+        (ROOT / "scripts/staged_candidate_cloudbuild.py").read_text()
+    )
+    (helpers / "fixlist-cloud-operator.sh").write_text("""set -eu
+case "$OPERATION" in
+  verify-zero-admission-obligations)
+    test "$CLOUDSDK_AUTH_ACCESS_TOKEN_FILE" = "$GATEWAY_ADMISSION_ACCESS_TOKEN_FILE"
+    test "$CONFIRM" = "VERIFY-ZERO-ADMISSION:$SOURCE_SHA:19"
+    echo barrier ;;
+  verify-worker-runtime-revision)
+    test -z "${CLOUDSDK_AUTH_ACCESS_TOKEN_FILE:-}"
+    test "$TARGET_REVISION" = "$GATEWAY_STAGED_SERVING_REVISION"
+    test "$FIXLIST_WORKER_PROBE_URL" = "$WORKER_ORIGIN"
+    echo worker ;;
+  *) exit 70 ;;
+esac
+""")
+    (helpers / "verify-standard150-reconciler.sh").write_text("""set -eu
+test "$CLOUDSDK_AUTH_ACCESS_TOKEN_FILE" = "$GATEWAY_ADMISSION_ACCESS_TOKEN_FILE"
+test "$RECONCILER_EXPECTED_REVISION" = "$GATEWAY_STAGED_SERVING_REVISION"
+echo scheduler
+""")
+    text = (ROOT / "scripts/deploy_dispatch_gateway.sh").read_text()
+    cutover = text[text.index("verify_paid_cutover()"):text.index("\nverify_paid_cutover\n")]
+    command = """
+gcloud() {
+  test -z "${CLOUDSDK_AUTH_ACCESS_TOKEN_FILE:-}"
+  case "$*" in
+    'tasks queues describe '*) printf '{"state":"RUNNING","httpTarget":%s}\n' "$QUEUE_TARGET" ;;
+    'tasks list '*) printf '[]\n' ;;
+    *) return 70 ;;
+  esac
+}
+""" + cutover + "\nverify_paid_cutover\n"
+    env = {
+        **os.environ,
+        "REPO_ROOT": str(tmp_path), "STAGED_ROLLOUT_SCOPE": "paid", "QUEUE_TARGET": queue_target,
+        "SOURCE_SHA": "a" * 40, "BARRIER_EXPECTED_GENERATION": "19", "PROJECT": "seo-autopilot-501517",
+        "REGION": "europe-west1", "WORKER": "fixlist-standard150-worker", "INVOKER_SA": "fixture",
+        "WORKER_ORIGIN": "https://fixlist-standard150-worker-tpucgyfewa-ew.a.run.app",
+        "QUEUE": "fixlist-standard150", "DRAIN_QUEUE": "fixlist-standard150-drain",
+        "GATEWAY_STAGED_SERVING_REVISION": "fixlist-standard150-worker-00123-test",
+        "GATEWAY_ADMISSION_ACCESS_TOKEN_FILE": str(tmp_path / "fixture-token"),
+        "GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT": "fixture",
+    }
+    env.pop("CLOUDSDK_AUTH_ACCESS_TOKEN_FILE", None)
+    result = subprocess.run(["/bin/bash", "-euo", "pipefail", "-c", command],
+                            env=env, capture_output=True, text=True)
+    if queue_target == "null":
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.splitlines() == ["barrier", "scheduler", "worker"]
+    else:
+        assert result.returncode != 0
+        assert result.stdout.splitlines() == ["barrier"]
+        assert "without HTTP overrides" in result.stderr

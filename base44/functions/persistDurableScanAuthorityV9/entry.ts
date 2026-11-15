@@ -1,8 +1,9 @@
 import { validateScanResultCap } from "./scanLimits.js";
+import { stagedCompletionTime } from "./completionTimestamp.js";
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import { secrets } from "base44:runtime";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "persistDurableScanAuthorityV9-staged-runtime-20261111-v2";
+const BASE44_RUNTIME_ACTIVATION_ID = "persistDurableScanAuthorityV9-staged-runtime-20261111-v4";
 import { createAuthoritySeal, verifyAuthoritySeal } from "./authoritySeal.js";
 import { authorityRowsFromSnapshot } from "./authorityRows.js";
 import { AUTHORITY_CONTRACT, buildAuthoritySnapshot, buildPersistedAuthoritySnapshot, firstFailedAuthorityPredicate, hasCompleteAcceptanceEvidence } from "./authoritySnapshot.js";
@@ -145,7 +146,13 @@ Deno.serve(async (req) => {
       );
     }
 
-    const stableSealedAt = stableTimestamp(scan);
+    let stableSealedAt;
+    try {
+      const completionTime = stagedCompletionTime(scan, scanResult);
+      stableSealedAt = scan.authority_sealed_at || completionTime || stableTimestamp(scan);
+    } catch {
+      throw new RequestProblem(409, "worker_completion_time_invalid", "The durable worker completion time is invalid.");
+    }
     const snapshot = buildAuthoritySnapshot({
       identityVersion: PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION,
       scan: authorityScanResult,
@@ -327,6 +334,7 @@ Deno.serve(async (req) => {
       && persistedScan?.authority_proof === finalAuthorityProof
       && persistedScan?.authority_seal_version === persistedAuthoritySnapshot.version
       && persistedScan?.authority_sealed_at === persistedAuthoritySnapshot.sealed_at
+      && persistedScan?.completed_at === persistedAuthoritySnapshot.sealed_at
       && persistedScan?.fix_list_id === fixList.id
       && persistedScan?.release_gate_eligible === true
       && finalPersistedFixList?.authority_proof === finalAuthorityProof

@@ -172,8 +172,8 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
     setSubmitting(false);
     setActiveStep("");
     setWatchedScanId("");
-    setError("This scan stopped before it finished, so no results were saved. Nothing was charged — you can run it again.");
-  }, [durableScanFailed]);
+    setError(durableScan.failureMessage);
+  }, [durableScanFailed, durableScan.failureMessage]);
 
   function recordDebug(data) {
     const next = runtimeDebug(data);
@@ -368,6 +368,8 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
       assertServerAdmissionIdentity(jobData, { request_id: requestId, idempotency_key: idempotencyKey });
       if (jobData?.accepted === true) {
         scanId = String(jobData.scan_id || "");
+        const acceptedMode = jobData.scan_mode === "standard_500" && jobData.page_cap === 500 ? jobData.scan_mode : scanMode;
+        const acceptedPageCap = pageCapFromRecord({ scan_mode: acceptedMode });
         scanRunHandle = {
           id: scanId,
           scan_id: scanId,
@@ -378,7 +380,8 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
           website_url: normalizedUrl,
           submitted_url: submittedUrl,
           normalized_domain: normalizedScanDomain(normalizedUrl),
-          scan_mode: scanMode,
+          scan_mode: acceptedMode,
+          page_cap: acceptedPageCap,
           path_prefix: requestedPathPrefix,
           scope_type: isFocusedScan ? "path_prefix" : "",
           parent_scan_id: isFocusedScan ? String(focusedScope.parent_scan_id || "") : "",
@@ -395,10 +398,10 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
         await assertCurrentScanSession(sessionIdentity, requestEpoch, requestEpochRef);
         // From this point forward the durable server/worker path owns every
         // terminal transition. The browser only watches this exact scan id.
-        trackEvent("scan_accepted", { scan_mode: STANDARD_SCAN_MODE });
+        trackEvent("scan_accepted", { scan_mode: acceptedMode, page_cap: acceptedPageCap });
         // Exact identity only — never a substitute scan.
         logScanBoundary("async_job_accepted", identityDebug(), { status: jobData.status || "crawling", replayed: jobData.replayed === true });
-        recordDebug({ ...identityDebug(), status: jobData.status || "crawling", stage: jobData.replayed ? "async_job_replayed" : "async_job_accepted", website_url: normalizedUrl, scan_mode: scanMode });
+        recordDebug({ ...identityDebug(), status: jobData.status || "crawling", stage: jobData.replayed ? "async_job_replayed" : "async_job_accepted", website_url: normalizedUrl, scan_mode: acceptedMode, page_cap: acceptedPageCap });
         refreshDebugData();
         navigate(`/dashboard?scan_id=${encodeURIComponent(scanId)}`);
         return;

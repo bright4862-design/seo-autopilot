@@ -5,6 +5,8 @@ import test from "node:test";
 import {resolveServerScanContract, trustedScanContract, validateScanResultCap, progressFields} from "../../base44/functions/startStandardScanJobV9/scanLimits.js";
 import {topFixIds} from "../../base44/functions/getCustomerScanResultV9/firstFixes.js";
 import {buildAuthoritySnapshot, buildPersistedAuthoritySnapshot} from "../../base44/functions/persistDurableScanAuthorityV9/authoritySnapshot.js";
+import {stagedCompletionTime as authorityCompletionTime} from "../../base44/functions/persistDurableScanAuthorityV9/completionTimestamp.js";
+import {stagedCompletionTime as limitedCompletionTime} from "../../base44/functions/persistLimitedScanResultV9/completionTimestamp.js";
 import {buildAuthoritySnapshot as oldSnapshot} from "../../base44/functions/persistDurableScanAuthorityV8/authoritySnapshot.js";
 import {authorityRowsFromSnapshot} from "../../base44/functions/persistDurableScanAuthorityV9/authorityRows.js";
 import {authoritySnapshotFromRows, createAuthoritySeal, verifyAuthoritySeal, buildCustomerProjection} from "../../base44/functions/getCustomerScanResultV9/projection.js";
@@ -36,6 +38,34 @@ test("authorized page cap bounds actual result and review evidence, while legacy
   assert.throws(() => validateScanResultCap(standard,{pages_crawled:150},{comparison_evidence:{observation_count:500}}));
 });
 
+test("V9 normalizes old 150 task limits without treating an unsaved 500 cap as authorized", async () => {
+  const packages = [
+    "startStandardScanJobV9", "durableScanWorkerControlV9", "persistDurableScanAuthorityV9",
+    "persistLimitedScanResultV9", "getCustomerScanResultV9",
+  ];
+  const expected = { ...standard, pipeline_mode: "staged" };
+  for (const name of packages) {
+    const limits = await import(`../../base44/functions/${name}/scanLimits.js`);
+    for (const scan_mode of ["standard_150", "advanced"]) {
+      for (const cap of [{}, { page_cap: null }]) {
+        const historical = { scan_mode, pipeline_mode: "staged", ...cap };
+        assert.deepEqual(limits.trustedScanContract(historical), expected, name);
+        assert.deepEqual(limits.validateScanResultCap(historical, { ...expected, pages_crawled: 150 }), expected, name);
+        assert.equal(limits.progressFields(historical, { pages_crawled: 8, pages_planned: 10 }).pages_crawled, 8);
+        assert.deepEqual(limits.scanContractSnapshotFields(historical), {}, name);
+        assert.throws(() => limits.validateScanResultCap(historical, { pages_crawled: 151 }), /scan_page_count_invalid/);
+      }
+    }
+    for (const page_cap of [undefined, null, 150, "500"]) {
+      const unsaved = { ...large, page_cap };
+      assert.throws(() => limits.trustedScanContract(unsaved), /scan_page_cap_invalid/, name);
+      assert.throws(() => limits.scanContractSnapshotFields(unsaved), /scan_page_cap_invalid/, name);
+    }
+    assert.deepEqual(limits.trustedScanContract(large), large, name);
+    assert.deepEqual(limits.scanContractSnapshotFields(large), large, name);
+  }
+});
+
 test("batch progress is bounded, monotonic and heartbeat-bearing", () => {
   const result=progressFields({...large,pages_crawled:100,pages_planned:500},{pages_crawled:50,pages_planned:400});
   assert.equal(progressFields(large,{pages_crawled:407,pages_planned:500,batch_committed:10}).last_committed_batch,10);
@@ -58,6 +88,69 @@ test("V9 cap refactor preserves historical 150 snapshot bytes and seals new cap 
   assert.equal(projection.run.page_cap,500); assert.deepEqual(projection.top_fix_ids,[]);
   const tampered=structuredClone(rows);Object.assign(tampered.run,standard);
   assert.equal(await verifyAuthoritySeal(authoritySnapshotFromRows(tampered),"test-key",proof,webcrypto),false);
+});
+
+test("Historical authority and limited seals still verify when Base44 supplies a null cap", async () => {
+  const key = "historical-cap-test-key";
+  const historical = { scan_mode: "advanced", pipeline_mode: "staged" };
+  const args = snapshotArgs(historical);
+  const signed = oldSnapshot(args);
+  const proof = await createAuthoritySeal(signed, key, webcrypto);
+  const persisted = authorityRowsFromSnapshot(signed, { fixListId: "list_123", ownerUserId: args.userId, proof });
+  const rows = {
+    run: { ...persisted.scanRun, id: args.identity.scan_id, project_id: args.identity.project_id, ...historical, page_cap: null },
+    fixList: { ...persisted.fixList, id: "list_123" },
+    fixItems: persisted.fixItems, userId: args.userId,
+  };
+  assert.deepEqual(buildPersistedAuthoritySnapshot(rows), signed);
+  assert.equal(await verifyAuthoritySeal(authoritySnapshotFromRows(rows), key, proof, webcrypto), true);
+
+  const writer = await import("../../base44/functions/persistLimitedScanResultV9/limitedResultIntegrity.js");
+  const reader = await import("../../base44/functions/getCustomerScanResultV9/limitedResultIntegrity.js");
+  const limited = {
+    ...args, identity: { ...args.identity, owner_user_id: args.userId, request_id: "request_123", attempt_count: 1 },
+    review: { coverage_state: "limited_coverage", scan_status: "limited", recommendations: [
+      { fix_id: "limited_fix", issue_title: "Review the inspected pages", affected_pages: ["/"] },
+    ] },
+  };
+  const before = writer.buildLimitedResultSnapshot(limited);
+  const limitedProof = await writer.createLimitedResultProof(before, key, webcrypto);
+  const after = reader.buildLimitedResultSnapshot({ ...limited, scan: { ...limited.scan, page_cap: null } });
+  assert.equal(await reader.verifyLimitedResultProof(after, key, limitedProof, webcrypto), true);
+});
+
+test("V9 staged completion time is signed identically in stored results and comparison evidence", async () => {
+  const completedAt = "2026-11-11T12:03:47.521Z";
+  for (const contract of [{ ...standard, pipeline_mode: "staged" }, large]) {
+    const args = snapshotArgs(contract);
+    const run = { ...contract, started_at: args.now };
+    const worker = { result_ready_at: completedAt };
+    const now = Date.parse(completedAt) + 5_000;
+    assert.equal(authorityCompletionTime(run, worker, now), completedAt);
+    assert.equal(limitedCompletionTime(run, worker, now), completedAt);
+    for (const readCompletionTime of [authorityCompletionTime, limitedCompletionTime]) {
+      assert.equal(readCompletionTime(run, {}, now), "");
+      assert.equal(readCompletionTime({ ...run, pipeline_mode: "monolith" }, worker, now), "");
+      assert.throws(() => readCompletionTime(run, { result_ready_at: "2026-11-11T11:55:00.000Z" }, now));
+      assert.throws(() => readCompletionTime(run, { result_ready_at: "2026-11-11T12:10:00.000Z" }, now));
+    }
+    const staged = buildAuthoritySnapshot({ ...args, now: authorityCompletionTime(run, worker, now) });
+    const rows = authorityRowsFromSnapshot(staged, { fixListId: "list_123", ownerUserId: args.userId });
+    const evidence = {
+      run: { ...rows.scanRun, id: args.identity.scan_id, project_id: args.identity.project_id },
+      fixList: { ...rows.fixList, id: "list_123" },
+      fixItems: rows.fixItems,
+      userId: args.userId,
+    };
+    const final = buildPersistedAuthoritySnapshot(evidence);
+    assert.equal(final.sealed_at, completedAt);
+    assert.equal(final.scan.completed_at, completedAt);
+    const proof = await createAuthoritySeal(final, "completion-test-key", webcrypto);
+    const readback = authoritySnapshotFromRows(evidence);
+    assert.equal(await verifyAuthoritySeal(readback, "completion-test-key", proof, webcrypto), true);
+    const wrongTime = authoritySnapshotFromRows({ ...evidence, run: { ...evidence.run, completed_at: args.now } });
+    assert.equal(await verifyAuthoritySeal(wrongTime, "completion-test-key", proof, webcrypto), false);
+  }
 });
 
 test("V9 comparison supports the complete 500-page observation population", () => {

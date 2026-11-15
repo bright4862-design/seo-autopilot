@@ -26,7 +26,7 @@ fixlist_install_base44_cli() { FIXLIST_BASE44_CLI="$TEST_CLI"; }
 fixlist_require_base44_owner() { return 0; }
 `);
   writeFileSync(join(root, "scripts/base44_release_manifest.mjs"),
-    "export const buildManifest = ([name]) => ({functions: {[name]: {packageDigest: 'same'}}});\n");
+    "export function assertPulledFunctionPackage() {}\n");
   writeFileSync(join(root, "scripts/deploy-base44-staged-functions.sh"), `
 #!/usr/bin/env bash
 [[ "$1" == verify ]] || exit 1

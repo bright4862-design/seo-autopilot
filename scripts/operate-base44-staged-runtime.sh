@@ -78,12 +78,9 @@ JSON
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 const [root,remote] = process.argv.slice(2);
-const {buildManifest} = await import(pathToFileURL(path.join(root,'scripts/base44_release_manifest.mjs')));
-const names=['fixlistStagedRuntimeControl'];
-const local=buildManifest(names,path.join(root,'base44/functions'),[]);
-const deployed=buildManifest(names,remote,[]);
-if (local.functions[names[0]].packageDigest !== deployed.functions[names[0]].packageDigest)
-  throw Error('Base44 staged runtime operator bytes differ from source');
+const {assertPulledFunctionPackage} = await import(pathToFileURL(path.join(root,'scripts/base44_release_manifest.mjs')));
+const name = 'fixlistStagedRuntimeControl';
+assertPulledFunctionPackage(name, path.join(root, 'base44/functions', name), path.join(remote, name));
 console.log('BASE44_STAGED_OPERATOR_PACKAGE_MATCHED');
 NODE
 }

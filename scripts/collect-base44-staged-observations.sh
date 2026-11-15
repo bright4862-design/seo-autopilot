@@ -7,10 +7,15 @@ SOURCE_SHA="${SOURCE_SHA:-}"
 OWNER_ID="${EXPECTED_OWNER_USER_ID:-}"
 OUTPUT="${BASE44_OBSERVATIONS_DIR:-}"
 APP_ID="6a498732ec779dfaaeab0e53"
-[[ "$OWNER_ID" == 6a498da58ef5cec1f5cd4486 && "${BASE44_APP_ID:-$APP_ID}" == "$APP_ID" ]] || {
-  echo 'Refusing: FixList owner and app identity required.' >&2
+[[ "${BASE44_APP_ID:-$APP_ID}" == "$APP_ID" ]] || {
+  echo 'Refusing: FixList app identity required.' >&2
   exit 2
 }
+case "$OWNER_ID" in
+  6a498da58ef5cec1f5cd4486) OWNER_EMAIL=bright4862@gmail.com ;;
+  6a498732ec779dfaaeab0e54) OWNER_EMAIL=londonparisbrussels@gmail.com ;;
+  *) echo 'Refusing: EXPECTED_OWNER_USER_ID must select an approved FixList owner.' >&2; exit 2 ;;
+esac
 source "$ROOT/scripts/lib/release-source-guard.sh"
 source "$ROOT/scripts/lib/base44-pinned-cli.sh"
 fixlist_require_exact_main "$ROOT" "$SOURCE_SHA" "$SOURCE_SHA"
@@ -31,8 +36,12 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 fixlist_install_base44_cli "$TMP/cli"
 fixlist_require_base44_owner "${BASE44_EXPECTED_OWNER:-}" "$TMP/whoami" "$APP_ID"
-if ! timeout --signal=TERM --kill-after=5s 55 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" exec --data-env prod \
-    > "$TMP/intake.out" 2> "$TMP/intake.err" <<'JS'
+{
+  printf 'const expectedId = "%s";\nconst expectedEmail = "%s";\n' "$OWNER_ID" "$OWNER_EMAIL"
+  cat <<'JS'
+const me = await base44.auth.me();
+if (me?.id !== expectedId || String(me?.email || "").trim().toLowerCase() !== expectedEmail
+    || me?.role !== "admin") throw new Error("owner_identity_mismatch");
 const reply = await base44.functions.invoke("startStandardScanJobV9", { action: "staged_runtime_status" });
 const body = reply?.data && typeof reply.data === "object" ? reply.data : reply;
 if (body?.schema_version !== "fixlist_staged_v9_intake_readback_v1" || body?.success !== true) {
@@ -44,7 +53,9 @@ const keys = ["schema_version", "success", "observed_at", "build_id", "runtime_a
 const safe = Object.fromEntries(keys.map(key => [key, body[key]]));
 console.log("FIXLIST_V9_INTAKE_READBACK=" + JSON.stringify(safe));
 JS
-then
+} > "$TMP/intake.js"
+if ! timeout --signal=TERM --kill-after=5s 55 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" exec --data-env prod \
+    < "$TMP/intake.js" > "$TMP/intake.out" 2> "$TMP/intake.err"; then
   echo 'V9 intake readback failed. No scan was submitted.' >&2
   exit 1
 fi

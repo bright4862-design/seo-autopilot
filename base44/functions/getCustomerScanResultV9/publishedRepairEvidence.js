@@ -45,7 +45,7 @@ export function publishedRepairEvidenceFields(fix, { identityVersion = "", scanO
     throw new Error("published identity evidence missing or unsupported");
   }
   const fields = {
-    ...repairImpactFields(fix),
+    ...repairImpactFields(fix, { persisted }),
     page_count: count(fix.page_count),
     family_breakdown: Object.fromEntries(Object.entries(record(fix.family_breakdown)).map(([family, value]) => [family, count(value)])),
     representative_pages_by_family: Object.fromEntries(Object.entries(record(fix.representative_pages_by_family)).map(([family, value]) => {

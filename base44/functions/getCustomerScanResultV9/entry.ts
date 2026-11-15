@@ -3,8 +3,7 @@ import { secrets } from "base44:runtime";
 import { readCustomerScanComparison, unavailableScanComparison, validComparisonRequest } from "./comparisonReader.js";
 import { requestScanComparison } from "./comparisonGateway.js";
 import {
-  buildLimitedResultSnapshot,
-  verifyLimitedResultProof,
+  verifyLimitedResultReadback,
 } from "./limitedResultIntegrity.js";
 import {
   authoritySnapshotFromRows,
@@ -37,7 +36,7 @@ const ACCEPTED_LIMITED_INTEGRITY_VERSIONS = new Set([
 ]);
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "getCustomerScanResultV9-staged-runtime-20261111-v2";
+const BASE44_RUNTIME_ACTIVATION_ID = "getCustomerScanResultV9-staged-runtime-20261111-v3";
 import { isReadableAuthorityReleaseFingerprint } from "./releaseCompatibility.js";
 import {
   customerPreviewPayloadMatchesRun,
@@ -207,7 +206,7 @@ Deno.serve(async (req) => {
         "standard_limited_result_integrity_v4_focused_scope_effective_path",
         "standard_limited_result_integrity_v5_report_evidence",
       ].includes(limitedIntegrityVersion);
-      const limitedSnapshot = buildLimitedResultSnapshot({
+      const limitedSnapshotArgs = {
         identity: {
           scan_id: run.id,
           project_id: run.project_id,
@@ -232,22 +231,22 @@ Deno.serve(async (req) => {
             classification_integrity: run.classification_integrity,
             classification_verdict: run.classification_verdict,
           } : {}),
-          recommendations: limitedFixItems,
         },
         now: cleanText(run.result_integrity_sealed_at, 80),
         version: limitedIntegrityVersion,
-      });
+      };
       const secret = String(mutableSigningKey() || "");
       if (!secret) {
         throw new RequestProblem(503, "result_authority_unavailable", "Verified results are temporarily unavailable.");
       }
-      if (!await verifyLimitedResultProof(limitedSnapshot, secret, integrityProof)) {
+      const verifiedFixItems = await verifyLimitedResultReadback(limitedSnapshotArgs, limitedFixItems, secret, integrityProof);
+      if (!verifiedFixItems) {
         throw new RequestProblem(409, "limited_result_invalid", "This saved result no longer matches its integrity proof.");
       }
       return Response.json(buildCustomerProjection({
         run,
         fixList: limitedFixList,
-        fixItems: limitedFixItems,
+        fixItems: verifiedFixItems,
         fullAccess: true,
         authorityVerified: false,
         resultIntegrityVerified: true,

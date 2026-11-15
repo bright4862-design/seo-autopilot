@@ -217,9 +217,6 @@ const FIX_ITEM_FIELDS = [
   "first_seen_scan_run_id",
   "carried_over",
   "page_count",
-  "affected_page_count",
-  "affected_page_count_is_lower_bound",
-  "template_impact_estimates",
   "family_breakdown",
   "representative_pages_by_family",
   "what_to_do_steps",
@@ -566,7 +563,7 @@ function authorityFixFromRow(item, { canonical = false, version = "", publishedC
     ? sanitizeReportRawFindingEvidence({ ...item, ...raw })
     : {};
   const base = {
-    ...repairImpactFields(item),
+    ...repairImpactFields(item, { persisted: true }),
     fix_id: text(item?.fix_id, 160),
     rule: text(item?.rule, 200),
     category: text(item?.category, 200),
@@ -853,7 +850,7 @@ function applyCoverageValidity(result) {
 function sanitizeFixItem(item, { reportEvidence = false, publishedContext = {} } = {}) {
   const result = pickFields(item, FIX_ITEM_FIELDS);
   const published = publishedRepairEvidenceFields(item, publishedContext);
-  Object.assign(result, repairImpactFields(item), published.fields, published.evidence);
+  Object.assign(result, repairImpactFields(item, { persisted: true }), published.fields, published.evidence);
   if (publishedContext.identityVersion && item?.priority_context) result.priority_context = canonicalPriorityContext(item.priority_context, publishedContext.identityVersion);
   const raw = item?.raw_finding && typeof item.raw_finding === "object" ? item.raw_finding : {};
   const evidenceGroups = canonicalRepairEvidenceGroups(raw.repair_evidence_groups);

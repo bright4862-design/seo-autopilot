@@ -1657,7 +1657,7 @@ jobs:
           gcloud logging read \
             'resource.type="cloud_run_revision" AND resource.labels.service_name="fixlist-standard150-worker" AND severity>=WARNING' \
             --project="$GCP_PROJECT" --freshness=30m --limit=100 --order=asc \
-            --format='table(timestamp,resource.labels.revision_name,severity,textPayload,jsonPayload.event,jsonPayload.error_code,jsonPayload.error_type)' || true
+            --format='table(timestamp,resource.labels.revision_name,severity,jsonPayload.event,jsonPayload.error_code,jsonPayload.error_type)' || true
 
           echo '=== WORKER REQUEST LOGS ==='
           gcloud logging read \
@@ -1669,13 +1669,13 @@ jobs:
           gcloud logging read \
             "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${ADMISSION_COORDINATOR_SERVICE}\" AND logName:\"run.googleapis.com%2Frequests\" AND httpRequest.requestMethod=\"POST\" AND httpRequest.requestUrl:\"/claim\"" \
             --project="$GCP_PROJECT" --freshness=8h --limit=200 --order=asc \
-            --format='table(timestamp,resource.labels.revision_name,httpRequest.requestMethod,httpRequest.status,httpRequest.latency,httpRequest.requestUrl)' || true
+            --format='table(timestamp,resource.labels.revision_name,httpRequest.requestMethod,httpRequest.status,httpRequest.latency)' || true
 
           echo '=== ADMISSION COORDINATOR WARNING/ERROR LOGS (8H) ==='
           gcloud logging read \
             "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${ADMISSION_COORDINATOR_SERVICE}\" AND severity>=WARNING" \
             --project="$GCP_PROJECT" --freshness=8h --limit=200 --order=asc \
-            --format='table(timestamp,resource.labels.revision_name,severity,textPayload,jsonPayload.event,jsonPayload.error,jsonPayload.error_code,httpRequest.status)' || true
+            --format='table(timestamp,resource.labels.revision_name,severity,jsonPayload.event,jsonPayload.error_code,httpRequest.status)' || true
 
           echo 'READONLY_DIAGNOSTIC_COMPLETE'
 

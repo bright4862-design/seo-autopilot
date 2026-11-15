@@ -100,12 +100,10 @@ def test_generic_tag_operator_cannot_reassign_a_canary_tag(tmp_path):
 def test_gateway_rollback_baseline_precedes_canary_tag_creation():
     """A bad or absent previous gateway must fail before creating a durable tag."""
     deploy = (ROOT / "scripts/deploy_dispatch_gateway.sh").read_text()
-    assert deploy.index('python3 "$REPO_ROOT/scripts/verify_gateway_rollback.py"') < deploy.index(
-        'bash "$REPO_ROOT/scripts/prepare_gateway_canary.sh"'
-    )
-    assert deploy.index("Owner canary requires a verified existing gateway rollback target.") < deploy.index(
-        'bash "$REPO_ROOT/scripts/prepare_gateway_canary.sh"'
-    )
-    assert deploy.index('bash "$REPO_ROOT/scripts/prepare_gateway_canary.sh"') < deploy.index(
-        'gcloud run deploy "$GATEWAY"'
-    )
+    verify_baseline = deploy.index('python3 "$REPO_ROOT/scripts/verify_gateway_rollback.py"')
+    prepare_canary = deploy.index('bash "$REPO_ROOT/scripts/prepare_gateway_canary.sh"')
+    assert verify_baseline < prepare_canary < deploy.index('gcloud run deploy "$GATEWAY"')
+    baseline_guard = deploy[verify_baseline:prepare_canary].split("\nfi", 1)[0]
+    assert '|| -n "${GATEWAY_CANARY_REVISION:-}"' in baseline_guard
+    assert '[[ "$GATEWAY_PIPELINE_MODE" == staged' in baseline_guard
+    assert "exit 2" in baseline_guard

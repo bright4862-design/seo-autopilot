@@ -46,6 +46,7 @@ function harness({
   }
   const dependencies = {
     "./scanLimits.js": scanLimits,
+    "./cloudTasks.js": { paidDispatchGatewayUrl },
     ...launch.modules,
     "./runtimeConfig.js": runtimeConfig,
     "./generatedReleaseContract.js": { ...releaseContract, RELEASE_FINGERPRINT: releaseFingerprint },
@@ -89,7 +90,11 @@ function harness({
 }
 
 test("actual V9 intake returns a closed, no-store owner-only settings and release readback", async () => {
-  const fixture = harness({ settings: { ...staged, SCAN_STAGED_OWNER_IDS: `${secondOwner},${owner.id}` } });
+  const gatewayOrigin = "https://fixlist-dispatch-gateway.example.test";
+  const fixture = harness({ settings: {
+    ...staged, SCAN_STAGED_OWNER_IDS: `${secondOwner},${owner.id}`,
+    SCAN_DISPATCH_GATEWAY_URL: gatewayOrigin,
+  } });
   const { status, cacheControl, body } = await fixture.post({ data: { action } });
   const hash = createHash("sha256").update(JSON.stringify([owner.id, secondOwner])).digest("hex");
   const activation = source.match(/BASE44_RUNTIME_ACTIVATION_ID\s*=\s*"([^"]+)"/)[1];
@@ -106,6 +111,7 @@ test("actual V9 intake returns a closed, no-store owner-only settings and releas
     configured_pipeline_mode: "staged",
     staged_rollout_scope: "off",
     staged_500_entitled_enabled: false,
+    paid_dispatch_gateway_origin: gatewayOrigin,
     pipeline_mode: "staged",
     staged_owner_cohort_state: "explicit",
     staged_owner_count: 2,
@@ -115,7 +121,7 @@ test("actual V9 intake returns a closed, no-store owner-only settings and releas
     admission_gate: "enabled",
   });
   assert.deepEqual(fixture.envReads.sort(), [
-    "SCAN_PIPELINE_MODE", "SCAN_STAGED_500_ENTITLED_ENABLED", "SCAN_STAGED_OWNER_IDS", "SCAN_STAGED_ROLLOUT_SCOPE",
+    "SCAN_DISPATCH_GATEWAY_URL", "SCAN_PIPELINE_MODE", "SCAN_STAGED_500_ENTITLED_ENABLED", "SCAN_STAGED_OWNER_IDS", "SCAN_STAGED_ROLLOUT_SCOPE",
   ]);
   assert.deepEqual(fixture.secretReads, ["BETA_SCAN_INTAKE_ENABLED", "BETA_SCAN_ADMISSION_ENABLED"]);
   assert.deepEqual(fixture.sideEffects, []);

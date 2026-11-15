@@ -23,7 +23,7 @@ import {
 } from "./admissionClient.js";
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "startStandardScanJobV9-staged-runtime-20261111-v4";
+const BASE44_RUNTIME_ACTIVATION_ID = "startStandardScanJobV9-staged-runtime-20261111-v5";
 const STAGED_RUNTIME_ACTION = "staged_runtime_status";
 const STAGED_RUNTIME_ADMIN_EMAILS = new Map([
   ["6a498da58ef5cec1f5cd4486", "bright4862@gmail.com"],
@@ -123,6 +123,7 @@ async function stagedRuntimeStatus(user, raw) {
       configured_pipeline_mode: settings.pipelineMode,
       staged_rollout_scope: settings.rolloutScope,
       staged_500_entitled_enabled: settings.entitled500Enabled,
+      paid_dispatch_gateway_origin: paidDispatchGatewayUrl(stagedScanEnv),
       pipeline_mode: enabled ? "staged" : "monolith",
       staged_owner_cohort_state: cohortState,
       staged_owner_count: cohortHash === null ? null : ownerIds.length,

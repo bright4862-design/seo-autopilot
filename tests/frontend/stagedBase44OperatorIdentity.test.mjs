@@ -16,6 +16,9 @@ const buildId = "1".repeat(64);
 const fingerprint = "2".repeat(16);
 const activationId = "v9-activation";
 const customerDigest = createHash("sha256").update(JSON.stringify([customer.id])).digest("hex");
+const gatewayOrigin = "https://fixlist-dispatch-gateway-tpucgyfewa-ew.a.run.app";
+const gatewayRevision = "fixlist-dispatch-gateway-staged-fixture";
+const emptyCohortDigest = createHash("sha256").update("[]").digest("hex");
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "staged-operator-identity-"));
@@ -82,6 +85,7 @@ if (args[2] === "exec") {
         release_fingerprint: "${fingerprint}", configured_pipeline_mode: "staged", pipeline_mode: "staged",
         staged_owner_cohort_state: "explicit", staged_owner_count: 1, staged_owner_cohort_sha256: "3".repeat(64),
         staged_owner_enabled: true, intake_gate: "enabled", admission_gate: "enabled",
+        staged_rollout_scope: "off", staged_500_entitled_enabled: false,
         ...JSON.parse(process.env.TEST_V9),
       };
     } },
@@ -91,21 +95,41 @@ if (args[2] === "exec") {
 }
 `);
   chmodSync(cli, 0o700);
+  const curl = join(root, "curl");
+  writeFileSync(curl, `#!${process.execPath}
+import { appendFileSync, readFileSync } from "node:fs";
+const url = process.argv.at(-1);
+if (url !== "${gatewayOrigin}/health") process.exit(3);
+const trace = process.env.TEST_TRACE;
+const closed = readFileSync(trace, "utf8").includes("BETA_SCAN_INTAKE_ENABLED=false");
+appendFileSync(trace, JSON.stringify(["gateway.health"]) + "\\n");
+console.log(JSON.stringify({
+  ok: true, service: "fixlist-dispatch-gateway", source_sha: "${source}", revision: "${gatewayRevision}",
+  pipeline_mode: "staged", staged_rollout_scope: "paid", staged_500_entitled_enabled: process.env.STAGED_PAID_PAGE_CAP === "500",
+  staged_owner_count: 0, staged_owner_cohort_sha256: "${emptyCohortDigest}", canary_worker_origin: null, canary_owner_count: 0,
+  ...JSON.parse(process.env.TEST_GATEWAY),
+  ...(closed ? JSON.parse(process.env.TEST_GATEWAY_AFTER_CLOSE) : {}),
+}));
+`);
+  chmodSync(curl, 0o700);
   return (script, operation, selected, user, options = {}) => {
     const confirm = {
       "prepare-owner": `PREPARE-BASE44-STAGED-150:${source}:${selected}`,
+      "prepare-paid": `PREPARE-BASE44-STAGED-PAID:${source}:${gatewayRevision}:${options.cap || "150"}`,
       "deploy-probe": `DEPLOY-BASE44-STAGED-PROBE:${source}`,
       disable: `DISABLE-BASE44-STAGED:${source}:${selected}`,
     }[operation] || "";
     const result = spawnSync("bash", [script], {
       cwd: root, encoding: "utf8", timeout: 15000,
       env: {
-        ...process.env, BASE44_API_KEY: options.apiKey || "", SOURCE_SHA: source, OPERATION: operation,
+        ...process.env, PATH: `${root}:${process.env.PATH}`, BASE44_API_KEY: options.apiKey || "", SOURCE_SHA: source, OPERATION: operation,
         CONFIRM: options.confirm ?? confirm, STAGED_OPERATOR_USER_ID: options.operatorId || "",
         BASE44_EXPECTED_OWNER: options.expectedCli || "", TEST_CLI_USER: options.actualCli || options.expectedCli || "",
         STAGED_OWNER_USER_ID: selected, EXPECTED_OWNER_USER_ID: selected, BASE44_OBSERVATIONS_DIR: output,
         TEST_CLI: cli, TEST_TRACE: trace, TEST_USER: JSON.stringify(user),
         TEST_PROBE: JSON.stringify(options.probe || {}), TEST_V9: JSON.stringify(options.v9 || {}),
+        STAGED_PAID_PAGE_CAP: options.cap || "150", STAGED_GATEWAY_REVISION: gatewayRevision,
+        TEST_GATEWAY: JSON.stringify(options.gateway || {}), TEST_GATEWAY_AFTER_CLOSE: JSON.stringify(options.gatewayAfterClose || {}),
       },
     });
     const calls = existsSync(trace) ? readFileSync(trace, "utf8").trim().split("\n").map(JSON.parse) : [];
@@ -162,7 +186,8 @@ for (const [name, admin] of [["London", london], ["Bright", bright]]) {
     assert.equal(mutations.length, 2);
     assert.ok(intakeReadbacks[0] < mutations[0] && mutations[1] < intakeReadbacks[1]);
     assert.deepEqual(calls[mutations[0]], ["secrets", "set", "BETA_SCAN_INTAKE_ENABLED=false"]);
-    assert.deepEqual(calls[mutations[1]], ["secrets", "set", "SCAN_PIPELINE_MODE=staged", `SCAN_STAGED_OWNER_IDS=${customer.id}`]);
+    assert.deepEqual(calls[mutations[1]], ["secrets", "set", "SCAN_PIPELINE_MODE=staged", `SCAN_STAGED_OWNER_IDS=${customer.id}`,
+      "SCAN_STAGED_ROLLOUT_SCOPE=off", "SCAN_STAGED_500_ENTITLED_ENABLED=false"]);
     assert.match(result.stdout, /public_intake=closed v9_attested=true pilot_cohort_matches=true/);
     assert.equal((result.stdout + result.stderr).includes(customer.id), false);
     assert.equal((result.stdout + result.stderr).includes(customerDigest), false);
@@ -209,6 +234,7 @@ test("customer-cohort disable is available with a stale V9 route", t => {
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.calls.some(row => row[1] === "startStandardScanJobV9"), false);
   assert.ok(result.calls.some(row => row.includes("SCAN_PIPELINE_MODE=monolith") && row.includes("SCAN_STAGED_OWNER_IDS=")));
+  assert.ok(result.calls.some(row => row.includes("SCAN_STAGED_ROLLOUT_SCOPE=off") && row.includes("SCAN_STAGED_500_ENTITLED_ENABLED=false")));
 });
 
 test("read-only pilot status identifies a different exact cohort without exposing it", t => {
@@ -221,6 +247,56 @@ test("read-only pilot status identifies a different exact cohort without exposin
   assert.equal(status.v9_intake_attested, true);
   assert.equal(status.pilot_cohort_matches, false);
   assert.equal(result.stdout.includes("9".repeat(64)), false);
+});
+
+function paidOptions(cap = "150", overrides = {}) {
+  return {
+    cap, operatorId: london.id, expectedCli: london.email,
+    v9: { pipeline_mode: "monolith", staged_owner_enabled: false, staged_owner_cohort_state: "empty",
+      staged_owner_count: 0, staged_owner_cohort_sha256: emptyCohortDigest, intake_gate: "disabled",
+      staged_rollout_scope: "paid", staged_500_entitled_enabled: cap === "500", paid_dispatch_gateway_origin: gatewayOrigin },
+    ...overrides,
+  };
+}
+
+for (const cap of ["150", "500"]) {
+  test(`paid ${cap} preparation proves both runtimes and keeps intake closed`, t => {
+    const result = fixture(t)(operator, "prepare-paid", "", london, paidOptions(cap));
+    assert.equal(result.status, 0, result.stderr);
+    const relevant = result.calls.filter(([name, fn]) => name === "secrets" || name === "gateway.health" || fn === "startStandardScanJobV9");
+    assert.deepEqual(relevant, [
+      ["invoke", "startStandardScanJobV9", "staged_runtime_status"], ["gateway.health"],
+      ["secrets", "set", "BETA_SCAN_INTAKE_ENABLED=false"], ["gateway.health"],
+      ["secrets", "set", "SCAN_PIPELINE_MODE=staged", "SCAN_STAGED_OWNER_IDS=", "SCAN_PIPELINE_OWNER_IDS=",
+        "SCAN_STAGED_ROLLOUT_SCOPE=paid", `SCAN_STAGED_500_ENTITLED_ENABLED=${cap === "500"}`],
+      ["invoke", "startStandardScanJobV9", "staged_runtime_status"], ["gateway.health"],
+    ]);
+    assert.match(result.stdout, /BASE44_STAGED_PAID_READBACK_VERIFIED.*public_intake=closed/);
+  });
+}
+
+test("paid preparation makes no writes when Base44 dispatches to another origin", t => {
+  const options = paidOptions();
+  options.v9.paid_dispatch_gateway_origin = "https://other.example";
+  const result = fixture(t)(operator, "prepare-paid", "", london, options);
+  assert.equal(result.status, 2);
+  assert.equal(result.calls.some(([command]) => command === "secrets" || command === "gateway.health"), false);
+});
+
+test("paid preparation leaves intake closed when the gateway changes after the close", t => {
+  const options = paidOptions("500", { gatewayAfterClose: { staged_500_entitled_enabled: false } });
+  const result = fixture(t)(operator, "prepare-paid", "", london, options);
+  assert.equal(result.status, 2);
+  assert.deepEqual(result.calls.filter(([command]) => command === "secrets"), [["secrets", "set", "BETA_SCAN_INTAKE_ENABLED=false"]]);
+});
+
+test("paid status cross-checks both runtimes without writing", t => {
+  const result = fixture(t)(operator, "status-paid", "", london, paidOptions("500"));
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.calls.filter(([command]) => command === "secrets"), []);
+  assert.deepEqual(JSON.parse(result.stdout.trim()), {
+    base44_v9_attested: true, page_cap: 500, intake_gate: "disabled", admission_gate: "enabled",
+  });
 });
 
 test("the collector reads V9 for the selected London app identity", t => {

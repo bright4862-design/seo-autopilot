@@ -16,6 +16,7 @@ export const HISTORICAL_READABLE_RELEASE_FINGERPRINTS = Object.freeze([
   "7a95768cc8ee2076",
   "0fa7d98734efb3f2",
   "01ebe8e90df1e6bd",
+  "118544dcf77d86cf",
 ]);
 
 export function isReadableAuthorityReleaseFingerprint(value, currentReleaseFingerprint) {

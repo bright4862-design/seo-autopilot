@@ -2,4 +2,4 @@
 // SHA-256 package identity for base44/functions/durableScanWorkerControlV8.
 // Every regular package file is covered except generatedBuildId.js itself.
 
-export const FUNCTION_BUILD_ID = "cabbffde51bd779845f29116a0a81321b8a2c56f0658d63ea1b72b6beedd1aa0";
+export const FUNCTION_BUILD_ID = "47206b4ac6728f686150af2a07e2fe30598b4510240ba9d192c3e09d63e3148e";

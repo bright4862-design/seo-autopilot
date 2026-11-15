@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from .extract import is_legal_page_path, is_route_boundary
 from .market_scope import strip_market_locale_prefix
 
-SAMPLING_VERSION = "balanced_sitemap_buckets_v9_feasible_ceiling_hub_reservations"
+SAMPLING_VERSION = "balanced_sitemap_buckets_v10_protected_plan"
 TRUST_PREFIXES = (
     "/about", "/contact", "/privacy", "/terms", "/legal", "/mentions-legales",
     "/cgv", "/security", "/impressum", "/conditions", "/a-propos",

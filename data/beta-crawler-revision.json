@@ -59,7 +59,7 @@
     "review_version": "python_review_v2_structural_marketplace",
     "route_boundary_classifier_version": "route_boundary_classifier_v2_wordpress_author_archives",
     "sampling_disclosure_version": "sampling_disclosure_v5_selection_language",
-    "sampling_version": "balanced_sitemap_buckets_v9_feasible_ceiling_hub_reservations",
+    "sampling_version": "balanced_sitemap_buckets_v10_protected_plan",
     "scan_history_delete_version": "scan_history_delete_v2_drain_children",
     "scan_history_version": "scan_history_v3_focused_parent_children",
     "scan_page_cap_contract_version": "server_scan_page_caps_v1_150_500",
@@ -75,10 +75,10 @@
     "visible_template_evidence_version": "visible_template_evidence_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "118544dcf77d86cf",
+  "fingerprint": "2678b7511b2c5190",
   "git_commit": "",
-  "note": "Architecture corrections candidate: feasible section ceiling and hub coverage, synchronous500 admission guard, cached review RSS, signed shortlist consistency. Offline verification only; live activation and scan acceptance pending.",
-  "recorded_at": "2026-11-12T01:13:38.090430+00:00",
+  "note": "Candidate: preserve planned section coverage when new links enter the crawl frontier. Live 150 and 500 acceptance is pending.",
+  "recorded_at": "2026-11-15T21:23:31.616881+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"
 }

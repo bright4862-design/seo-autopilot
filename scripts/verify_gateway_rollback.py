@@ -33,6 +33,10 @@ def verify(service, revision, health, baseline, expected_revision, source_sha):
         canary.update(pipeline_mode=baseline["pipeline_mode"],
                       staged_owner_cohort_sha256=baseline.get("staged_owner_cohort_sha256"),
                       staged_owner_count=baseline.get("staged_owner_count"))
+    if "staged_rollout_scope" in baseline:
+        canary["staged_rollout_scope"] = baseline["staged_rollout_scope"]
+    if "staged_500_entitled_enabled" in baseline:
+        canary["staged_500_entitled_enabled"] = baseline["staged_500_entitled_enabled"]
     verify_runtime_health(health, expected_revision, source_sha, baseline["contract_version"],
                           baseline["queue"], baseline["drain_queue"], baseline["worker_origin"], **canary)
 

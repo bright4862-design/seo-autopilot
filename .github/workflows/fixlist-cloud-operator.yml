@@ -121,15 +121,17 @@ on:
         required: false
         type: string
       gateway_staged_config:
-        description: "deploy-dispatch-gateway only: explicitly enable staged validation for the exact canary cohort after a verified zero-owner deployment"
+        description: "deploy-dispatch-gateway only: enable an exact owner cohort or staged paid launches on the verified serving revision"
         required: false
         default: "off"
         type: choice
         options:
           - "off"
           - owner-canary
+          - paid
+          - paid-500
       gateway_staged_confirm:
-        description: "Staged gateway only: ENABLE-STAGED-GATEWAY:<source-sha>:<sorted-cohort-sha256>"
+        description: "ENABLE-STAGED-GATEWAY:<source>:<cohort-sha> or ENABLE-PAID-STAGED-GATEWAY:<source>:<serving-revision>:<150-or-500>"
         required: false
         type: string
   issue_comment:
@@ -233,7 +235,7 @@ jobs:
       # step exists only to produce the token and must not replace the
       # credentials the gcloud steps below authenticate with.
       - name: Mint coordinator operator identity token
-        if: contains(fromJSON('["barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only","staged-queue-activate","staged-queue-drain-pause","staged-queue-recover"]'), inputs.operation)
+        if: contains(fromJSON('["barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only","staged-queue-activate","staged-queue-drain-pause","staged-queue-recover"]'), inputs.operation) || (inputs.operation == 'deploy-dispatch-gateway' && startsWith(inputs.gateway_staged_config, 'paid'))
         id: operator-id-token
         uses: google-github-actions/auth@v3
         with:
@@ -369,7 +371,7 @@ jobs:
       # Tagging is a SEPARATE exact-revision confirmed action, never part of
       # this read-only diagnosis. Do not infer identity from the serving URL.
       - name: Resolve staged worker token audience (read only)
-        if: inputs.operation == 'verify-staged-worker-release' || (inputs.operation == 'deploy-dispatch-gateway' && inputs.gateway_canary == 'owner-canary')
+        if: inputs.operation == 'verify-staged-worker-release' || (inputs.operation == 'deploy-dispatch-gateway' && (inputs.gateway_canary == 'owner-canary' || startsWith(inputs.gateway_staged_config, 'paid')))
         id: staged-worker-url
         shell: bash
         run: |
@@ -380,7 +382,7 @@ jobs:
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
       - name: Mint staged worker invoker identity token (read only)
-        if: inputs.operation == 'verify-staged-worker-release' || (inputs.operation == 'deploy-dispatch-gateway' && inputs.gateway_canary == 'owner-canary')
+        if: inputs.operation == 'verify-staged-worker-release' || (inputs.operation == 'deploy-dispatch-gateway' && (inputs.gateway_canary == 'owner-canary' || startsWith(inputs.gateway_staged_config, 'paid')))
         id: staged-worker-token
         uses: google-github-actions/auth@v3
         with:
@@ -472,7 +474,7 @@ jobs:
       # token used only by the barrier subprocess. The tool enforces exact
       # main, fixed resources and its own bounded confirmations.
       - name: Mint admission access token for staged-queue barrier reads
-        if: contains(fromJSON('["staged-queue-activate","staged-queue-drain-pause","staged-queue-recover"]'), inputs.operation)
+        if: contains(fromJSON('["staged-queue-activate","staged-queue-drain-pause","staged-queue-recover"]'), inputs.operation) || (inputs.operation == 'deploy-dispatch-gateway' && startsWith(inputs.gateway_staged_config, 'paid'))
         id: staged-barrier-auth
         uses: google-github-actions/auth@v3
         with:
@@ -525,10 +527,27 @@ jobs:
           GATEWAY_STAGED_CONFIG: ${{ inputs.gateway_staged_config || 'off' }}
           GATEWAY_STAGED_OWNER_IDS: ${{ inputs.gateway_staged_config == 'owner-canary' && inputs.acceptance_owner_user_ids || '' }}
           GATEWAY_STAGED_CONFIRM: ${{ inputs.gateway_staged_confirm }}
+          GATEWAY_STAGED_SERVING_REVISION: ${{ startsWith(inputs.gateway_staged_config, 'paid') && inputs.revision || '' }}
+          FIXLIST_ADMISSION_ACCESS_TOKEN: ${{ steps.staged-barrier-auth.outputs.access_token }}
+          FIXLIST_OPERATOR_ID_TOKEN: ${{ steps.operator-id-token.outputs.id_token }}
+          FIXLIST_OPERATOR_TOKEN_AUDIENCE: ${{ env.ADMISSION_OPERATOR_AUDIENCE }}
+          BARRIER_EXPECTED_GENERATION: ${{ inputs.barrier_generation }}
+          CHANGE_TICKET: ${{ inputs.change_ticket }}
+          CUTOVER_REASON: ${{ inputs.reason }}
           FIXLIST_WORKER_ID_TOKEN: ${{ steps.staged-worker-token.outputs.id_token }}
           FIXLIST_WORKER_TOKEN_AUDIENCE: ${{ steps.staged-worker-url.outputs.url }}
         shell: bash
-        run: ./scripts/deploy_dispatch_gateway.sh
+        run: |
+          set -euo pipefail
+          if [[ "$GATEWAY_STAGED_CONFIG" == paid || "$GATEWAY_STAGED_CONFIG" == paid-500 ]]; then
+            umask 077
+            GATEWAY_ADMISSION_ACCESS_TOKEN_FILE="$(mktemp "$RUNNER_TEMP/fixlist-gateway-admission.XXXXXX")"
+            export GATEWAY_ADMISSION_ACCESS_TOKEN_FILE
+            trap 'rm -f "$GATEWAY_ADMISSION_ACCESS_TOKEN_FILE"' EXIT
+            printf '%s' "$FIXLIST_ADMISSION_ACCESS_TOKEN" > "$GATEWAY_ADMISSION_ACCESS_TOKEN_FILE"
+          fi
+          unset FIXLIST_ADMISSION_ACCESS_TOKEN
+          ./scripts/deploy_dispatch_gateway.sh
 
       - name: Deploy admission coordinator
         if: inputs.operation == 'deploy-admission-coordinator'

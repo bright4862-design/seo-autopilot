@@ -1,4 +1,4 @@
-import { frozenTaskScanContract, readStagedScanSettings, resolveServerScanContract, stagedScanOwnerEnabled, trustedScanContract } from "./scanLimits.js";
+import { frozenTaskScanContract, hasLargeScanGrant, readStagedScanSettings, resolveServerScanContract, stagedScanOwnerEnabled, trustedScanContract } from "./scanLimits.js";
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 import { secrets } from "base44:runtime";
 import {
@@ -6,6 +6,7 @@ import {
   enqueueScanDrain,
   enqueueScanJob,
   normalizeAttemptCount,
+  paidDispatchGatewayUrl,
 } from "./cloudTasks.js";
 import { evaluateScanAccess, uniqueAccessRows } from "./entitlement.js";
 import {
@@ -17,11 +18,12 @@ import {
   bindAdmission,
   claimAdmission,
   releaseAdmission,
+  statusAdmission,
   verifyAdmissionClaimEvidence,
 } from "./admissionClient.js";
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "startStandardScanJobV9-staged-runtime-20261111-v3";
+const BASE44_RUNTIME_ACTIVATION_ID = "startStandardScanJobV9-staged-runtime-20261111-v4";
 const STAGED_RUNTIME_ACTION = "staged_runtime_status";
 const STAGED_RUNTIME_ADMIN_EMAILS = new Map([
   ["6a498da58ef5cec1f5cd4486", "bright4862@gmail.com"],
@@ -119,6 +121,8 @@ async function stagedRuntimeStatus(user, raw) {
       runtime_activation_id: BASE44_RUNTIME_ACTIVATION_ID,
       release_fingerprint: RELEASE_FINGERPRINT,
       configured_pipeline_mode: settings.pipelineMode,
+      staged_rollout_scope: settings.rolloutScope,
+      staged_500_entitled_enabled: settings.entitled500Enabled,
       pipeline_mode: enabled ? "staged" : "monolith",
       staged_owner_cohort_state: cohortState,
       staged_owner_count: cohortHash === null ? null : ownerIds.length,
@@ -165,6 +169,9 @@ const CUSTOMER_STATUS_DETAIL: Record<string, string> = {
   scan_admission_paused: "New scans are temporarily paused.",
   scan_intake_paused: "New scans are temporarily paused.",
   scan_admission_configuration_invalid: "The scan admission coordinator is not configured correctly.",
+  scan_staged_rollout_configuration_invalid: "New scans are temporarily paused.",
+  scan_staged_500_unavailable: "Standard 500 scans are temporarily paused.",
+  dispatch_gateway_not_configured: "The scan queue is not configured yet. No scan was started.",
 };
 
 export default async function (req: Request): Promise<Response> {
@@ -258,6 +265,15 @@ export default async function (req: Request): Promise<Response> {
         error: "Focused scans require a fresh server-admitted scan.",
         ...identity.fields,
       }, 409);
+    }
+
+    const stagedSettings = readStagedScanSettings(stagedScanEnv);
+    if (stagedSettings.rolloutScope === "invalid") {
+      const code = "scan_staged_rollout_configuration_invalid";
+      return jsonResponse({
+        success: false, accepted: false, version: VERSION, failure_code: code,
+        error: customerStatusDetail(code), retryable: true, ...identity.fields,
+      }, 503);
     }
 
     let context;
@@ -367,10 +383,17 @@ export default async function (req: Request): Promise<Response> {
         }, entitlement.failureCode === "paid_access_conflict" ? 409 : 402);
       }
 
+      const scanContract = resolveServerScanContract({
+        access: entitlement.record, ownerUserId: user.id,
+        verifiedAccess: entitlement.preview === false, settings: stagedSettings,
+      });
+      const requiresExistingScan = hasLargeScanGrant(entitlement.record) && scanContract.page_cap !== 500;
       const admitted = await admitServerOwnedScan({
         base44,
         user,
         access: entitlement.record,
+        scanContract,
+        requiresExistingScan,
         project: project.project,
         body,
         identity,
@@ -403,7 +426,13 @@ export default async function (req: Request): Promise<Response> {
     const scanContract = frozenTaskContract.page_cap === undefined
       ? trustedScanContract(context.scan)
       : frozenTaskContract;
-    const scanRobotsPolicy = await ensureFrozenScanRobotsPolicy({ base44, context });
+    const paidRoutePaused = stagedSettings.rolloutScope !== "paid"
+      || (scanContract.page_cap === 500 && !stagedSettings.entitled500Enabled);
+    const paidDispatch = context.scan.staged_rollout_scope === "paid";
+    const readOnlyReplay = context.readOnlyReplay || (paidDispatch && paidRoutePaused);
+    const scanRobotsPolicy = readOnlyReplay
+      ? robotsPolicyFromScanRun(context.scan)
+      : await ensureFrozenScanRobotsPolicy({ base44, context });
     if (!scanRobotsPolicy) {
       return jsonResponse({
         success: false,
@@ -416,7 +445,7 @@ export default async function (req: Request): Promise<Response> {
     }
 
     const attemptCount = normalizeAttemptCount(context.scan?.attempt_count);
-    if (scanIsTerminal(context.scan)) {
+    if (readOnlyReplay || scanIsTerminal(context.scan)) {
       return jsonResponse({
         success: true,
         accepted: true,
@@ -480,6 +509,7 @@ export default async function (req: Request): Promise<Response> {
       attemptCount,
       payload: { ...commonPayload, ...frozenTaskContract, drain_after: drainAfter },
       signingKey: dispatchSigningKey,
+      requireGateway: paidDispatch,
     });
     if (!drain.ok) {
       await failOwnedScanRun({
@@ -512,10 +542,12 @@ export default async function (req: Request): Promise<Response> {
         business_name: String(body.business_name || body.project_name || ""),
         cms_platform: String(body.cms_platform || body.platform || ""),
         ...scanContract,
+        ...(paidDispatch ? { staged_rollout_scope: "paid" } : {}),
         respect_robots_txt: scanRobotsPolicy.respect_robots_txt,
         owner_attested_robots_override: scanRobotsPolicy.owner_attested_robots_override,
       },
       signingKey: dispatchSigningKey,
+      requireGateway: paidDispatch,
     });
 
     if (!enqueued.ok && enqueued.outcomeUnknown !== true) {
@@ -647,7 +679,50 @@ async function loadExactOwnedProject({ base44, user, projectId, websiteUrl }) {
   return { ok: true, project };
 }
 
-async function admitServerOwnedScan({ base44, user, access, project, body, identity, websiteUrl, scope, robotsPolicy }) {
+async function replayBoundScanWithoutAdmission({ base44, user, project, request, websiteUrl, robotsPolicy, code }) {
+  const paused = { ok: false, status: 503, code, error: customerStatusDetail(code), retryable: true };
+  const ownerUserId = String(user.id);
+  // A read-only lookup cannot consume a new admission slot when dispatch is
+  // unavailable. Accept only a scan already bound to this request.
+  const status = await statusAdmission({ ownerUserId, env: mutableScanAdmissionEnv }).catch(() => null);
+  const binding = status?.admission;
+  if (status?.ok !== true || binding?.request_id !== request.request_id || !binding?.scan_id) return paused;
+  const scan = await base44.asServiceRole.entities.ScanRun.get(binding.scan_id).catch(() => null);
+  if (scan?.id !== binding.scan_id) return paused;
+
+  const admissionEvidence = await verifiedAdmissionClaim({
+    claim: {
+      ...binding,
+      cohort_evidence_proof: scan.admission_cohort_evidence_proof,
+      cohort_evidence: {
+        version: "admission_claim_evidence_v1",
+        owner_user_id: ownerUserId,
+        request_id: binding.request_id,
+        barrier_generation: binding.barrier_generation,
+        claim_sequence: binding.claim_sequence,
+        admission_mode: binding.admission_mode,
+        acceptance_cohort_id: binding.acceptance_cohort_id,
+        acceptance_release_id: binding.acceptance_release_id,
+        acceptance_source_sha: binding.acceptance_source_sha,
+        acceptance_expires_at: binding.acceptance_expires_at,
+      },
+    },
+    ownerUserId,
+    requestId: request.request_id,
+    signingKey: String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || ""),
+  });
+  if (!admissionEvidence) return paused;
+  const validation = validateServerScanContext({ scan, user, project, request, websiteUrl, admissionEvidence, robotsPolicy });
+  if (!validation.ok) return validation;
+  return {
+    ok: true, replayed: true, replayReason: "request_replay",
+    context: { ok: true, scan, project, expectedDomain: authorityDomain(websiteUrl), readOnlyReplay: true },
+  };
+}
+
+async function admitServerOwnedScan({
+  base44, user, access, scanContract, requiresExistingScan, project, body, identity, websiteUrl, scope, robotsPolicy,
+}) {
   const request = normalizeAdmissionIdentity({
     request_id: identity.fields.request_id,
     idempotency_key: identity.fields.idempotency_key,
@@ -657,6 +732,14 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
     return { ok: false, status: 409, code: request.code, error: "The scan request identity is invalid." };
   }
   identity.fields.request_fingerprint = request.request_fingerprint;
+
+  const blockedDispatch = requiresExistingScan ? "scan_staged_500_unavailable"
+    : scanContract.staged_rollout_scope === "paid" && !paidDispatchGatewayUrl() ? "dispatch_gateway_not_configured" : "";
+  if (blockedDispatch) {
+    return replayBoundScanWithoutAdmission({
+      base44, user, project, request, websiteUrl, robotsPolicy, code: blockedDispatch,
+    });
+  }
 
   let claim;
   try {
@@ -760,6 +843,7 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
       base44,
       user,
       access,
+      scanContract,
       project,
       body,
       request,
@@ -953,6 +1037,7 @@ async function recoverOrCreateServerScan({
   base44,
   user,
   access,
+  scanContract,
   project,
   body,
   request,
@@ -1007,7 +1092,7 @@ async function recoverOrCreateServerScan({
       requested_path_prefix: scope?.pathPrefix || "",
       discovered_from: scope?.focused ? scope.discoveredFrom : "",
       user_confirmed: scope?.focused === true,
-      ...resolveServerScanContract({ access, ownerUserId: user.id, env: stagedScanEnv }),
+      ...scanContract,
       scan_source: String(body.source || "scan_website_page"),
       status: "queued",
       previous_scan_id: String(previousScanId),

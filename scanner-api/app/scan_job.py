@@ -34,7 +34,7 @@ from .acceptance_evidence import (
 )
 from .observability import emit
 from .page_output_privacy import project_scan_result_for_external_boundary
-from .scan_limits import current_page_cap, page_cap_for_mode, scan_page_limit
+from .scan_limits import current_page_cap, page_cap_for_mode, scan_page_limit, standard_scan_contract
 from .staged_telemetry import COMPLETION_FUNCTIONS, active_delivery
 
 WORKER_VERSION = "scan_job_worker_v1_cloud_tasks"
@@ -1083,10 +1083,10 @@ async def complete_authority(
         return {"ok": False, "transient": False, "failure_code": "scan_identity_mismatch"}
     scan = fresh
     if _function_generation.get() == "V9":
-        mode = str(scan.get("scan_mode") or "standard_150")
-        cap = page_cap_for_mode(mode)
-        if scan.get("page_cap", cap) != cap or int(result.get("pages_crawled") or 0) > cap:
+        contract = standard_scan_contract(scan)
+        if contract is None or int(result.get("pages_crawled") or 0) > contract[1]:
             return {"ok": False, "transient": False, "failure_code": "scan_page_cap_invalid"}
+        mode, cap, _ = contract
         result = {**result, "scan_mode": mode, "canonical_mode": mode, "page_cap": cap}
 
     crawl_limitation = terminal_crawl_limitation(result)

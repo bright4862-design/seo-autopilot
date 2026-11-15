@@ -138,7 +138,7 @@ async function accessToken() {
   }
 }
 
-async function createTaskViaGateway({ gatewayUrl, signingKey, queuePath, body, taskName, attemptCount }) {
+async function createTaskViaGateway({ gatewayUrl, signingKey, queuePath, body, taskName, attemptCount, requireGateway }) {
   const payloadText = JSON.stringify({ queue_path: queuePath, task: body?.task || null });
   const timestamp = String(Math.trunc(Date.now() / 1000));
   let signature = "";
@@ -152,6 +152,7 @@ async function createTaskViaGateway({ gatewayUrl, signingKey, queuePath, body, t
   try {
     response = await fetch(`${String(gatewayUrl).replace(/\/+$/, "")}/dispatch`, {
       method: "POST",
+      ...(requireGateway ? { redirect: "error" } : {}),
       headers: {
         "content-type": "application/json",
         "x-fixlist-timestamp": timestamp,
@@ -219,14 +220,30 @@ async function createTaskViaGateway({ gatewayUrl, signingKey, queuePath, body, t
   };
 }
 
-async function createTask({ queuePath, body, taskName, attemptCount, signingKey }) {
-  const gatewayUrl = String(Deno.env.get("SCAN_DISPATCH_GATEWAY_URL") || "").trim();
+export function paidDispatchGatewayUrl(env = name => Deno.env.get(name)) {
+  const raw = String(env("SCAN_DISPATCH_GATEWAY_URL") || "").trim();
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" && (raw === url.origin || raw === `${url.origin}/`)
+      ? url.origin : "";
+  } catch {
+    return "";
+  }
+}
+
+async function createTask({ queuePath, body, taskName, attemptCount, signingKey, requireGateway }) {
+  const gatewayUrl = requireGateway
+    ? paidDispatchGatewayUrl()
+    : String(Deno.env.get("SCAN_DISPATCH_GATEWAY_URL") || "").trim();
+  if (requireGateway && !gatewayUrl) {
+    return { ok: false, outcomeUnknown: false, failureCode: "dispatch_gateway_not_configured" };
+  }
   const gatewaySigningKey = String(signingKey ?? Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") ?? "");
   if (gatewayUrl) {
     if (!gatewaySigningKey) {
       return { ok: false, outcomeUnknown: false, failureCode: "dispatch_gateway_signing_key_missing" };
     }
-    return createTaskViaGateway({ gatewayUrl, signingKey: gatewaySigningKey, queuePath, body, taskName, attemptCount });
+    return createTaskViaGateway({ gatewayUrl, signingKey: gatewaySigningKey, queuePath, body, taskName, attemptCount, requireGateway });
   }
 
   const { token, failureCode: tokenFailureCode } = await accessToken();
@@ -278,6 +295,7 @@ export async function enqueueScanJob(args) {
     taskName: taskNameForScan(args.queuePath, args.scanId, attempt),
     attemptCount: attempt,
     signingKey: args.signingKey,
+    requireGateway: args.requireGateway === true || args.payload?.staged_rollout_scope === "paid",
   });
 }
 
@@ -295,5 +313,6 @@ export async function enqueueScanDrain(args) {
     taskName: taskNameForDrain(args.queuePath, args.scanId, attempt),
     attemptCount: attempt,
     signingKey: args.signingKey,
+    requireGateway: args.requireGateway === true || args.payload?.staged_rollout_scope === "paid",
   });
 }

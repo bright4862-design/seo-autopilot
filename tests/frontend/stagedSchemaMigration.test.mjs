@@ -11,7 +11,7 @@ const sourceSha = 'a'.repeat(40);
 const appId = '6a498732ec779dfaaeab0e53';
 const entities = ['ScanRun', 'FixList', 'FixItem', 'Access'];
 const fields = {
-  ScanRun: ['page_cap', 'pipeline_mode', 'pages_planned', 'workspace_cleanup_state', 'workspace_cleanup_completed_at', 'last_committed_batch'],
+  ScanRun: ['page_cap', 'pipeline_mode', 'staged_rollout_scope', 'pages_planned', 'workspace_cleanup_state', 'workspace_cleanup_completed_at', 'last_committed_batch'],
   FixItem: ['affected_page_count', 'affected_page_count_is_lower_bound', 'template_impact_estimates'],
   Access: ['page_cap'],
 };
@@ -119,11 +119,13 @@ test('staged plan allows exactly the known additions while preserving the live d
   delete before.ScanRun.properties.website_url.description;
   const plan = planStagedSchemas(before);
   assert.equal(plan.decision, 'apply');
-  assert.equal(plan.operations.length, 11);
+  assert.equal(plan.operations.length, 12);
   assert.equal(plan.after.ScanRun.platform_marker, 'preserve');
   assert.deepEqual(plan.after.ScanRun.properties.created_date, {type: 'string'});
   assert.equal(Object.hasOwn(plan.after.ScanRun.properties.website_url, 'description'), false);
   assert.deepEqual(plan.after.Access.properties.page_cap.enum, [150, 500]);
+  assert.deepEqual(plan.after.ScanRun.properties.staged_rollout_scope.enum, ['paid']);
+  assert.equal(plan.after.ScanRun.required.includes('staged_rollout_scope'), false);
   assert.deepEqual(plan.after.ScanRun.properties.scan_mode.enum, ['standard_150', 'basic', 'quick', 'deep', 'advanced', 'standard_500']);
   assert.equal(planStagedSchemas(plan.after).decision, 'match');
   assert.equal(before.Access.properties.page_cap, undefined);
@@ -148,7 +150,7 @@ test('offline plan writes a source-bound report without authentication or reques
   assert.equal(result.data.source_sha, sourceSha);
   assert.equal(result.data.live_verified, false);
   assert.match(result.data.contract_sha256, /^[a-f0-9]{64}$/);
-  assert.equal(result.data.operations.length, 11);
+  assert.equal(result.data.operations.length, 12);
   assert.equal(f.requests.length, 0);
   assert.equal(existsSync(f.events), false);
 });

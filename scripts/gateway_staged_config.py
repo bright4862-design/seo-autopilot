@@ -17,6 +17,8 @@ def owners(value):
 
 
 def plan(config, owner_ids, canary_owner_ids):
+    rollout_scope = "off"
+    entitled_500 = config == "paid-500"
     if config == "off":
         if owner_ids:
             raise ValueError("off staging cannot carry an owner cohort")
@@ -26,10 +28,16 @@ def plan(config, owner_ids, canary_owner_ids):
         if not selected or selected != owners(canary_owner_ids):
             raise ValueError("staged owners must exactly match the verified canary route")
         mode = "staged"
+    elif config in {"paid", "paid-500"}:
+        if owner_ids or canary_owner_ids:
+            raise ValueError("paid staging requires the canonical worker and an empty owner cohort")
+        mode, selected, rollout_scope = "staged", [], "paid"
     else:
-        raise ValueError("staging config must be off or owner-canary")
+        raise ValueError("staging config must be off, owner-canary, paid or paid-500")
     digest = hashlib.sha256(json.dumps(selected, separators=(",", ":")).encode()).hexdigest()
-    return {"pipeline_mode": mode, "owner_ids": ",".join(selected),
+    return {"pipeline_mode": mode, "staged_rollout_scope": rollout_scope,
+            "staged_500_entitled_enabled": entitled_500,
+            "owner_ids": ",".join(selected),
             "staged_owner_count": len(selected), "staged_owner_cohort_sha256": digest}
 
 

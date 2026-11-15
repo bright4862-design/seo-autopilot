@@ -5,6 +5,7 @@ import { buildCustomerProjection } from "../../base44/functions/getCustomerScanR
 import { durableScanStatePresentation } from "../../src/lib/durableScanStatePresentation.js";
 import { resolveScanFunctionRoute } from "../../src/lib/scanFunctionRouting.js";
 import { resolveScanOwnership } from "../../src/lib/siteOwnershipPolicy.js";
+import publicRouteContract from "../../data/base44-function-routes.json" with { type: "json" };
 
 const respectRobots = { respect_robots_txt: true, owner_attested_robots_override: false, site_ownership_answer: "not_owner" };
 const overrideRobots = { respect_robots_txt: false, owner_attested_robots_override: true, site_ownership_answer: "owner_or_manager" };
@@ -52,6 +53,21 @@ test("the browser uses the V9 reader only when configured and preserves the exac
     assert.deepEqual(bundle.run.access_limitation, generation === "V9" ? { kind: "bot_challenge", provider: "cloudflare" } : undefined);
     assert.equal(Object.hasOwn(bundle.run, "status_detail"), false);
   }
+});
+
+test("the public manifest selects start, result, and deletion routes together", () => {
+  const v9 = {
+    generation: "v9",
+    routes: publicRouteContract.candidate_routes.v9,
+    historical_routes: {v8: publicRouteContract.routes},
+  };
+  for (const name of ["startStandardScanJob", "getCustomerScanResult", "deleteCustomerScanData"]) {
+    const entry = `${name}V8`;
+    assert.equal(resolveScanFunctionRoute(entry), entry);
+    assert.equal(resolveScanFunctionRoute(entry, undefined, v9), `${name}V9`);
+    assert.equal(resolveScanFunctionRoute(entry, "V8", v9), `${name}V9`);
+  }
+  assert.equal(resolveScanFunctionRoute("createAccessCheckout", undefined, v9), "createAccessCheckout");
 });
 
 test("known access restrictions get distinct, owner-aware advice at both page caps", () => {

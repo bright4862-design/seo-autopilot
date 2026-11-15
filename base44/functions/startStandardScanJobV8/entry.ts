@@ -16,11 +16,12 @@ import {
   bindAdmission,
   claimAdmission,
   releaseAdmission,
+  statusAdmission,
   verifyAdmissionClaimEvidence,
 } from "./admissionClient.js";
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "startStandardScanJobV8-fresh-runtime-20260922-v1";
+const BASE44_RUNTIME_ACTIVATION_ID = "startStandardScanJobV8-fresh-runtime-20260922-v2";
 
 const CORS_HEADERS = Object.freeze({
   "Access-Control-Allow-Origin": "*",
@@ -100,6 +101,7 @@ const CUSTOMER_STATUS_DETAIL: Record<string, string> = {
   scan_admission_paused: "New scans are temporarily paused.",
   scan_intake_paused: "New scans are temporarily paused.",
   scan_admission_configuration_invalid: "The scan admission coordinator is not configured correctly.",
+  scan_client_refresh_required: "Refresh FixList to start a Standard 500 scan.",
 };
 
 export default async function (req: Request): Promise<Response> {
@@ -330,7 +332,18 @@ export default async function (req: Request): Promise<Response> {
       };
     }
 
-    const scanRobotsPolicy = await ensureFrozenScanRobotsPolicy({ base44, context });
+    if (hasStandard500Grant(entitlement.record) && !isSavedStandard150(context.scan)) {
+      const refresh = standard500RefreshRequired();
+      return jsonResponse({
+        success: false, accepted: false, version: VERSION, retryable: false,
+        failure_code: refresh.code, error: refresh.error, ...identity.fields,
+      }, refresh.status);
+    }
+    const readOnlyReplay = hasStandard500Grant(entitlement.record)
+      && (context.scan.page_cap != null || context.scan.pipeline_mode === "staged");
+    const scanRobotsPolicy = readOnlyReplay
+      ? robotsPolicyFromScanRun(context.scan)
+      : await ensureFrozenScanRobotsPolicy({ base44, context });
     if (!scanRobotsPolicy) {
       return jsonResponse({
         success: false,
@@ -343,7 +356,7 @@ export default async function (req: Request): Promise<Response> {
     }
 
     const attemptCount = normalizeAttemptCount(context.scan?.attempt_count);
-    if (scanIsTerminal(context.scan)) {
+    if (readOnlyReplay || scanIsTerminal(context.scan)) {
       return jsonResponse({
         success: true,
         accepted: true,
@@ -574,6 +587,61 @@ async function loadExactOwnedProject({ base44, user, projectId, websiteUrl }) {
   return { ok: true, project };
 }
 
+function hasStandard500Grant(access) {
+  return access?.page_cap === 500 && access.access_status === "active" && access.has_full_access === true;
+}
+
+function isSavedStandard150(scan) {
+  const mode = scan?.scan_mode || PUBLIC_SCAN_MODE;
+  return (mode === PUBLIC_SCAN_MODE && (scan?.page_cap == null || scan.page_cap === MAX_PAGES))
+    || (mode === "advanced" && scan?.page_cap == null);
+}
+
+function standard500RefreshRequired() {
+  const code = "scan_client_refresh_required";
+  return { ok: false, status: 409, code, error: customerStatusDetail(code) };
+}
+
+async function replayStandard150For500Grant({ base44, user, project, request, websiteUrl, robotsPolicy }) {
+  // Only a coordinator-bound 150 request can be replayed by an old client.
+  // Looking it up first avoids consuming a slot for a new 150 scan.
+  const ownerUserId = String(user.id);
+  const status = await statusAdmission({ ownerUserId, env: mutableScanAdmissionEnv }).catch(() => null);
+  const binding = status?.admission;
+  if (status?.ok !== true || binding?.request_id !== request.request_id || !binding.scan_id) return standard500RefreshRequired();
+  const scan = await base44.asServiceRole.entities.ScanRun.get(binding.scan_id).catch(() => null);
+  if (scan?.id !== binding.scan_id || !isSavedStandard150(scan)) return standard500RefreshRequired();
+
+  const admissionEvidence = await verifiedAdmissionClaim({
+    claim: {
+      ...binding,
+      cohort_evidence_proof: scan.admission_cohort_evidence_proof,
+      cohort_evidence: {
+        version: "admission_claim_evidence_v1",
+        owner_user_id: ownerUserId,
+        request_id: binding.request_id,
+        barrier_generation: binding.barrier_generation,
+        claim_sequence: binding.claim_sequence,
+        admission_mode: binding.admission_mode,
+        acceptance_cohort_id: binding.acceptance_cohort_id,
+        acceptance_release_id: binding.acceptance_release_id,
+        acceptance_source_sha: binding.acceptance_source_sha,
+        acceptance_expires_at: binding.acceptance_expires_at,
+      },
+    },
+    ownerUserId,
+    requestId: request.request_id,
+    signingKey: String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || ""),
+  });
+  if (!admissionEvidence) return standard500RefreshRequired();
+  const validation = validateServerScanContext({ scan, user, project, request, websiteUrl, admissionEvidence, robotsPolicy });
+  if (!validation.ok) return validation;
+  return {
+    ok: true, replayed: true, replayReason: "request_replay",
+    context: { ok: true, scan, project, expectedDomain: authorityDomain(websiteUrl) },
+  };
+}
+
 async function admitServerOwnedScan({ base44, user, access, project, body, identity, websiteUrl, scope, robotsPolicy }) {
   const request = normalizeAdmissionIdentity({
     request_id: identity.fields.request_id,
@@ -584,6 +652,10 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
     return { ok: false, status: 409, code: request.code, error: "The scan request identity is invalid." };
   }
   identity.fields.request_fingerprint = request.request_fingerprint;
+
+  if (hasStandard500Grant(access)) {
+    return replayStandard150For500Grant({ base44, user, project, request, websiteUrl, robotsPolicy });
+  }
 
   let claim;
   try {

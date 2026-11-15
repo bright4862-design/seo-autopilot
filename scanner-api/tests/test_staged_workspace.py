@@ -821,6 +821,31 @@ async def test_existing_staged_intake_continues_after_cohort_is_disabled(h, monk
     assert calls == ["plan"]
 
 
+@pytest.mark.parametrize("stored_scope,task_scope,allowed", [
+    ("paid", "paid", True),
+    ("paid", None, False),
+    (None, "paid", False),
+    (None, None, True),
+])
+@pytest.mark.asyncio
+async def test_scan_entry_requires_the_durable_rollout_scope(h, monkeypatch, stored_scope, task_scope, allowed):
+    from app import main
+    h.scan["staged_rollout_scope"] = stored_scope
+    h.job["staged_rollout_scope"] = task_scope
+    monkeypatch.setenv("SCAN_WORKSPACE_BUCKET", "private-test-bucket")
+    monkeypatch.setattr(main, "require_cloud_tasks_oidc", lambda _: None)
+    monkeypatch.setattr(main, "read_scan_run", h.read)
+
+    async def staged(stage, job, **kwargs):
+        return await h.runtime.process(None, stage, job)
+
+    monkeypatch.setattr(main, "run_staged_delivery", staged)
+    response = await main.scan_job(main.ScanJobRequest(**h.job), authorization=None)
+    assert (("batch", 0) in h.dispatcher.tasks) == allowed
+    if not allowed:
+        assert response["skipped"] == "scan_contract_mismatch"
+
+
 @pytest.mark.parametrize("contract", [
     {"page_cap": None, "pipeline_mode": "staged"},
     {"page_cap": 150, "pipeline_mode": "monolith"},

@@ -2,7 +2,7 @@ import asyncio
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from fastapi import Body, FastAPI, Header, HTTPException
@@ -412,6 +412,7 @@ class ScanJobRequest(BaseModel):
     scan_mode: str = "standard_150"
     page_cap: int | None = Field(default=None, strict=True)
     pipeline_mode: str | None = None
+    staged_rollout_scope: Literal["paid"] | None = None
     respect_robots_txt: bool = True
     owner_attested_robots_override: bool = False
 
@@ -638,7 +639,8 @@ async def scan_job(
         if scan is None:
             # Transient: the row must exist, so let Cloud Tasks retry it.
             raise HTTPException(status_code=503, detail="The scan record is unavailable.")
-        if not task_matches_scan_contract(scan, job):
+        if (payload.staged_rollout_scope != (scan.get("staged_rollout_scope") or None)
+                or not task_matches_scan_contract(scan, job)):
             return {"success": True, "scan_id": scan_id, "skipped": "scan_contract_mismatch"}
         # A later cohort change cannot move work already admitted to a
         # different pipeline. The worker follows the durable attempt.

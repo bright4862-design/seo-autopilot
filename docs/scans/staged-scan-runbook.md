@@ -178,6 +178,14 @@ Review a corpus with sitemap inventories on all 50 sites so each can contribute 
 
 Phase 7 (5,000-page scans), adaptive sampling, weekly monitoring and the separate signed targeted-verification product are future extensions. The 30-day lifecycle must be revisited before introducing a longer-lived monitoring baseline.
 
+## Paid rollout
+
+Rehearse the V9 route manifest with intake closed before switching the public site to V9. The publisher verifies the new V9 routes and keeps V8 available for earlier clients and in-flight results. Establish the ordinary-customer pilot on the exact V9 build before enabling the paid scope.
+
+After draining all three queues and verifying the staged-capable canonical worker, use gateway configuration `paid` for staged 150. The gateway verifies the closed barrier and exact serving revision before promoting. The Base44 account must report the matching paid scope and leave the 500 switch off during the 150 rollout.
+
+A named non-administrator pilot can exercise 500 with an approved, active 500-page grant. Verify the full scan and saved result on the existing staged pilot path. Once the 500 corpus and production checks pass, `paid-500` enables already-entitled 500 launches. Turn on `SCAN_STAGED_500_ENTITLED_ENABLED` in Base44 only after the gateway verifies its matching flag. New requests from a verified 500 holder receive a clear pause response if the 500 tier is disabled. Existing grants and in-flight attempts keep their original cap. Neither switch issues a new grant.
+
 ## Rollback and recovery
 
 Close staged intake to stop new admissions. Keep the stage endpoints, queue, V9 functions and workspace available for attempts that already own a staged contract. Wait for the admission barrier and entry, stage, and drain queues to clear before changing the serving worker or removing its source tag. Existing sealed authority remains immutable.

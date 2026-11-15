@@ -269,16 +269,12 @@ test("Base44 admission configuration is disabled-first, entitlement-owned and ad
 
 test("Base44 release deploy names the explicit durable functions and never reconciles entities or the site", () => {
   const expected = [
-    "startStandardScanJobV8",
-    "durableScanWorkerControlV8",
-    "persistDurableScanAuthorityV8",
-    "persistLimitedScanResultV8",
-    "getCustomerScanResultV8",
     "createAccessCheckout",
     "stripeWebhook",
     "ownerScanDebugControl",
   ];
   for (const name of expected) assert.match(deployFunctions, new RegExp(`\\b${name}\\b`));
+  assert.match(deployFunctions, /base44-public-routes\.mjs/);
   assert.match(deployFunctions, /functions deploy "\$\{FUNCTIONS\[@\]\}"/);
   assert.match(deployFunctions, /base44_release_manifest\.mjs" verify/);
   assert.doesNotMatch(deployFunctions, /\bdeploy\s+--|\bsite\s+deploy|entities\s+push|--force/);
@@ -307,15 +303,10 @@ test("Base44 site publication restores the durable backend after the site deploy
   assert.match(mainEntry, /__FIXLIST_SOURCE_SHA__/);
   assert.match(verifySite, /\/assets\/index-/);
   assert.match(verifySite, /grep -Fq "\$EXPECTED_SOURCE_SHA"/);
+  assert.match(deploySite, /base44-public-routes\.mjs/);
   for (const required of [
-    "startStandardScanJobV8",
-    "durableScanWorkerControlV8",
-    "persistDurableScanAuthorityV8",
-    "persistLimitedScanResultV8",
-    "getCustomerScanResultV8",
     "createAccessCheckout",
     "stripeWebhook",
-    "deleteCustomerScanDataV8",
     "ownerScanDebugControl",
   ]) assert.match(deploySite, new RegExp(`\\b${required}\\b`));
   assert.doesNotMatch(deploySite, /deploy-base44-beta-functions\.sh|--force|entities\s+push/);

@@ -621,11 +621,9 @@ test("runtime verification demands both identities", () => {
   assert.match(verifier, /if \(!\/\^\[A-Za-z0-9\._-\]\{1,120\}\$\/\.test\(activationId\)\) process\.exit\(5\)/);
 });
 
-test("the verifier probes exactly the six live routes", () => {
-  const listed = verifier.slice(verifier.indexOf("FUNCTION_ROUTES=("), verifier.indexOf(")", verifier.indexOf("FUNCTION_ROUTES=(")))
-    .split("\n").slice(1).map((line) => line.trim()).filter(Boolean);
-  const active = JSON.parse(fs.readFileSync("data/base44-function-routes.json", "utf8")).routes;
-  assert.deepEqual(listed.sort(), Object.values(active).sort());
+test("the final recovery verifier probes the source-selected routes", () => {
+  assert.match(verifier, /base44-public-routes\.mjs/);
+  assert.match(verifier, /for name in "\$\{FUNCTION_ROUTES\[@\]\}"/);
 });
 
 test("routed build IDs identify alias bytes and activation markers remain route-specific", () => {

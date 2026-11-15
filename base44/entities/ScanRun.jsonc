@@ -743,6 +743,13 @@
       ],
       "default": "monolith"
     },
+    "staged_rollout_scope": {
+      "type": "string",
+      "enum": [
+        "paid"
+      ],
+      "description": "Server-written dispatch scope for a staged attempt admitted through a verified paid entitlement."
+    },
     "pages_planned": {
       "type": "integer"
     },

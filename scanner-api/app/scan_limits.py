@@ -51,6 +51,9 @@ def task_matches_scan_contract(scan: dict, task: dict) -> bool:
     """A task can repeat a frozen contract but cannot choose it."""
     cap = task.get("page_cap")
     pipeline = task.get("pipeline_mode")
+    scope = task.get("staged_rollout_scope")
+    if scope is not None and (scope != "paid" or scan.get("staged_rollout_scope") != scope or pipeline != "staged"):
+        return False
     if cap is None and pipeline is None:
         return task.get("scan_mode") != "standard_500"  # Older tasks carry no frozen contract.
     return type(cap) is int and standard_scan_contract(scan) == (task.get("scan_mode"), cap, pipeline)

@@ -213,7 +213,26 @@ export function validatePrerequisites(packet, expected) {
   } };
 }
 
-// This function must remain self-contained: it also runs inside Base44 exec.
+function persistedTimestamp(value) {
+  if (typeof value !== "string") return NaN;
+  const match = /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match || match[1].startsWith("0000-")) return NaN;
+  const date = new Date(`${match[1]}T00:00:00Z`);
+  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== match[1]) return NaN;
+  return Date.parse(value);
+}
+
+function ordinaryTerminalWindow(operator, now) {
+  const observed = persistedTimestamp(operator?.observed_at);
+  const terminal = persistedTimestamp(operator?.terminal_observed_at);
+  const started = persistedTimestamp(operator?.run?.started_at);
+  const completed = persistedTimestamp(operator?.run?.completed_at);
+  return observed <= terminal && terminal - observed <= 1_830_000
+    && observed - 30_000 <= started && started < completed && completed - started <= 1_800_000
+    && completed <= terminal + 30_000 && terminal <= now + 30_000 && now - terminal <= 900_000;
+}
+
+// Embed both timestamp helpers when running this function outside this module.
 export async function executeStaged500Canary(base44, config, now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms))) {
   const ordinary = config.ordinaryScanId !== undefined;
   const report = { schema_version: "staged_500_canary_v1", production_freeze: false, source_sha: config.sourceSha,
@@ -231,14 +250,6 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
   const unwrap = value => value?.data && typeof value.data === "object" ? value.data : value;
   const integer = value => Number.isInteger(value) && value >= 0;
   const url = value => { try { return new URL(String(value)).href; } catch { return ""; } };
-  function persistedTimestamp(value) {
-    if (typeof value !== "string") return NaN;
-    const match = /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.exec(value);
-    if (!match || match[1].startsWith("0000-")) return NaN;
-    const date = new Date(`${match[1]}T00:00:00Z`);
-    if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== match[1]) return NaN;
-    return Date.parse(value);
-  }
   async function signedSelectionCoverage(sampling, crawled) {
     const record = value => Boolean(value && typeof value === "object" && !Array.isArray(value));
     const discovered = sampling?.sections_discovered;
@@ -283,7 +294,11 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
     let timer; try { return await Promise.race([Promise.resolve().then(operation), new Promise((_, reject) => { timer = setTimeout(() => reject(new CanaryCheckError("operation_timeout")), remaining); })]); } finally { clearTimeout(timer); }
   }
   try {
-    require(config.appId === "6a498732ec779dfaaeab0e53" && config.provenance?.source_sha === config.sourceSha && config.provenance?.release_fingerprint === config.expectedFingerprint && Date.parse(config.provenance?.expires_at) > now(), "prerequisites_invalid_or_expired");
+    const operator = config.operatorReadback;
+    const observed = ordinary ? persistedTimestamp(operator?.observed_at) : now();
+    require(config.appId === "6a498732ec779dfaaeab0e53" && config.provenance?.source_sha === config.sourceSha
+      && config.provenance?.release_fingerprint === config.expectedFingerprint
+      && Date.parse(config.provenance?.expires_at) > observed, "prerequisites_invalid_or_expired");
     const published = Array.isArray(config.provenance.base44_functions) ? config.provenance.base44_functions : [];
     const launcher = published.find(row => row?.name === "startStandardScanJobV9");
     const reader = published.find(row => row?.name === "getCustomerScanResultV9");
@@ -291,18 +306,15 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
       && /^getCustomerScanResultV9B[a-f0-9]{16}$/.test(config.resultRoute)
       && config.launchRoute === launcher?.route_name && config.resultRoute === reader?.route_name,
     "staged_scan_routes_unverified");
-    const operator = config.operatorReadback;
     if (ordinary) {
       const pilot = config.provenance.ordinary_pilot;
       require(typeof config.ordinaryScanId === "string" && /^[A-Za-z0-9_-]{6,160}$/.test(config.ordinaryScanId)
         && pilot?.owner_user_id === config.ownerId && pilot.operator_user_id !== config.ownerId
         && ["6a498da58ef5cec1f5cd4486", "6a498732ec779dfaaeab0e54"].includes(pilot.operator_user_id), "ordinary_pilot_identity_mismatch");
-      const observed = persistedTimestamp(operator?.observed_at);
       require(operator?.schema_version === "staged_500_ordinary_operator_readback_v1"
         && operator.operator_user_id === pilot.operator_user_id && operator.source_sha === config.sourceSha
         && operator.prerequisite_sha256 === config.provenance.prerequisite_sha256
-        && Number.isFinite(observed) && observed >= Date.parse(config.provenance.observed_at) && observed <= now()
-        && observed - 30000 <= persistedTimestamp(operator.run?.started_at),
+        && observed >= Date.parse(config.provenance.observed_at) && ordinaryTerminalWindow(operator, now()),
       "ordinary_operator_run_missing_or_mismatched");
       report.observed_at = operator.observed_at;
     }
@@ -439,12 +451,12 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
 }
 
 export function renderRemoteCanary(config) {
-  return `const config = ${JSON.stringify(config)};\nconsole.log('FIXLIST_STAGED_500_CANARY=' + JSON.stringify(await (${executeStaged500Canary.toString()})(base44, config)));\n`;
+  return `const config = ${JSON.stringify(config)};\n${persistedTimestamp.toString()}\n${ordinaryTerminalWindow.toString()}\nconsole.log('FIXLIST_STAGED_500_CANARY=' + JSON.stringify(await (${executeStaged500Canary.toString()})(base44, config)));\n`;
 }
 
 export function renderOrdinaryReadback(config) {
   if (!id(config.ordinaryScanId)) throw new Error("ordinary_scan_id_invalid");
-  return `const config = ${JSON.stringify(config)};\nexport async function verifyOrdinaryStaged500Readback(authenticatedClient) {\n  return (${executeStaged500Canary.toString()})(authenticatedClient, config);\n}\n`;
+  return `const config = ${JSON.stringify(config)};\n${persistedTimestamp.toString()}\n${ordinaryTerminalWindow.toString()}\nexport async function verifyOrdinaryStaged500Readback(authenticatedClient) {\n  return (${executeStaged500Canary.toString()})(authenticatedClient, config);\n}\n`;
 }
 
 // Observe a single newly submitted native scan with the approved operator's
@@ -490,7 +502,7 @@ export async function observeOrdinaryPilotRun(base44, config, now = Date.now,
       return {
         schema_version: "staged_500_ordinary_operator_readback_v1", operator_user_id: operator,
         source_sha: config.sourceSha, prerequisite_sha256: config.provenance.prerequisite_sha256,
-        observed_at: new Date(observed).toISOString(),
+        observed_at: new Date(observed).toISOString(), terminal_observed_at: new Date(now()).toISOString(),
         run: {
           ...Object.fromEntries(fields.map(key => [key, run[key]])),
           admission_claim_proof_present: true,
@@ -515,6 +527,127 @@ function operatorReadbackFromExec(input) {
   const lines = fs.readFileSync(input, "utf8").split("\n").filter(line => line.startsWith(prefix));
   if (lines.length !== 1) throw new Error("ordinary_operator_readback_missing_or_ambiguous");
   return JSON.parse(lines[0].slice(prefix.length));
+}
+
+function ordinaryReadbackContext(packet, expected, operator, env, now = Date.now()) {
+  if (!ordinaryTerminalWindow(operator, now)) throw new Error("ordinary_operator_window_invalid");
+  const observed = persistedTimestamp(operator.observed_at);
+  const validation = validatePrerequisites(packet, { ...expected, now: observed });
+  if (!validation.ready) throw new Error(validation.failures.join(","));
+  const provenance = validation.provenance;
+  const run = operator.run;
+  const complete = run.status === "complete";
+  const duration = persistedTimestamp(run.completed_at) - persistedTimestamp(run.started_at);
+  const batches = run.last_committed_batch + 1;
+  const positive = value => Number.isSafeInteger(value) && value > 0;
+  if (operator.schema_version !== "staged_500_ordinary_operator_readback_v1"
+      || operator.operator_user_id !== expected.ordinaryOperatorId || operator.source_sha !== expected.sourceSha
+      || operator.prerequisite_sha256 !== provenance.prerequisite_sha256 || observed < Date.parse(provenance.observed_at)
+      || !id(env.ORDINARY_SCAN_ID) || run.id !== env.ORDINARY_SCAN_ID || run.owner_user_id !== expected.ownerId
+      || !id(env.PROJECT_ID) || run.project_id !== env.PROJECT_ID || !id(env.REQUEST_ID) || run.request_id !== env.REQUEST_ID
+      || (run.idempotency_key || run.request_id) !== env.REQUEST_ID
+      || !origin(env.TARGET_URL) || origin(run.website_url) !== origin(env.TARGET_URL)
+      || run.scan_mode !== "standard_500" || run.page_cap !== 500 || run.pipeline_mode !== "staged"
+      || run.admission_mode !== "acceptance_only" || run.admission_acceptance_source_sha !== expected.sourceSha
+      || run.admission_claim_proof_present !== true || run.beta_revision_fingerprint !== expected.fingerprint
+      || !["complete", "limited"].includes(run.status)
+      || !positive(run.attempt_count) || run.attempt_count >= 2 ** 31
+      || !positive(run.pages_crawled) || !positive(run.pages_planned) || run.pages_crawled > run.pages_planned || run.pages_planned > 500
+      || !positive(batches) || batches > 254 || run.pages_crawled > batches * 50
+      || (complete && run.pages_crawled !== run.pages_planned)
+      || (complete ? run.authority_proof_present !== true || !/^[a-zA-Z0-9_]{1,120}$/.test(run.authority_seal_version || "")
+        : run.result_integrity_proof_present !== true || !/^[a-zA-Z0-9_]{1,120}$/.test(run.result_integrity_version || ""))) {
+    throw new Error("ordinary_operator_readback_identity_mismatch");
+  }
+  const runFields = [
+    "id", "owner_user_id", "project_id", "request_id", "idempotency_key", "website_url",
+    "scan_mode", "page_cap", "pipeline_mode", "admission_mode", "admission_acceptance_source_sha",
+    "status", "pages_crawled", "pages_planned", "last_committed_batch", "attempt_count",
+    "started_at", "completed_at", "beta_revision_fingerprint", "admission_claim_proof_present",
+    ...(complete ? ["authority_seal_version", "authority_proof_present"] : ["result_integrity_version", "result_integrity_proof_present"]),
+  ];
+  const safeOperator = {
+    schema_version: operator.schema_version, operator_user_id: operator.operator_user_id,
+    source_sha: operator.source_sha, prerequisite_sha256: operator.prerequisite_sha256,
+    observed_at: operator.observed_at, terminal_observed_at: operator.terminal_observed_at,
+    run: Object.fromEntries(runFields.map(key => [key, run[key]])),
+  };
+  safeOperator.run.website_url = origin(env.TARGET_URL);
+  return { operator: safeOperator, provenance, duration, batches, complete };
+}
+
+function collectOrdinaryBrowserReport(report, { operator, provenance, duration, batches, complete }) {
+  const run = operator.run;
+  const functional500 = complete && run.pages_crawled === 500 && batches === 10;
+  const positive = value => Number.isSafeInteger(value) && value > 0;
+  const peak = report.memory?.finalize_peak_bytes;
+  const projectionBytes = report.payload_bytes?.customer_projection;
+  const progress = [{ status: run.status, pages_crawled: run.pages_crawled, pages_planned: run.pages_planned,
+    last_committed_batch: run.last_committed_batch }];
+  if (report.terminal_outcome_verified !== true || report.failure_code !== null
+      || report.production_freeze !== false || report.full_500_gate !== false || report.acceptance_verified !== false
+      || report.release_fingerprint !== provenance.release_fingerprint || !report.provenance || digest(report.provenance) !== digest(provenance)
+      || report.observed_at !== operator.observed_at || report.terminal_status !== run.status || report.page_cap !== run.page_cap
+      || report.pages_crawled !== run.pages_crawled || report.pages_planned !== run.pages_planned
+      || report.committed_batch_count !== batches || report.attempt_count !== run.attempt_count
+      || report.scan_started_at !== run.started_at || report.scan_completed_at !== run.completed_at || report.duration_ms !== duration
+      || report.functional_500_verified !== functional500 || report.durable_worker_owned !== complete
+      || report.durable_worker_receipt_required !== !complete || !Array.isArray(report.progress) || digest(report.progress) !== digest(progress)
+      || !positive(projectionBytes) || report.payload_bytes.completion_request !== null
+      || report.memory?.scope !== "finalize_only" || report.memory.all_stages_verified !== false
+      || (peak !== null && !positive(peak))) throw new Error("ordinary_operator_report_mismatch");
+
+  const reasons = ["rate_limit", "rate_limited", "throttled", "staged_rate_limit", "staged_wall_budget", "staged_partial_evidence"];
+  const termination = report.termination_reasons;
+  const priorities = report.throttled_priority_summary;
+  const levels = ["critical", "high", "medium", "low"];
+  const hasReason = reason => Array.isArray(termination) && termination.includes(reason);
+  const throttled = !complete && hasReason("staged_rate_limit");
+  const outcome = complete ? "complete" : throttled ? "limited_throttled"
+    : hasReason("staged_wall_budget") ? "limited_budget" : "limited_partial";
+  if (report.outcome !== outcome || (!complete && (!Array.isArray(termination) || termination.length > reasons.length
+      || termination.some(reason => !reasons.includes(reason))
+      || !termination.some(reason => reason.startsWith("staged_"))))
+      || (throttled && (run.result_integrity_version !== "standard_limited_result_integrity_v5_report_evidence"
+        || !Array.isArray(priorities) || !positive(priorities.length) || priorities.length > 3
+        || priorities.some((priority, index) => !levels.includes(priority)
+          || (index > 0 && levels.indexOf(priorities[index - 1]) > levels.indexOf(priority)))))) {
+    throw new Error("ordinary_customer_terminal_evidence_invalid");
+  }
+
+  let selection = null;
+  if (report.selection_coverage !== null) {
+    const s = report.selection_coverage;
+    const within = (value, cap) => Number.isSafeInteger(value) && value >= 0 && value <= cap;
+    if (!complete || run.authority_seal_version !== "standard_review_snapshot_hmac_identity_v1"
+        || !/^[a-z0-9_]{5,120}$/.test(s?.sampling_version || "") || typeof s.inventory_capped !== "boolean"
+        || !within(s.inventory_urls, 5000) || !within(s.selected_urls, 499) || !within(s.selected_inventory_urls, s.selected_urls)
+        || s.pages_checked !== run.pages_crawled || !within(s.sections_discovered, s.inventory_urls)
+        || !within(s.sections_never_selected, s.sections_discovered) || !/^[a-f0-9]{64}$/.test(s.sections_sha256 || "")) {
+      throw new Error("ordinary_customer_selection_evidence_invalid");
+    }
+    selection = { sampling_version: s.sampling_version, inventory_capped: s.inventory_capped,
+      inventory_urls: s.inventory_urls, selected_urls: s.selected_urls, selected_inventory_urls: s.selected_inventory_urls,
+      pages_checked: s.pages_checked, sections_discovered: s.sections_discovered,
+      sections_never_selected: s.sections_never_selected, sections_sha256: s.sections_sha256 };
+  }
+  return {
+    schema_version: "staged_500_canary_v1", production_freeze: false, source_sha: operator.source_sha,
+    execution_mode: "ordinary_user_readback", expected_owner_user_id: run.owner_user_id, project_id: run.project_id,
+    target_url: run.website_url, request_id: run.request_id, release_fingerprint: provenance.release_fingerprint, provenance,
+    observed_at: operator.observed_at, scan_id: run.id, attempt_count: run.attempt_count,
+    scan_started_at: run.started_at, scan_completed_at: run.completed_at, terminal_status: run.status,
+    page_cap: run.page_cap, pages_crawled: run.pages_crawled, pages_planned: run.pages_planned,
+    committed_batch_count: batches, duration_ms: duration, terminal_outcome_verified: true,
+    functional_500_verified: functional500, full_500_gate: false, acceptance_verified: false, outcome, progress,
+    selection_coverage: selection, durable_worker_owned: complete, durable_worker_receipt_required: !complete,
+    payload_bytes: { customer_projection: projectionBytes, completion_request: null },
+    memory: { finalize_peak_bytes: peak, scope: "finalize_only", all_stages_verified: false },
+    unverified: ["completion_request_byte_measurement", "all_stage_memory_measurement", "per_scan_runtime_revision_receipt",
+      ...(complete && !selection ? ["signed_selection_coverage"] : []), ...(peak === null ? ["finalize_memory_measurement"] : [])],
+    failure_code: null, ...(!complete ? { termination_reasons: termination } : {}),
+    ...(throttled ? { throttled_priority_summary: priorities } : {}),
+  };
 }
 
 export function localAcceptanceIdentity(root, sourceSha, ownerId) {
@@ -593,8 +726,12 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
       const expected = localAcceptanceIdentity(root, env.SOURCE_SHA, env.EXPECTED_OWNER_USER_ID);
       if (ordinary) expected.ordinaryOperatorId = env.EXPECTED_OPERATOR_USER_ID || "";
       const packet = JSON.parse(fs.readFileSync(env.PREREQUISITES_FILE, "utf8"));
-      const validation = validatePrerequisites(packet, expected);
-      if (!validation.ready) throw new Error(validation.failures.join(","));
+      const browser = mode === "render-ordinary-readback";
+      const readback = browser
+        ? ordinaryReadbackContext(packet, expected, JSON.parse(fs.readFileSync(env.ORDINARY_OPERATOR_READBACK_FILE, "utf8")), env)
+        : null;
+      const validation = readback ?? validatePrerequisites(packet, expected);
+      if (!validation.provenance) throw new Error(validation.failures.join(","));
       if (!id(env.EXPECTED_OWNER_USER_ID) || !id(env.PROJECT_ID) || !id(env.REQUEST_ID) || !origin(env.TARGET_URL)) throw new Error("scan_input_invalid");
       const maxWait = Number(env.MAX_WAIT_SECONDS || 900), pollSeconds = Number(env.POLL_SECONDS || 5);
       if (!Number.isInteger(maxWait) || maxWait < 1 || maxWait > 1800 || !Number.isInteger(pollSeconds) || pollSeconds < 1 || pollSeconds > 60) throw new Error("scan_timeout_invalid");
@@ -605,22 +742,19 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
         maxWait, pollSeconds, provenance: validation.provenance, launchRoute, resultRoute };
       if (mode === "render-ordinary-operator-readback") {
         process.stdout.write(renderOrdinaryOperatorReadback({ ...config, ordinaryScanId: env.ORDINARY_SCAN_ID }));
-      } else if (mode === "render-ordinary-readback") {
-        const operatorReadback = JSON.parse(fs.readFileSync(env.ORDINARY_OPERATOR_READBACK_FILE, "utf8"));
-        process.stdout.write(renderOrdinaryReadback({ ...config, ordinaryScanId: env.ORDINARY_SCAN_ID, operatorReadback }));
+      } else if (browser) {
+        process.stdout.write(renderOrdinaryReadback({ ...config, ordinaryScanId: env.ORDINARY_SCAN_ID, operatorReadback: readback.operator }));
       } else {
         process.stdout.write(renderRemoteCanary(config));
       }
     } else if (mode === "collect-ordinary-operator-readback") {
       const [input, output] = process.argv.slice(3), env = process.env;
-      const readback = operatorReadbackFromExec(input);
-      const run = readback.run;
-      if (readback.schema_version !== "staged_500_ordinary_operator_readback_v1"
-          || readback.operator_user_id !== env.EXPECTED_OPERATOR_USER_ID || readback.source_sha !== env.SOURCE_SHA
-          || run?.id !== env.ORDINARY_SCAN_ID || run.owner_user_id !== env.EXPECTED_OWNER_USER_ID
-          || run.project_id !== env.PROJECT_ID || run.request_id !== env.REQUEST_ID
-          || origin(run.website_url) !== origin(env.TARGET_URL)) throw new Error("ordinary_operator_readback_identity_mismatch");
-      writeNewArtifact(output, readback, path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."));
+      const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+      const packet = JSON.parse(fs.readFileSync(env.PREREQUISITES_FILE, "utf8"));
+      const expected = localAcceptanceIdentity(root, env.SOURCE_SHA, env.EXPECTED_OWNER_USER_ID);
+      expected.ordinaryOperatorId = env.EXPECTED_OPERATOR_USER_ID || "";
+      const { operator } = ordinaryReadbackContext(packet, expected, operatorReadbackFromExec(input), env);
+      writeNewArtifact(output, operator, root);
       console.log("STAGED_500_ORDINARY_OPERATOR_READBACK_SAVED");
     } else if (mode === "collect" || mode === "collect-ordinary-readback") {
       const [input, output, cliStatus] = process.argv.slice(3), prefix = "FIXLIST_STAGED_500_CANARY=";
@@ -642,21 +776,13 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
           || report.provenance?.ordinary_pilot?.operator_user_id !== env.EXPECTED_OPERATOR_USER_ID
           || report.provenance?.ordinary_pilot?.owner_user_id !== env.EXPECTED_OWNER_USER_ID
         : report.execution_mode !== undefined) throw new Error("cli_report_execution_mode_mismatch");
-      if (ordinary && report.terminal_outcome_verified === true) {
+      if (ordinary) {
+        const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+        const packet = JSON.parse(fs.readFileSync(env.PREREQUISITES_FILE, "utf8"));
+        const expected = localAcceptanceIdentity(root, env.SOURCE_SHA, env.EXPECTED_OWNER_USER_ID);
+        expected.ordinaryOperatorId = env.EXPECTED_OPERATOR_USER_ID || "";
         const operator = JSON.parse(fs.readFileSync(env.ORDINARY_OPERATOR_READBACK_FILE, "utf8"));
-        const run = operator.run;
-        if (operator.schema_version !== "staged_500_ordinary_operator_readback_v1"
-            || operator.operator_user_id !== env.EXPECTED_OPERATOR_USER_ID || operator.source_sha !== env.SOURCE_SHA
-            || operator.prerequisite_sha256 !== report.provenance.prerequisite_sha256 || operator.observed_at !== report.observed_at
-            || run?.id !== env.ORDINARY_SCAN_ID || run.owner_user_id !== env.EXPECTED_OWNER_USER_ID
-            || run.project_id !== env.PROJECT_ID || run.request_id !== env.REQUEST_ID
-            || origin(run.website_url) !== report.target_url
-            || run.status !== report.terminal_status || run.page_cap !== report.page_cap
-            || run.pages_crawled !== report.pages_crawled || run.pages_planned !== report.pages_planned
-            || run.last_committed_batch + 1 !== report.committed_batch_count || run.attempt_count !== report.attempt_count
-            || run.started_at !== report.scan_started_at || run.completed_at !== report.scan_completed_at) {
-          throw new Error("ordinary_operator_report_mismatch");
-        }
+        report = collectOrdinaryBrowserReport(report, ordinaryReadbackContext(packet, expected, operator, env));
       }
       if (!ordinary && Number(cliStatus) !== 0) { report.terminal_outcome_verified = false; report.failure_code = "cli_execution_failed"; }
       writeNewArtifact(output, report, path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."));

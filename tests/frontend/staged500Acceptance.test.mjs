@@ -120,14 +120,24 @@ function config() {
   return { appId: "6a498732ec779dfaaeab0e53", sourceSha: sha, ownerId: owner, projectId: project, targetUrl: "https://example.com/", requestId: "request_500_123", expectedFingerprint: fingerprint, maxWait: 600, pollSeconds: 1, provenance: prerequisite.provenance, launchRoute, resultRoute };
 }
 
-function ordinaryPacket() {
+function ordinaryPacket(at = now, entitySources) {
   const { data, local } = prerequisites();
+  if (entitySources) {
+    local.entitySources = entitySources;
+    data.schema_readback.entity_sources = entitySources;
+  }
+  const fresh = { observed_at: new Date(at - 1000).toISOString(), expires_at: new Date(at + 600000).toISOString() };
+  Object.assign(data, fresh);
+  for (const key of ["base44", "schema_readback", "base44_configuration", "worker", "gateway", "infrastructure"]) {
+    Object.assign(data[key], fresh);
+  }
+  data.infrastructure.task.observed_at = new Date(at - 3600_000).toISOString();
   Object.assign(data.base44_configuration.intake_route, {
-    observer_user_id: pilotOperator, route_name: launchRoute, pipeline_mode: "monolith", staged_owner_enabled: false,
+    observer_user_id: pilotOperator, route_name: launchRoute, observed_at: fresh.observed_at,
+    pipeline_mode: "monolith", staged_owner_enabled: false,
     staged_rollout_scope: "off", staged_500_entitled_enabled: false,
   });
-  const expected = { ...local, ordinaryOperatorId: pilotOperator };
-  return { data, local, expected };
+  return { data, local: { ...local, now: at }, expected: { ...local, now: at, ordinaryOperatorId: pilotOperator } };
 }
 
 test("the ordinary-user packet verifies the separate operator readback for only the target cohort", () => {
@@ -155,9 +165,16 @@ test("the ordinary-user packet verifies the separate operator readback for only 
 });
 
 test("the authenticated ordinary account can verify a completed native V9 scan without launching work", async t => {
-  const { data, expected } = ordinaryPacket();
+  const receiptTime = Date.now();
+  const observationTime = receiptTime - 20 * 60_000;
+  const { entitySources } = localAcceptanceIdentity(process.cwd(), sha, owner);
+  const { data, expected } = ordinaryPacket(observationTime, entitySources);
   const { provenance } = validatePrerequisites(data, expected);
+  assert.ok(provenance);
+  assert.ok(Date.parse(data.expires_at) < receiptTime);
   const fake = fakeSdk("notAdmin");
+  fake.run.started_at = new Date(observationTime - 25_000).toISOString();
+  fake.run.completed_at = new Date(receiptTime - 1_000).toISOString();
   fake.run.admission_mode = "acceptance_only";
   fake.run.admission_acceptance_source_sha = sha;
   fake.run.admission_cohort_evidence_version = "admission_claim_evidence_v1";
@@ -169,8 +186,9 @@ test("the authenticated ordinary account can verify a completed native V9 scan w
   };
   await assert.rejects(observeOrdinaryPilotRun({
     auth: { me: async () => ({ id: pilotOperator, email: "londonparisbrussels@gmail.com", role: "user" }) },
-  }, ordinary, () => now), /ordinary_operator_identity_mismatch/);
-  const operatorReadback = await observeOrdinaryPilotRun(operator, ordinary, () => now);
+  }, ordinary, () => observationTime), /ordinary_operator_identity_mismatch/);
+  const observationTimes = [observationTime, receiptTime];
+  const operatorReadback = await observeOrdinaryPilotRun(operator, ordinary, () => observationTimes.shift());
   assert.equal(operatorReadback.run.authority_proof_present, true);
   assert.doesNotMatch(JSON.stringify(operatorReadback), /f{64}|e{64}|londonparisbrussels|never-print-private/);
   ordinary.operatorReadback = operatorReadback;
@@ -186,7 +204,7 @@ test("the authenticated ordinary account can verify a completed native V9 scan w
     return { data: projection };
   };
   delete fake.sdk.entities.ScanRun;
-  const report = await executeStaged500Canary(fake.sdk, ordinary, () => now);
+  const report = await executeStaged500Canary(fake.sdk, ordinary, () => receiptTime);
   assert.equal(report.terminal_outcome_verified, true, report.failure_code);
   assert.equal(report.execution_mode, "ordinary_user_readback");
   assert.equal(report.scan_id, fake.run.id);
@@ -196,17 +214,16 @@ test("the authenticated ordinary account can verify a completed native V9 scan w
   assert.equal(report.committed_batch_count, 10);
   assert.ok(fake.calls.some(call => call.name === resultRoute));
   assert.ok(!fake.calls.some(call => call.name === launchRoute));
-  const unversioned = await executeStaged500Canary({}, { ...ordinary, resultRoute: "getCustomerScanResultV9" }, () => now);
+  const unversioned = await executeStaged500Canary({}, { ...ordinary, resultRoute: "getCustomerScanResultV9" }, () => receiptTime);
   assert.equal(unversioned.failure_code, "staged_scan_routes_unverified");
   projection.run.pages_crawled = 499;
-  const discrepant = await executeStaged500Canary(fake.sdk, ordinary, () => now);
+  const discrepant = await executeStaged500Canary(fake.sdk, ordinary, () => receiptTime);
   assert.equal(discrepant.failure_code, "ordinary_customer_projection_mismatch");
   projection.run.pages_crawled = 500;
 
-  const usable = { ...ordinary, provenance: { ...provenance, expires_at: new Date(Date.now() + 300_000).toISOString() } };
   const importReadback = config => import(`data:text/javascript;base64,${Buffer.from(renderOrdinaryReadback(config)).toString("base64")}`);
-  const browser = await importReadback(usable);
-  assert.deepEqual(await browser.verifyOrdinaryStaged500Readback(fake.sdk), { ...report, provenance: usable.provenance });
+  const browser = await importReadback(ordinary);
+  assert.deepEqual(await browser.verifyOrdinaryStaged500Readback(fake.sdk), report);
 
   const staleConfig = { ...ordinary, provenance: { ...provenance, expires_at: "1970-01-01T00:00:00.000Z" } };
   const module = await importReadback(staleConfig);
@@ -219,17 +236,35 @@ test("the authenticated ordinary account can verify a completed native V9 scan w
   const operatorFile = path.join(directory, "operator.json");
   const browserFile = path.join(directory, "browser.json");
   const reportFile = path.join(directory, "report.json");
+  const prerequisitesFile = path.join(directory, "prerequisites.json");
+  writeFileSync(prerequisitesFile, JSON.stringify(data));
   const env = { ...process.env, SOURCE_SHA: sha, EXPECTED_OWNER_USER_ID: owner, EXPECTED_OPERATOR_USER_ID: pilotOperator,
     PROJECT_ID: project, REQUEST_ID: fake.run.request_id, TARGET_URL: fake.run.website_url,
-    ORDINARY_SCAN_ID: fake.run.id, ORDINARY_OPERATOR_READBACK_FILE: operatorFile };
+    ORDINARY_SCAN_ID: fake.run.id, ORDINARY_OPERATOR_READBACK_FILE: operatorFile, PREREQUISITES_FILE: prerequisitesFile };
   const collect = (mode, input, output) => spawnSync(process.execPath,
     ["scripts/staged_scan_acceptance.mjs", mode, input, output], { env, encoding: "utf8" });
   writeFileSync(operatorExec, "CLI banner\nFIXLIST_STAGED_500_ORDINARY_OPERATOR=" + JSON.stringify(operatorReadback) + "\n");
   const collected = collect("collect-ordinary-operator-readback", operatorExec, operatorFile);
   assert.equal(collected.status, 0, collected.stderr);
-  writeFileSync(browserFile, JSON.stringify({ ...report, committed_batch_count: 9 }));
+  const rendered = spawnSync(process.execPath, ["scripts/staged_scan_acceptance.mjs", "render-ordinary-readback"], { env, encoding: "utf8" });
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.ok(rendered.stdout.includes(resultRoute));
+  for (const change of [{ committed_batch_count: 9 }, { terminal_outcome_verified: "yes" }, { full_500_gate: true },
+    { acceptance_verified: true }, { production_freeze: true }, { duration_ms: 1 }, { release_fingerprint: "b".repeat(16) }]) {
+    writeFileSync(browserFile, JSON.stringify({ ...report, ...change }));
+    assert.match(collect("collect-ordinary-readback", browserFile, reportFile).stderr, /ordinary_operator_report_mismatch/);
+  }
+  const fullOperator = JSON.parse(readFileSync(operatorFile, "utf8"));
+  const smallOperator = structuredClone(fullOperator);
+  Object.assign(smallOperator.run, { pages_crawled: 22, pages_planned: 22, last_committed_batch: 0 });
+  writeFileSync(operatorFile, JSON.stringify(smallOperator));
+  writeFileSync(browserFile, JSON.stringify({ ...report, pages_crawled: 22, pages_planned: 22, committed_batch_count: 1,
+    progress: [{ status: "complete", pages_crawled: 22, pages_planned: 22, last_committed_batch: 0 }] }));
   assert.match(collect("collect-ordinary-readback", browserFile, reportFile).stderr, /ordinary_operator_report_mismatch/);
-  writeFileSync(browserFile, JSON.stringify(report));
+  writeFileSync(operatorFile, JSON.stringify({ ...fullOperator, terminal_observed_at: new Date(observationTime).toISOString() }));
+  assert.match(collect("collect-ordinary-readback", browserFile, reportFile).stderr, /ordinary_operator_window_invalid/);
+  writeFileSync(operatorFile, JSON.stringify(fullOperator));
+  writeFileSync(browserFile, JSON.stringify({ ...report, private_extra: "ignore-me", memory: { ...report.memory, private_extra: "ignore-me" } }));
   const combined = collect("collect-ordinary-readback", browserFile, reportFile);
   assert.equal(combined.status, 0, combined.stderr);
   assert.deepEqual(JSON.parse(readFileSync(reportFile, "utf8")), report);
@@ -247,7 +282,8 @@ test("ordinary readback refuses wrong role, grant, scan, claim, or operator with
     const fake = fakeSdk(scenario);
     Object.assign(fake.run, { admission_mode: "acceptance_only", admission_acceptance_source_sha: sha, admission_claim_proof_present: true, ...change });
     const operatorReadback = { schema_version: "staged_500_ordinary_operator_readback_v1", operator_user_id: pilotOperator,
-      source_sha: sha, prerequisite_sha256: provenance.prerequisite_sha256, observed_at: new Date(now).toISOString(), run: fake.run };
+      source_sha: sha, prerequisite_sha256: provenance.prerequisite_sha256, observed_at: new Date(now).toISOString(),
+      terminal_observed_at: new Date(now).toISOString(), run: fake.run };
     const ordinary = { ...config(), provenance, ordinaryScanId: fake.run.id, operatorReadback };
     delete fake.sdk.entities.ScanRun;
     const result = await executeStaged500Canary(fake.sdk, ordinary, () => now);

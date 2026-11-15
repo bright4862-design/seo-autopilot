@@ -32,7 +32,9 @@ class PromotionRecordError(ValueError):
 
 def verify_active_v9_packages(root: Path, accepted_sha: str, source_sha: str, deployment: str) -> None:
     packages = [f"base44/functions/{name}{generation}" for generation in ("V8", "V9") for name in SCANNER_FUNCTIONS]
-    if deployment != "scanner-functions":
+    if deployment == "recover-functions":
+        packages.append("base44/functions/fixlistStagedRuntimeControl")
+    if deployment in {"release-functions", "site-and-functions"}:
         packages.extend(f"base44/functions/{name}" for name in ("createAccessCheckout", "stripeWebhook", "ownerScanDebugControl"))
 
     def git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -132,7 +134,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--repo-root", type=Path, default=ROOT)
-    parser.add_argument("--base44-v9", choices=("scanner-functions", "release-functions", "site-and-functions"))
+    parser.add_argument("--base44-v9", choices=("scanner-functions", "release-functions", "site-and-functions", "recover-functions"))
     args = parser.parse_args()
     try:
         fingerprint = verify_promotion_record(args.repo_root, args.source_sha, args.base44_v9)

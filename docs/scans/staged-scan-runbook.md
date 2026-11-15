@@ -194,6 +194,19 @@ Once the 500 corpus and production checks pass, `paid-500` enables already-entit
 
 Close staged intake to stop new admissions. Keep the stage endpoints, queue, V9 functions and workspace available for attempts that already own a staged contract. Wait for the admission barrier and entry, stage, and drain queues to clear before changing the serving worker or removing its source tag. Existing sealed authority remains immutable.
 
+If an interrupted public V9 site publish removed one or more V9 function routes, keep the admission barrier and Base44 intake closed. Use the same approved package bytes from the exact current `main` with the active V9 manifest and frozen acceptance record. Sign in with the existing approved Base44 owner CLI session and choose a new readiness path outside the checkout.
+
+```sh
+source_sha=$(git rev-parse HEAD)
+SOURCE_SHA="$source_sha" \
+  BASE44_EXPECTED_OWNER="<approved owner email>" \
+  CONFIRM="RECOVER-BASE44-ACTIVE-V9:$source_sha" \
+  READINESS_OUTPUT=/absolute/v9-recovery-readiness.json \
+  bash scripts/deploy-base44-staged-functions.sh recover-active
+```
+
+Recovery checks every registered alias against its accepted package and creates only missing V9 aliases. If the launcher is absent from both the function registry and the external route, recovery requires a fresh closed-intake read from the exact deployed `fixlistStagedRuntimeControl` package before it creates any alias. If that independent probe is missing, the approved operator can restore it with the existing `deploy-probe` operation before retrying. Recovery checks the restored launcher and all six runtimes before writing its readiness record. If retained V8 routes also need repair, use the existing guarded `scanner-functions` release after the V9 launcher is restored.
+
 When rolling back paid settings, run the Base44 operator's `disable` operation, then use `OPERATION=status-off` to verify that the exact V9 launcher sees both paid switches off and intake closed. Keep intake closed if that readback fails.
 
 The periodic Scheduler calls the canonical service. Before opening normal staged intake, verify the promoted stage-capable worker with `scripts/verify-standard150-reconciler.sh`. Set `RECONCILER_EXPECTED_SOURCE_SHA` and `RECONCILER_EXPECTED_STAGED_CONFIG_SHA256` to the reviewed build values, with the same `TASKS_INVOKER_SERVICE_ACCOUNT` used by the Scheduler. The verifier checks that the canonical service and source-bound tag resolve to the same revision and that the Scheduler uses the canonical OIDC audience.

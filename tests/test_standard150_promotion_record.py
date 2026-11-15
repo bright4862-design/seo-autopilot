@@ -183,6 +183,19 @@ def test_later_public_v9_site_fails_closed_if_historical_aliases_differ(v9_relea
         gate.verify_promotion_record(root, current, "site-and-functions")
 
 
+def test_restart_recovery_binds_independent_probe_package_to_accepted_source(v9_release_history):
+    root, files, commit, routes, accept = v9_release_history
+    probe = "base44/functions/fixlistStagedRuntimeControl/entry.ts"
+    files(probe, "Original probe\n")
+    accepted = commit()
+    routes("v9")
+    accept(accepted)
+    assert gate.verify_promotion_record(root, commit(), "recover-functions")
+    files(probe, "Changed after acceptance\n")
+    with pytest.raises(gate.PromotionRecordError, match="active_v9_packages_differ_from_accepted_source"):
+        gate.verify_promotion_record(root, commit(), "recover-functions")
+
+
 def test_promotion_guard_scoped_to_new_promotion_not_rollback():
     operator = (ROOT / "scripts/fixlist-cloud-operator.sh").read_text()
     assert 'if [[ "$OPERATION" == "promote-worker" ]]; then' in operator

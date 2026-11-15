@@ -135,6 +135,59 @@ test("true affected counts and qualified template estimates survive writer/readb
   assert.throws(()=>repairImpactFields({affected_page_count_is_lower_bound:true}));
 });
 
+test("Base44 defaults for absent staged 150 impact evidence preserve authority and preview seals", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const previewWriter = await import("../../base44/functions/persistDurableScanAuthorityV9/customerPreviewSeal.js");
+  const previewReader = await import("../../base44/functions/getCustomerScanResultV9/customerPreviewSeal.js");
+  const emitted = spawnSync("python", ["tests/helpers/emitStage3SignedCompletion.py"], { encoding: "utf8" });
+  assert.equal(emitted.status, 0, emitted.stderr || String(emitted.error));
+  const { envelope: body, secret, identity_version: identityVersion } = JSON.parse(emitted.stdout);
+  const options = {
+    scan: { ...body.scan, ...standard, pipeline_mode: "staged" }, review: body.review,
+    identity: body.identity, userId: body.identity.owner_user_id,
+    now: "2026-11-11T12:00:00.000Z", identityVersion,
+  };
+  const defaults = { affected_page_count: null, affected_page_count_is_lower_bound: null, template_impact_estimates: [] };
+  const snapshot = buildAuthoritySnapshot(options);
+  assert.equal(snapshot.recommendations.length, 1);
+  const [fix] = snapshot.recommendations;
+  assert.equal(fix.affected_pages.length, 2);
+  assert.ok(Object.keys(defaults).every(key => !Object.hasOwn(fix, key)));
+
+  const proof = await createAuthoritySeal(snapshot, secret, webcrypto);
+  const persisted = authorityRowsFromSnapshot(snapshot, { fixListId: "list_123", ownerUserId: options.userId, proof });
+  const rows = {
+    run: { ...persisted.scanRun, id: body.identity.scan_id, project_id: body.identity.project_id },
+    fixList: { ...persisted.fixList, id: "list_123" }, fixItems: [{ ...persisted.fixItems[0], ...defaults }],
+    userId: options.userId,
+  };
+  const readback = authoritySnapshotFromRows(rows);
+  assert.deepEqual(buildPersistedAuthoritySnapshot(rows), snapshot);
+  assert.deepEqual(readback, snapshot);
+  assert.equal(await verifyAuthoritySeal(readback, secret, proof, webcrypto), true);
+
+  const projection = buildCustomerProjection({ ...rows, fullAccess: true, authorityVerified: true });
+  assert.deepEqual(projection.top_fix_ids, [fix.fix_id]);
+  assert.ok(Object.keys(defaults).every(key => !Object.hasOwn(projection.fixItems[0], key)));
+  const preview = previewWriter.buildCustomerPreviewPayload({ ...rows, ownerUserId: options.userId, fullAuthorityProof: proof });
+  assert.equal(preview.fixItems.length, 1);
+  assert.ok(Object.keys(defaults).every(key => !Object.hasOwn(preview.fixItems[0], key)));
+  const previewProof = await previewWriter.createCustomerPreviewProof(preview, secret, webcrypto);
+  const storedPreview = previewReader.parseCustomerPreviewPayload(previewWriter.serializeCustomerPreviewPayload(preview));
+  assert.equal(await previewReader.verifyCustomerPreviewProof(storedPreview, secret, previewProof, webcrypto), true);
+
+  const rawReview = structuredClone(options.review);
+  Object.assign(rawReview.canonical_repairs[0], defaults);
+  assert.throws(() => buildAuthoritySnapshot({ ...options, review: rawReview }), /canonical repair contract is invalid/);
+  delete rawReview.canonical_repairs[0].affected_page_count;
+  delete rawReview.canonical_repairs[0].affected_page_count_is_lower_bound;
+  const explicitEmpty = buildAuthoritySnapshot({ ...options, review: rawReview });
+  const explicitRows = { ...rows, fixItems: [{ ...persisted.fixItems[0], template_impact_estimates: [] }] };
+  assert.deepEqual(explicitEmpty.recommendations[0].template_impact_estimates, []);
+  assert.deepEqual(buildPersistedAuthoritySnapshot(explicitRows), explicitEmpty);
+  assert.deepEqual(authoritySnapshotFromRows(explicitRows), explicitEmpty);
+});
+
 test("stalled staged evidence with zero fixes persists a truthful limited snapshot and reads back identically",async()=>{
   const writer=await import("../../base44/functions/persistLimitedScanResultV9/limitedResultIntegrity.js");
   const reader=await import("../../base44/functions/getCustomerScanResultV9/limitedResultIntegrity.js");
@@ -147,6 +200,38 @@ test("stalled staged evidence with zero fixes persists a truthful limited snapsh
   const proof=await writer.createLimitedResultProof(snapshot,"partial-key",webcrypto);
   assert.equal(await reader.verifyLimitedResultProof(rebuilt,"partial-key",proof,webcrypto),true);
   for (const scan of [{...args.scan,...standard},{...args.scan,scan_coverage:{...args.scan.scan_coverage,usable_html_pages:0}},{...args.scan,pages_crawled:0}]) assert.equal(writer.buildLimitedResultSnapshot({...args,scan}).eligible_for_limited_result,false);
+});
+
+test("limited readback uses the signed impact shape across Base44 defaults", async () => {
+  const writer = await import("../../base44/functions/persistLimitedScanResultV9/limitedResultIntegrity.js");
+  const reader = await import("../../base44/functions/getCustomerScanResultV9/limitedResultIntegrity.js");
+  const identity = { scan_id: "scan_123", project_id: "project_123", owner_user_id: "owner_123",
+    request_id: "request_123", attempt_count: 1, normalized_domain: "example.com" };
+  const scan = { ...standard, pipeline_mode: "staged", submitted_url: "https://example.com/", pages_crawled: 10 };
+  const review = { coverage_state: "limited_coverage", score_is_provisional: true, release_gate_eligible: false, scan_status: "limited" };
+  const fix = { fix_id: "missing_title", issue_title: "Add a title", priority: "high", affected_pages: ["/"] };
+  const defaults = { affected_page_count: null, affected_page_count_is_lower_bound: null, template_impact_estimates: [] };
+  const count = { affected_page_count: 3, affected_page_count_is_lower_bound: true };
+  const secret = "limited-readback-test-key";
+  for (const [impact, version, keepEstimates] of [
+    [{}, writer.LIMITED_RESULT_INTEGRITY_VERSION, false],
+    [{ template_impact_estimates: [] }, writer.LIMITED_RESULT_INTEGRITY_VERSION_V4, true],
+    [count, writer.LIMITED_RESULT_INTEGRITY_VERSION, false],
+    [{ ...count, template_impact_estimates: [] }, writer.LIMITED_RESULT_INTEGRITY_VERSION_V4, true],
+  ]) {
+    const args = { identity, scan, review, version, now: "2026-11-11T12:00:00Z" };
+    const snapshot = writer.buildLimitedResultSnapshot({ ...args, review: { ...review, recommendations: [{ ...fix, ...impact }] } });
+    const proof = await writer.createLimitedResultProof(snapshot, secret, webcrypto);
+    const stored = writer.limitedRowsFromSnapshot(snapshot, { fixListId: "list_123", proof });
+    const items = [{ ...defaults, ...stored.fixItems[0] }];
+    const readback = await reader.verifyLimitedResultReadback(args, items, secret, proof);
+    assert.ok(readback);
+    assert.equal(Object.hasOwn(readback[0], "template_impact_estimates"), keepEstimates);
+    assert.deepEqual(reader.buildLimitedResultSnapshot({ ...args,
+      review: { ...review, recommendations: readback } }), snapshot);
+    const tampered = [{ ...items[0], affected_page_count: 4 }];
+    assert.equal(await reader.verifyLimitedResultReadback(args, tampered, secret, proof), null);
+  }
 });
 
 async function controlHarness(recordOverrides = {}) {

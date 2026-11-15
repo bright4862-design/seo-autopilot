@@ -466,7 +466,7 @@ function toAuthorityFix(fix, index, context = {}) {
     }
     : {};
   return {
-    ...repairImpactFields(fix),
+    ...repairImpactFields(fix, context),
     fix_id: text(fix?.fix_id || fix?.id, 160) || `authority_fix_${index + 1}`,
     rule: text(fix?.rule, 200),
     category: text(fix?.category, 200),

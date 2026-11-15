@@ -78,7 +78,7 @@ export function buildCustomerPreviewPayload({ run, fixList, fixItems, ownerUserI
     })
     .slice(0, CUSTOMER_PREVIEW_VISIBLE_FIX_COUNT)
     .map((item) => {
-      const projected = {...pickFields(item, PREVIEW_FIX_ITEM_FIELDS), ...repairImpactFields(item)};
+      const projected = {...pickFields(item, PREVIEW_FIX_ITEM_FIELDS), ...repairImpactFields(item, { persisted: true })};
       projected.preview_locked_detail = false;
       const examplePage = previewExamplePage(item);
       if (examplePage) projected.preview_example_page = examplePage;

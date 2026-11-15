@@ -296,3 +296,26 @@ test("a linked rescan needs a second fresh claim for the same owner", () => {
   spare.acceptance.cohort.per_owner_claim_budget = 2;
   assert.equal(evaluateStage4ReleaseAcceptance(spare).pass, true);
 });
+
+
+test("Stage-4 evidence refuses timestamps that reverse the scan-to-readback sequence", () => {
+  assert.equal(evaluateStage4ReleaseAcceptance(validRecord()).pass, true, "chronological control");
+
+  for (const [step, observedAt, message] of [
+    ["reload", "2026-09-19T20:09:59Z", "reload observation precedes accepted scan"],
+    ["history", "2026-09-19T20:09:59Z", "history observation precedes accepted scan"],
+    ["rescan", "2026-09-19T20:09:59Z", "rescan observation must follow accepted scan"],
+    ["rescan", "2026-09-19T20:10:00Z", "rescan observation must follow accepted scan"],
+  ]) {
+    const record = validRecord();
+    record.acceptance[step].observed_at = observedAt;
+    // All scan references, hashes, proof shapes and release fields remain valid.
+    const result = evaluateStage4ReleaseAcceptance(record);
+    assert.equal(result.status, "failed", step);
+    assert.ok(result.failures.includes(message), step);
+  }
+
+  const offset = validRecord();
+  offset.acceptance.reload.observed_at = "2026-09-19T22:11:00+02:00";
+  assert.equal(evaluateStage4ReleaseAcceptance(offset).pass, true, "equivalent timezone");
+});

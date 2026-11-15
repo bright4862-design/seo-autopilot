@@ -98,8 +98,9 @@ async def test_single_429_activates_pacing_and_retries_once(mock_network, monkey
             f"{origin}/section/p2",
         ])),
         f"{origin}/section": fx._html(fx._page("Hub")),
-        f"{origin}/section/p1": fx._html(fx._page("Recovered page")),
+        f"{origin}/section/p1": fx._html(fx._page("Recovered page", canonical=f"{origin}/section/target")),
         f"{origin}/section/p2": fx._html(fx._page("Other page")),
+        f"{origin}/section/target": fx._html(fx._page("Canonical target")),
     }
     mock_network(routes)
 
@@ -133,6 +134,51 @@ async def test_single_429_activates_pacing_and_retries_once(mock_network, monkey
     assert result["crawl_timing"]["rate_limit_throttle_activated"] is True
     assert result["crawl_timing"]["rate_limit_retry_count"] == 1
     assert result["crawl_timing"]["rate_limit_recovered_count"] == 1
+    assert p1["canonical_target_evidence_source"] == "validation"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("headers", [{}, {"Retry-After": "30"}])
+async def test_last_crawl_429_blocks_direct_followups_during_pending_cooldown(mock_network, monkeypatch, headers):
+    origin = "https://pending-cooldown.example"
+    page_urls = {f"{origin}/products/{index}" for index in range(3)}
+    canonical = f"{origin}/late-canonical"
+    app_shell = fx._html(fx._page("Product", canonical=canonical, body='<div id="root"></div>'))
+    routes = {
+        f"{origin}/": fx._html(fx._page("Home")),
+        f"{origin}/sitemap.xml": fx._xml(fx._sitemap(sorted(page_urls))),
+        canonical: fx._html(fx._page("Canonical target")),
+        **dict.fromkeys(page_urls, app_shell),
+    }
+    requests = mock_network(routes)
+    visited = set()
+    rendered = []
+    actual_fetch = scanner.fetch_and_extract
+
+    async def throttle_final_crawl_page(client, url, *args, **kwargs):
+        if url in page_urls:
+            visited.add(url)
+            if visited == page_urls:
+                routes[url] = {"status": 429, "headers": headers}
+        return await actual_fetch(client, url, *args, **kwargs)
+
+    async def render(url):
+        rendered.append(url)
+        return {}
+
+    monkeypatch.setattr(scanner, "fetch_and_extract", throttle_final_crawl_page)
+    monkeypatch.setattr(scanner, "RATE_LIMIT_MAX_RETRIES", 0)
+    result = await scanner.run_scan(
+        origin + "/", job_mode=True, concurrency=1, _roundtrip_state=True, _render_page=render,
+    )
+
+    assert sum(page["status_code"] == 429 for page in result["pages"]) == 1
+    assert result["crawl_timing"]["rate_limit_retry_count"] == 0
+    assert result["coverage_probe_evidence"]["stage2_orchestration_reason"] == "crawl_rate_limit_cooldown"
+    assert all(request.url.path != "/late-canonical" for request in requests)
+    assert result["render_evidence"]["browser_followup"]["skip_reason"] == "crawl_rate_limit_cooldown"
+    assert result["render_evidence"]["browser_followup"]["status"] == "recommended_not_run"
+    assert rendered == []
 
 
 def test_cloudflare_shopify_profile_uses_slower_default_interval():

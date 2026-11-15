@@ -26,15 +26,24 @@ def test_robots_snapshot_preserves_rules_and_unknown_state():
 def test_pacer_snapshot_uses_wall_clock_and_restores_pressure():
     pacer = scanner._AdaptiveRateLimitPacer(deadline=time.monotonic() + 300, enabled=True)
     pacer.next_request_at = time.monotonic() + 25
+    pacer.rate_limit_cooldown_until = time.monotonic() + 15
     pacer.retry_count = 3
     pacer.pressure_429_count = 2
+    pacer.saw_429 = True
     snapshot = pacer.to_dict()
     assert snapshot['deadline_at'] > time.time() + 290
     assert snapshot['next_request_at'] > time.time() + 20
+    assert snapshot['rate_limit_cooldown_until'] > time.time() + 10
     restored = scanner._AdaptiveRateLimitPacer.from_dict(json.loads(json.dumps(snapshot)))
     assert 20 < restored.next_request_at - time.monotonic() <= 25
+    assert 10 < restored.rate_limit_cooldown_until - time.monotonic() <= 15
     assert restored.retry_count == 3
     assert restored.pressure_429_count == 2
+    del snapshot['rate_limit_cooldown_until']
+    old = scanner._AdaptiveRateLimitPacer.from_dict(snapshot)
+    assert old.rate_limit_cooldown_until == old.next_request_at
+    snapshot['saw_429'] = False
+    assert scanner._AdaptiveRateLimitPacer.from_dict(snapshot).rate_limit_cooldown_until == 0.0
 
 
 def test_scan_state_public_batch_interface_exists():

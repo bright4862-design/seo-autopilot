@@ -11,6 +11,9 @@
 // infrastructure = fresh bucket/queue/IAM plus a source-bound task observation.
 // Every observation has observed_at/expires_at, within a 15 minute window.
 // Assembly validates independent live observations and preserves their capture times.
+// For a first ordinary pilot, pass "-" as the assembly task path. Capture
+// that scan's task metadata and pass ORDINARY_TASK_OBSERVATION_FILE for the
+// terminal browser render and receipt collection.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -22,6 +25,7 @@ import { diffEntity } from "./base44_authority_schema.mjs";
 export const APP_ID = "6a498732ec779dfaaeab0e53";
 const REQUIRED_OBSERVATIONS = ["base44", "schema_readback", "base44_configuration", "worker", "worker_base44_runtime", "gateway", "infrastructure", "stage_task"];
 const WORKER_V9_FUNCTIONS = ["durableScanWorkerControlV9", "persistDurableScanAuthorityV9", "persistLimitedScanResultV9"];
+const PILOT_OPERATORS = new Set(["6a498da58ef5cec1f5cd4486", "6a498732ec779dfaaeab0e54"]);
 const sha256 = value => createHash("sha256").update(value).digest("hex");
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
 const digest = value => sha256(JSON.stringify(canonical(value)));
@@ -74,6 +78,18 @@ function matchesWorkerBase44Runtime(worker, expected) {
     })),
   };
   return JSON.stringify(canonical(worker.base44_runtime)) === JSON.stringify(canonical(observation));
+}
+
+function matchesStageTaskObservation(task, contract) {
+  const sample = task?.sample;
+  return task?.schema_version === "staged_scan_task_observation_v1" && task.status === "verified_task_metadata"
+    && task.source_sha === contract.sourceSha && task.worker_revision === contract.revision
+    && task.worker_config_sha256 === contract.configDigest && task.queue_path === contract.queueName
+    && /^scan-[a-f0-9]{64}$/.test(sample?.task_id || "")
+    && ["batch", "finalize"].includes(sample?.stage)
+    && sample.target === `${contract.target}/scan-${sample.stage}`
+    && sample.dispatch_deadline_seconds === 480 && sample.method === "POST"
+    && sample.oidc_invoker === invokerAccount && sample.oidc_audience === contract.audience;
 }
 
 export function validatePrerequisites(packet, expected) {
@@ -136,6 +152,7 @@ export function validatePrerequisites(packet, expected) {
   }
   const worker = packet?.worker, gateway = packet?.gateway, workerEnv = environments.worker || {}, gatewayEnv = environments.gateway || {};
   const owner = expected.ownerId;
+  const ordinaryPilot = expected.ordinaryOperatorId !== undefined;
   const cohort = sha256(JSON.stringify([owner]));
   add(typeof owner === "string" && ownerIdPattern.test(owner) && workerEnv.SCAN_STAGED_OWNER_IDS === owner
     && workerEnv.SCAN_PIPELINE_MODE === "staged" && !workerEnv.SCAN_PIPELINE_OWNER_IDS, "worker_cohort_mismatch");
@@ -147,9 +164,15 @@ export function validatePrerequisites(packet, expected) {
     && Boolean(intakeIdentity) && intake.build_id === intakeIdentity.build_id
     && intake.runtime_activation_id === intakeIdentity.runtime_activation_id
     && intake.release_fingerprint === expected.fingerprint, "base44_intake_identity_mismatch");
-  add(intake?.configured_pipeline_mode === "staged" && intake?.pipeline_mode === "staged"
+  if (ordinaryPilot) {
+    add(PILOT_OPERATORS.has(expected.ordinaryOperatorId) && !PILOT_OPERATORS.has(owner)
+      && intake?.observer_user_id === expected.ordinaryOperatorId
+      && intake?.route_name === intakeIdentity?.route_name
+      && intake?.staged_rollout_scope === "off" && intake?.staged_500_entitled_enabled === false, "ordinary_operator_readback_mismatch");
+  }
+  add(intake?.configured_pipeline_mode === "staged" && intake?.pipeline_mode === (ordinaryPilot ? "monolith" : "staged")
     && intake?.staged_owner_cohort_state === "explicit" && intake?.staged_owner_count === 1
-    && intake?.staged_owner_cohort_sha256 === cohort && intake?.staged_owner_enabled === true
+    && intake?.staged_owner_cohort_sha256 === cohort && intake?.staged_owner_enabled === !ordinaryPilot
     && intake?.intake_gate === "enabled" && intake?.admission_gate === "enabled", "base44_intake_cohort_mismatch");
   // The worker stamp binds the reviewed inactive environment. Only mode and
   // cohort may differ on the active revision, and both were checked above.
@@ -183,30 +206,53 @@ export function validatePrerequisites(packet, expected) {
     add(typeof workerSa === "string" && policy?.bindings?.some(row => row.role === role && !row.condition && row.members?.includes(`serviceAccount:${workerSa}`)) && !policy?.bindings?.some(row => row.members?.some(member => ["allUsers", "allAuthenticatedUsers"].includes(member))), `infrastructure_iam_mismatch:${role}`);
   }
   const task = infra?.task;
-  const sample = task?.sample;
   const taskObserved = Date.parse(task?.observed_at);
-  add(task?.schema_version === "staged_scan_task_observation_v1" && task.status === "verified_task_metadata"
-    && task.source_sha === expected.sourceSha && task.worker_revision === worker?.revision?.metadata?.name
-    && task.worker_config_sha256 === configDigest && task.queue_path === stageQueue?.name
-    && Number.isFinite(taskObserved) && taskObserved <= now && now - taskObserved <= taskSampleLifetimeMs
-    && /^scan-[a-f0-9]{64}$/.test(sample?.task_id || "")
-    && ["batch", "finalize"].includes(sample?.stage)
-    && sample?.target === `${workerEnv.SCAN_STAGE_TARGET_URL}/scan-${sample?.stage}`
-    && sample?.dispatch_deadline_seconds === 480 && sample?.method === "POST"
-    && sample?.oidc_invoker === invokerAccount && sample?.oidc_audience === workerEnv.SCAN_STAGE_TOKEN_AUDIENCE,
-  "stage_task_contract_mismatch");
-  return { ready: failures.length === 0, failures: [...new Set(failures)], provenance: failures.length ? null : {
+  const taskContract = { sourceSha: expected.sourceSha, revision: worker?.revision?.metadata?.name, configDigest,
+    queueName: stageQueue?.name, target: workerEnv.SCAN_STAGE_TARGET_URL, audience: workerEnv.SCAN_STAGE_TOKEN_AUDIENCE };
+  const taskDeferred = ordinaryPilot && expected.allowDeferredOrdinaryTask === true
+    && packet?.ordinary_task_observation === "deferred" && task === null;
+  add(taskDeferred || (matchesStageTaskObservation(task, taskContract)
+    && Number.isFinite(taskObserved) && taskObserved <= now && now - taskObserved <= taskSampleLifetimeMs), "stage_task_contract_mismatch");
+  return { ready: failures.length === 0, failures: [...new Set(failures)], taskDeferred, taskContract, provenance: failures.length ? null : {
     source_sha: expected.sourceSha, release_fingerprint: expected.fingerprint, observed_at: packet.observed_at, expires_at: packet.expires_at,
     worker_revision: worker.revision.metadata.name, gateway_revision: gateway.revision.metadata.name,
     worker_config_sha256: configDigest, staged_owner_cohort_sha256: cohort,
+    ...(ordinaryPilot ? { ordinary_pilot: { operator_user_id: expected.ordinaryOperatorId, owner_user_id: owner } } : {}),
+    ...(taskDeferred ? { ordinary_task_observation: "deferred" } : {}),
     base44_functions: functions.map(({ name, route_name, build_id, package_digest, runtime_activation_id }) => ({ name, route_name, build_id, package_digest, runtime_activation_id })),
     schema_readback_sha256: digest(packet.schema_readback.entity_sources), infrastructure_sha256: digest(infra), prerequisite_sha256: digest(packet),
   } };
 }
 
-// This function must remain self-contained: it also runs inside Base44 exec.
+function persistedTimestamp(value) {
+  if (typeof value !== "string") return NaN;
+  const match = /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match || match[1].startsWith("0000-")) return NaN;
+  const date = new Date(`${match[1]}T00:00:00Z`);
+  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== match[1]) return NaN;
+  return Date.parse(value);
+}
+
+function ordinaryTerminalWindow(operator, now) {
+  const observed = persistedTimestamp(operator?.observed_at);
+  const terminal = persistedTimestamp(operator?.terminal_observed_at);
+  const started = persistedTimestamp(operator?.run?.started_at);
+  const completed = persistedTimestamp(operator?.run?.completed_at);
+  return observed <= terminal && terminal - observed <= 1_830_000
+    && observed - 30_000 <= started && started < completed && completed - started <= 1_800_000
+    && completed <= terminal + 30_000 && terminal <= now + 30_000 && now - terminal <= 900_000;
+}
+
+function receiptTerminationReasons(reasons) {
+  const known = ["rate_limit", "rate_limited", "throttled", "staged_rate_limit", "staged_wall_budget", "staged_partial_evidence"];
+  return Array.isArray(reasons) ? reasons.filter(reason => known.includes(reason)) : [];
+}
+
+// Embed the plain helpers when running this function outside this module.
 export async function executeStaged500Canary(base44, config, now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms))) {
+  const ordinary = config.ordinaryScanId !== undefined;
   const report = { schema_version: "staged_500_canary_v1", production_freeze: false, source_sha: config.sourceSha,
+    ...(ordinary ? { execution_mode: "ordinary_user_readback" } : {}),
     expected_owner_user_id: config.ownerId, project_id: config.projectId, target_url: config.targetUrl, request_id: config.requestId,
     release_fingerprint: null, provenance: config.provenance, observed_at: new Date(now()).toISOString(), scan_id: null,
     attempt_count: null, scan_started_at: null, scan_completed_at: null,
@@ -220,14 +266,6 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
   const unwrap = value => value?.data && typeof value.data === "object" ? value.data : value;
   const integer = value => Number.isInteger(value) && value >= 0;
   const url = value => { try { return new URL(String(value)).href; } catch { return ""; } };
-  function persistedTimestamp(value) {
-    if (typeof value !== "string") return NaN;
-    const match = /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.exec(value);
-    if (!match || match[1].startsWith("0000-")) return NaN;
-    const date = new Date(`${match[1]}T00:00:00Z`);
-    if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== match[1]) return NaN;
-    return Date.parse(value);
-  }
   async function signedSelectionCoverage(sampling, crawled) {
     const record = value => Boolean(value && typeof value === "object" && !Array.isArray(value));
     const discovered = sampling?.sections_discovered;
@@ -272,7 +310,11 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
     let timer; try { return await Promise.race([Promise.resolve().then(operation), new Promise((_, reject) => { timer = setTimeout(() => reject(new CanaryCheckError("operation_timeout")), remaining); })]); } finally { clearTimeout(timer); }
   }
   try {
-    require(config.appId === "6a498732ec779dfaaeab0e53" && config.provenance?.source_sha === config.sourceSha && config.provenance?.release_fingerprint === config.expectedFingerprint && Date.parse(config.provenance?.expires_at) > now(), "prerequisites_invalid_or_expired");
+    const operator = config.operatorReadback;
+    const observed = ordinary ? persistedTimestamp(operator?.observed_at) : now();
+    require(config.appId === "6a498732ec779dfaaeab0e53" && config.provenance?.source_sha === config.sourceSha
+      && config.provenance?.release_fingerprint === config.expectedFingerprint
+      && Date.parse(config.provenance?.expires_at) > observed, "prerequisites_invalid_or_expired");
     const published = Array.isArray(config.provenance.base44_functions) ? config.provenance.base44_functions : [];
     const launcher = published.find(row => row?.name === "startStandardScanJobV9");
     const reader = published.find(row => row?.name === "getCustomerScanResultV9");
@@ -280,8 +322,25 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
       && /^getCustomerScanResultV9B[a-f0-9]{16}$/.test(config.resultRoute)
       && config.launchRoute === launcher?.route_name && config.resultRoute === reader?.route_name,
     "staged_scan_routes_unverified");
+    if (ordinary) {
+      const pilot = config.provenance.ordinary_pilot;
+      require(typeof config.ordinaryScanId === "string" && /^[A-Za-z0-9_-]{6,160}$/.test(config.ordinaryScanId)
+        && pilot?.owner_user_id === config.ownerId && pilot.operator_user_id !== config.ownerId
+        && ["6a498da58ef5cec1f5cd4486", "6a498732ec779dfaaeab0e54"].includes(pilot.operator_user_id), "ordinary_pilot_identity_mismatch");
+      if (config.provenance.ordinary_task_observation === "deferred") {
+        require(/^[a-f0-9]{64}$/.test(config.provenance.ordinary_stage_task_observation_sha256 || ""),
+          "ordinary_stage_task_observation_required");
+      }
+      require(operator?.schema_version === "staged_500_ordinary_operator_readback_v1"
+        && operator.operator_user_id === pilot.operator_user_id && operator.source_sha === config.sourceSha
+        && operator.prerequisite_sha256 === config.provenance.prerequisite_sha256
+        && observed >= Date.parse(config.provenance.observed_at) && ordinaryTerminalWindow(operator, now()),
+      "ordinary_operator_run_missing_or_mismatched");
+      report.observed_at = operator.observed_at;
+    }
     const me = await bounded(() => base44.auth.me());
-    require(me?.id === config.ownerId && me.role === "admin", "authenticated_owner_not_admin");
+    require(me?.id === config.ownerId && me.role === (ordinary ? "user" : "admin"),
+      ordinary ? "authenticated_ordinary_user_mismatch" : "authenticated_owner_not_admin");
     const email = String(me.email || "").trim().toLowerCase(); require(email, "owner_email_missing");
     const project = await bounded(() => base44.entities.BusinessProject.get(config.projectId));
     require(project?.id === config.projectId && project.owner_user_id === config.ownerId && url(project.website_url) === config.targetUrl, "project_identity_mismatch");
@@ -294,15 +353,36 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
     require(grant.owner_user_id === config.ownerId && String(grant.user_email || "").trim().toLowerCase() === email && grant.app_id === config.appId && grant.has_full_access === true && grant.access_status === "active" && grant.plan_id === "standard150_lifetime" && grant.page_cap === 500, "existing_entitlement_not_500");
     const dated = Number.isFinite(Date.parse(grant.granted_at || ""));
     require((grant.grant_source === "manual_grant" && dated) || (grant.grant_source === "stripe_checkout" && Boolean(grant.stripe_checkout_session_id) && Number.isFinite(Date.parse(grant.paid_at || ""))) || (grant.grant_source === "owner_test" && dated && me.id === "6a498da58ef5cec1f5cd4486" && email === "bright4862@gmail.com"), "access_grant_unverified");
-    const accepted = unwrap(await bounded(() => base44.functions.invoke(config.launchRoute, { request_id: config.requestId, idempotency_key: config.requestId, project_id: config.projectId, website_url: config.targetUrl, submitted_url: config.targetUrl, scan_mode: "standard_500", source: "staged_500_acceptance" })));
-    require(accepted?.success === true && accepted.accepted === true && accepted.scan_mode === "standard_500" && accepted.page_cap === 500 && accepted.pipeline_mode === "staged", "scan_not_accepted_as_staged_500");
-    report.scan_id = String(accepted.scan_id || accepted.scan_run_id || ""); require(/^[A-Za-z0-9_-]{6,160}$/.test(report.scan_id), "scan_id_missing");
+    if (ordinary) {
+      report.scan_id = config.ordinaryScanId;
+    } else {
+      const accepted = unwrap(await bounded(() => base44.functions.invoke(config.launchRoute, { request_id: config.requestId, idempotency_key: config.requestId, project_id: config.projectId, website_url: config.targetUrl, submitted_url: config.targetUrl, scan_mode: "standard_500", source: "staged_500_acceptance" })));
+      require(accepted?.success === true && accepted.accepted === true && accepted.scan_mode === "standard_500" && accepted.page_cap === 500 && accepted.pipeline_mode === "staged", "scan_not_accepted_as_staged_500");
+      report.scan_id = String(accepted.scan_id || accepted.scan_run_id || "");
+      require(/^[A-Za-z0-9_-]{6,160}$/.test(report.scan_id), "scan_id_missing");
+    }
     let run, projection;
     while (now() < deadline) {
       projection = unwrap(await bounded(() => base44.functions.invoke(config.resultRoute, { scan_id: report.scan_id })));
-      run = await bounded(() => base44.entities.ScanRun.get(report.scan_id));
+      run = ordinary ? operator.run : await bounded(() => base44.entities.ScanRun.get(report.scan_id));
       require(projection?.success === true && projection.scan_id === report.scan_id && run?.id === report.scan_id && run.owner_user_id === config.ownerId && run.project_id === config.projectId && run.request_id === config.requestId && (run.idempotency_key || run.request_id) === config.requestId && url(run.website_url) === config.targetUrl, "scan_identity_mismatch");
       require(run.page_cap === 500 && run.scan_mode === "standard_500" && run.pipeline_mode === "staged", "scan_contract_mismatch");
+      if (ordinary) require(run.admission_mode === "acceptance_only" && run.admission_acceptance_source_sha === config.sourceSha
+        && run.admission_claim_proof_present === true,
+        "ordinary_acceptance_claim_mismatch");
+      if (ordinary) {
+        const customer = projection.run;
+        require(projection.access === "full" && customer?.id === run.id && customer.project_id === run.project_id
+          && url(customer.website_url) === config.targetUrl && customer.scan_mode === run.scan_mode
+          && customer.page_cap === run.page_cap && customer.pipeline_mode === run.pipeline_mode, "ordinary_customer_projection_mismatch");
+        if (["queued", "crawling", "reviewing"].includes(customer.status)) {
+          await sleep(Math.min(config.pollSeconds * 1000, Math.max(1, deadline - now())));
+          continue;
+        }
+        require(customer.status === run.status && customer.pages_crawled === run.pages_crawled
+          && customer.pages_planned === run.pages_planned && customer.started_at === run.started_at
+          && customer.completed_at === run.completed_at, "ordinary_customer_projection_mismatch");
+      }
       const pending = ["queued", "crawling", "reviewing"].includes(run.status);
       // The admission row has no progress counters yet. A plan can retain its
       // first page before any batch is committed. Unknown progress is allowed
@@ -337,7 +417,7 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
     report.scan_started_at = run.started_at;
     report.scan_completed_at = run.completed_at;
     if (run.status === "complete") {
-      require(projection.authority_verified === true && /^[a-f0-9]{64}$/.test(run.authority_proof || "") && Boolean(run.authority_seal_version), "complete_authority_unverified");
+      require(projection.authority_verified === true && (ordinary ? run.authority_proof_present === true : /^[a-f0-9]{64}$/.test(run.authority_proof || "")) && Boolean(run.authority_seal_version), "complete_authority_unverified");
       require(projection.run.advanced_scan_backend === "python_scanner_api" && projection.run.deno_fallback_used === false
         && projection.run.ai_review_backend === "python_review_api" && projection.run.python_review_fallback_used === false, "durable_worker_evidence_missing");
       report.durable_worker_owned = true;
@@ -353,7 +433,7 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
       }
       if (!report.selection_coverage) report.unverified.push("signed_selection_coverage");
     } else {
-      require(projection.result_integrity_verified === true && /^[a-f0-9]{64}$/.test(run.result_integrity_proof || "") && Boolean(run.result_integrity_version), "limited_integrity_unverified");
+      require(projection.result_integrity_verified === true && (ordinary ? run.result_integrity_proof_present === true : /^[a-f0-9]{64}$/.test(run.result_integrity_proof || "")) && Boolean(run.result_integrity_version), "limited_integrity_unverified");
       require(projection.authority_verified !== true && projection.run.score_is_provisional === true && projection.run.release_gate_eligible === false && ["limited_coverage", "access_limited", "inventory_unproven"].includes(projection.run.coverage_state) && Boolean(projection.run.limitation) && Array.isArray(projection.fixItems) && projection.fixItems.length > 0, "limited_coverage_untruthful");
       const fixIds = new Set(projection.fixItems.map(fix => String(fix?.fix_id || fix?.issue_id || fix?.id || "")).filter(Boolean));
       require(Array.isArray(projection.top_fix_ids) && projection.top_fix_ids.length >= 1 && projection.top_fix_ids.length <= 3 && new Set(projection.top_fix_ids).size === projection.top_fix_ids.length && projection.top_fix_ids.every(id => typeof id === "string" && fixIds.has(id)), "limited_priorities_missing_or_invalid");
@@ -371,7 +451,7 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
       }
       const budget = reasons.includes("staged_wall_budget");
       require(throttled || budget || reasons.includes("staged_partial_evidence"), "limited_termination_reason_missing");
-      report.termination_reasons = reasons.filter(reason => ["rate_limit", "rate_limited", "throttled", "staged_rate_limit", "staged_wall_budget", "staged_partial_evidence"].includes(reason));
+      report.termination_reasons = receiptTerminationReasons(reasons);
       report.outcome = throttled ? "limited_throttled" : budget ? "limited_budget" : "limited_partial";
       // Limited seals do not attest the scan/review backend fields. The
       // independent receipt must bind this result to the exact worker.
@@ -391,7 +471,230 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
 }
 
 export function renderRemoteCanary(config) {
-  return `const config = ${JSON.stringify(config)};\nconsole.log('FIXLIST_STAGED_500_CANARY=' + JSON.stringify(await (${executeStaged500Canary.toString()})(base44, config)));\n`;
+  return `const config = ${JSON.stringify(config)};\n${persistedTimestamp.toString()}\n${ordinaryTerminalWindow.toString()}\n${receiptTerminationReasons.toString()}\nconsole.log('FIXLIST_STAGED_500_CANARY=' + JSON.stringify(await (${executeStaged500Canary.toString()})(base44, config)));\n`;
+}
+
+export function renderOrdinaryReadback(config) {
+  if (!id(config.ordinaryScanId)) throw new Error("ordinary_scan_id_invalid");
+  return `const config = ${JSON.stringify(config)};\n${persistedTimestamp.toString()}\n${ordinaryTerminalWindow.toString()}\n${receiptTerminationReasons.toString()}\nexport async function verifyOrdinaryStaged500Readback(authenticatedClient) {\n  return (${executeStaged500Canary.toString()})(authenticatedClient, config);\n}\n`;
+}
+
+// Observe a single newly submitted native scan with the approved operator's
+// existing production session. The regular user never reads this entity.
+// Begin within 30s of the saved start for the independent worker receipt.
+export async function observeOrdinaryPilotRun(base44, config, now = Date.now,
+  sleep = ms => new Promise(resolve => setTimeout(resolve, ms))) {
+  const observed = now();
+  const operator = config.provenance?.ordinary_pilot?.operator_user_id;
+  const emails = {
+    "6a498da58ef5cec1f5cd4486": "bright4862@gmail.com",
+    "6a498732ec779dfaaeab0e54": "londonparisbrussels@gmail.com",
+  };
+  if (!Object.hasOwn(emails, operator) || config.appId !== "6a498732ec779dfaaeab0e53"
+      || config.ownerId === operator || config.ownerId !== config.provenance.ordinary_pilot.owner_user_id
+      || config.sourceSha !== config.provenance.source_sha
+      || !(Date.parse(config.provenance.expires_at) > observed)
+      || !/^[A-Za-z0-9_-]{6,160}$/.test(config.ordinaryScanId || "")) throw new Error("ordinary_operator_prerequisites_mismatch");
+  const me = await base44.auth.me();
+  if (me?.id !== operator || me?.role !== "admin" || String(me.email || "").trim().toLowerCase() !== emails[operator]) {
+    throw new Error("ordinary_operator_identity_mismatch");
+  }
+  const deadline = observed + config.maxWait * 1000;
+  do {
+    const run = await base44.entities.ScanRun.get(config.ordinaryScanId);
+    if (run?.id !== config.ordinaryScanId || run.owner_user_id !== config.ownerId
+        || run.project_id !== config.projectId || run.request_id !== config.requestId
+        || (run.idempotency_key || run.request_id) !== config.requestId
+        || new URL(run.website_url).href !== config.targetUrl || run.scan_mode !== "standard_500"
+        || run.page_cap !== 500 || run.pipeline_mode !== "staged"
+        || run.admission_mode !== "acceptance_only" || run.admission_acceptance_source_sha !== config.sourceSha
+        || run.admission_cohort_evidence_version !== "admission_claim_evidence_v1"
+        || !/^[a-f0-9]{64}$/.test(run.admission_cohort_evidence_proof || "")) {
+      throw new Error("ordinary_operator_scan_identity_mismatch");
+    }
+    if (["complete", "limited"].includes(run.status)) {
+      const fields = [
+        "id", "owner_user_id", "project_id", "request_id", "idempotency_key", "website_url",
+        "scan_mode", "page_cap", "pipeline_mode", "admission_mode", "admission_acceptance_source_sha",
+        "status", "pages_crawled", "pages_planned", "last_committed_batch", "attempt_count",
+        "started_at", "completed_at", "beta_revision_fingerprint", "authority_seal_version", "result_integrity_version",
+      ];
+      return {
+        schema_version: "staged_500_ordinary_operator_readback_v1", operator_user_id: operator,
+        source_sha: config.sourceSha, prerequisite_sha256: config.provenance.prerequisite_sha256,
+        observed_at: new Date(observed).toISOString(), terminal_observed_at: new Date(now()).toISOString(),
+        run: {
+          ...Object.fromEntries(fields.map(key => [key, run[key]])),
+          admission_claim_proof_present: true,
+          authority_proof_present: /^[a-f0-9]{64}$/.test(run.authority_proof || ""),
+          result_integrity_proof_present: /^[a-f0-9]{64}$/.test(run.result_integrity_proof || ""),
+          ...(run.status === "limited" ? { termination_reasons: receiptTerminationReasons(run.coverage_reasons) } : {}),
+        },
+      };
+    }
+    if (!["queued", "crawling", "reviewing"].includes(run.status)) throw new Error("ordinary_operator_scan_unsuccessful");
+    await sleep(Math.min(config.pollSeconds * 1000, Math.max(0, deadline - now())));
+  } while (now() < deadline);
+  throw new Error("ordinary_operator_scan_timeout");
+}
+
+export function renderOrdinaryOperatorReadback(config) {
+  if (!id(config.ordinaryScanId)) throw new Error("ordinary_scan_id_invalid");
+  return `const config = ${JSON.stringify(config)};\n${receiptTerminationReasons.toString()}\ntry { console.log('FIXLIST_STAGED_500_ORDINARY_OPERATOR=' + JSON.stringify(await (${observeOrdinaryPilotRun.toString()})(base44, config))); } catch { throw new Error('ordinary_operator_readback_failed'); }\n`;
+}
+
+function operatorReadbackFromExec(input) {
+  const prefix = "FIXLIST_STAGED_500_ORDINARY_OPERATOR=";
+  const lines = fs.readFileSync(input, "utf8").split("\n").filter(line => line.startsWith(prefix));
+  if (lines.length !== 1) throw new Error("ordinary_operator_readback_missing_or_ambiguous");
+  return JSON.parse(lines[0].slice(prefix.length));
+}
+
+function ordinaryReadbackContext(packet, expected, operator, env, { verifyTask = false } = {}) {
+  if (!ordinaryTerminalWindow(operator, Date.now())) throw new Error("ordinary_operator_window_invalid");
+  const observed = persistedTimestamp(operator.observed_at);
+  const validation = validatePrerequisites(packet, { ...expected, now: observed, allowDeferredOrdinaryTask: true });
+  if (!validation.ready) throw new Error(validation.failures.join(","));
+  const provenance = validation.provenance;
+  const run = operator.run;
+  const complete = run.status === "complete";
+  const duration = persistedTimestamp(run.completed_at) - persistedTimestamp(run.started_at);
+  const lastBatch = run.last_committed_batch;
+  const batches = Number.isSafeInteger(lastBatch) && lastBatch >= 0 ? lastBatch + 1 : NaN;
+  const termination = receiptTerminationReasons(run.termination_reasons);
+  const positive = value => Number.isSafeInteger(value) && value > 0;
+  if (operator.schema_version !== "staged_500_ordinary_operator_readback_v1"
+      || operator.operator_user_id !== expected.ordinaryOperatorId || operator.source_sha !== expected.sourceSha
+      || operator.prerequisite_sha256 !== provenance.prerequisite_sha256 || observed < Date.parse(provenance.observed_at)
+      || !id(env.ORDINARY_SCAN_ID) || run.id !== env.ORDINARY_SCAN_ID || run.owner_user_id !== expected.ownerId
+      || !id(env.PROJECT_ID) || run.project_id !== env.PROJECT_ID || !id(env.REQUEST_ID) || run.request_id !== env.REQUEST_ID
+      || (run.idempotency_key || run.request_id) !== env.REQUEST_ID
+      || !origin(env.TARGET_URL) || origin(run.website_url) !== origin(env.TARGET_URL)
+      || run.scan_mode !== "standard_500" || run.page_cap !== 500 || run.pipeline_mode !== "staged"
+      || run.admission_mode !== "acceptance_only" || run.admission_acceptance_source_sha !== expected.sourceSha
+      || run.admission_claim_proof_present !== true || run.beta_revision_fingerprint !== expected.fingerprint
+      || !["complete", "limited"].includes(run.status)
+      || !positive(run.attempt_count) || run.attempt_count >= 2 ** 31
+      || !positive(run.pages_crawled) || !positive(run.pages_planned) || run.pages_crawled > run.pages_planned || run.pages_planned > 500
+      || !positive(batches) || batches > 254 || run.pages_crawled > batches * 50
+      || (complete && run.pages_crawled !== run.pages_planned)
+      || (!complete && (!termination.some(reason => reason.startsWith("staged_")) || termination.length > 6))
+      || (complete ? run.authority_proof_present !== true || !/^[a-zA-Z0-9_]{1,120}$/.test(run.authority_seal_version || "")
+        : run.result_integrity_proof_present !== true || !/^[a-zA-Z0-9_]{1,120}$/.test(run.result_integrity_version || ""))) {
+    throw new Error("ordinary_operator_readback_identity_mismatch");
+  }
+  if (verifyTask && validation.taskDeferred) {
+    if (!env.ORDINARY_TASK_OBSERVATION_FILE) throw new Error("ordinary_stage_task_observation_required");
+    const task = readObservation(env.ORDINARY_TASK_OBSERVATION_FILE);
+    const taskTime = persistedTimestamp(task?.observed_at);
+    const started = persistedTimestamp(run.started_at);
+    // Existing task observations use whole seconds. Match a sample made in
+    // the run's first second while keeping later/fractional times exact.
+    const earliest = /T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})$/.test(task?.observed_at || "")
+      ? Math.floor(started / 1000) * 1000 : started;
+    if (!matchesStageTaskObservation(task, validation.taskContract)
+        || !(taskTime >= earliest && taskTime <= persistedTimestamp(operator.terminal_observed_at))) {
+      throw new Error("ordinary_stage_task_observation_mismatch");
+    }
+    // Match StageTaskDispatcher's IDs for a committed batch or the finalizer,
+    // without requesting Cloud Tasks' full view or exposing the signed task body.
+    const { stage, task_id: taskId } = task.sample;
+    const prefix = `${run.id}:${run.attempt_count}:${stage}:`;
+    const identities = stage === "batch" ? Array.from({ length: batches }, (_, batch) => prefix + batch)
+      : [prefix + batches, `${prefix}${batches}:recovery:1`];
+    if (!identities.some(identity => taskId === `scan-${sha256(identity)}`)) {
+      throw new Error("ordinary_stage_task_attempt_mismatch");
+    }
+    provenance.ordinary_stage_task_observation_sha256 = digest(task);
+  }
+  const runFields = [
+    "id", "owner_user_id", "project_id", "request_id", "idempotency_key", "website_url",
+    "scan_mode", "page_cap", "pipeline_mode", "admission_mode", "admission_acceptance_source_sha",
+    "status", "pages_crawled", "pages_planned", "last_committed_batch", "attempt_count",
+    "started_at", "completed_at", "beta_revision_fingerprint", "admission_claim_proof_present",
+    ...(complete ? ["authority_seal_version", "authority_proof_present"] : ["result_integrity_version", "result_integrity_proof_present"]),
+  ];
+  const safeOperator = {
+    schema_version: operator.schema_version, operator_user_id: operator.operator_user_id,
+    source_sha: operator.source_sha, prerequisite_sha256: operator.prerequisite_sha256,
+    observed_at: operator.observed_at, terminal_observed_at: operator.terminal_observed_at,
+    run: Object.fromEntries(runFields.map(key => [key, run[key]])),
+  };
+  safeOperator.run.website_url = origin(env.TARGET_URL);
+  if (!complete) safeOperator.run.termination_reasons = termination;
+  return { operator: safeOperator, provenance, duration, batches, complete };
+}
+
+function collectOrdinaryBrowserReport(report, { operator, provenance, duration, batches, complete }) {
+  const run = operator.run;
+  const functional500 = complete && run.pages_crawled === 500 && batches === 10;
+  const positive = value => Number.isSafeInteger(value) && value > 0;
+  const peak = report.memory?.finalize_peak_bytes;
+  const projectionBytes = report.payload_bytes?.customer_projection;
+  const progress = [{ status: run.status, pages_crawled: run.pages_crawled, pages_planned: run.pages_planned,
+    last_committed_batch: run.last_committed_batch }];
+  if (report.terminal_outcome_verified !== true || report.failure_code !== null
+      || report.production_freeze !== false || report.full_500_gate !== false || report.acceptance_verified !== false
+      || report.release_fingerprint !== provenance.release_fingerprint || !report.provenance || digest(report.provenance) !== digest(provenance)
+      || report.observed_at !== operator.observed_at || report.terminal_status !== run.status || report.page_cap !== run.page_cap
+      || report.pages_crawled !== run.pages_crawled || report.pages_planned !== run.pages_planned
+      || report.committed_batch_count !== batches || report.attempt_count !== run.attempt_count
+      || report.scan_started_at !== run.started_at || report.scan_completed_at !== run.completed_at || report.duration_ms !== duration
+      || report.functional_500_verified !== functional500 || report.durable_worker_owned !== complete
+      || report.durable_worker_receipt_required !== !complete || !Array.isArray(report.progress) || digest(report.progress) !== digest(progress)
+      || !positive(projectionBytes) || report.payload_bytes.completion_request !== null
+      || report.memory?.scope !== "finalize_only" || report.memory.all_stages_verified !== false
+      || (peak !== null && !positive(peak))) throw new Error("ordinary_operator_report_mismatch");
+
+  const termination = report.termination_reasons;
+  const priorities = report.throttled_priority_summary;
+  const levels = ["critical", "high", "medium", "low"];
+  const hasReason = reason => run.termination_reasons?.includes(reason);
+  const throttled = !complete && hasReason("staged_rate_limit");
+  const outcome = complete ? "complete" : throttled ? "limited_throttled"
+    : hasReason("staged_wall_budget") ? "limited_budget" : "limited_partial";
+  if (report.outcome !== outcome || (!complete && (!Array.isArray(termination)
+      || digest(termination) !== digest(run.termination_reasons)))
+      || (throttled && (run.result_integrity_version !== "standard_limited_result_integrity_v5_report_evidence"
+        || !Array.isArray(priorities) || !positive(priorities.length) || priorities.length > 3
+        || priorities.some((priority, index) => !levels.includes(priority)
+          || (index > 0 && levels.indexOf(priorities[index - 1]) > levels.indexOf(priority)))))) {
+    throw new Error("ordinary_customer_terminal_evidence_invalid");
+  }
+
+  let selection = null;
+  if (report.selection_coverage !== null) {
+    const s = report.selection_coverage;
+    const within = (value, cap) => Number.isSafeInteger(value) && value >= 0 && value <= cap;
+    if (!complete || run.authority_seal_version !== "standard_review_snapshot_hmac_identity_v1"
+        || !/^[a-z0-9_]{5,120}$/.test(s?.sampling_version || "") || typeof s.inventory_capped !== "boolean"
+        || !within(s.inventory_urls, 5000) || !within(s.selected_urls, 499) || !within(s.selected_inventory_urls, s.selected_urls)
+        || s.pages_checked !== run.pages_crawled || !within(s.sections_discovered, s.inventory_urls)
+        || !within(s.sections_never_selected, s.sections_discovered) || !/^[a-f0-9]{64}$/.test(s.sections_sha256 || "")) {
+      throw new Error("ordinary_customer_selection_evidence_invalid");
+    }
+    selection = { sampling_version: s.sampling_version, inventory_capped: s.inventory_capped,
+      inventory_urls: s.inventory_urls, selected_urls: s.selected_urls, selected_inventory_urls: s.selected_inventory_urls,
+      pages_checked: s.pages_checked, sections_discovered: s.sections_discovered,
+      sections_never_selected: s.sections_never_selected, sections_sha256: s.sections_sha256 };
+  }
+  return {
+    schema_version: "staged_500_canary_v1", production_freeze: false, source_sha: operator.source_sha,
+    execution_mode: "ordinary_user_readback", expected_owner_user_id: run.owner_user_id, project_id: run.project_id,
+    target_url: run.website_url, request_id: run.request_id, release_fingerprint: provenance.release_fingerprint, provenance,
+    observed_at: operator.observed_at, scan_id: run.id, attempt_count: run.attempt_count,
+    scan_started_at: run.started_at, scan_completed_at: run.completed_at, terminal_status: run.status,
+    page_cap: run.page_cap, pages_crawled: run.pages_crawled, pages_planned: run.pages_planned,
+    committed_batch_count: batches, duration_ms: duration, terminal_outcome_verified: true,
+    functional_500_verified: functional500, full_500_gate: false, acceptance_verified: false, outcome, progress,
+    selection_coverage: selection, durable_worker_owned: complete, durable_worker_receipt_required: !complete,
+    payload_bytes: { customer_projection: projectionBytes, completion_request: null },
+    memory: { finalize_peak_bytes: peak, scope: "finalize_only", all_stages_verified: false },
+    unverified: ["completion_request_byte_measurement", "all_stage_memory_measurement", "per_scan_runtime_revision_receipt",
+      ...(complete && !selection ? ["signed_selection_coverage"] : []), ...(peak === null ? ["finalize_memory_measurement"] : [])],
+    failure_code: null, ...(!complete ? { termination_reasons: run.termination_reasons } : {}),
+    ...(throttled ? { throttled_priority_summary: priorities } : {}),
+  };
 }
 
 export function localAcceptanceIdentity(root, sourceSha, ownerId) {
@@ -424,6 +727,7 @@ export function assemblePrerequisites({ base44, schema, intake, cloud, task }, e
   const expires_at = new Date(expires).toISOString();
   const packet = {
     schema_version: "staged_scan_acceptance_prerequisites_v1", source_sha: expected.sourceSha,
+    ...(expected.allowDeferredOrdinaryTask === true && task === null ? { ordinary_task_observation: "deferred" } : {}),
     release_fingerprint: expected.fingerprint, observed_at, expires_at,
     base44: { ...base44, expires_at },
     schema_readback: { observed_at: schema.observed_at, expires_at, source_sha: schema.source_sha, app_id: schema.app_id,
@@ -438,6 +742,13 @@ export function assemblePrerequisites({ base44, schema, intake, cloud, task }, e
   return packet;
 }
 
+function readObservation(file) {
+  if (typeof file !== "string" || !path.isAbsolute(file) || !fs.lstatSync(file).isFile() || fs.realpathSync(file) !== file) {
+    throw new Error("observation_path_invalid");
+  }
+  return JSON.parse(fs.readFileSync(file, "utf8"));
+}
+
 export function writeNewArtifact(output, value, root) {
   if (!path.isAbsolute(output) || !fs.existsSync(path.dirname(output)) || fs.realpathSync(path.dirname(output)) !== path.dirname(output)) throw new Error("artifact_path_invalid");
   const relative = path.relative(fs.realpathSync(root), path.dirname(output));
@@ -449,42 +760,90 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   try {
     const mode = process.argv[2];
     if (mode === "describe-prerequisites") console.log(JSON.stringify({ schema_version: "staged_scan_acceptance_prerequisites_v1", required_observations: REQUIRED_OBSERVATIONS, freshness_seconds: 900, stage_task_max_age_seconds: taskSampleLifetimeMs / 1000 }, null, 2));
-    else if (mode === "assemble-prerequisites") {
+    else if (mode === "assemble-prerequisites" || mode === "assemble-ordinary-prerequisites") {
       if (process.argv.length !== 9) throw new Error("expected six paths: package schema intake cloud task output");
       const [base44File, schemaFile, intakeFile, cloudFile, taskFile, output] = process.argv.slice(3);
       const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
       const expected = localAcceptanceIdentity(root, process.env.SOURCE_SHA, process.env.EXPECTED_OWNER_USER_ID);
-      const read = file => {
-        if (!path.isAbsolute(file) || !fs.lstatSync(file).isFile() || fs.realpathSync(file) !== file) throw new Error("observation_path_invalid");
-        return JSON.parse(fs.readFileSync(file, "utf8"));
-      };
-      const packet = assemblePrerequisites({ base44: read(base44File), schema: read(schemaFile), intake: read(intakeFile),
-        cloud: read(cloudFile), task: read(taskFile) }, expected);
+      if (mode === "assemble-ordinary-prerequisites") {
+        expected.ordinaryOperatorId = process.env.EXPECTED_OPERATOR_USER_ID || "";
+        expected.allowDeferredOrdinaryTask = taskFile === "-";
+      }
+      const packet = assemblePrerequisites({ base44: readObservation(base44File), schema: readObservation(schemaFile),
+        intake: readObservation(intakeFile), cloud: readObservation(cloudFile),
+        task: expected.allowDeferredOrdinaryTask ? null : readObservation(taskFile) }, expected);
       writeNewArtifact(output, packet, root);
       console.log("STAGED_500_PREREQUISITES_ASSEMBLED");
     }
-    else if (mode === "render") {
+    else if (["render", "render-ordinary-operator-readback", "render-ordinary-readback"].includes(mode)) {
       const env = process.env, root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+      const ordinary = mode !== "render";
       const expected = localAcceptanceIdentity(root, env.SOURCE_SHA, env.EXPECTED_OWNER_USER_ID);
+      if (ordinary) expected.ordinaryOperatorId = env.EXPECTED_OPERATOR_USER_ID || "";
+      if (mode === "render-ordinary-operator-readback") expected.allowDeferredOrdinaryTask = true;
       const packet = JSON.parse(fs.readFileSync(env.PREREQUISITES_FILE, "utf8"));
-      const validation = validatePrerequisites(packet, expected);
-      if (!validation.ready) throw new Error(validation.failures.join(","));
+      const browser = mode === "render-ordinary-readback";
+      const readback = browser
+        ? ordinaryReadbackContext(packet, expected, readObservation(env.ORDINARY_OPERATOR_READBACK_FILE), env, { verifyTask: true })
+        : null;
+      const validation = readback ?? validatePrerequisites(packet, expected);
+      if (!validation.provenance) throw new Error(validation.failures.join(","));
       if (!id(env.EXPECTED_OWNER_USER_ID) || !id(env.PROJECT_ID) || !id(env.REQUEST_ID) || !origin(env.TARGET_URL)) throw new Error("scan_input_invalid");
       const maxWait = Number(env.MAX_WAIT_SECONDS || 900), pollSeconds = Number(env.POLL_SECONDS || 5);
       if (!Number.isInteger(maxWait) || maxWait < 1 || maxWait > 1800 || !Number.isInteger(pollSeconds) || pollSeconds < 1 || pollSeconds > 60) throw new Error("scan_timeout_invalid");
       const launchRoute = expected.functions.startStandardScanJobV9.route_name;
       const resultRoute = expected.functions.getCustomerScanResultV9.route_name;
-      process.stdout.write(renderRemoteCanary({ appId: APP_ID, sourceSha: env.SOURCE_SHA, ownerId: env.EXPECTED_OWNER_USER_ID, projectId: env.PROJECT_ID, requestId: env.REQUEST_ID, targetUrl: origin(env.TARGET_URL), expectedFingerprint: expected.fingerprint, maxWait, pollSeconds, provenance: validation.provenance, launchRoute, resultRoute }));
-    } else if (mode === "collect") {
+      const config = { appId: APP_ID, sourceSha: env.SOURCE_SHA, ownerId: env.EXPECTED_OWNER_USER_ID, projectId: env.PROJECT_ID,
+        requestId: env.REQUEST_ID, targetUrl: origin(env.TARGET_URL), expectedFingerprint: expected.fingerprint,
+        maxWait, pollSeconds, provenance: validation.provenance, launchRoute, resultRoute };
+      if (mode === "render-ordinary-operator-readback") {
+        process.stdout.write(renderOrdinaryOperatorReadback({ ...config, ordinaryScanId: env.ORDINARY_SCAN_ID }));
+      } else if (browser) {
+        process.stdout.write(renderOrdinaryReadback({ ...config, ordinaryScanId: env.ORDINARY_SCAN_ID, operatorReadback: readback.operator }));
+      } else {
+        process.stdout.write(renderRemoteCanary(config));
+      }
+    } else if (mode === "collect-ordinary-operator-readback") {
+      const [input, output] = process.argv.slice(3), env = process.env;
+      const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+      const packet = JSON.parse(fs.readFileSync(env.PREREQUISITES_FILE, "utf8"));
+      const expected = localAcceptanceIdentity(root, env.SOURCE_SHA, env.EXPECTED_OWNER_USER_ID);
+      expected.ordinaryOperatorId = env.EXPECTED_OPERATOR_USER_ID || "";
+      const { operator } = ordinaryReadbackContext(packet, expected, operatorReadbackFromExec(input), env);
+      writeNewArtifact(output, operator, root);
+      console.log("STAGED_500_ORDINARY_OPERATOR_READBACK_SAVED");
+    } else if (mode === "collect" || mode === "collect-ordinary-readback") {
       const [input, output, cliStatus] = process.argv.slice(3), prefix = "FIXLIST_STAGED_500_CANARY=";
-      const lines = fs.readFileSync(input, "utf8").split("\n").filter(line => line.startsWith(prefix));
-      if (lines.length !== 1) throw new Error("cli_report_missing_or_ambiguous");
-      const report = JSON.parse(lines[0].slice(prefix.length)), env = process.env;
+      const ordinary = mode === "collect-ordinary-readback";
+      const raw = fs.readFileSync(input, "utf8"), env = process.env;
+      let report;
+      if (ordinary) {
+        if (process.argv.length !== 5) throw new Error("expected ordinary readback JSON input and output paths");
+        report = JSON.parse(raw);
+      } else {
+        const lines = raw.split("\n").filter(line => line.startsWith(prefix));
+        if (lines.length !== 1) throw new Error("cli_report_missing_or_ambiguous");
+        report = JSON.parse(lines[0].slice(prefix.length));
+      }
       if (report.schema_version !== "staged_500_canary_v1" || report.source_sha !== env.SOURCE_SHA || report.expected_owner_user_id !== env.EXPECTED_OWNER_USER_ID || report.project_id !== env.PROJECT_ID || report.request_id !== env.REQUEST_ID || report.target_url !== origin(env.TARGET_URL)) throw new Error("cli_report_identity_mismatch");
-      if (Number(cliStatus) !== 0) { report.terminal_outcome_verified = false; report.failure_code = "cli_execution_failed"; }
+      if (ordinary ? report.execution_mode !== "ordinary_user_readback"
+          || !id(env.ORDINARY_SCAN_ID) || report.scan_id !== env.ORDINARY_SCAN_ID
+          || !PILOT_OPERATORS.has(env.EXPECTED_OPERATOR_USER_ID)
+          || report.provenance?.ordinary_pilot?.operator_user_id !== env.EXPECTED_OPERATOR_USER_ID
+          || report.provenance?.ordinary_pilot?.owner_user_id !== env.EXPECTED_OWNER_USER_ID
+        : report.execution_mode !== undefined) throw new Error("cli_report_execution_mode_mismatch");
+      if (ordinary) {
+        const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+        const packet = JSON.parse(fs.readFileSync(env.PREREQUISITES_FILE, "utf8"));
+        const expected = localAcceptanceIdentity(root, env.SOURCE_SHA, env.EXPECTED_OWNER_USER_ID);
+        expected.ordinaryOperatorId = env.EXPECTED_OPERATOR_USER_ID || "";
+        const operator = JSON.parse(fs.readFileSync(env.ORDINARY_OPERATOR_READBACK_FILE, "utf8"));
+        report = collectOrdinaryBrowserReport(report, ordinaryReadbackContext(packet, expected, operator, env, { verifyTask: true }));
+      }
+      if (!ordinary && Number(cliStatus) !== 0) { report.terminal_outcome_verified = false; report.failure_code = "cli_execution_failed"; }
       writeNewArtifact(output, report, path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."));
       console.log(`STAGED_500_REPORT_SAVED outcome=${report.outcome} acceptance_verified=${report.acceptance_verified === true}`);
       if (!report.terminal_outcome_verified) process.exitCode = 1;
-    } else throw new Error("Use render, collect, assemble-prerequisites, or describe-prerequisites");
+    } else throw new Error("Unknown staged acceptance operation");
   } catch (error) { console.error(`STAGED_500_ACCEPTANCE_BLOCKED: ${error.message}`); process.exitCode = 2; }
 }

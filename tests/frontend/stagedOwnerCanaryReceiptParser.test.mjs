@@ -27,7 +27,7 @@ const valid = {
   "local_source_verified": true,
   "deployed_git_source_sha": {
     "state": "unverified",
-    "reason": "No deployed SHA attested"
+    "reason": "The customer API does not attest a deployed Git SHA."
   },
   "app_id": "6a498732ec779dfaaeab0e53",
   "expected_owner_user_id": "owner_123",

@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 import ts from "typescript";
 
@@ -26,6 +29,8 @@ import * as activeLimited from "../../base44/functions/getCustomerScanResultV8/l
 import * as activePreview from "../../base44/functions/getCustomerScanResultV8/customerPreviewSeal.js";
 import * as activeCompatibility from "../../base44/functions/getCustomerScanResultV8/releaseCompatibility.js";
 import { FUNCTION_BUILD_ID as ACTIVE_FUNCTION_BUILD_ID } from "../../base44/functions/getCustomerScanResultV8/generatedBuildId.js";
+import { buildAuthoritySnapshot as buildStagedAuthoritySnapshot } from "../../base44/functions/persistDurableScanAuthorityV9/authoritySnapshot.js";
+import { emptyGeoReadiness } from "../../base44/functions/persistDurableScanAuthorityV9/geoReadiness.js";
 
 const entrySource = readFileSync("base44/functions/getCustomerScanResult/entry.ts", "utf8");
 const activeEntrySource = readFileSync("base44/functions/getCustomerScanResultV8/entry.ts", "utf8");
@@ -36,19 +41,21 @@ const HISTORICAL_FINGERPRINT = "5d94e93c54a9efb6";
 // Keep this fixture fixed: deriving it from the new candidate would miss a
 // release advance that accidentally makes intact customer history unreadable.
 const PREVIOUS_CURRENT_FINGERPRINT = "01ebe8e90df1e6bd";
+const PREVIOUS_STAGED_FINGERPRINT = "118544dcf77d86cf";
 const UNKNOWN_FINGERPRINT = "aaaaaaaaaaaaaaaa";
 let handlerInvocationSequence = 0;
 
-async function importHandler(harnessName, active = false) {
-  const javascript = ts.transpileModule(active ? activeEntrySource : entrySource, {
+async function importHandler(harnessName, source) {
+  const javascript = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
   }).outputText.replace(/^import[\s\S]*?;\s*$/gm, "");
   const prelude = `const { ${Object.keys(globalThis[harnessName]).join(",")} } = globalThis.${harnessName};`;
   await import(`data:text/javascript;base64,${Buffer.from(`${prelude}\n${javascript}\n// harness:${harnessName}`).toString("base64")}`);
 }
 
-async function sealedRows(fingerprint) {
-  const snapshot = buildAuthoritySnapshot({
+async function sealedRows(fingerprint, staged) {
+  const buildSnapshot = staged ? buildStagedAuthoritySnapshot : buildAuthoritySnapshot;
+  const snapshot = buildSnapshot({
     scan: {
       submitted_url: "https://www.funbooker.com/",
       website_url: "https://www.funbooker.com/",
@@ -86,6 +93,7 @@ async function sealedRows(fingerprint) {
       },
       classification_verdict: "complete",
       worker_peak_memory_bytes: 1024,
+      ...(staged ? { scan_mode: "standard_150", pipeline_mode: "staged", page_cap: 150 } : {}),
     },
     review: {
       archetype_classifier_version: "archetype_classifier_v10_structural_finance_member_retail",
@@ -122,6 +130,7 @@ async function sealedRows(fingerprint) {
       },
       classification_verdict: "complete",
       worker_peak_memory_bytes: 1024,
+      ...(staged ? { geo_readiness: emptyGeoReadiness() } : {}),
       recommendations: [{
         fix_id: "fix_hist", rule: "missing_h1", issue_title: "Review this page heading",
         priority: "medium", page_url: "https://www.funbooker.com/fr/ville/paris",
@@ -156,11 +165,11 @@ function matches(record, query) {
 }
 
 async function invokeWithFingerprint(fingerprint, {
-  active = false, mutateRows = () => {}, callerUserId = "user_hist", signingKey = SECRET,
+  active = false, stagedReader, mutateRows = () => {}, callerUserId = "user_hist", signingKey = SECRET,
 } = {}) {
   const invocationId = ++handlerInvocationSequence;
   const harnessName = `__customerHistoricalReaderHarness_${invocationId}`;
-  const rows = await sealedRows(fingerprint);
+  const rows = await sealedRows(fingerprint, Boolean(stagedReader));
   mutateRows(rows);
   const access = {
     id: "access_hist",
@@ -221,10 +230,11 @@ async function invokeWithFingerprint(fingerprint, {
       ...activeProjection, ...activeLimited, ...activePreview, ...activeCompatibility,
       FUNCTION_BUILD_ID: ACTIVE_FUNCTION_BUILD_ID,
     } : {}),
+    ...stagedReader?.modules,
   };
 
   try {
-    await importHandler(harnessName, active);
+    await importHandler(harnessName, stagedReader?.entry ?? (active ? activeEntrySource : entrySource));
     assert.equal(typeof handler, "function");
     return await handler(new Request("https://function.example", {
       method: "POST",
@@ -237,6 +247,49 @@ async function invokeWithFingerprint(fingerprint, {
     else globalThis.Deno = priorDeno;
   }
 }
+
+test("the next V9 reader opens the prior signed staged result without marking it current", async t => {
+  const directory = mkdtempSync(join(tmpdir(), "next-v9-customer-reader-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  cpSync("base44/functions/getCustomerScanResultV9", directory, { recursive: true });
+  writeFileSync(join(directory, "package.json"), '{"type":"module"}');
+  const nextFingerprint = "bbbbbbbbbbbbbbbb";
+  const generatedContract = join(directory, "generatedReleaseContract.js");
+  writeFileSync(generatedContract, readFileSync(generatedContract, "utf8")
+    .replace(/RELEASE_FINGERPRINT = "[a-f0-9]{16}"/, `RELEASE_FINGERPRINT = "${nextFingerprint}"`));
+  const fromReader = file => import(pathToFileURL(join(directory, file)).href);
+  const stagedReader = {
+    entry: readFileSync(join(directory, "entry.ts"), "utf8")
+      .replace(/BASE44_HANDLER_RELEASE_FINGERPRINT = "[a-f0-9]{16}"/, `BASE44_HANDLER_RELEASE_FINGERPRINT = "${nextFingerprint}"`),
+    modules: {
+      ...await fromReader("projection.js"),
+      ...await fromReader("limitedResultIntegrity.js"),
+      ...await fromReader("customerPreviewSeal.js"),
+      ...await fromReader("releaseCompatibility.js"),
+      ...await fromReader("generatedReleaseContract.js"),
+      ...await fromReader("generatedBuildId.js"),
+    },
+  };
+
+  const response = await invokeWithFingerprint(PREVIOUS_STAGED_FINGERPRINT, { stagedReader });
+  const body = await response.json();
+  assert.equal(response.status, 200, body.error_code);
+  assert.equal(body.authority_verified, true);
+  assert.equal(body.release_contract_current, false);
+  assert.equal(body.run.beta_revision_fingerprint, PREVIOUS_STAGED_FINGERPRINT);
+  assert.equal(body.run.page_cap, 150);
+  assert.equal(body.fixItems[0].recommended_value, "Keep the verified saved instruction.");
+
+  const unknown = await invokeWithFingerprint(UNKNOWN_FINGERPRINT, { stagedReader });
+  assert.equal(unknown.status, 503);
+  assert.equal((await unknown.json()).error_code, "result_release_mismatch");
+  const invalid = await invokeWithFingerprint(PREVIOUS_STAGED_FINGERPRINT, { stagedReader, signingKey: "wrong-test-key" });
+  assert.equal(invalid.status, 409);
+  assert.equal((await invalid.json()).error_code, "result_authority_invalid");
+  const otherOwner = await invokeWithFingerprint(PREVIOUS_STAGED_FINGERPRINT, { stagedReader, callerUserId: "other_user" });
+  assert.equal(otherOwner.status, 404);
+  assert.equal((await otherOwner.json()).error_code, "scan_not_found");
+});
 
 test("the actual customer reader opens a sealed known-compatible historical release", async () => {
   const response = await invokeWithFingerprint(HISTORICAL_FINGERPRINT);

@@ -1,11 +1,15 @@
+from collections import Counter
 import json
 import time
 from urllib import robotparser
+from urllib.parse import urlsplit
 
 import pytest
 
 from app import scanner
 from app.robots_policy import RobotsPolicy
+from app.scan_limits import scan_page_limit
+from tests import fixtures as fx
 
 
 def test_robots_snapshot_preserves_rules_and_unknown_state():
@@ -71,6 +75,71 @@ async def test_checkpoint_between_batches_preserves_dedup_and_pages(mock_network
     assert sum(request.url.path == '/' for request in requests) == 2
     for path in paths:
         assert sum(request.url.path == path for request in requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("cap", "selected_response"), [
+    (150, "healthy"), (500, "healthy"), (150, "duplicate"), (150, "failed"),
+])
+async def test_planned_sections_survive_new_internal_links_and_batch_checkpoints(mock_network, cap, selected_response):
+    origin = "https://staged-coverage.example"
+    populations = {"products": 340, "collections": 170, "locations": 80, "fieldnotes": 50}
+    routes = {
+        origin + "/": fx._html(fx._page("Home", links=[
+            "/products/0.html", "/products/17.html", "/products/211.html",
+            "/collections/4.html", "/locations/23.html",
+        ])),
+        origin + "/robots.txt": fx._text("User-agent: *\nAllow: /\n"),
+    }
+    inventory = []
+    for section, count in populations.items():
+        for index in range(count):
+            url = f"{origin}/{section}/{index}.html"
+            inventory.append(url)
+            routes[url] = fx._html(fx._page(url, links=["/", f"/{section}/{(index + 1) % count}.html"]))
+    routes[origin + "/sitemap.xml"] = fx._xml(fx._sitemap(inventory))
+    mock_network(routes)
+
+    with scan_page_limit(cap):
+        state = await scanner.plan_scan(origin, scan_mode=f"standard_{cap}", job_mode=True, staged=True)
+        planned = set(state.queued)
+        assert len(planned) == cap and len(state.sitemap_urls) == 640
+        sections = Counter("/" + urlsplit(url).path.split("/")[1] for url in planned if url != state.start_url)
+        assert set(sections) == {f"/{section}" for section in populations}
+        assert max(sections.values()) <= (cap - 1) * 40 // 100
+        assert state.sampling_evidence["sections_selected"] == sections
+        selection = next(url for url in sorted(planned - state.first_pass_urls) if "/fieldnotes/" in url)
+        if selected_response == "duplicate":
+            routes[selection] = {"status": 301, "headers": {"location": state.start_url}, "body": ""}
+        if selected_response == "failed":
+            routes[selection] = {"status": 404, "body": "Not found"}
+        state = scanner.ScanState.from_dict(json.loads(json.dumps(state.to_dict())))
+        for batch in range((cap + 49) // 50):
+            await scanner.crawl_batch(state, max_pages=50)
+            snapshot = json.loads(json.dumps(state.to_dict()))
+            if batch == 0:
+                # Old batches placed internal discoveries in the same heap
+                # class as original selections. Resume with that saved format.
+                assert set(snapshot["queued"]) - planned
+                for item in snapshot["queue"]:
+                    item[0] = min(item[0], 1)
+            state = scanner.ScanState.from_dict(snapshot)
+
+    retained = {page["url"] for page in state.pages}
+    assert len(retained) == cap
+    assert state.completion_reason == "page_cap"
+    if selected_response == "duplicate":
+        assert retained & planned == planned - {selection}
+        assert len(retained - planned) == 1
+        assert {"duplicate_url": selection, "retained_url": state.start_url} in state.duplicate_merges
+    else:
+        assert retained == planned
+        retained_sections = Counter("/" + urlsplit(url).path.split("/")[1] for url in retained if url != state.start_url)
+        assert retained_sections == state.sampling_evidence["sections_selected"]
+    if selected_response == "failed":
+        assert next(page for page in state.pages if page["url"] == selection)["status_code"] == 404
+    else:
+        assert all(page["status_code"] == 200 for page in state.pages)
 
 
 @pytest.mark.asyncio

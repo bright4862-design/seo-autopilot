@@ -611,12 +611,15 @@ class ScanState:
             snapshot["timing_budget"][name] += offset
         for name in ("queued", "seen", "first_pass_urls"):
             snapshot[name] = set(snapshot[name])
-        snapshot["queue"] = [tuple(item) for item in snapshot["queue"]]
-        heapq.heapify(snapshot["queue"])
         snapshot["robots_policy"] = RobotsPolicy.from_dict(snapshot["robots_policy"])
         snapshot["rate_limit_pacer"] = _AdaptiveRateLimitPacer.from_dict(snapshot["rate_limit_pacer"])
         snapshot["crawl_state"]["in_flight"] = 0
-        return cls(**snapshot)
+        state = cls(**snapshot)
+        # The serialized heap may predate the separate backfill priority.
+        # Its discovery records still distinguish planned from later URLs.
+        state.queue[:] = [state._priority(item[-1]) for item in state.queue]
+        heapq.heapify(state.queue)
+        return state
 
     def rebuild_priority(self, *, observed: bool = False) -> None:
         pending = [item[-1] if isinstance(item, (list, tuple)) else item for item in self.queue]
@@ -649,7 +652,15 @@ class ScanState:
         return (-float(self.importance.get(url, {}).get("importance_score", 0.0)), hashlib.sha256(url.encode()).hexdigest())
 
     def _priority(self, url: str) -> tuple:
-        return (0 if url in self.first_pass_urls else 1, *self._rank(url), url)
+        if url in self.first_pass_urls:
+            priority = 0
+        elif "sitemap" in self.discovery.get(url, {}).get("discovered_from", ()):
+            # Planning labels only the admitted sample with this source.
+            # Internal links discovered during crawling fill any spare slots.
+            priority = 1
+        else:
+            priority = 2
+        return (priority, *self._rank(url), url)
 
     def annotate_importance(self, page: dict) -> None:
         evidence = self.importance.get(page.get("url")) or self.importance.get(page.get("final_url")) or {}

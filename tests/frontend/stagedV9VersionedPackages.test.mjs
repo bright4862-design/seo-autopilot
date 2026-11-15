@@ -113,3 +113,53 @@ test("generator and materializer detect package drift then generate a fresh rout
   materializeStagedV9Packages(root, output);
   assert.ok(fs.existsSync(path.join(output, FUNCTIONS, updated.functions[name].route_name)));
 });
+
+test("recording acceptance and selecting public V9 preserves the exact staged package bytes", t => {
+  const parent = tempRoot(t);
+  const source = path.join(parent, "source");
+  const stablePaths = ["base44/functions", "src", STAGED_V9_ROUTES_FILE,
+    "data/cross-runtime-release-components.json", "scanner-api/app/generated_v9_worker_runtime.py"];
+  for (const rel of [...stablePaths, "data/beta-crawler-revision.json", "data/base44-function-routes.json",
+    "scripts/generate_release_contracts.mjs", "scripts/base44_release_manifest.mjs",
+    "scripts/lib/staged-v9-function-packages.mjs"]) {
+    fs.cpSync(path.join(ROOT, rel), path.join(source, rel), { recursive: true });
+  }
+  const env = { ...process.env, RELEASE_CONTRACT_ROOT: source };
+  const generate = (...args) => execFileSync(process.execPath, [path.join(source, "scripts/generate_release_contracts.mjs"), ...args],
+    { cwd: source, env, stdio: "pipe" });
+  const exactFiles = root => fs.readdirSync(root, { recursive: true }).sort().flatMap(rel => {
+    const file = path.join(root, rel);
+    return fs.statSync(file).isFile() ? [[rel, createHash("sha256").update(fs.readFileSync(file)).digest("hex")]] : [];
+  });
+  const releaseFile = path.join(source, "data/beta-crawler-revision.json");
+  const routesFile = path.join(source, "data/base44-function-routes.json");
+  const record = JSON.parse(fs.readFileSync(releaseFile, "utf8"));
+  const routes = JSON.parse(fs.readFileSync(routesFile, "utf8"));
+  const v8 = routes.generation === "v8" ? routes.routes : routes.historical_routes.v8;
+  const v9 = routes.generation === "v9" ? routes.routes : routes.candidate_routes.v9;
+  const history = { ...routes.historical_routes };
+  delete history.v8;
+  fs.writeFileSync(releaseFile, JSON.stringify({ ...record, status: "candidate", git_commit: "", acceptance_report: "" }));
+  fs.writeFileSync(routesFile, JSON.stringify({ ...routes, generation: "v8", routes: v8,
+    historical_routes: history, candidate_routes: { ...routes.candidate_routes, v9 } }));
+  generate("--check");
+  const candidate = path.join(parent, "candidate");
+  materializeStagedV9Packages(source, candidate);
+  const candidateFiles = exactFiles(source);
+
+  const frozenRecord = { ...record, status: "frozen_beta", git_commit: "a".repeat(40),
+    acceptance_report: "docs/fixture-accepted-release.md" };
+  fs.writeFileSync(releaseFile, JSON.stringify(frozenRecord));
+  fs.writeFileSync(routesFile, JSON.stringify({ ...routes, generation: "v9", routes: v9,
+    historical_routes: { ...history, v8 }, candidate_routes: {} }));
+  generate("--check");
+  generate();
+  const frozen = path.join(parent, "frozen");
+  materializeStagedV9Packages(source, frozen);
+
+  const metadata = new Set(["data/beta-crawler-revision.json", "data/base44-function-routes.json"]);
+  assert.deepEqual(exactFiles(source).filter(([rel]) => !metadata.has(rel)),
+    candidateFiles.filter(([rel]) => !metadata.has(rel)), "freezing must preserve runtime and historical reader bytes");
+  assert.deepEqual(exactFiles(frozen), exactFiles(candidate), "same accepted package archive must preserve every deployed byte");
+  assert.deepEqual(JSON.parse(fs.readFileSync(releaseFile, "utf8")), frozenRecord);
+});

@@ -428,7 +428,7 @@ async def test_authority_retry_reuses_persisted_result_and_review(h):
     await h.run("plan")
     for batch in range(3):
         await h.run("batch", batch=batch)
-    reviewed, completed = [], []
+    reviewed, completed, stamps = [], [], []
 
     async def review(result):
         reviewed.append(result["pages_crawled"])
@@ -436,19 +436,23 @@ async def test_authority_retry_reuses_persisted_result_and_review(h):
 
     async def complete(client, scan, result, key, *, review):
         completed.append(review)
+        stamps.append(result["result_ready_at"])
         if len(completed) == 1:
             return {"ok": False, "transient": True}
         return await h.complete(client, scan, result, key)
 
     h.deps.review, h.deps.complete = review, complete
+    h.now = 1017.0
     with pytest.raises(StageRetry):
         await h.run("finalize", batch=3)
     assert await h.store.read(h.prefix + "review.json.gz")
     assert await h.store.read(h.prefix + "result.json.gz")
     assert (await h.frontier()).value["lease_until"] == 0
+    h.now += 20.0
     await h.run("finalize", batch=3)
     assert reviewed == [120]
     assert len(completed) == 2 and completed[0] == completed[1]
+    assert stamps == ["1970-01-01T00:16:57.000Z"] * 2
     finished = [
         (await h.store.read(key)).value for key in await h.store.keys(h.prefix + "receipts/")
         if key.endswith(".finished.json.gz")
@@ -460,6 +464,45 @@ async def test_authority_retry_reuses_persisted_result_and_review(h):
         assert retry["artifacts"][artifact] == {
             "generation": producer["artifacts"][artifact]["generation"], "produced": False,
         }
+
+
+@pytest.mark.parametrize("mode,cap", [("standard_150", 150), ("standard_500", 500)])
+@pytest.mark.asyncio
+async def test_blocked_crawl_can_finish_without_starting_review(h, monkeypatch, mode, cap):
+    from app import scan_job
+
+    h.scan.update(scan_mode=mode, page_cap=cap)
+    h.job.update(scan_mode=mode, page_cap=cap)
+    monkeypatch.setattr(scan_job, "read_scan_run", h.read)
+
+    async def blocked_result(state):
+        return {"pages_crawled": 1, "pages": [{
+            "url": h.scan["website_url"],
+            "status_code": 403,
+            "page_evidence_class": "failed_access",
+            "access_block_vendor": "cloudflare",
+            "access_block_kind": "challenge",
+        }]}
+
+    async def review(result):
+        pytest.fail("The reviewer should not run when the crawl found zero usable pages")
+
+    h.deps.finalize = blocked_result
+    h.deps.review = review
+    h.deps.complete = scan_job.complete_authority
+    await h.run("plan")
+    for batch in range(3):
+        await h.run("batch", batch=batch)
+
+    outcome = await h.run("finalize", batch=3)
+
+    assert outcome == {"success": False, "error_code": "scan_access_limited"}
+    assert len(h.failures) == 1
+    args, kwargs = h.failures[0]
+    assert args[1:3] == (h.scan["id"], "scan_access_limited")
+    assert "Cloudflare returned a bot challenge" in args[3]
+    assert kwargs["attempt_count"] == h.scan["attempt_count"]
+    assert await h.store.read(h.prefix + "review.json.gz") is None
 
 
 @pytest.mark.parametrize("change,expected", [({"attempt_count": 2}, "superseded_attempt"), ({"status": "cancelled"}, "already_terminal"), ({"owner_user_id": "other-owner"}, "identity_mismatch")])

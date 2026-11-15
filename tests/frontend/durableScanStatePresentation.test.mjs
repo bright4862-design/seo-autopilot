@@ -36,6 +36,7 @@ test("the kind vocabulary is closed", () => {
     "access_limited",
     "deadline_reached",
     "rendering_not_verified",
+    "robots_blocked",
     "save_failed",
     "too_few_usable_pages",
     "unknown_limited",

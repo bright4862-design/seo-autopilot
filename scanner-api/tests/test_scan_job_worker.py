@@ -114,6 +114,21 @@ def test_definitive_blocked_crawl_short_circuits_before_full_review():
     }) is None
 
 
+def test_robots_failure_requires_a_frozen_respect_policy_and_only_denied_pages():
+    result = {
+        "respect_robots_txt": True,
+        "owner_attested_robots_override": False,
+        "pages": [{"url": "https://example.com/", "status_code": 0, "fetch_error": "blocked_by_robots_txt"}],
+    }
+    assert terminal_crawl_limitation(result)["code"] == "blocked_by_robots_txt"
+    assert terminal_crawl_limitation({
+        **result, "respect_robots_txt": False, "owner_attested_robots_override": True,
+    }) is None
+    assert terminal_crawl_limitation({
+        **result, "pages": [*result["pages"], {"status_code": 500}],
+    }) is None
+
+
 def test_blocked_review_gets_truthful_access_limited_terminal_code():
     limitation = terminal_review_limitation({
         "release_gate_eligible": False,

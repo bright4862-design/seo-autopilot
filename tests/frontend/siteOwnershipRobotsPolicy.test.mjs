@@ -25,7 +25,7 @@ import {
 import { durableScanStatePresentation } from "../../src/lib/durableScanStatePresentation.js";
 
 const WAF_TITLE = "Your site's security service is blocking FixList.";
-const WAF_ACTION = "Temporarily allow FixList in your firewall/bot protection, then Rescan.";
+const WAF_ACTION = "Ask your site administrator to review the restriction and approve this scan before trying again.";
 
 class MemoryStorage {
   constructor(seed = {}) { this.map = new Map(Object.entries(seed)); }

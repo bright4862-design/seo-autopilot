@@ -913,11 +913,11 @@ def _access_limitation_detail(pages: list[dict[str, Any]] | None) -> str:
     )
 
 def terminal_crawl_limitation(result: dict[str, Any]) -> dict[str, str] | None:
-    """Short-circuit a definitively blocked crawl before full local review.
+    """Close a definite access or robots restriction before full local review.
 
-    This is intentionally narrow: at least one page must carry the existing
-    blocked-access classifier and there must be zero usable HTML pages. Other
-    crawl failures continue through the normal review contract.
+    A site access failure requires a blocked page and zero usable HTML.
+    A robots failure requires every observed page to have been denied by the
+    frozen robots policy. Remaining cases continue through normal review.
     """
     if not isinstance(result, dict):
         return None
@@ -927,6 +927,16 @@ def terminal_crawl_limitation(result: dict[str, Any]) -> dict[str, str] | None:
 
     from .page_evidence_gate import page_has_usable_html
     from .review import is_blocked_access_page
+
+    if (
+        result.get("respect_robots_txt") is True
+        and result.get("owner_attested_robots_override") is False
+        and all(isinstance(page, dict) and page.get("fetch_error") == "blocked_by_robots_txt" for page in pages)
+    ):
+        return {
+            "code": "blocked_by_robots_txt",
+            "detail": "The site's robots.txt rules blocked every page considered for this scan.",
+        }
 
     blocked = sum(1 for page in pages if isinstance(page, dict) and is_blocked_access_page(page))
     usable = sum(1 for page in pages if isinstance(page, dict) and page_has_usable_html(page))

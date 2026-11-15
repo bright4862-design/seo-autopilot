@@ -1,6 +1,7 @@
 """Exercise the real extracted engine through a durable ten-batch chain."""
 import json
 from pathlib import Path
+from datetime import datetime, timezone
 import subprocess
 
 import pytest
@@ -39,6 +40,7 @@ async def test_500_page_scan_commits_ten_batches_and_duplicate_finalization_is_i
 
     async def start(client, current):
         scan["status"] = "crawling"
+        scan["started_at"] = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
         return dict(scan)
 
     async def progress(client, current, crawled, planned, batch=None):
@@ -97,28 +99,34 @@ async def test_500_page_scan_commits_ten_batches_and_duplicate_finalization_is_i
     with scan_job.worker_function_generation("V9"):
         envelope = scan_job.build_completion_envelope(scan, result, review, "integration-test-key")
     assert len(json.dumps(envelope)) < len(json.dumps(original_envelope))
+    assert envelope["scan"]["result_ready_at"] == result["result_ready_at"]
     (tmp_path / "completion-500.json").write_text(json.dumps(envelope))
     script = """
       import assert from 'node:assert/strict';
       import {readFileSync} from 'node:fs';
       import {webcrypto} from 'node:crypto';
       import {buildAuthoritySnapshot, firstFailedAuthorityPredicate} from './base44/functions/persistDurableScanAuthorityV9/authoritySnapshot.js';
+      import {stagedCompletionTime} from './base44/functions/persistDurableScanAuthorityV9/completionTimestamp.js';
       import {authorityRowsFromSnapshot} from './base44/functions/persistDurableScanAuthorityV9/authorityRows.js';
       import {authoritySnapshotFromRows, createAuthoritySeal, verifyAuthoritySeal} from './base44/functions/getCustomerScanResultV9/projection.js';
-      const {body, original} = JSON.parse(readFileSync(0, 'utf8'));
-      const options = {scan:body.scan,review:body.review,identity:body.identity,userId:body.identity.owner_user_id,now:'2026-11-11T12:00:00.000Z',identityVersion:'evidence_url_identity_v2_published_route'};
+      const {body, original, scan} = JSON.parse(readFileSync(0, 'utf8'));
+      const finishedAt = stagedCompletionTime(scan, body.scan);
+      assert.ok(Date.parse(finishedAt) > Date.parse(scan.started_at));
+      const options = {scan:body.scan,review:body.review,identity:body.identity,userId:body.identity.owner_user_id,now:finishedAt,identityVersion:'evidence_url_identity_v2_published_route'};
       assert.equal(firstFailedAuthorityPredicate(body.scan,body.review,{identityVersion:options.identityVersion}),'');
       const snapshot = buildAuthoritySnapshot(options);
       assert.deepEqual(snapshot,buildAuthoritySnapshot({...options,scan:original.scan,review:original.review}));
       const rows = authorityRowsFromSnapshot(snapshot,{fixListId:'list_500',ownerUserId:options.userId});
       const restored = authoritySnapshotFromRows({run:{...rows.scanRun,id:body.identity.scan_id,project_id:body.identity.project_id},fixList:{...rows.fixList,id:'list_500'},fixItems:rows.fixItems,userId:options.userId});
       assert.deepEqual(restored,snapshot);
+      assert.equal(restored.scan.completed_at, finishedAt);
+      assert.equal(restored.sealed_at, finishedAt);
       const proof = await createAuthoritySeal(snapshot,'integration-test-key',webcrypto);
       assert.equal(await verifyAuthoritySeal(restored,'integration-test-key',proof,webcrypto),true);
       assert.equal(snapshot.scan.pages_crawled,500);
       assert.equal(snapshot.scan.page_cap,500);
     """
     checked = subprocess.run(["node", "--input-type=module", "-e", script],
-                             input=json.dumps({"body": envelope, "original": original_envelope}), text=True, capture_output=True,
+                             input=json.dumps({"body": envelope, "original": original_envelope, "scan": scan}), text=True, capture_output=True,
                              cwd=Path(__file__).resolve().parents[2], timeout=30)
     assert checked.returncode == 0, checked.stderr

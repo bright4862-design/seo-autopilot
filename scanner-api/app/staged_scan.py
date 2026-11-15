@@ -14,9 +14,16 @@ import re
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable
 
-from .scan_job import already_terminal, current_attempt, identity_matches, is_superseded_attempt
+from .scan_job import (
+    already_terminal,
+    current_attempt,
+    identity_matches,
+    is_superseded_attempt,
+    terminal_crawl_limitation,
+)
 from .observability import website_host
 from .staged_telemetry import MAX_RECORDED_DELIVERIES, DeliveryReceipt, active_delivery
 from .workspace import WorkspaceConflict, WorkspaceUnavailable, attempt_prefix
@@ -320,7 +327,10 @@ class StagedScanRuntime:
             if not signing_key:
                 raise StageRetry("Authority signing is not configured")
             reviewed = None
-            if self.dep.review is not None:
+            # Completion can already close a definitively blocked crawl from
+            # its evidence. A reviewer outage must not mask that outcome.
+            crawl_limitation = terminal_crawl_limitation(result)
+            if self.dep.review is not None and crawl_limitation is None:
                 review_snapshot = await self.store.read(prefix + "review.json.gz")
                 if review_snapshot:
                     reviewed = review_snapshot.value
@@ -335,6 +345,17 @@ class StagedScanRuntime:
                 fresh, stopped = await self._fence(client, job)
                 if stopped:
                     return stopped
+            if crawl_limitation is None:
+                # Write the timestamp before the first persistence request.
+                # Later deliveries keep it even if the response is lost.
+                stamp_key = prefix + "completion.json"
+                stamp = await self.store.read(stamp_key)
+                if stamp:
+                    ready_at = stamp.value["result_ready_at"]
+                else:
+                    ready_at = datetime.fromtimestamp(self.clock(), timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                    await self.store.write(stamp_key, {"result_ready_at": ready_at})
+                result = {**result, "result_ready_at": ready_at}
             completion = self.dep.complete(client, fresh, result, signing_key, review=reviewed) if reviewed is not None else self.dep.complete(client, fresh, result, signing_key)
             outcome = await asyncio.wait_for(completion, timeout=90)
             if outcome.get("transient"):

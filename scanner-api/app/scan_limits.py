@@ -25,6 +25,37 @@ def page_cap_for_mode(mode: str) -> int:
         raise ValueError("Unsupported server scan mode") from exc
 
 
+def standard_scan_contract(scan: dict) -> tuple[str, int, str] | None:
+    """Read a V9 contract or the implicit Standard 150 cap on an old row."""
+    mode = scan.get("scan_mode")
+    cap = scan.get("page_cap")
+    pipeline = scan.get("pipeline_mode")
+    if cap is None:
+        if mode not in (None, "", "advanced", "standard_150"):
+            return None
+        mode, cap = "standard_150", DEFAULT_PAGE_CAP
+        if pipeline is None:
+            pipeline = "monolith"
+    if (
+        type(cap) is int
+        and mode in ("standard_150", "standard_500")
+        and cap == page_cap_for_mode(mode)
+        and pipeline in ("monolith", "staged")
+        and (cap != SERVER_MAX_PAGE_CAP or pipeline == "staged")
+    ):
+        return mode, cap, pipeline
+    return None
+
+
+def task_matches_scan_contract(scan: dict, task: dict) -> bool:
+    """A task can repeat a frozen contract but cannot choose it."""
+    cap = task.get("page_cap")
+    pipeline = task.get("pipeline_mode")
+    if cap is None and pipeline is None:
+        return task.get("scan_mode") != "standard_500"  # Older tasks carry no frozen contract.
+    return type(cap) is int and standard_scan_contract(scan) == (task.get("scan_mode"), cap, pipeline)
+
+
 def current_page_cap() -> int:
     return _page_cap.get()
 

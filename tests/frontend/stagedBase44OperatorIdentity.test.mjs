@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -8,29 +9,42 @@ import test from "node:test";
 const source = "a".repeat(40);
 const bright = { id: "6a498da58ef5cec1f5cd4486", email: "bright4862@gmail.com", role: "admin" };
 const london = { id: "6a498732ec779dfaaeab0e54", email: "londonparisbrussels@gmail.com", role: "admin" };
+const customer = { id: "6aaaaaaaaaaaaaaaaaaaaaaa", email: "customer@example.test", role: "user" };
 const operator = "scripts/operate-base44-staged-runtime.sh";
 const collector = "scripts/collect-base44-staged-observations.sh";
+const buildId = "1".repeat(64);
+const fingerprint = "2".repeat(16);
+const activationId = "v9-activation";
+const customerDigest = createHash("sha256").update(JSON.stringify([customer.id])).digest("hex");
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "staged-operator-identity-"));
-  const output = mkdtempSync(join(tmpdir(), "staged-operator-observations-"));
+  const output = realpathSync(mkdtempSync(join(tmpdir(), "staged-operator-observations-")));
   t.after(() => {
     rmSync(root, { recursive: true, force: true });
     rmSync(output, { recursive: true, force: true });
   });
   mkdirSync(join(root, "scripts/lib"), { recursive: true });
+  mkdirSync(join(root, "data"));
+  writeFileSync(join(root, "data/beta-crawler-revision.json"), JSON.stringify({ fingerprint }));
   for (const file of [operator, collector]) copyFileSync(file, join(root, file));
   writeFileSync(join(root, "scripts/lib/release-source-guard.sh"), "fixlist_require_exact_main() { [[ \"$2\" == \"$SOURCE_SHA\" ]]; }\n");
   writeFileSync(join(root, "scripts/lib/base44-pinned-cli.sh"), `
 fixlist_install_base44_cli() { FIXLIST_BASE44_CLI="$TEST_CLI"; }
-fixlist_require_base44_owner() { return 0; }
+fixlist_require_base44_owner() { [[ "$1" == "$TEST_CLI_USER" ]] || return 2; }
 `);
   writeFileSync(join(root, "scripts/base44_release_manifest.mjs"),
     "export function assertPulledFunctionPackage() {}\n");
+  writeFileSync(join(root, "scripts/generate_release_contracts.mjs"), `
+if (process.argv[3] !== "startStandardScanJobV9") process.exit(1);
+const outputs = {"--build-id": "${buildId}", "--activation-id": "${activationId}"};
+if (!Object.hasOwn(outputs, process.argv[2])) process.exit(1);
+console.log(outputs[process.argv[2]]);
+`);
   writeFileSync(join(root, "scripts/deploy-base44-staged-functions.sh"), `
 #!/usr/bin/env bash
 [[ "$1" == verify ]] || exit 1
-printf '%s\\n' '{"candidate_fingerprint":"2222222222222222","functions":[{"name":"startStandardScanJobV9","build_id":"${"1".repeat(64)}","runtime_activation_id":"v9-activation"}]}' > "$READINESS_OUTPUT"
+printf '%s\\n' '{"candidate_fingerprint":"${fingerprint}","functions":[{"name":"startStandardScanJobV9","build_id":"${buildId}","runtime_activation_id":"${activationId}"}]}' > "$READINESS_OUTPUT"
 `);
   writeFileSync(join(root, "scripts/base44_staged_schema.mjs"), `
 import { writeFileSync } from "node:fs";
@@ -60,13 +74,15 @@ if (args[2] === "exec") {
         success: true, operator_build_id: "fixlist-staged-runtime-control-v1", v9_runtime_attested: false,
         schema_version: "fixlist_staged_runtime_readback_v1", config_converged: true,
         env_mode: "staged", owner_match: true, cohort_count: 1, intake_disabled_verified: true,
+        ...JSON.parse(process.env.TEST_PROBE)
       };
       return {
         success: true, schema_version: "fixlist_staged_v9_intake_readback_v1",
-        observed_at: new Date().toISOString(), build_id: "1".repeat(64), runtime_activation_id: "v9-activation",
-        release_fingerprint: "2".repeat(16), configured_pipeline_mode: "staged", pipeline_mode: "staged",
+        observed_at: new Date().toISOString(), build_id: "${buildId}", runtime_activation_id: "${activationId}",
+        release_fingerprint: "${fingerprint}", configured_pipeline_mode: "staged", pipeline_mode: "staged",
         staged_owner_cohort_state: "explicit", staged_owner_count: 1, staged_owner_cohort_sha256: "3".repeat(64),
         staged_owner_enabled: true, intake_gate: "enabled", admission_gate: "enabled",
+        ...JSON.parse(process.env.TEST_V9),
       };
     } },
   };
@@ -75,7 +91,7 @@ if (args[2] === "exec") {
 }
 `);
   chmodSync(cli, 0o700);
-  return (script, operation, selected, user) => {
+  return (script, operation, selected, user, options = {}) => {
     const confirm = {
       "prepare-owner": `PREPARE-BASE44-STAGED-150:${source}:${selected}`,
       "deploy-probe": `DEPLOY-BASE44-STAGED-PROBE:${source}`,
@@ -84,9 +100,12 @@ if (args[2] === "exec") {
     const result = spawnSync("bash", [script], {
       cwd: root, encoding: "utf8", timeout: 15000,
       env: {
-        ...process.env, BASE44_API_KEY: "", SOURCE_SHA: source, OPERATION: operation, CONFIRM: confirm,
+        ...process.env, BASE44_API_KEY: options.apiKey || "", SOURCE_SHA: source, OPERATION: operation,
+        CONFIRM: options.confirm ?? confirm, STAGED_OPERATOR_USER_ID: options.operatorId || "",
+        BASE44_EXPECTED_OWNER: options.expectedCli || "", TEST_CLI_USER: options.actualCli || options.expectedCli || "",
         STAGED_OWNER_USER_ID: selected, EXPECTED_OWNER_USER_ID: selected, BASE44_OBSERVATIONS_DIR: output,
         TEST_CLI: cli, TEST_TRACE: trace, TEST_USER: JSON.stringify(user),
+        TEST_PROBE: JSON.stringify(options.probe || {}), TEST_V9: JSON.stringify(options.v9 || {}),
       },
     });
     const calls = existsSync(trace) ? readFileSync(trace, "utf8").trim().split("\n").map(JSON.parse) : [];
@@ -100,6 +119,7 @@ test("the new London staged cohort uses the signed-in app identity before any Ba
   assert.deepEqual(result.calls.slice(0, 2), [["exec", "--data-env", "prod"], ["auth.me"]]);
   assert.equal(result.calls.filter(([name]) => name === "secrets").length, 2);
   assert.ok(result.calls.some(row => row.includes(`SCAN_STAGED_OWNER_IDS=${london.id}`)));
+  assert.equal(result.calls.some(row => row[1] === "startStandardScanJobV9"), false);
 });
 
 for (const [operation, user] of [
@@ -114,6 +134,94 @@ for (const [operation, user] of [
     assert.doesNotMatch(result.stdout + result.stderr, /@gmail\.com/);
   });
 }
+
+function pilotOptions(admin = london, overrides = {}) {
+  return {
+    operatorId: admin.id,
+    expectedCli: admin.email,
+    probe: { owner_match: false },
+    v9: {
+      pipeline_mode: "monolith",
+      staged_owner_enabled: false,
+      staged_owner_cohort_sha256: customerDigest,
+      intake_gate: "disabled",
+    },
+    ...overrides,
+  };
+}
+
+for (const [name, admin] of [["London", london], ["Bright", bright]]) {
+  test(`the approved ${name} administrator prepares only the customer and proves the exact V9 cohort`, t => {
+    const result = fixture(t)(operator, "prepare-owner", customer.id, admin, pilotOptions(admin));
+    assert.equal(result.status, 0, result.stderr);
+    const { calls } = result;
+    const intakeReadbacks = calls.flatMap((row, index) => row[1] === "startStandardScanJobV9" ? [index] : []);
+    const mutations = calls.flatMap((row, index) => row[0] === "secrets" ? [index] : []);
+    assert.deepEqual(calls.slice(0, 2), [["exec", "--data-env", "prod"], ["auth.me"]]);
+    assert.equal(intakeReadbacks.length, 2);
+    assert.equal(mutations.length, 2);
+    assert.ok(intakeReadbacks[0] < mutations[0] && mutations[1] < intakeReadbacks[1]);
+    assert.deepEqual(calls[mutations[0]], ["secrets", "set", "BETA_SCAN_INTAKE_ENABLED=false"]);
+    assert.deepEqual(calls[mutations[1]], ["secrets", "set", "SCAN_PIPELINE_MODE=staged", `SCAN_STAGED_OWNER_IDS=${customer.id}`]);
+    assert.match(result.stdout, /public_intake=closed v9_attested=true pilot_cohort_matches=true/);
+    assert.equal((result.stdout + result.stderr).includes(customer.id), false);
+    assert.equal((result.stdout + result.stderr).includes(customerDigest), false);
+  });
+}
+
+for (const [name, user, overrides] of [
+  ["absent explicit administrator", london, { operatorId: "" }],
+  ["unknown administrator", london, { operatorId: customer.id }],
+  ["wrong confirmation target", london, { confirm: `PREPARE-BASE44-STAGED-150:${source}:${london.id}` }],
+  ["wrong configured CLI account", london, { expectedCli: bright.email }],
+  ["different signed-in CLI account", london, { actualCli: bright.email }],
+  ["workspace API key without the personal CLI session", london, { apiKey: "b44k_mock" }],
+  ["ordinary customer as the runtime caller", customer, {}],
+  ["stale V9 intake build", london, { v9: { build_id: "0".repeat(64) } }],
+]) {
+  test(`pilot preparation makes zero configuration writes with ${name}`, t => {
+    const result = fixture(t)(operator, "prepare-owner", customer.id, user, pilotOptions(london, overrides));
+    assert.equal(result.status, 2, result.stderr);
+    assert.equal(result.calls.some(([command]) => command === "secrets"), false);
+    assert.doesNotMatch(result.stdout, /BASE44_STAGED_CONFIG_READBACK_VERIFIED/);
+  });
+}
+
+for (const drift of [
+  { staged_owner_cohort_sha256: "9".repeat(64) },
+  { staged_owner_count: 2 },
+  { staged_owner_enabled: true },
+  { intake_gate: "enabled" },
+]) {
+  test(`pilot verification fails closed for V9 drift in ${Object.keys(drift)[0]}`, t => {
+    const options = pilotOptions();
+    options.v9 = { ...options.v9, ...drift };
+    const result = fixture(t)(operator, "prepare-owner", customer.id, london, options);
+    assert.equal(result.status, 2, result.stderr);
+    assert.ok(result.calls.some(row => row.includes("BETA_SCAN_INTAKE_ENABLED=false")));
+    assert.doesNotMatch(result.stdout, /BASE44_STAGED_CONFIG_READBACK_VERIFIED/);
+  });
+}
+
+test("customer-cohort disable is available with a stale V9 route", t => {
+  const options = pilotOptions(london, { probe: { env_mode: "monolith", owner_match: false, cohort_count: 0 } });
+  const result = fixture(t)(operator, "disable", customer.id, london, options);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.calls.some(row => row[1] === "startStandardScanJobV9"), false);
+  assert.ok(result.calls.some(row => row.includes("SCAN_PIPELINE_MODE=monolith") && row.includes("SCAN_STAGED_OWNER_IDS=")));
+});
+
+test("read-only pilot status identifies a different exact cohort without exposing it", t => {
+  const options = pilotOptions();
+  options.v9.staged_owner_cohort_sha256 = "9".repeat(64);
+  const result = fixture(t)(operator, "status", customer.id, london, options);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.calls.some(([command]) => command === "secrets"), false);
+  const status = JSON.parse(result.stdout.trim().split("\n").at(-1));
+  assert.equal(status.v9_intake_attested, true);
+  assert.equal(status.pilot_cohort_matches, false);
+  assert.equal(result.stdout.includes("9".repeat(64)), false);
+});
 
 test("the collector reads V9 for the selected London app identity", t => {
   const result = fixture(t)(collector, "status", london.id, london);

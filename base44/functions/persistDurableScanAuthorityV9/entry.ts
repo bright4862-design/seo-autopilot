@@ -3,7 +3,7 @@ import { stagedCompletionTime } from "./completionTimestamp.js";
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import { secrets } from "base44:runtime";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "persistDurableScanAuthorityV9-staged-runtime-20261111-v3";
+const BASE44_RUNTIME_ACTIVATION_ID = "persistDurableScanAuthorityV9-staged-runtime-20261111-v4";
 import { createAuthoritySeal, verifyAuthoritySeal } from "./authoritySeal.js";
 import { authorityRowsFromSnapshot } from "./authorityRows.js";
 import { AUTHORITY_CONTRACT, buildAuthoritySnapshot, buildPersistedAuthoritySnapshot, firstFailedAuthorityPredicate, hasCompleteAcceptanceEvidence } from "./authoritySnapshot.js";

@@ -25,6 +25,7 @@ from .scan_job import (
     terminal_crawl_limitation,
 )
 from .observability import website_host
+from .scan_limits import standard_scan_contract, task_matches_scan_contract
 from .staged_telemetry import MAX_RECORDED_DELIVERIES, DeliveryReceipt, active_delivery
 from .workspace import WorkspaceConflict, WorkspaceUnavailable, attempt_prefix
 
@@ -32,6 +33,10 @@ from .workspace import WorkspaceConflict, WorkspaceUnavailable, attempt_prefix
 STAGE_LEASE_SECONDS = 450.0
 STAGE_WORK_SECONDS = 180.0
 STAGE_DELIVERY_SECONDS = 420.0
+FINALIZE_RECOVERY_SECONDS = 1800.0
+# A delivery admitted before the cutoff can spend its full lease issuing
+# requests. Base44 then allows each HTTP function up to five minutes.
+FINALIZE_PERSIST_DRAIN_SECONDS = STAGE_LEASE_SECONDS + 300.0
 SCAN_WALL_SECONDS = 600.0
 BATCH_SIZE = 50
 STAGED_SCAN_PIPELINE_VERSION = "staged_scan_pipeline_v2_owner_shortlist_cached_rss_admission"
@@ -44,17 +49,6 @@ class StageRetry(RuntimeError):
     def __init__(self, message: str, *, retry_after: int = 10):
         super().__init__(message)
         self.retry_after = max(1, int(retry_after))
-
-
-def staged_pipeline_enabled(job: dict[str, Any]) -> bool:
-    if str(os.getenv("SCAN_PIPELINE_MODE") or "monolith").lower() != "staged":
-        return False
-    owners = {item.strip() for item in str(os.getenv("SCAN_STAGED_OWNER_IDS") or os.getenv("SCAN_PIPELINE_OWNER_IDS") or "").split(",") if item.strip()}
-    # A wildcard is a configuration error, not permission to route every owner.
-    if "*" in owners:
-        return False
-    owner_id = job.get("owner_user_id")
-    return isinstance(owner_id, str) and bool(owner_id) and owner_id in owners
 
 
 @dataclass
@@ -97,6 +91,8 @@ class StagedScanRuntime:
             raise StageRetry("The scan record is unavailable")
         if not identity_matches(scan, job):
             return None, {"success": True, "skipped": "identity_mismatch"}
+        if not task_matches_scan_contract(scan, job):
+            return None, {"success": True, "skipped": "scan_contract_mismatch"}
         attempt = int(job.get("attempt_count") or 1)
         if is_superseded_attempt(scan, attempt) or current_attempt(scan) != attempt:
             return None, {"success": True, "skipped": "superseded_attempt"}
@@ -110,13 +106,10 @@ class StagedScanRuntime:
     def _canonical_job(scan: dict, job: dict) -> dict:
         if scan.get("pipeline_mode") != "staged":
             raise ValueError("The durable scan has not selected the staged pipeline")
-        mode = str(scan.get("scan_mode") or "standard_150").lower()
-        # Historical rows use advanced; only the server-owned V9 row can grant 500.
-        if mode == "advanced":
-            mode = "standard_150"
-        cap = scan.get("page_cap", 150)
-        if isinstance(cap, bool) or mode not in {"standard_150", "standard_500"} or cap != {"standard_150": 150, "standard_500": 500}[mode]:
+        contract = standard_scan_contract(scan)
+        if contract is None:
             raise ValueError("The server-owned scan entitlement is invalid")
+        mode, cap, pipeline = contract
         if str(job.get("scan_mode") or "standard_150") != mode:
             raise ValueError("The task mode does not match its durable scan")
         result = dict(job)
@@ -124,16 +117,18 @@ class StagedScanRuntime:
             if field in scan and scan[field] is not None:
                 result[field] = scan[field]
         result["normalized_domain"] = result.get("normalized_domain") or website_host(result["website_url"])
-        result.update({"scan_mode": mode, "page_cap": cap})
+        result.update({"scan_mode": mode, "page_cap": cap, "pipeline_mode": pipeline})
         return result
 
-    async def _lease(self, prefix: str, stage: str, batch: int) -> tuple[dict, int] | None:
+    async def _lease(self, prefix: str, stage: str, batch: int, recovery_generation: int = 0) -> tuple[dict, int] | None:
         key = prefix + "frontier.json"
         stored = await self.store.read(key)
         current = dict(stored.value) if stored else {"stage": "plan", "batch": 0, "committed_batches": [], "wall_deadline": self.clock() + SCAN_WALL_SECONDS}
         if current.get("stage") == "deleted":
             raise StageRetry("The workspace was deleted")
         if current.get("stage") != stage or int(current.get("batch") or 0) != batch:
+            return None
+        if stage == "finalize" and recovery_generation != int("finalize_recovery_until" in current):
             return None
         if float(current.get("lease_until") or 0) > self.clock():
             raise StageRetry("A delivery already owns this stage", retry_after=int(current["lease_until"] - self.clock()) + 1)
@@ -175,6 +170,10 @@ class StagedScanRuntime:
     async def _replay(self, client: Any, scan: dict, job: dict, frontier: dict) -> dict:
         if frontier.get("stage") == "done":
             return {"success": True, "scan_id": job["scan_id"], "already_completed": True}
+        if "finalize_recovery_until" in frontier:
+            # The watchdog owns dispatch now. A delayed batch must not
+            # refresh the heartbeat or issue the previous finalize task.
+            return {"success": True, "skipped": "finalize_recovery_pending"}
         if frontier.get("stage") not in {"batch", "finalize"}:
             raise StageRetry("The requested stage is not ready")
         scan, stopped = await self._fence(client, job)
@@ -193,7 +192,9 @@ class StagedScanRuntime:
         await self.dispatcher.enqueue(job, frontier["stage"], int(frontier["batch"]), **dispatch_options)
         return {"success": True, "scan_id": job["scan_id"], "stage": frontier["stage"], "batch": frontier["batch"], "pages_crawled": int(frontier.get("pages_crawled") or 0)}
 
-    async def process(self, client: Any, stage: str, job: dict, *, batch: int = 0, limited: bool = False) -> dict:
+    async def process(self, client: Any, stage: str, job: dict, *, batch: int = 0, limited: bool = False, recovery_generation: int = 0) -> dict:
+        if type(recovery_generation) is not int or recovery_generation not in (0, 1) or (recovery_generation and stage != "finalize"):
+            raise ValueError("Invalid finalize recovery generation")
         delivery_deadline = time.monotonic() + STAGE_DELIVERY_SECONDS
         scan, skipped = await self._fence(client, job)
         if skipped:
@@ -204,13 +205,46 @@ class StagedScanRuntime:
         receipt = None
         receipt_context = None
         try:
-            leased = await self._lease(prefix, stage, batch)
+            leased = await self._lease(prefix, stage, batch, recovery_generation)
             if leased is None:
                 stored = await self.store.read(prefix + "frontier.json")
                 if not stored:
                     raise StageRetry("The plan has not committed")
+                if stage == "finalize" and recovery_generation != int("finalize_recovery_until" in stored.value):
+                    return {"success": True, "skipped": "superseded_finalize_delivery"}
                 return await self._replay(client, scan, job, stored.value)
             frontier, generation = leased
+            if recovery_generation and self.clock() >= frontier["finalize_recovery_until"]:
+                # A timed-out persist can outlive its worker's HTTP request.
+                # Fence new finalizers and leave a full lease interval for
+                # previously started writes before attempting terminal failure.
+                safe_after = frontier["finalize_recovery_until"] + FINALIZE_PERSIST_DRAIN_SECONDS
+                if self.clock() < safe_after:
+                    raise StageRetry("The last finalize delivery is still draining")
+                _, stopped = await self._fence(client, job)
+                if stopped:
+                    return stopped
+                failure_code = "staged_finalize_timeout"
+                closed = await self.dep.fail(
+                    client, job["scan_id"], failure_code,
+                    "The scan could not save its result after retrying. Please start a new scan.",
+                    attempt_count=job.get("attempt_count"),
+                )
+                if closed is False:
+                    return {"success": True, "skipped": "superseded_attempt"}
+                persisted = await self.dep.read_scan(client, job["scan_id"])
+                if not isinstance(persisted, dict):
+                    raise StageRetry("The finalization timeout could not be verified")
+                if not identity_matches(persisted, job):
+                    return {"success": True, "skipped": "identity_mismatch"}
+                if current_attempt(persisted) != current_attempt(scan):
+                    return {"success": True, "skipped": "superseded_attempt"}
+                status = str(persisted.get("status") or "").lower()
+                if status == "failed" and persisted.get("error_code") == failure_code:
+                    return {"success": False, "error_code": failure_code}
+                if already_terminal(persisted):
+                    return {"success": True, "skipped": "already_terminal", "status": status}
+                raise StageRetry("The finalization timeout was not persisted")
             receipt = DeliveryReceipt(self.store, prefix, job, stage, batch, frontier["lease_owner"], generation)
             receipt_context = active_delivery.set(receipt)
             receipt.start()
@@ -356,6 +390,8 @@ class StagedScanRuntime:
                     ready_at = datetime.fromtimestamp(self.clock(), timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
                     await self.store.write(stamp_key, {"result_ready_at": ready_at})
                 result = {**result, "result_ready_at": ready_at}
+            if recovery_generation and self.clock() >= frontier["finalize_recovery_until"]:
+                raise StageRetry("The recovery window closed before the result could be saved")
             completion = self.dep.complete(client, fresh, result, signing_key, review=reviewed) if reviewed is not None else self.dep.complete(client, fresh, result, signing_key)
             outcome = await asyncio.wait_for(completion, timeout=90)
             if outcome.get("transient"):
@@ -404,10 +440,31 @@ class StagedScanRuntime:
         frontier = dict(stored.value)
         if float(frontier.get("lease_until") or 0) > self.clock():
             raise StageRetry("The live batch lease has not expired")
-        if frontier.get("stage") != "done":
-            frontier.update({"stage": "finalize", "limited": True, "lease_owner": "", "lease_until": 0})
+        if frontier.get("stage") == "done":
+            return {"success": True, "scan_id": job["scan_id"], "already_completed": True}
+        if frontier.get("stage") not in {"batch", "finalize"}:
+            raise StageRetry("The committed frontier cannot be finalized")
+        if "finalize_recovery_until" not in frontier:
+            # Only an interrupted crawl produces new partial evidence.
+            # A completed crawl can reuse its original result and review.
+            if frontier["stage"] == "batch":
+                frontier.update(stage="finalize", limited=True)
+            frontier.update(
+                finalize_recovery_until=self.clock() + FINALIZE_RECOVERY_SECONDS,
+                lease_owner="", lease_until=0,
+            )
             await self.store.write(prefix + "frontier.json", frontier, generation=stored.generation)
-        return await self._replay(client, scan, job, frontier)
+        batch = int(frontier["batch"])
+        recovery_until = frontier["finalize_recovery_until"]
+        if self.clock() >= recovery_until:
+            if self.clock() < recovery_until + FINALIZE_PERSIST_DRAIN_SECONDS:
+                raise StageRetry("The last finalize delivery is still draining")
+            return await self.process(client, "finalize", job, batch=batch, recovery_generation=1)
+        _, stopped = await self._fence(client, job)
+        if stopped:
+            return stopped
+        await self.dispatcher.enqueue(job, "finalize", batch, limited=bool(frontier.get("limited")), recovery_generation=1)
+        return {"success": True, "scan_id": job["scan_id"], "finalize_recovery_pending": True}
 
     async def delete_workspace(self, client: Any, job: dict) -> dict:
         scan = await self.dep.read_scan(client, job["scan_id"])
@@ -415,6 +472,8 @@ class StagedScanRuntime:
             raise StageRetry("The scan record is unavailable")
         if not identity_matches(scan, job) or current_attempt(scan) != int(job.get("attempt_count") or 1):
             return {"success": True, "skipped": "identity_mismatch"}
+        if not task_matches_scan_contract(scan, job):
+            return {"success": True, "skipped": "scan_contract_mismatch"}
         if not already_terminal(scan):
             raise StageRetry("The scan must be stopped before deleting evidence")
         prefix = self._scan_prefix(job)

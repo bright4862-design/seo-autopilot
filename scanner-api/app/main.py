@@ -53,7 +53,7 @@ from .scan_job import (
     write_terminal_failure,
 )
 from .scanner import VERSION, run_scan
-from .scan_limits import PAGE_CAPS
+from .scan_limits import PAGE_CAPS, task_matches_scan_contract
 from .trust_discovery import apply_trust_discovery_gate, enrich_scan_with_trust_pages
 from .url_evidence import URL_EVIDENCE_VERSION, apply_verified_url_contract
 
@@ -410,6 +410,8 @@ class ScanJobRequest(BaseModel):
     business_name: str | None = None
     cms_platform: str | None = None
     scan_mode: str = "standard_150"
+    page_cap: int | None = Field(default=None, strict=True)
+    pipeline_mode: str | None = None
     respect_robots_txt: bool = True
     owner_attested_robots_override: bool = False
 
@@ -425,12 +427,16 @@ class ScanDrainRequest(BaseModel):
     owner_user_id: str | None = None
     website_url: str
     normalized_domain: str | None = None
+    scan_mode: str | None = None
+    page_cap: int | None = Field(default=None, strict=True)
+    pipeline_mode: str | None = None
     drain_after: str
 
 
 class ScanStageRequest(ScanJobRequest):
     batch: int = Field(default=0, ge=0)
     limited: bool = False
+    recovery_generation: int = Field(default=0, strict=True, ge=0, le=1)
 
 
 class WorkspaceDeleteRequest(BaseModel):
@@ -442,6 +448,9 @@ class WorkspaceDeleteRequest(BaseModel):
     project_id: str | None = None
     website_url: str | None = None
     normalized_domain: str | None = None
+    scan_mode: str | None = None
+    page_cap: int | None = Field(default=None, strict=True)
+    pipeline_mode: str | None = None
 
 
 def require_cloud_tasks_oidc(authorization: str | None) -> None:
@@ -615,22 +624,6 @@ async def scan_job(
     scan_id = str(payload.scan_id or "").strip()
     if not scan_id or not str(payload.request_id or "").strip():
         raise HTTPException(status_code=400, detail="A durable scan_id and request_id are required.")
-    from .staged_scan import staged_pipeline_enabled
-    if staged_pipeline_enabled(payload.model_dump()):
-        if not valid_robots_policy_pair(payload.respect_robots_txt, payload.owner_attested_robots_override):
-            raise HTTPException(status_code=400, detail="Invalid scan robots policy.")
-        return await run_staged_delivery("plan", payload.model_dump())
-    if staged_control_configured():
-        # A rollout flag controls new intake. Previously admitted staged scans
-        # continue to their committed result when the cohort is switched off.
-        from .scan_job import worker_function_generation
-        with worker_function_generation("V9"):
-            async with httpx.AsyncClient() as staged_client:
-                stored = await read_scan_run(staged_client, scan_id)
-        if stored and stored.get("pipeline_mode") == "staged":
-            return await run_staged_delivery("plan", payload.model_dump())
-    if str(payload.scan_mode or "").lower() != "standard_150":
-        raise HTTPException(status_code=400, detail="Only the Standard 150 scan is available.")
     if not valid_robots_policy_pair(
         payload.respect_robots_txt,
         payload.owner_attested_robots_override,
@@ -641,12 +634,22 @@ async def scan_job(
     job_attempt = normalize_attempt(payload.attempt_count)
 
     async with httpx.AsyncClient() as client:
-        scan = await read_scan_run(client, scan_id)
+        scan = await read_task_scan(client, scan_id)
         if scan is None:
             # Transient: the row must exist, so let Cloud Tasks retry it.
             raise HTTPException(status_code=503, detail="The scan record is unavailable.")
+        if not task_matches_scan_contract(scan, job):
+            return {"success": True, "scan_id": scan_id, "skipped": "scan_contract_mismatch"}
+        # A later cohort change cannot move work already admitted to a
+        # different pipeline. The worker follows the durable attempt.
+        if scan.get("pipeline_mode") == "staged":
+            if not staged_control_configured():
+                raise HTTPException(status_code=503, detail="This worker cannot process staged scans.")
+            return await run_staged_delivery("plan", job)
+        if str(payload.scan_mode or "").lower() != "standard_150":
+            raise HTTPException(status_code=400, detail="Only the Standard 150 scan is available in this pipeline.")
         from .scan_job import worker_function_generation
-        with worker_function_generation("V9" if "page_cap" in scan else "V8"):
+        with worker_function_generation("V9" if scan.get("page_cap") is not None else "V8"):
             if not identity_matches(scan, job):
                 await persist_terminal_failure_bounded(
                     client, scan_id, "scan_identity_mismatch",
@@ -900,8 +903,8 @@ def staged_control_configured() -> bool:
     return bool(os.getenv("SCAN_WORKSPACE_BUCKET")) or str(os.getenv("SCAN_PIPELINE_MODE") or "").lower() == "staged"
 
 
-async def enqueue_staged_partial(client: httpx.AsyncClient, scan: dict[str, Any]) -> dict[str, Any] | None:
-    """Turn watchdogs into finalize dispatches when committed evidence exists."""
+async def recover_staged_finalization(client: httpx.AsyncClient, scan: dict[str, Any], *, watchdog: bool = False) -> dict[str, Any] | None:
+    """Recover a stalled scan with committed evidence."""
     if scan.get("pipeline_mode") != "staged":
         return None
     from .scan_job import worker_function_generation
@@ -918,14 +921,16 @@ async def enqueue_staged_partial(client: httpx.AsyncClient, scan: dict[str, Any]
             if not plan or not isinstance(plan.value.get("job"), dict):
                 raise StageRetry("The committed scan plan is unavailable")
             result = await runtime.request_partial_finalize(client, plan.value["job"])
-            return {**result, "limited_finalize_queued": True}
+            if watchdog and result.get("finalize_recovery_pending"):
+                raise StageRetry("Finalization recovery has not reached a terminal result")
+            return result
     except StageRetry as exc:
         raise HTTPException(status_code=503, detail="Partial scan finalization is pending.", headers={"Retry-After": str(exc.retry_after)}) from exc
     except (WorkspaceConflict, WorkspaceUnavailable, RuntimeError) as exc:
         raise HTTPException(status_code=503, detail="Partial scan finalization is unavailable.") from exc
 
 
-async def read_scan_for_drain(client: httpx.AsyncClient, scan_id: str) -> dict[str, Any] | None:
+async def read_task_scan(client: httpx.AsyncClient, scan_id: str) -> dict[str, Any] | None:
     if staged_control_configured():
         from .scan_job import worker_function_generation
         with worker_function_generation("V9"):
@@ -935,11 +940,11 @@ async def read_scan_for_drain(client: httpx.AsyncClient, scan_id: str) -> dict[s
 
 async def write_drain_failure(client: httpx.AsyncClient, scan: dict[str, Any], scan_id: str, code: str, detail: str, *, attempt_count: int) -> bool:
     from .scan_job import worker_function_generation
-    with worker_function_generation("V9" if scan.get("pipeline_mode") == "staged" else "V8"):
+    with worker_function_generation("V9" if scan.get("page_cap") is not None or scan.get("pipeline_mode") == "staged" else "V8"):
         return await write_terminal_failure(client, scan_id, code, detail, attempt_count=attempt_count)
 
 
-async def run_staged_delivery(stage: str, job: dict[str, Any], *, batch: int = 0, limited: bool = False) -> dict[str, Any]:
+async def run_staged_delivery(stage: str, job: dict[str, Any], *, batch: int = 0, limited: bool = False, recovery_generation: int = 0) -> dict[str, Any]:
     from .scan_job import worker_function_generation
     from .scan_limits import scan_page_limit
     from .staged_scan import STAGE_DELIVERY_SECONDS, StageRetry
@@ -948,7 +953,9 @@ async def run_staged_delivery(stage: str, job: dict[str, Any], *, batch: int = 0
         with worker_function_generation("V9"), scan_page_limit(500 if job.get("scan_mode") == "standard_500" else 150):
             runtime = build_staged_runtime()
             async with httpx.AsyncClient() as client:
-                return await asyncio.wait_for(runtime.process(client, stage, job, batch=batch, limited=limited), timeout=STAGE_DELIVERY_SECONDS)
+                return await asyncio.wait_for(runtime.process(
+                    client, stage, job, batch=batch, limited=limited, recovery_generation=recovery_generation,
+                ), timeout=STAGE_DELIVERY_SECONDS)
     except StageRetry as exc:
         raise HTTPException(status_code=503, detail="The scan stage will be retried.", headers={"Retry-After": str(exc.retry_after)}) from exc
     except ValueError as exc:
@@ -961,13 +968,19 @@ async def run_staged_delivery(stage: str, job: dict[str, Any], *, batch: int = 0
 async def scan_batch(payload: ScanStageRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
     require_cloud_tasks_oidc(authorization)
     # Existing staged scans must drain even after the canary flag is disabled.
-    return await run_staged_delivery("batch", payload.model_dump(exclude={"batch", "limited"}), batch=payload.batch)
+    return await run_staged_delivery(
+        "batch", payload.model_dump(exclude={"batch", "limited", "recovery_generation"}),
+        batch=payload.batch, recovery_generation=payload.recovery_generation,
+    )
 
 
 @app.post("/scan-finalize")
 async def scan_finalize(payload: ScanStageRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
     require_cloud_tasks_oidc(authorization)
-    return await run_staged_delivery("finalize", payload.model_dump(exclude={"batch", "limited"}), batch=payload.batch, limited=payload.limited)
+    return await run_staged_delivery(
+        "finalize", payload.model_dump(exclude={"batch", "limited", "recovery_generation"}),
+        batch=payload.batch, limited=payload.limited, recovery_generation=payload.recovery_generation,
+    )
 
 
 @app.post("/scan-workspace-delete")
@@ -1007,12 +1020,19 @@ async def scan_reconcile(authorization: str | None = Header(default=None)) -> di
                 counts = await reconcile_stale_scans(client)
                 candidates = counts.pop("finalize_candidates", [])
                 if candidates:
-                    counts["limited_finalize_queued"] = 0
+                    counts["finalize_recovery_pending"] = 0
+                    counts["finalize_recovery_unavailable"] = 0
                     for candidate in candidates[:50]:
                         scan = await read_scan_run(client, str(candidate.get("scan_id") or ""))
                         if scan and current_attempt(scan) == normalize_attempt(candidate.get("attempt_count")):
-                            queued = await enqueue_staged_partial(client, scan)
-                            counts["limited_finalize_queued"] += int(bool(queued and queued.get("limited_finalize_queued")))
+                            try:
+                                recovered = await recover_staged_finalization(client, scan)
+                            except HTTPException as exc:
+                                if exc.status_code != 503:
+                                    raise
+                                counts["finalize_recovery_unavailable"] += 1
+                                continue
+                            counts["finalize_recovery_pending"] += int(bool(recovered and recovered.get("finalize_recovery_pending")))
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail="Durable scan reconciliation is unavailable.") from exc
     emit("scan_reconcile_completed", **counts)
@@ -1044,9 +1064,11 @@ async def scan_job_drain(
     job = payload.model_dump()
     job_attempt = normalize_attempt(payload.attempt_count)
     async with httpx.AsyncClient() as client:
-        scan = await read_scan_for_drain(client, scan_id)
+        scan = await read_task_scan(client, scan_id)
         if scan is None:
             raise HTTPException(status_code=503, detail="The scan record is unavailable.")
+        if not task_matches_scan_contract(scan, job):
+            return {"success": True, "scan_id": scan_id, "skipped": "scan_contract_mismatch"}
         if not identity_matches(scan, job):
             return {
                 "success": True,
@@ -1135,7 +1157,7 @@ async def scan_job_drain(
                 seconds=WORKER_HEARTBEAT_DRAIN_AFTER_SECONDS,
             )
             if now_utc >= heartbeat_deadline:
-                partial = await enqueue_staged_partial(client, scan)
+                partial = await recover_staged_finalization(client, scan, watchdog=True)
                 if partial:
                     return partial
                 try:
@@ -1165,7 +1187,7 @@ async def scan_job_drain(
         if now_utc < terminal_deadline:
             raise HTTPException(status_code=503, detail="The worker terminal deadline is not due yet.")
 
-        partial = await enqueue_staged_partial(client, scan)
+        partial = await recover_staged_finalization(client, scan, watchdog=True)
         if partial:
             return partial
         try:

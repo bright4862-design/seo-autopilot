@@ -1,4 +1,4 @@
-import { readStagedScanSettings, resolveServerScanContract, stagedScanOwnerEnabled, trustedScanContract } from "./scanLimits.js";
+import { frozenTaskScanContract, readStagedScanSettings, resolveServerScanContract, stagedScanOwnerEnabled, trustedScanContract } from "./scanLimits.js";
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 import { secrets } from "base44:runtime";
 import {
@@ -21,7 +21,7 @@ import {
 } from "./admissionClient.js";
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "startStandardScanJobV9-staged-runtime-20261111-v2";
+const BASE44_RUNTIME_ACTIVATION_ID = "startStandardScanJobV9-staged-runtime-20261111-v3";
 const STAGED_RUNTIME_ACTION = "staged_runtime_status";
 const STAGED_RUNTIME_ADMIN_EMAILS = new Map([
   ["6a498da58ef5cec1f5cd4486", "bright4862@gmail.com"],
@@ -399,7 +399,10 @@ export default async function (req: Request): Promise<Response> {
       };
     }
 
-    const scanContract = trustedScanContract(context.scan);
+    const frozenTaskContract = frozenTaskScanContract(context.scan);
+    const scanContract = frozenTaskContract.page_cap === undefined
+      ? trustedScanContract(context.scan)
+      : frozenTaskContract;
     const scanRobotsPolicy = await ensureFrozenScanRobotsPolicy({ base44, context });
     if (!scanRobotsPolicy) {
       return jsonResponse({
@@ -475,7 +478,7 @@ export default async function (req: Request): Promise<Response> {
       invokerServiceAccount,
       scanId: identity.fields.scan_id,
       attemptCount,
-      payload: { ...commonPayload, drain_after: drainAfter },
+      payload: { ...commonPayload, ...frozenTaskContract, drain_after: drainAfter },
       signingKey: dispatchSigningKey,
     });
     if (!drain.ok) {

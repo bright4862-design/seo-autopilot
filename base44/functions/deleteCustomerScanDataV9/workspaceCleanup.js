@@ -1,5 +1,18 @@
 import { createServiceAccountAccessToken } from "./gcpAuth.js";
 
+function frozenTaskScanContract(run = {}) {
+  // Each Base44 function is packaged independently. Keep the same frozen V9
+  // contract as the launcher while accepting older staged rows without a cap.
+  const { scan_mode, page_cap, pipeline_mode } = run;
+  if (page_cap == null && scan_mode !== "standard_500") return {};
+  if (
+    (scan_mode !== "standard_150" && scan_mode !== "standard_500")
+    || page_cap !== (scan_mode === "standard_150" ? 150 : 500)
+    || (pipeline_mode !== "staged" && (pipeline_mode !== "monolith" || page_cap !== 150))
+  ) throw new Error("scan_page_cap_invalid");
+  return { scan_mode, page_cap, pipeline_mode };
+}
+
 export function workspaceCleanupTask({run, queuePath, workerUrl, invokerServiceAccount}) {
   if (!/^projects\/[a-z0-9-]+\/locations\/[a-z0-9-]+\/queues\/[A-Za-z0-9_-]+$/.test(String(queuePath || ""))) throw new Error("workspace_cleanup_not_configured");
   const target = new URL(workerUrl);
@@ -8,7 +21,13 @@ export function workspaceCleanupTask({run, queuePath, workerUrl, invokerServiceA
   const scanId = String(run?.id || "");
   const attempt = Number(run?.attempt_count || 1);
   if (!/^[A-Za-z0-9_-]{6,128}$/.test(scanId) || !Number.isInteger(attempt) || attempt < 1 || !invokerServiceAccount) throw new Error("workspace_cleanup_not_configured");
-  const payload = {scan_id: scanId, attempt_count: attempt, request_id: run.request_id, idempotency_key: run.idempotency_key || run.request_id, project_id: run.project_id, owner_user_id: run.owner_user_id, website_url: run.website_url, normalized_domain: run.normalized_domain, workspace_cleanup: true};
+  const contract = frozenTaskScanContract(run);
+  if (contract.pipeline_mode === "monolith") throw new Error("scan_page_cap_invalid");
+  const payload = {
+    scan_id: scanId, attempt_count: attempt, request_id: run.request_id, idempotency_key: run.idempotency_key || run.request_id,
+    project_id: run.project_id, owner_user_id: run.owner_user_id, website_url: run.website_url, normalized_domain: run.normalized_domain,
+    workspace_cleanup: true, ...contract,
+  };
   const bytes = new TextEncoder().encode(JSON.stringify(payload));
   return {task: {name: `${queuePath}/tasks/standard150-cleanup-${scanId}-a${attempt}`, dispatchDeadline: "480s", httpRequest: {url: target.href, httpMethod: "POST", headers: {"content-type": "application/json"}, body: btoa(String.fromCharCode(...bytes)), oidcToken: {serviceAccountEmail: invokerServiceAccount, audience: target.origin}}}};
 }
@@ -24,7 +43,10 @@ async function signature(secret, timestamp, text) {
 }
 
 export async function ensureWorkspaceCleanup(run, {env = name => Deno.env.get(name), fetchImpl = fetch, tokenImpl = createServiceAccountAccessToken} = {}) {
-  if (run?.pipeline_mode !== "staged" || run?.workspace_cleanup_state === "complete") return {complete: true};
+  if (run?.pipeline_mode !== "staged" || run?.workspace_cleanup_state === "complete") {
+    if (run) frozenTaskScanContract(run);
+    return {complete: true};
+  }
   const queuePath = String(env("SCAN_DRAIN_QUEUE_PATH") || "");
   const body = workspaceCleanupTask({run, queuePath, workerUrl: env("SCAN_WORKER_URL"), invokerServiceAccount: env("TASKS_INVOKER_SERVICE_ACCOUNT")});
   const gateway = String(env("SCAN_DISPATCH_GATEWAY_URL") || "");

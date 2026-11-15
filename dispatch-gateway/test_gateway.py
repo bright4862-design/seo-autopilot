@@ -92,6 +92,37 @@ def task(*, scan_id="scan_abc123", drain=False, attempt=1, respect_robots_txt=Tr
 
 
 class ValidateDispatchTests(unittest.TestCase):
+    def test_watchdog_and_cleanup_preserve_the_frozen_contract(self):
+        staged = [{"scan_mode": f"standard_{cap}", "page_cap": cap, "pipeline_mode": "staged"} for cap in (150, 500)]
+        monolith = {**staged[0], "pipeline_mode": "monolith"}
+        malformed = [
+            {"scan_mode": "standard_150"}, {"pipeline_mode": "staged"}, {"page_cap": 500},
+            {**staged[1], "page_cap": True}, {**staged[1], "page_cap": "500"},
+            {**staged[1], "page_cap": None}, {**staged[0], "page_cap": 500},
+            {**staged[0], "pipeline_mode": "unknown"}, {**staged[1], "pipeline_mode": "monolith"},
+        ]
+        for is_cleanup in (False, True):
+            original = task(drain=True)
+            job = json.loads(base64.b64decode(original["httpRequest"]["body"]))
+            if is_cleanup:
+                original["name"] = f"{main.DRAIN_QUEUE_PATH}/tasks/standard150-cleanup-scan_abc123-a1"
+                original["httpRequest"]["url"] = main.WORKSPACE_DELETE_URL
+                del original["scheduleTime"]
+                del job["drain_after"]
+                job["workspace_cleanup"] = True
+            valid = [{}, *staged] if is_cleanup else [{}, *staged, monolith]
+            invalid = [*malformed, monolith] if is_cleanup else malformed
+            for contract in [*valid, *invalid]:
+                with self.subTest(is_cleanup=is_cleanup, contract=contract):
+                    value = deepcopy(original)
+                    value["httpRequest"]["body"] = encoded({**job, **contract})
+                    accepted, error = self.validate(value, queue_path=main.DRAIN_QUEUE_PATH)
+                    if contract in valid:
+                        self.assertIsNone(error)
+                        self.assertEqual(accepted, value)
+                    else:
+                        self.assertEqual((accepted, error), (None, "invalid_scan_mode"))
+
     def test_workspace_cleanup_is_pinned_to_control_queue_and_delete_route(self):
         value = task()
         value["name"] = f"{main.DRAIN_QUEUE_PATH}/tasks/standard150-cleanup-scan_abc123-a1"

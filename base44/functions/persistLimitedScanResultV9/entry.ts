@@ -5,7 +5,7 @@ import { verifyAuthoritySeal } from "./workerEnvelope.js";
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
 import { stagedCompletionTime } from "./completionTimestamp.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "persistLimitedScanResultV9-staged-runtime-20261111-v2";
+const BASE44_RUNTIME_ACTIVATION_ID = "persistLimitedScanResultV9-staged-runtime-20261111-v3";
 import {
   buildLimitedResultSnapshot,
   createLimitedResultProof,
@@ -289,6 +289,9 @@ async function assertAttemptStillActive(entities, scanId, claimedAttempt) {
   const fresh = await entities.ScanRun.get(scanId).catch(() => null);
   if (!fresh || normalizeAttempt(fresh.attempt_count) !== claimedAttempt) {
     throw new RequestProblem(409, "superseded_attempt", "A newer attempt took over while saving.");
+  }
+  if (["complete", "failed", "cancelled"].includes(String(fresh.status || "").toLowerCase())) {
+    throw new RequestProblem(409, "terminal_result_rejected", "This scan attempt is already terminal.");
   }
 }
 

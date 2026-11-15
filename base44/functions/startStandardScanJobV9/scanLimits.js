@@ -4,11 +4,26 @@ export const MAX_SCAN_PAGE_CAP = 500;
 export const AFFECTED_PAGE_LIST_LIMIT = 150;
 
 export function trustedScanContract(scan = {}) {
-  const mode = String(scan.scan_mode || "standard_150");
+  const hasSavedCap = scan.page_cap != null;
+  const savedMode = String(scan.scan_mode || "standard_150");
+  const mode = !hasSavedCap && savedMode === "advanced" ? "standard_150" : savedMode;
   const cap = SCAN_PAGE_CAPS[mode];
-  if (!cap || (scan.page_cap !== undefined && scan.page_cap !== cap)
-      || (cap > 150 && scan.pipeline_mode !== "staged")) throw new Error("scan_page_cap_invalid");
+  if (!Number.isInteger(cap) || (hasSavedCap && scan.page_cap !== cap)
+      || (mode === "standard_500" && (!hasSavedCap || scan.pipeline_mode !== "staged"))) throw new Error("scan_page_cap_invalid");
   return {scan_mode: mode, page_cap: cap, pipeline_mode: scan.pipeline_mode === "staged" ? "staged" : "monolith"};
+}
+
+export function frozenTaskScanContract(scan) {
+  // Only V9 admission stores a cap. Old rows can still carry provider defaults
+  // for the mode and pipeline, including an empty cap on readback.
+  const { scan_mode, page_cap, pipeline_mode } = scan;
+  if (page_cap == null && scan_mode !== "standard_500") return {};
+  if (
+    (scan_mode !== "standard_150" && scan_mode !== "standard_500")
+    || page_cap !== SCAN_PAGE_CAPS[scan_mode]
+    || (pipeline_mode !== "staged" && (pipeline_mode !== "monolith" || page_cap !== 150))
+  ) throw new Error("scan_page_cap_invalid");
+  return { scan_mode, page_cap, pipeline_mode };
 }
 
 export function readStagedScanSettings(env) {
@@ -57,5 +72,6 @@ export function progressFields(scan, progress = {}) {
 }
 
 export function scanContractSnapshotFields(scan = {}) {
-  return scan.page_cap === undefined ? {} : trustedScanContract(scan);
+  // Base44 can present an absent historical field as null. Keep it outside the old seal.
+  return scan.page_cap == null && scan.scan_mode !== "standard_500" ? {} : trustedScanContract(scan);
 }

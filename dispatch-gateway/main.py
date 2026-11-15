@@ -241,6 +241,19 @@ def _valid_scan_mode(job: dict[str, Any]) -> bool:
     )
 
 
+def _valid_control_scan_contract(job: dict[str, Any], *, is_cleanup: bool) -> bool:
+    fields = {"scan_mode", "page_cap", "pipeline_mode"}
+    if fields.isdisjoint(job):
+        return True  # Tasks already minted by an older launcher.
+    if not fields.issubset(job) or type(job["page_cap"]) is not int:
+        return False
+    pipeline = job["pipeline_mode"]
+    if pipeline != "staged" and (pipeline != "monolith" or is_cleanup):
+        return False
+    contract = (job["scan_mode"], job["page_cap"])
+    return contract == ("standard_150", 150) or (pipeline == "staged" and contract == ("standard_500", 500))
+
+
 def validate_dispatch(payload: Any) -> tuple[dict[str, Any] | None, str | None]:
     if not isinstance(payload, dict):
         return None, "invalid_payload"
@@ -297,6 +310,8 @@ def validate_dispatch(payload: Any) -> tuple[dict[str, Any] | None, str | None]:
     if not scan_id or scan_id != name_scan_id:
         return None, "scan_identity_mismatch"
 
+    if (is_cleanup or is_drain) and not _valid_control_scan_contract(job, is_cleanup=is_cleanup):
+        return None, "invalid_scan_mode"
     if is_cleanup:
         if job.get("workspace_cleanup") is not True or task.get("scheduleTime"):
             return None, "invalid_workspace_cleanup"

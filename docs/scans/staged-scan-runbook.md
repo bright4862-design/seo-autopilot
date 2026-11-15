@@ -180,6 +180,10 @@ Phase 7 (5,000-page scans), adaptive sampling, weekly monitoring and the separat
 
 ## Rollback and recovery
 
-Remove cohort owners or set `SCAN_PIPELINE_MODE=monolith` consistently across Base44/gateway/worker to stop new staged admissions. Do not disable stage endpoints, delete the stage queue, remove V9 functions or delete the bucket while admitted scans remain active. Let them finish or finalize committed evidence through the reconciler, then verify terminal records before removing infrastructure. Existing sealed authority remains immutable.
+Close staged intake to stop new admissions. Keep the stage endpoints, queue, V9 functions and workspace available for attempts that already own a staged contract. Wait for the admission barrier and entry, stage, and drain queues to clear before changing the serving worker or removing its source tag. Existing sealed authority remains immutable.
+
+The periodic Scheduler calls the canonical service. Before opening normal staged intake, verify the promoted stage-capable worker with `scripts/verify-standard150-reconciler.sh`. Set `RECONCILER_EXPECTED_SOURCE_SHA` and `RECONCILER_EXPECTED_STAGED_CONFIG_SHA256` to the reviewed build values, with the same `TASKS_INVOKER_SERVICE_ACCOUNT` used by the Scheduler. The verifier checks that the canonical service and source-bound tag resolve to the same revision and that the Scheduler uses the canonical OIDC audience.
+
+For a stalled attempt with committed batches, the watchdog records one replacement finalization task. A finished crawl reuses its saved result and review. An interrupted crawl finalizes its committed pages as limited. The watchdog retries finalization for 30 minutes, lets any outstanding save drain, then verifies the exact attempt's terminal state before acknowledging a timeout.
 
 Watch committed batch count and heartbeat timestamps, enqueue errors, retry counts, workspace generation conflicts, limited-completion reasons and deletion cleanup failures. A stored page object by itself is not proof of a committed batch: only artifacts referenced by the committed frontier belong to the final result. Do not manually assemble or reseal results from orphan objects.

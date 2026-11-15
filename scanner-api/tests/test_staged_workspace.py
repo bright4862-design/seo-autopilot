@@ -6,8 +6,7 @@ from re import fullmatch
 import pytest
 
 from app.staged_scan import (
-    STAGE_LEASE_SECONDS, StageDependencies, StageRetry, StagedScanRuntime,
-    staged_pipeline_enabled,
+    FINALIZE_PERSIST_DRAIN_SECONDS, STAGE_LEASE_SECONDS, StageDependencies, StageRetry, StagedScanRuntime,
 )
 from app.workspace import MemoryWorkspace, WorkspaceConflict, WorkspaceUnavailable, attempt_prefix
 
@@ -92,7 +91,7 @@ class Harness:
 
     async def progress(self, client, scan, crawled, planned, batch=None):
         assert batch is None or (type(batch) is int and batch >= 0)
-        assert 0 <= crawled <= planned <= scan["page_cap"]
+        assert 0 <= crawled <= planned <= (scan.get("page_cap") or 150)
         if self.progress_failure:
             self.progress_failure = False
             raise RuntimeError("progress unavailable")
@@ -155,6 +154,19 @@ async def test_plan_uses_none_for_no_committed_batch_and_budget_starts_before_di
     assert h.progresses == [(0, 120, None)]
     assert (await h.frontier()).value["wall_deadline"] == 1600
     assert ("batch", 0) in h.dispatcher.tasks
+
+
+@pytest.mark.parametrize("legacy_row", [{}, {"page_cap": None}, {"scan_mode": "advanced", "page_cap": None}])
+@pytest.mark.asyncio
+async def test_legacy_staged_row_accepts_its_implicit_standard_150_task(h, legacy_row):
+    h.scan.pop("page_cap")
+    h.scan.update(legacy_row)
+    await h.run("plan")
+    job, _ = h.dispatcher.tasks[("batch", 0)]
+    assert (job["scan_mode"], job["page_cap"], job["pipeline_mode"]) == ("standard_150", 150, "staged")
+    for batch in range(3):
+        await h.runtime.process(None, "batch", job, batch=batch)
+    assert (await h.runtime.process(None, "finalize", job, batch=3))["fix_list_id"] == "list_test"
 
 
 @pytest.mark.asyncio
@@ -319,7 +331,10 @@ async def test_partial_evidence_finalizes_as_limited(h, cause, result_reason):
         await h.runtime.request_partial_finalize(None, h.job)
     frontier = (await h.frontier()).value
     assert frontier["stage"] == "finalize"
-    await h.run("finalize", batch=frontier["batch"])
+    await h.runtime.process(
+        None, "finalize", h.job, batch=frontier["batch"],
+        recovery_generation=int(cause == "watchdog"),
+    )
     assert len(h.results) == 1
     assert h.results[0]["pipeline_limited"] is True
     assert h.results[0]["pipeline_limit_reason"] == result_reason
@@ -466,6 +481,99 @@ async def test_authority_retry_reuses_persisted_result_and_review(h):
         }
 
 
+@pytest.mark.asyncio
+async def test_watchdog_replaces_a_lost_finalize_without_downgrading_saved_evidence(h):
+    await h.run("plan")
+    for batch in range(3):
+        await h.run("batch", batch=batch)
+    attempts = []
+
+    async def complete(client, scan, result, key):
+        attempts.append(result)
+        if len(attempts) == 1:
+            return {"ok": False, "transient": True}
+        return await h.complete(client, scan, result, key)
+
+    h.deps.complete = complete
+    with pytest.raises(StageRetry):
+        await h.run("finalize", batch=3)
+    progress_before = list(h.progresses)
+    h.dispatcher.fail_after = True
+    with pytest.raises(RuntimeError, match="dispatch acknowledgement lost"):
+        await h.runtime.request_partial_finalize(None, h.job)
+    cutoff = (await h.frontier()).value["finalize_recovery_until"]
+    h.now += 30
+    result = await h.runtime.request_partial_finalize(None, h.job)
+    assert result["finalize_recovery_pending"] is True
+    assert (await h.frontier()).value["finalize_recovery_until"] == cutoff
+    assert h.dispatcher.calls[-2:] == [("finalize", 3, {"limited": False, "recovery_generation": 1})] * 2
+    assert (await h.run("finalize", batch=3))["skipped"] == "superseded_finalize_delivery"
+    assert h.progresses == progress_before
+
+    recovered = await h.runtime.process(None, "finalize", h.job, batch=3, recovery_generation=1)
+    assert recovered["fix_list_id"] == "list_test"
+    assert attempts[1] == attempts[0]
+    assert h.scan["status"] == "complete"
+    assert not h.failures
+
+
+@pytest.mark.asyncio
+async def test_watchdog_fences_expired_recovery_and_closes_only_the_current_attempt(h):
+    await h.run("plan")
+    await h.run("batch", batch=0)
+    await h.runtime.request_partial_finalize(None, h.job)
+    cutoff = (await h.frontier()).value["finalize_recovery_until"]
+    h.now = cutoff
+    with pytest.raises(StageRetry):
+        await h.runtime.process(None, "finalize", h.job, batch=1, recovery_generation=1)
+    assert not h.results and not h.failures
+
+    h.now += STAGE_LEASE_SECONDS
+    with pytest.raises(StageRetry, match="still draining"):
+        await h.runtime.request_partial_finalize(None, h.job)
+    assert not h.failures
+
+    h.now = cutoff + FINALIZE_PERSIST_DRAIN_SECONDS
+    writes = []
+
+    async def write_failure(client, scan_id, code, detail, *, attempt_count):
+        writes.append((scan_id, code, attempt_count))
+        if len(writes) == 1:
+            raise RuntimeError("terminal write was unavailable")
+        if len(writes) == 2:
+            return True  # Provider acknowledged without a visible terminal state.
+        h.scan.update(status="failed", error_code=code)
+        return True
+
+    h.deps.fail = write_failure
+    with pytest.raises(RuntimeError, match="terminal write was unavailable"):
+        await h.runtime.request_partial_finalize(None, h.job)
+    with pytest.raises(StageRetry, match="was not persisted"):
+        await h.runtime.request_partial_finalize(None, h.job)
+    result = await h.runtime.request_partial_finalize(None, h.job)
+    assert result == {"success": False, "error_code": "staged_finalize_timeout"}
+    assert writes == [(h.scan["id"], "staged_finalize_timeout", 1)] * 3
+    assert not h.results
+    assert (await h.runtime.request_partial_finalize(None, h.job))["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_recovery_reports_an_existing_terminal_result_from_the_failure_readback(h):
+    await h.run("plan")
+    await h.run("batch", batch=0)
+    await h.runtime.request_partial_finalize(None, h.job)
+    h.now = (await h.frontier()).value["finalize_recovery_until"] + FINALIZE_PERSIST_DRAIN_SECONDS
+
+    async def replay_terminal(*args, **kwargs):
+        h.scan["status"] = "complete"
+        return True
+
+    h.deps.fail = replay_terminal
+    assert await h.runtime.request_partial_finalize(None, h.job) == {
+        "success": True, "skipped": "already_terminal", "status": "complete",
+    }
+
+
 @pytest.mark.parametrize("mode,cap", [("standard_150", 150), ("standard_500", 500)])
 @pytest.mark.asyncio
 async def test_blocked_crawl_can_finish_without_starting_review(h, monkeypatch, mode, cap):
@@ -528,12 +636,14 @@ async def test_cancel_during_fetch_prevents_evidence_commit(h):
 @pytest.mark.asyncio
 async def test_task_cannot_upgrade_server_cap_or_select_monolith_record(h):
     h.job["scan_mode"] = "standard_500"
-    with pytest.raises(ValueError):
-        await h.run("plan")
+    assert (await h.run("plan"))["skipped"] == "scan_contract_mismatch"
+    h.scan.update(scan_mode="standard_500", page_cap=None)
+    h.job["page_cap"] = 500
+    assert (await h.run("plan"))["skipped"] == "scan_contract_mismatch"
+    h.scan.update(scan_mode="standard_150", page_cap=150, pipeline_mode="monolith")
     h.job["scan_mode"] = "standard_150"
-    h.scan["pipeline_mode"] = "monolith"
-    with pytest.raises(ValueError):
-        await h.run("plan")
+    h.job["page_cap"] = 150
+    assert (await h.run("plan"))["skipped"] == "scan_contract_mismatch"
     assert not h.store.objects
 
 
@@ -587,15 +697,24 @@ async def test_plan_uses_real_signed_progress_contract(h, monkeypatch):
     assert envelopes[1]["progress"]["batch_committed"] == 0
 
 
+@pytest.mark.parametrize("staged_worker", [False, True])
 @pytest.mark.asyncio
-async def test_v9_monolith_keeps_generation_through_completion(h, monkeypatch):
+async def test_v9_monolith_keeps_generation_through_completion(h, monkeypatch, staged_worker):
     from app import main, scan_job
     h.scan["pipeline_mode"] = "monolith"
+    h.job["pipeline_mode"] = "monolith"
     monkeypatch.delenv("SCAN_WORKSPACE_BUCKET", raising=False)
     monkeypatch.setenv("SCAN_PIPELINE_MODE", "monolith")
+    if staged_worker:
+        monkeypatch.setenv("SCAN_WORKSPACE_BUCKET", "private-test-bucket")
+        monkeypatch.setenv("SCAN_PIPELINE_MODE", "staged")
+        monkeypatch.setenv("SCAN_STAGED_OWNER_IDS", h.scan["owner_user_id"])
     monkeypatch.setattr(main, "require_cloud_tasks_oidc", lambda _: None)
     monkeypatch.setattr(main, "read_scan_run", h.read)
     observed = []
+
+    async def cannot_switch_pipeline(*args, **kwargs):
+        pytest.fail("A stored monolith attempt must not switch pipelines")
 
     async def started(client, scan):
         observed.append(scan_job.worker_function_name("durableScanWorkerControlV8"))
@@ -609,6 +728,7 @@ async def test_v9_monolith_keeps_generation_through_completion(h, monkeypatch):
         return {"ok": True}
 
     monkeypatch.setattr(main, "mark_scan_started", started)
+    monkeypatch.setattr(main, "run_staged_delivery", cannot_switch_pipeline)
     monkeypatch.setattr(main, "run_scan", crawl)
     monkeypatch.setattr(main, "apply_post_crawl_transforms", lambda r: r)
     monkeypatch.setattr(main, "complete_authority", complete)
@@ -619,7 +739,43 @@ async def test_v9_monolith_keeps_generation_through_completion(h, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_v9_monolith_watchdog_failure_uses_the_v9_control_function(h, monkeypatch):
+    from app import main, scan_job
+
+    h.scan["pipeline_mode"] = "monolith"
+
+    async def fail(client, scan_id, code, detail, *, attempt_count):
+        assert scan_job.worker_function_name("durableScanWorkerControlV8") == "durableScanWorkerControlV9"
+        assert (scan_id, attempt_count) == (h.scan["id"], 1)
+        return True
+
+    monkeypatch.setattr(main, "write_terminal_failure", fail)
+    assert await main.write_drain_failure(None, h.scan, h.scan["id"], "timeout", "detail", attempt_count=1)
+
+
+@pytest.mark.asyncio
+async def test_staged_scan_cannot_run_on_a_worker_without_staged_storage(h, monkeypatch):
+    from fastapi import HTTPException
+    from app import main
+
+    monkeypatch.delenv("SCAN_WORKSPACE_BUCKET", raising=False)
+    monkeypatch.setenv("SCAN_PIPELINE_MODE", "monolith")
+    monkeypatch.setattr(main, "require_cloud_tasks_oidc", lambda _: None)
+    monkeypatch.setattr(main, "read_scan_run", h.read)
+
+    async def cannot_start(*args, **kwargs):
+        pytest.fail("A staged attempt cannot start a monolith worker")
+
+    monkeypatch.setattr(main, "mark_scan_started", cannot_start)
+
+    with pytest.raises(HTTPException) as retry:
+        await main.scan_job(main.ScanJobRequest(**h.job), authorization=None)
+    assert retry.value.status_code == 503
+
+
+@pytest.mark.asyncio
 async def test_reconciler_and_drain_finalize_committed_partial_instead_of_failure(h, monkeypatch):
+    from fastapi import HTTPException
     from app import main, scan_job
     await h.run("plan")
     await h.run("batch", batch=0)
@@ -639,9 +795,11 @@ async def test_reconciler_and_drain_finalize_committed_partial_instead_of_failur
     monkeypatch.setattr(main, "reconcile_stale_scans", reconcile)
     monkeypatch.setattr(main, "write_terminal_failure", unexpected_failure)
     response = await main.scan_reconcile(authorization=None)
-    assert response["reconciliation"]["limited_finalize_queued"] == 1
+    assert response["reconciliation"]["finalize_recovery_pending"] == 1
     drain_payload = main.ScanDrainRequest(**h.job, drain_after="2026-01-01T00:00:00Z")
-    assert (await main.scan_job_drain(drain_payload, authorization=None))["limited_finalize_queued"] is True
+    with pytest.raises(HTTPException) as retry:
+        await main.scan_job_drain(drain_payload, authorization=None)
+    assert retry.value.status_code == 503
     assert ("finalize", 1) in h.dispatcher.tasks
 
 
@@ -663,26 +821,25 @@ async def test_existing_staged_intake_continues_after_cohort_is_disabled(h, monk
     assert calls == ["plan"]
 
 
-def test_new_intake_flag_requires_owner_cohort(monkeypatch):
-    monkeypatch.setenv("SCAN_PIPELINE_MODE", "staged")
-    monkeypatch.delenv("SCAN_STAGED_OWNER_IDS", raising=False)
-    monkeypatch.delenv("SCAN_PIPELINE_OWNER_IDS", raising=False)
-    assert not staged_pipeline_enabled({"owner_user_id": "owner_test"})
-    monkeypatch.setenv("SCAN_STAGED_OWNER_IDS", "owner_test")
-    assert staged_pipeline_enabled({"owner_user_id": "owner_test"})
-    assert not staged_pipeline_enabled({"owner_user_id": "other_owner"})
-    assert not staged_pipeline_enabled({"owner_user_id": None})
-    monkeypatch.setenv("SCAN_STAGED_OWNER_IDS", "*")
-    assert not staged_pipeline_enabled({"owner_user_id": "owner_test"})
-    monkeypatch.setenv("SCAN_STAGED_OWNER_IDS", "owner_test,*")
-    assert not staged_pipeline_enabled({"owner_user_id": "owner_test"})
-    monkeypatch.delenv("SCAN_STAGED_OWNER_IDS")
-    monkeypatch.setenv("SCAN_PIPELINE_OWNER_IDS", "*")
-    assert not staged_pipeline_enabled({"owner_user_id": "owner_test"})
-    monkeypatch.setenv("SCAN_PIPELINE_OWNER_IDS", "owner_test")
-    assert staged_pipeline_enabled({"owner_user_id": "owner_test"})
-    monkeypatch.setenv("SCAN_PIPELINE_MODE", "monolith")
-    assert not staged_pipeline_enabled({"owner_user_id": "owner_test"})
+@pytest.mark.parametrize("contract", [
+    {"page_cap": None, "pipeline_mode": "staged"},
+    {"page_cap": 150, "pipeline_mode": "monolith"},
+    {"page_cap": 500, "scan_mode": "standard_500"},
+])
+@pytest.mark.asyncio
+async def test_task_contract_cannot_change_saved_entry_drain_or_cleanup(h, monkeypatch, contract):
+    from app import main
+
+    monkeypatch.setattr(main, "require_cloud_tasks_oidc", lambda _: None)
+    monkeypatch.setattr(main, "read_scan_run", h.read)
+    job = {**h.job, **contract}
+    assert (await main.scan_job(main.ScanJobRequest(**job), authorization=None))["skipped"] == "scan_contract_mismatch"
+    drain = main.ScanDrainRequest(**job, drain_after="2026-01-01T00:00:00Z")
+    assert (await main.scan_job_drain(drain, authorization=None))["skipped"] == "scan_contract_mismatch"
+    assert (await h.runtime.process(None, "plan", job))["skipped"] == "scan_contract_mismatch"
+    h.scan["status"] = "failed"
+    assert (await h.runtime.delete_workspace(None, job))["skipped"] == "scan_contract_mismatch"
+    assert not h.crawls and not h.failures and not h.store.objects
 
 
 @pytest.mark.parametrize("route", ["/scan-batch", "/scan-finalize", "/scan-workspace-delete"])

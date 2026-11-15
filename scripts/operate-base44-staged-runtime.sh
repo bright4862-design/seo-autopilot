@@ -2,6 +2,9 @@
 # Source-pinned, owner-only Base44 staged-150 configuration and readback.
 # The script intentionally changes NO GCP resources, entitlements, public routes,
 # V8 functions, admission barrier, or BETA_SCAN_ADMISSION_ENABLED.
+# For a customer pilot, set STAGED_OPERATOR_USER_ID to the signed-in admin and
+# STAGED_OWNER_USER_ID to the exact tester ID verified in the native preview
+# session. The tester must have role "user" and the intended scan entitlement.
 set -euo pipefail
 umask 077
 
@@ -14,17 +17,28 @@ SOURCE_SHA="${SOURCE_SHA:-}"
 CONFIRM="${CONFIRM:-}"
 OPERATION="${OPERATION:-status}"
 OWNER_ID="${STAGED_OWNER_USER_ID:-}"
+OPERATOR_ID="${STAGED_OPERATOR_USER_ID:-$OWNER_ID}"
 BASE44_EXPECTED_OWNER="${BASE44_EXPECTED_OWNER:-}"
 
 refuse() { echo "BASE44_STAGED_CONTROL_BLOCKED: $*" >&2; exit 2; }
 [[ "$APP_ID" == "6a498732ec779dfaaeab0e53" ]] || refuse "unexpected app"
 [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || refuse "exact SOURCE_SHA required"
-# Application identity is independent of the platform deploy account.
-case "$OWNER_ID" in
-  6a498da58ef5cec1f5cd4486) OWNER_EMAIL=bright4862@gmail.com ;;
-  6a498732ec779dfaaeab0e54) OWNER_EMAIL=londonparisbrussels@gmail.com ;;
-  *) refuse "STAGED_OWNER_USER_ID must select an approved FixList owner" ;;
+case "$OPERATOR_ID" in
+  6a498da58ef5cec1f5cd4486) OPERATOR_EMAIL=bright4862@gmail.com ;;
+  6a498732ec779dfaaeab0e54) OPERATOR_EMAIL=londonparisbrussels@gmail.com ;;
+  *) refuse "STAGED_OPERATOR_USER_ID must select an approved FixList administrator" ;;
 esac
+[[ "$OWNER_ID" =~ ^[A-Za-z0-9_-]{6,64}$ ]] || refuse "exact STAGED_OWNER_USER_ID required"
+PILOT=false
+if [[ "$OWNER_ID" != "$OPERATOR_ID" ]]; then
+  case "$OWNER_ID" in
+    6a498da58ef5cec1f5cd4486|6a498732ec779dfaaeab0e54)
+      refuse "customer pilot target must be separate from the approved administrator accounts" ;;
+  esac
+  [[ -z "${BASE44_API_KEY:-}" && "$BASE44_EXPECTED_OWNER" == "$OPERATOR_EMAIL" ]] ||
+    refuse "customer pilot requires the selected administrator's authenticated CLI session"
+  PILOT=true
+fi
 case "$OPERATION" in
   status) ;;
   deploy-probe)
@@ -44,7 +58,7 @@ fixlist_install_base44_cli "$TMP/pinned-cli"
 fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TMP/whoami" "$APP_ID"
 
 {
-  printf 'const expectedId = "%s";\nconst expectedEmail = "%s";\n' "$OWNER_ID" "$OWNER_EMAIL"
+  printf 'const expectedId = "%s";\nconst expectedEmail = "%s";\n' "$OPERATOR_ID" "$OPERATOR_EMAIL"
   cat <<'NODE'
 const me = await base44.auth.me();
 if (me?.id !== expectedId || String(me?.email || "").trim().toLowerCase() !== expectedEmail
@@ -116,12 +130,66 @@ console.log('BASE44_STAGED_RUNTIME_READBACK_OBSERVED');
 NODE
 }
 
+v9_pilot_readback() {
+  local phase="$1"
+  cp "$TMP/app-owner.js" "$TMP/v9-pilot.js"
+  cat >> "$TMP/v9-pilot.js" <<'NODE'
+const result = await base44.functions.invoke("startStandardScanJobV9", {action:"staged_runtime_status"});
+const value = result?.data && typeof result.data === "object" ? result.data : result;
+const fields = ["schema_version", "success", "observed_at", "build_id", "runtime_activation_id",
+  "release_fingerprint", "configured_pipeline_mode", "pipeline_mode", "staged_owner_cohort_state",
+  "staged_owner_count", "staged_owner_cohort_sha256", "staged_owner_enabled", "intake_gate"];
+const safe = Object.fromEntries(fields.map(key => [key, value?.[key]]));
+console.log("FIXLIST_V9_PILOT_READBACK=" + JSON.stringify(safe));
+NODE
+  timeout --signal=TERM --kill-after=5s 55 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" exec --data-env prod \
+    < "$TMP/v9-pilot.js" > "$TMP/v9-pilot.out" 2> "$TMP/v9-pilot.err" || return 1
+  node --input-type=module - "$TMP/v9-pilot.out" "$TMP/v9-pilot.json" \
+    "$REPO_ROOT" "$V9_BUILD_ID" "$V9_ACTIVATION_ID" "$OWNER_ID" "$phase" <<'NODE'
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+const [input, output, root, buildId, activationId, targetId, phase] = process.argv.slice(2);
+const prefix = 'FIXLIST_V9_PILOT_READBACK=';
+const lines = fs.readFileSync(input, 'utf8').split('\n').filter(line => line.startsWith(prefix));
+if (lines.length !== 1) process.exit(1);
+const report = JSON.parse(lines[0].slice(prefix.length));
+const {fingerprint} = JSON.parse(fs.readFileSync(path.join(root, 'data/beta-crawler-revision.json'), 'utf8'));
+const observationAgeMs = Date.now() - Date.parse(report.observed_at);
+if (report.success !== true || report.schema_version !== 'fixlist_staged_v9_intake_readback_v1'
+    || !/^[0-9a-f]{64}$/.test(buildId) || report.build_id !== buildId
+    || !activationId || report.runtime_activation_id !== activationId
+    || !/^[0-9a-f]{16}$/.test(fingerprint) || report.release_fingerprint !== fingerprint
+    || !Number.isFinite(observationAgeMs) || Math.abs(observationAgeMs) > 60_000) process.exit(1);
+const cohortDigest = createHash('sha256').update(JSON.stringify([targetId])).digest('hex');
+const cohortMatches = report.configured_pipeline_mode === 'staged' && report.staged_owner_cohort_state === 'explicit'
+  && report.staged_owner_count === 1 && report.staged_owner_cohort_sha256 === cohortDigest
+  && report.pipeline_mode === 'monolith' && report.staged_owner_enabled === false;
+if (phase === 'prepared' && !(cohortMatches && report.intake_gate === 'disabled')) process.exit(1);
+fs.writeFileSync(output, JSON.stringify(cohortMatches) + '\n', {flag:'w',mode:0o600});
+NODE
+}
+
+if [[ "$PILOT" == true && ( "$OPERATION" == status || "$OPERATION" == prepare-owner ) ]]; then
+  command -v timeout >/dev/null || refuse "timeout is required for customer pilot readback"
+  V9_BUILD_ID="$(node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --build-id startStandardScanJobV9)"
+  V9_ACTIVATION_ID="$(node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --activation-id startStandardScanJobV9)"
+fi
+
 case "$OPERATION" in
   status)
     verify_probe_package || refuse "deployed operator package mismatch"
     readback || refuse "runtime readback unavailable"
-    node - "$TMP/verified.json" <<'NODE'
+    if [[ "$PILOT" == true ]]; then
+      v9_pilot_readback status || refuse "exact V9 pilot readback unavailable"
+    fi
+    node - "$TMP/verified.json" "$TMP/v9-pilot.json" <<'NODE'
+const fs = require('node:fs');
 const report = require(process.argv[2]);
+if (fs.existsSync(process.argv[3])) {
+  report.v9_intake_attested = true;
+  report.pilot_cohort_matches = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+}
 console.log(JSON.stringify(report));
 NODE
     ;;
@@ -136,6 +204,9 @@ NODE
     ;;
   prepare-owner|disable)
     verify_probe_package || refuse "deployed operator package mismatch"
+    if [[ "$PILOT" == true && "$OPERATION" == prepare-owner ]]; then
+      v9_pilot_readback preflight || refuse "deployed V9 intake does not match the selected source"
+    fi
     # Stop *new* Base44 intake first. Leave admission enabled so committed
     # scans can reconcile/release coordinator claims and finish persistence.
     if ! "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" secrets set "BETA_SCAN_INTAKE_ENABLED=false" > "$TMP/intake.log" 2>&1; then
@@ -155,15 +226,21 @@ NODE
       fi
     fi
     readback || refuse "configuration may have changed; deployed runtime readback unavailable"
-    if ! node - "$TMP/verified.json" "$OPERATION" <<'NODE'
+    if ! node - "$TMP/verified.json" "$OPERATION" "$PILOT" <<'NODE'
 const fs = require('node:fs');
 const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const operation = process.argv[3];
+const operatorIsTarget = process.argv[4] === 'false';
 if (report.intake_disabled_verified !== true || report.config_converged !== true) process.exit(1);
-if (operation === 'prepare-owner' && (report.env_mode !== 'staged' || report.owner_match !== true || report.cohort_count !== 1)) process.exit(1);
+if (operation === 'prepare-owner' && (report.env_mode !== 'staged' || report.owner_match !== operatorIsTarget || report.cohort_count !== 1)) process.exit(1);
 if (operation === 'disable' && (report.env_mode !== 'monolith' || report.owner_match !== false || report.cohort_count !== 0)) process.exit(1);
 NODE
     then refuse "runtime configuration did not converge; never infer activation from a secrets write"; fi
-    echo "BASE44_STAGED_CONFIG_READBACK_VERIFIED mode=$OPERATION source_sha=$SOURCE_SHA public_intake=closed v9_attested=false"
+    if [[ "$PILOT" == true && "$OPERATION" == prepare-owner ]]; then
+      v9_pilot_readback prepared || refuse "intake closed but the exact V9 pilot cohort could not be verified"
+      echo "BASE44_STAGED_CONFIG_READBACK_VERIFIED mode=$OPERATION source_sha=$SOURCE_SHA public_intake=closed v9_attested=true pilot_cohort_matches=true"
+    else
+      echo "BASE44_STAGED_CONFIG_READBACK_VERIFIED mode=$OPERATION source_sha=$SOURCE_SHA public_intake=closed v9_attested=false"
+    fi
     ;;
 esac

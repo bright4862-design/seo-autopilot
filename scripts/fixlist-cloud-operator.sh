@@ -384,9 +384,11 @@ for b in builds:
     verdict=1
   else
     echo "built from: $release_sha"
+    # Consume each source file through EOF. grep -q can close the pipe on a
+    # match and cause git show to fail with SIGPIPE under set -o pipefail.
     if git cat-file -e "${release_sha}:scanner-api/app/scan_job.py" 2>/dev/null \
-      && git show "${release_sha}:scanner-api/app/main.py" 2>/dev/null | grep -q '@app.post("/scan-job")' \
-      && git show "${release_sha}:scanner-api/app/main.py" 2>/dev/null | grep -q '@app.post("/scan-job-drain")'; then
+      && git show "${release_sha}:scanner-api/app/main.py" 2>/dev/null | grep -Fx '@app.post("/scan-job")' >/dev/null \
+      && git show "${release_sha}:scanner-api/app/main.py" 2>/dev/null | grep -Fx '@app.post("/scan-job-drain")' >/dev/null; then
       echo "PASS: that commit has scan_job.py and declares /scan-job and /scan-job-drain."
     else
       echo "FAIL: that commit does NOT declare both durable routes."

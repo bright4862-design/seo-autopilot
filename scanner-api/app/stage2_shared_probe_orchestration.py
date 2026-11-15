@@ -124,7 +124,9 @@ async def _fetch_registered_probe(
         return _unknown_page("candidate_url_missing"), False
 
     if not scheduler.can_start_candidate(purpose, target):
-        reason = "deadline_exhausted" if scheduler.deadline_exhausted else "request_budget_exhausted"
+        reason = getattr(scheduler, "request_block_reason", "") or (
+            "deadline_exhausted" if scheduler.deadline_exhausted else "request_budget_exhausted"
+        )
         scheduler.record_exhausted(
             purpose,
             target,

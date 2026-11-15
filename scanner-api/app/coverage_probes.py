@@ -8,6 +8,7 @@ from collections import defaultdict
 from typing import Any
 from urllib.parse import urlparse
 
+from .finalize_probe_guard import FinalizeProbeGuard, FinalizeProbeSuppressed
 from .security import safe_get_once
 
 
@@ -372,11 +373,13 @@ class SharedCoverageProbeScheduler:
         shared_request_limit: int,
         initial_request_count: int,
         deadline: float,
+        finalize_guard: FinalizeProbeGuard | None = None,
     ) -> None:
         self.max_probe_requests = max(0, int(max_probe_requests or 0))
         self.shared_request_limit = max(0, int(shared_request_limit or 0))
         self.initial_request_count = max(0, int(initial_request_count or 0))
         self.deadline = float(deadline or 0.0)
+        self.finalize_guard = finalize_guard
         self.started_at = time.monotonic()
         self.requests_consumed = 0
         self.reused_requests = 0
@@ -437,6 +440,8 @@ class SharedCoverageProbeScheduler:
         return [dict(rows[url]) for url in sorted(rows)]
 
     def _request_capacity_available(self) -> bool:
+        if self.request_block_reason:
+            return False
         if self.deadline and time.monotonic() >= self.deadline:
             self.deadline_exhausted = True
             return False
@@ -447,6 +452,10 @@ class SharedCoverageProbeScheduler:
             self.budget_exhausted = True
             return False
         return True
+
+    @property
+    def request_block_reason(self) -> str:
+        return self.finalize_guard.reason if self.finalize_guard else ""
 
     def can_start_candidate(self, purpose: str, url: str) -> bool:
         del purpose
@@ -465,6 +474,8 @@ class SharedCoverageProbeScheduler:
             self.reused_requests += 1
             return self._response_cache[request_url]
         if not self._request_capacity_available():
+            if self.request_block_reason:
+                raise FinalizeProbeSuppressed(self.request_block_reason)
             raise RuntimeError(
                 "coverage_probe_deadline_exhausted"
                 if self.deadline_exhausted
@@ -496,6 +507,16 @@ class SharedCoverageProbeScheduler:
         return response
 
     def record_exhausted(self, purpose: str, url: str, *, source_pages: Any = None, link_text_samples: Any = None, metadata: Any = None) -> None:
+        if self.request_block_reason:
+            self.record_skipped(
+                purpose,
+                url,
+                reason=self.request_block_reason,
+                source_pages=source_pages,
+                link_text_samples=link_text_samples,
+                metadata=metadata,
+            )
+            return
         purpose = str(purpose or "")
         self._stats[purpose]["exhausted"] += 1
         self._observations_append({

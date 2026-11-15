@@ -28,6 +28,7 @@ from .coverage_probes import (
 )
 from .redirect_validation import apply_redirect_evidence, fetch_with_redirect_evidence, summarize_redirect_evidence
 from .extract import classify_template, extract_links, extract_page
+from .finalize_probe_guard import FinalizeProbeGuard
 from .market_scope import MARKET_SEGMENT_RE, market_pair_prefix, path_within_scope
 from .page_evidence_gate import (
     ACCESS_BLOCK_HEADER_ALLOWLIST,
@@ -1281,9 +1282,11 @@ async def _finalize_scan(state: ScanState) -> dict:
     pages.sort(key=lambda page: state._rank(str(page.get("url") or "")))
     path_of = lambda url: urlparse(url).path or "/"
     crawl_started_monotonic = state.crawl_started_monotonic
+    probe_guard = FinalizeProbeGuard()
     async with httpx.AsyncClient(
         timeout=fetch_timeout, follow_redirects=False,
         headers={"User-Agent": "Mozilla/5.0 (compatible; FixListPythonScanner/1.0)"},
+        event_hooks={"request": [probe_guard.before_request], "response": [probe_guard.after_response]},
     ) as client:
         crawl_elapsed_ms = state.crawl_elapsed_ms
         final_queue_size = len(queue)
@@ -1303,24 +1306,25 @@ async def _finalize_scan(state: ScanState) -> dict:
         # verify bounded discovered targets beyond its assessed sample without
         # quietly turning into a larger crawl.
         probe_started_at = time.monotonic()
-        probe_block_reason = ""
         if initial_rate_limit_blocked:
-            probe_block_reason = "initial_rate_limited"
+            probe_guard.reason = "initial_rate_limited"
         elif rate_limit_pacer.rate_limit_blocked_scan:
-            probe_block_reason = "crawl_rate_limited"
+            probe_guard.reason = "crawl_rate_limited"
         elif rate_limit_pacer.rate_limit_cooldown_until > probe_started_at:
-            probe_block_reason = "crawl_rate_limit_cooldown"
+            probe_guard.reason = "crawl_rate_limit_cooldown"
+        probe_blocked_by_crawl = bool(probe_guard.reason)
         remaining_crawl_seconds = max(0.0, timing_budget["crawl_deadline"] - probe_started_at)
         # Coverage is additive. It must not consume the whole remainder and
         # starve the pre-existing canonical validator that follows it.
         probe_time_budget_seconds = (
-            0.0 if probe_block_reason else min(12.0, remaining_crawl_seconds * 0.25)
+            0.0 if probe_blocked_by_crawl else min(12.0, remaining_crawl_seconds * 0.25)
         )
         probe_scheduler = SharedCoverageProbeScheduler(
             max_probe_requests=coverage_probe_request_limit(scan_mode),
             shared_request_limit=max_pages * 8,
             initial_request_count=crawl_state["claimed"],
             deadline=probe_started_at + probe_time_budget_seconds,
+            finalize_guard=probe_guard,
         )
         for target, record in discovery.items():
             if target in seen or "internal_link" not in set(record.get("discovered_from") or []):
@@ -1335,15 +1339,6 @@ async def _finalize_scan(state: ScanState) -> dict:
         link_probe_findings = []
         for candidate in probe_scheduler.candidates("internal_link"):
             target = candidate["url"]
-            if probe_block_reason:
-                probe_scheduler.record_skipped(
-                    "internal_link",
-                    target,
-                    reason=probe_block_reason,
-                    source_pages=candidate.get("source_pages") or [],
-                    link_text_samples=candidate.get("link_text_samples") or [],
-                )
-                continue
             if not probe_scheduler.can_start_candidate("internal_link", target):
                 probe_scheduler.record_exhausted(
                     "internal_link",
@@ -1444,12 +1439,8 @@ async def _finalize_scan(state: ScanState) -> dict:
                     "score_impact": 0,
                 })
 
-        if probe_block_reason:
+        if probe_blocked_by_crawl:
             coverage_probe_evidence = probe_scheduler.summary()
-            coverage_probe_evidence.update({
-                "stage2_orchestration_state": "not_verified",
-                "stage2_orchestration_reason": probe_block_reason,
-            })
         elif int(budget.get("max_pages") or 0) >= 150 and _supports_stage2_probe_fetch(fetch_and_extract):
             coverage_probe_evidence = await run_stage2_shared_probe_orchestration(
                 client=client,
@@ -1469,12 +1460,17 @@ async def _finalize_scan(state: ScanState) -> dict:
                     "stage2_orchestration_state": "not_verified",
                     "stage2_orchestration_reason": "hardened_probe_fetch_contract_unavailable",
                 })
+        if probe_guard.reason:
+            coverage_probe_evidence.update({
+                "stage2_orchestration_state": "not_verified",
+                "stage2_orchestration_reason": probe_guard.reason,
+            })
         canonical_target_evidence = await validate_canonical_targets(
             client,
             pages,
             robots_policy,
             deadline=timing_budget["crawl_deadline"],
-            rate_limited=bool(probe_block_reason),
+            finalize_guard=probe_guard,
         )
         redirect_evidence = summarize_redirect_evidence(pages)
         for page in pages:
@@ -1495,11 +1491,10 @@ async def _finalize_scan(state: ScanState) -> dict:
     material_render_risk = render_evidence["evidence_state"] == "material_client_rendering_risk"
     render_followup = await run_render_followup(
         pages if material_render_risk else [],
-        render_page=state.render_page if material_render_risk and not probe_block_reason else None,
+        render_page=state.render_page if material_render_risk else None,
         evidence_pages=pages,
+        finalize_guard=probe_guard if material_render_risk else None,
     )
-    if material_render_risk and probe_block_reason:
-        render_followup["skip_reason"] = probe_block_reason
     render_evidence["browser_followup_version"] = RENDER_FOLLOWUP_VERSION
     render_evidence["browser_followup"] = render_followup
     elapsed_ms = round((time.monotonic() - scan_started_at) * 1000)

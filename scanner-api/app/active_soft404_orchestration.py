@@ -131,7 +131,7 @@ async def collect_active_soft404_baselines(
             continue
 
         if not probe_scheduler.can_start_candidate("soft_404_baseline", target):
-            reason = (
+            reason = getattr(probe_scheduler, "request_block_reason", "") or (
                 "deadline_exhausted"
                 if probe_scheduler.deadline_exhausted
                 else "request_budget_exhausted"

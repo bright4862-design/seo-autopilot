@@ -240,16 +240,113 @@ cat "$TMP/config.js" "$TMP/canary.js" | timeout --signal=TERM "$((MAX_WAIT_SECON
 CLI_STATUS=$?
 set -e
 # Never print SDK responses, user email, authority proofs, credentials or raw evidence.
-node - "$TMP/runtime-output" "$ACCEPTANCE_OUTPUT" "$CLI_STATUS" "$SOURCE_SHA" "$EXPECTED_OWNER_USER_ID" "$PROJECT_ID" "$REQUEST_ID" <<'NODE'
+node - "$TMP/runtime-output" "$ACCEPTANCE_OUTPUT" "$CLI_STATUS" "$SOURCE_SHA" "$EXPECTED_OWNER_USER_ID" "$PROJECT_ID" "$REQUEST_ID" "$TMP/config.js" <<'NODE'
 const fs = require('node:fs');
-const [input, output, status, sourceSha, ownerId, projectId, requestId] = process.argv.slice(2);
-const prefix = 'FIXLIST_STAGED_OWNER_CANARY=';
-const line = fs.readFileSync(input, 'utf8').split('\n').filter(value => value.startsWith(prefix)).at(-1);
-let report;
-try { report = JSON.parse(line?.slice(prefix.length) || ''); } catch {
-  report = {schema_version:'staged_owner_canary_v1', production_freeze:false, source_sha:sourceSha, verified_owner_user_id:null, expected_owner_user_id:ownerId, project_id:projectId, request_id:requestId, acceptance_verified:false, failure_code:'cli_result_unavailable', unverified:['authenticated_runtime_result']};
+const [input, output, status, sourceSha, ownerId, projectId, requestId, configPath] = process.argv.slice(2);
+const configSource = fs.readFileSync(configPath, 'utf8').trim();
+const configPrefix = 'const config = ';
+if (!configSource.startsWith(configPrefix) || !configSource.endsWith(';')) throw new Error('Malformed locally pinned canary config');
+const pinned = JSON.parse(configSource.slice(configPrefix.length, -1));
+if (pinned.sourceSha !== sourceSha || pinned.ownerId !== ownerId
+    || pinned.projectId !== projectId || pinned.requestId !== requestId) {
+  throw new Error('Canary receipt configuration identity mismatch');
 }
-if (Number(status) !== 0) { report.acceptance_verified = false; report.failure_code = 'cli_execution_failed'; report.unverified = [...new Set([...(report.unverified || []), 'cli_execution'])]; }
+// The CLI is a transport, not an independent witness of evidence acceptance.
+// Refuse multiple stdout reports, foreign identities, or unsupported success claims.
+function parseCanaryReceipt(stdout, expected) {
+  const prefix = 'FIXLIST_STAGED_OWNER_CANARY=';
+  const makeFailure = code => ({
+    schema_version:'staged_owner_canary_v1', production_freeze:false,
+    source_sha:expected.sourceSha, app_id:expected.appId,
+    expected_owner_user_id:expected.ownerId, verified_owner_user_id:null,
+    project_id:expected.projectId, target_url:expected.targetUrl,
+    request_id:expected.requestId, expected_page_cap:150,
+    expected_release_fingerprint:expected.fingerprint,
+    accepted:false, acceptance_verified:false, failure_code:code,
+    unverified:['authenticated_runtime_result'],
+  });
+  const plain = value => value !== null && typeof value === 'object'
+    && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
+  const lines = stdout.split(/\r?\n/).filter(line => line.startsWith(prefix));
+  if (lines.length !== 1) return makeFailure(lines.length === 0 ? 'cli_result_unavailable' : 'cli_marker_ambiguous');
+  let report;
+  try { report = JSON.parse(lines[0].slice(prefix.length)); }
+  catch { return makeFailure('cli_report_malformed'); }
+  const permitted = new Set([
+    'schema_version','production_freeze','source_sha','local_source_verified',
+    'deployed_git_source_sha','app_id','expected_owner_user_id','verified_owner_user_id',
+    'project_id','target_url','request_id','expected_page_cap','expected_release_fingerprint',
+    'scan_id','accepted','acceptance_verified','terminal_status','authority_verified',
+    'release_fingerprint','release_contract_current','customer_reopen_verified',
+    'customer_reopen_fix_list_id','durable_worker_owned','ownership_evidence',
+    'page_cap','pages_crawled','pipeline_mode','last_committed_batch',
+    'committed_batch_count','duration_ms','worker_peak_memory_bytes','progress',
+    'unverified','failure_code',
+  ]);
+  if (!plain(report) || Object.keys(report).some(key => !permitted.has(key))
+      || !plain(report.deployed_git_source_sha)
+      || report.deployed_git_source_sha.state !== 'unverified'
+      || Object.keys(report.deployed_git_source_sha).some(key => !['state','reason'].includes(key))
+      || typeof report.deployed_git_source_sha.reason !== 'string'
+      || !Array.isArray(report.progress) || report.progress.length > 2000
+      || !report.progress.every(row => plain(row)
+        && Object.keys(row).every(key => ['observed_at','status','pages_crawled','pages_planned','last_committed_batch'].includes(key))
+        && typeof row.observed_at === 'string' && !Number.isNaN(Date.parse(row.observed_at))
+        && typeof row.status === 'string'
+        && ['pages_crawled','pages_planned','last_committed_batch'].every(key =>
+          row[key] === null || (Number.isSafeInteger(row[key]) && row[key] >= 0)))
+      || !Array.isArray(report.unverified) || report.unverified.length > 100
+      || !report.unverified.every(value => typeof value === 'string' && value.length <= 128)
+      || !Array.isArray(report.ownership_evidence) || report.ownership_evidence.length > 32
+      || !report.ownership_evidence.every(value => typeof value === 'string' && value.length <= 128)
+      || typeof report.acceptance_verified !== 'boolean') {
+    return makeFailure('cli_report_invalid');
+  }
+  if (report.schema_version !== 'staged_owner_canary_v1'
+      || report.production_freeze !== false || report.local_source_verified !== true
+      || report.source_sha !== expected.sourceSha || report.app_id !== expected.appId
+      || report.expected_owner_user_id !== expected.ownerId
+      || report.project_id !== expected.projectId || report.target_url !== expected.targetUrl
+      || report.request_id !== expected.requestId
+      || report.expected_page_cap !== 150
+      || report.expected_release_fingerprint !== expected.fingerprint) {
+    return makeFailure('cli_report_identity_mismatch');
+  }
+  if (report.acceptance_verified === true) {
+    const idPattern = /^[A-Za-z0-9_-]{6,160}$/;
+    const positive = value => Number.isSafeInteger(value) && value > 0;
+    if (report.accepted !== true || report.verified_owner_user_id !== expected.ownerId
+        || !idPattern.test(String(report.scan_id || ''))
+        || !idPattern.test(String(report.customer_reopen_fix_list_id || ''))
+        || report.terminal_status !== 'complete'
+        || report.authority_verified !== true
+        || report.release_contract_current !== true
+        || report.customer_reopen_verified !== true
+        || report.durable_worker_owned !== true
+        || report.ownership_evidence.includes('authority_verified') !== true
+        || report.release_fingerprint !== expected.fingerprint
+        || report.page_cap !== 150 || report.pipeline_mode !== 'staged'
+        || !positive(report.pages_crawled) || report.pages_crawled > 150
+        || !Number.isSafeInteger(report.last_committed_batch) || report.last_committed_batch < 0
+        || report.committed_batch_count !== report.last_committed_batch + 1
+        || !positive(report.duration_ms) || !positive(report.worker_peak_memory_bytes)
+        || report.progress.length === 0 || report.unverified.length !== 0
+        || report.failure_code !== null) {
+      return makeFailure('cli_success_unsubstantiated');
+    }
+  }
+  return report;
+}
+// End of pure receipt-parser boundary.
+let report = parseCanaryReceipt(fs.readFileSync(input, 'utf8'), {
+  sourceSha, ownerId, projectId, requestId, appId:pinned.appId,
+  targetUrl:pinned.targetUrl, fingerprint:pinned.expectedFingerprint,
+});
+if (Number(status) !== 0) {
+  report.acceptance_verified = false;
+  report.failure_code = 'cli_execution_failed';
+  report.unverified = [...new Set([...(report.unverified || []), 'cli_execution'])];
+}
 const temporary = output + '.tmp-' + process.pid;
 fs.writeFileSync(temporary, JSON.stringify(report, null, 2) + '\n', {mode:0o600, flag:'wx'});
 fs.linkSync(temporary, output);

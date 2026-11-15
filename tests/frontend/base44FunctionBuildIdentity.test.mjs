@@ -124,7 +124,8 @@ test("publish proves the release routes live before the site is cut over", () =>
   const deploy = source("scripts/deploy-base44-beta-site.sh");
   const at = (needle) => deploy.indexOf(needle);
 
-  const preSiteDeploy = at('deploy_functions "${VERIFIED_FUNCTIONS[@]}"');
+  const preSiteDeploy = at('deploy_functions "${CHECKOUT_FUNCTIONS[@]}"');
+  const preSiteV9 = at("deploy_active_v9 pre-site");
   const preSiteVerify = at("verify-base44-functions.sh");
   const siteDeploy = at("site deploy --no-build --yes");
   const successAt = at("BASE44_SITE_AND_BACKEND_DEPLOYED");
@@ -139,6 +140,7 @@ test("publish proves the release routes live before the site is cut over", () =>
   // site is live means a failed publish leaves getfixlist.com in front of
   // handlers that were never proven to run this source.
   assert.ok(preSiteDeploy < preSiteVerify, "the routes must be deployed before they are probed");
+  assert.ok(preSiteV9 >= 0 && preSiteV9 < preSiteVerify, "the physical V9 aliases must be deployed before the probes");
   assert.ok(preSiteVerify < siteDeploy, "the routes must be proven live before the site is published");
 
   // `site deploy` can reconcile the function inventory back to an older

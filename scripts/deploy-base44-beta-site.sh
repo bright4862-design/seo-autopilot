@@ -38,10 +38,17 @@ python3 "$REPO_ROOT/scripts/assert_standard150_promotion_record.py" --source-sha
 ROUTE_SELECTION="$(node "$REPO_ROOT/scripts/lib/base44-public-routes.mjs")"
 read -r -a ROUTE_FIELDS <<<"$ROUTE_SELECTION"
 VERIFIED_FUNCTIONS=("${ROUTE_FIELDS[@]:1}")
+CHECKOUT_FUNCTIONS=("${VERIFIED_FUNCTIONS[@]}")
 RELEASE_CONTRACT_ROOT="$REPO_ROOT" node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --check
 node "$REPO_ROOT/scripts/base44_release_manifest.mjs" verify
 if [[ "${ROUTE_FIELDS[0]}" == "v9" ]]; then
+  [[ "$APP_ID" == "6a498732ec779dfaaeab0e53" && "${BASE44_FUNCTION_ORIGIN:-https://base44.app}" == "https://base44.app" ]] || {
+    echo 'Refusing active V9 publication: the FixList app and Base44 origin must match.' >&2
+    exit 2
+  }
   node "$REPO_ROOT/scripts/base44_release_manifest.mjs" verify --staged
+  # The first six routes are materialized from V9 source in a scratch project.
+  CHECKOUT_FUNCTIONS=("${VERIFIED_FUNCTIONS[@]:6}")
 fi
 # Deployed, but not build-ID verified. createAccessCheckout and stripeWebhook
 # keep their names because Stripe addresses stripeWebhook by URL from its own
@@ -66,7 +73,16 @@ deploy_functions() {
   return "$status"
 }
 
-deploy_functions "${VERIFIED_FUNCTIONS[@]}"
+deploy_active_v9() {
+  if [[ "${ROUTE_FIELDS[0]}" == "v9" ]]; then
+    SOURCE_SHA="$SOURCE_SHA" CONFIRM="PUBLISH-BASE44-ACTIVE-V9:$SOURCE_SHA" BASE44_APP_ID="$APP_ID" \
+      BASE44_EXPECTED_OWNER="$BASE44_EXPECTED_OWNER" READINESS_OUTPUT="$TMP/v9-$1.json" \
+      bash "$REPO_ROOT/scripts/deploy-base44-staged-functions.sh" publish-active
+  fi
+}
+
+deploy_functions "${CHECKOUT_FUNCTIONS[@]}"
+deploy_active_v9 pre-site
 BASE44_APP_ID="$APP_ID" bash "$REPO_ROOT/scripts/verify-base44-functions.sh"
 printf 'BASE44_RELEASE_ROUTES_ACTIVE_PRE_SITE\n'
 
@@ -78,7 +94,8 @@ VITE_SCAN_FUNCTION_GENERATION= VITE_BASE44_APP_ID="$APP_ID" VITE_FIXLIST_SOURCE_
 # session so a second interactive login can never strand production with the
 # older site-snapshot inventory.
 FUNCTIONS=("${VERIFIED_FUNCTIONS[@]}" "${UNVERIFIED_FUNCTIONS[@]}")
-deploy_functions "${FUNCTIONS[@]}"
+deploy_functions "${CHECKOUT_FUNCTIONS[@]}" "${UNVERIFIED_FUNCTIONS[@]}"
+deploy_active_v9 post-site
 
 INVENTORY="$($FIXLIST_BASE44_CLI --app-id "$APP_ID" functions list 2>&1)"
 printf '%s\n' "$INVENTORY"

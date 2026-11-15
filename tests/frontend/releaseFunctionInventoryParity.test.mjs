@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 
 import { RELEASE_FUNCTIONS } from "../../scripts/base44_release_manifest.mjs";
+import stagedRoutes from "../../data/generated-staged-v9-routes.json" with { type: "json" };
 
 /**
  * Standard 150 keeps its deterministic guarded release inventory separate from
@@ -40,7 +41,7 @@ const unverified = bashArray(DEPLOY, "UNVERIFIED_FUNCTIONS");
 const deployed = [...verified, ...unverified];
 
 test("the guarded site deploy preserves the Standard 150 V8 release inventory", () => {
-  assert.deepEqual(deployed.filter((name) => !name.endsWith("V9")), RELEASE_FUNCTIONS);
+  assert.deepEqual(deployed.filter((name) => !/V9B[0-9a-f]{16}$/.test(name)), RELEASE_FUNCTIONS);
 });
 
 test("workflow-backed blog publisher is not sent through legacy functions deploy", () => {
@@ -75,6 +76,7 @@ test("the routes the customer scan path depends on are all in the verified set",
     readFileSync(new URL("../../data/base44-function-routes.json", import.meta.url), "utf8"),
   );
   const retained = generation === "v9" ? Object.values(routes.historical_routes.v8) : [];
+  const active = Object.values(routes.routes).map((name) => generation === "v9" ? stagedRoutes.functions[name].route_name : name);
   assert.equal(generation, routes.generation);
-  assert.deepEqual([...Object.values(routes.routes), ...retained].sort(), [...verified].sort());
+  assert.deepEqual([...active, ...retained].sort(), [...verified].sort());
 });

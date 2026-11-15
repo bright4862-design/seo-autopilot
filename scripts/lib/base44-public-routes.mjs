@@ -24,6 +24,24 @@ function exactRoutes(routes, generation) {
   });
 }
 
+function generatedIdentities(logicalRoutes, occupied) {
+  const generated = JSON.parse(readFileSync(new URL("../../data/generated-staged-v9-routes.json", import.meta.url), "utf8"));
+  const { schema_version: schema, functions } = generated;
+  if (schema !== "fixlist_staged_v9_routes_v1" || !isRecord(functions)
+      || Object.keys(functions).length !== logicalRoutes.length) {
+    throw new Error("invalid generated V9 route inventory");
+  }
+  return new Map(logicalRoutes.map((name) => {
+    const { route_name: route, build_id: build, runtime_activation_id: activation, package_digest: digest } = functions[name] ?? {};
+    if (typeof route !== "string" || route.length > 63 || !new RegExp(`^${name}B[0-9a-f]{16}$`).test(route) || occupied.includes(route)
+        || !/^[0-9a-f]{64}$/.test(build) || !/^[A-Za-z0-9._-]{1,120}$/.test(activation)
+        || !/^[0-9a-f]{64}$/.test(digest)) {
+      throw new Error(`invalid generated identity for ${name}`);
+    }
+    return [route, [build, activation]];
+  }));
+}
+
 // This resolver has no environment or CLI override. A publication can select
 // V9 only by committing it as the active generation in the source manifest.
 try {
@@ -39,7 +57,16 @@ try {
   if (groups.some((group) => !isRecord(group))) throw new Error("invalid route group");
   const aliases = groups.flatMap((group) => Object.values(group));
   if (new Set(aliases).size !== aliases.length) throw new Error("duplicate function alias across route groups");
-  process.stdout.write(`${[generation, ...active, ...retained].join(" ")}\n`);
+  const identities = generation === "v9" ? generatedIdentities(active, aliases) : new Map();
+  const [mode, route, ...extra] = process.argv.slice(2);
+  if (mode === "--identity" && identities.has(route) && extra.length === 0) {
+    process.stdout.write(`${identities.get(route).join(" ")}\n`);
+  } else if (mode === undefined) {
+    const deployed = generation === "v9" ? [...identities.keys(), ...retained] : active;
+    process.stdout.write(`${[generation, ...deployed].join(" ")}\n`);
+  } else {
+    throw new Error("unknown active V9 release identity");
+  }
 } catch (error) {
   console.error(`Refusing public Base44 route manifest: ${error.message}.`);
   process.exitCode = 2;

@@ -20,7 +20,7 @@ const text=file=>existsSync(file)?readFileSync(file,"utf8"):"";
 function fixture() {
   const root=mkdtempSync(join(tmpdir(),"staged-v9-publish-"));
   const bin=join(root,"bin");mkdirSync(bin);mkdirSync(join(root,"scripts/lib"),{recursive:true});mkdirSync(join(root,"data"));mkdirSync(join(root,"base44/functions"),{recursive:true});
-  for(const file of [publisher,verifier,collector,"scripts/base44_release_manifest.mjs","scripts/materialize-base44-staged-functions.mjs","scripts/lib/staged-v9-function-packages.mjs","data/base44-function-routes.json","data/beta-crawler-revision.json",routeManifest]) cpSync(file,join(root,file));
+  for(const file of [publisher,verifier,collector,"scripts/base44_release_manifest.mjs","scripts/materialize-base44-staged-functions.mjs","scripts/lib/staged-v9-function-packages.mjs","scripts/lib/base44-public-routes.mjs","data/base44-function-routes.json","data/beta-crawler-revision.json",routeManifest]) cpSync(file,join(root,file));
   for(const name of names) cpSync(`base44/functions/${name}`,join(root,"base44/functions",name),{recursive:true});
   const remote=join(root,"remote");mkdirSync(remote);
   const upstream=join(root,"expected-packages");
@@ -28,6 +28,13 @@ function fixture() {
   const calls=join(root,"calls");const events=join(root,"events");
   writeFileSync(join(root,"scripts/lib/release-source-guard.sh"),`fixlist_require_exact_main() {\n printf 'source-guard\\n' >> "$TEST_EVENTS"\n if [[ "\${TEST_GUARD_FAIL:-}" == yes ]]; then return 2; fi\n FIXLIST_EXACT_SOURCE_SHA="$2"\n}\n`);
   writeFileSync(join(root,"scripts/lib/base44-pinned-cli.sh"),`fixlist_install_base44_cli() { FIXLIST_BASE44_CLI="$TEST_FAKE_CLI"; export FIXLIST_BASE44_CLI; }\nfixlist_require_base44_owner() {\n printf 'owner-check\\n' >> "$TEST_EVENTS"\n [[ "\${TEST_OWNER_FAIL:-}" != yes ]]\n}\n`);
+  writeFileSync(join(root, "scripts/assert_standard150_promotion_record.py"), `import json, os, sys
+with open(os.environ['TEST_EVENTS'], 'a') as events:
+    events.write('promotion-guard\\n')
+with open('data/beta-crawler-revision.json') as source:
+    if json.load(source)['status'] != 'frozen_beta' or sys.argv[1:] != ['--source-sha', '${sourceSha}']:
+        sys.exit(2)
+`);
   writeFileSync(join(root,"scripts/generate_release_contracts.mjs"),`import crypto from 'node:crypto';\nimport fs from 'node:fs';\nfs.appendFileSync(process.env.TEST_EVENTS,'generator:'+process.argv[2]+'\\n');\nif(process.argv[2]==='--build-id')process.stdout.write(crypto.createHash('sha256').update(process.argv[3]).digest('hex')+'\\n');\nif(process.argv[2]==='--activation-id')process.stdout.write('staged-'+process.argv[3]+'\\n');\n`);
   writeFileSync(join(root,"scripts/base44_staged_schema.mjs"),`import fs from 'node:fs';
 const [operation, sourceFlag, source, reportFlag, report] = process.argv.slice(2);
@@ -257,9 +264,63 @@ for (const mode of ["entry", "config", "missing", "wrapper", "extra", "symlink"]
 
 test("V9 candidate scripts keep production promotion and global authority controls outside their mutation surface",()=>{
   const source=text(publisher);assert.match(source,/fixlist_require_exact_main/);assert.match(source,/fixlist_require_base44_owner/);assert.match(source,/functions deploy "\$route"/);assert.match(source,/functions pull "\$route"/);
-  assert.doesNotMatch(source,/fixlist_set_base44_release_source_sha|secrets set|site deploy|entities push|functions deploy --force|assert_standard150_promotion_record/);
+  assert.doesNotMatch(source,/fixlist_set_base44_release_source_sha|secrets set|site deploy|entities push|functions deploy --force|functions delete/);
+  assert.match(source,/if \[\[ "\$OPERATION" == publish-active \]\]; then\s+python3 .*assert_standard150_promotion_record/);
   assert.match(text("scripts/deploy-base44-beta-functions.sh"),/assert_standard150_promotion_record/);
   assert.match(text(verifier),/--proto '=https'/);assert.doesNotMatch(text(verifier),/curl[^\n]* -L/);
+});
+
+function selectActiveV9(fixtureRoot) {
+  const file = join(fixtureRoot, "data/base44-function-routes.json");
+  const manifest = JSON.parse(text(file));
+  manifest.generation = "v9";
+  manifest.historical_routes.v8 = manifest.routes;
+  manifest.routes = manifest.candidate_routes.v9;
+  delete manifest.candidate_routes.v9;
+  writeFileSync(file, JSON.stringify(manifest));
+}
+
+test("active V9 package publication requires frozen accepted source and restores only missing exact aliases", (t) => {
+  const f = fixture();
+  t.after(f.cleanup);
+  selectActiveV9(f.root);
+  const confirm = { CONFIRM: `PUBLISH-BASE44-ACTIVE-V9:${sourceSha}` };
+  assert.notEqual(f.run(confirm, ["publish-active"]).status, 0);
+  assert.equal(text(f.calls), "");
+  assert.match(text(f.events), /promotion-guard/);
+
+  const revisionPath = join(f.root, "data/beta-crawler-revision.json");
+  const revision = JSON.parse(text(revisionPath));
+  writeFileSync(revisionPath, JSON.stringify({ ...revision, status: "frozen_beta" }));
+  assert.notEqual(f.run().status, 0);
+  assert.equal(text(f.calls), "");
+
+  const result = f.run({ ...confirm, TEST_PREEXIST_ROUTE: aliases[0] }, ["publish-active"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(text(f.calls).trim().split("\n"), [
+    ...aliases.map(pullCall), ...aliases.slice(1).flatMap(route => [pullCall(route), deployCall(route), pullCall(route)]), execCall,
+  ]);
+  assert.match(result.stdout, /BASE44_ACTIVE_V9_PACKAGES_VERIFIED/);
+  assert.doesNotMatch(result.stdout, /BASE44_STAGED_V9_CANDIDATE_VERIFIED/);
+  assert.deepEqual(JSON.parse(text(f.readiness)).functions.map(row => row.route_name), aliases);
+});
+
+test("active V9 rejects a well-shaped but stale generated route before any CLI operation", (t) => {
+  const f = fixture();
+  t.after(f.cleanup);
+  selectActiveV9(f.root);
+  const revisionPath = join(f.root, "data/beta-crawler-revision.json");
+  const revision = JSON.parse(text(revisionPath));
+  writeFileSync(revisionPath, JSON.stringify({ ...revision, status: "frozen_beta" }));
+  const generated = join(f.root, routeManifest);
+  const record = JSON.parse(text(generated));
+  record.functions[names[0]].route_name = `${names[0]}B${"f".repeat(16)}`;
+  writeFileSync(generated, JSON.stringify(record));
+
+  const result = f.run({ CONFIRM: `PUBLISH-BASE44-ACTIVE-V9:${sourceSha}` }, ["publish-active"]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Generated staged V9 routes differ from package bytes/);
+  assert.equal(text(f.calls), "");
 });
 
 for(const mode of ["v8_alias","already_active","missing_candidate"] )test(`V9 candidate isolation refuses ${mode} before any CLI mutation`,()=>{

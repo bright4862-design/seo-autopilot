@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Publish or verify only the isolated, content-addressed V9 candidate packages.
+# Publish or verify the content-addressed V9 packages from the selected source.
 set -euo pipefail
 umask 077
 
@@ -17,12 +17,13 @@ if [[ "$APP_ID" != "6a498732ec779dfaaeab0e53" || ! "$SOURCE_SHA" =~ ^[0-9a-f]{40
   exit 2
 fi
 if (( $# > 1 )); then
-  echo 'Usage: deploy-base44-staged-functions.sh [verify]' >&2
+  echo 'Usage: deploy-base44-staged-functions.sh [verify|publish-active]' >&2
   exit 2
 fi
 case "$OPERATION" in
   publish) EXPECTED_CONFIRM="PUBLISH-BASE44-STAGED-V9:$SOURCE_SHA" ;;
   verify) EXPECTED_CONFIRM="VERIFY-BASE44-STAGED-V9:$SOURCE_SHA" ;;
+  publish-active) EXPECTED_CONFIRM="PUBLISH-BASE44-ACTIVE-V9:$SOURCE_SHA" ;;
   *) echo 'Unsupported staged V9 operation.' >&2; exit 2 ;;
 esac
 if [[ "$CONFIRM" != "$EXPECTED_CONFIRM" ]]; then
@@ -40,6 +41,11 @@ if [[ -n "${BASE44_API_KEY:-}" ]]; then
 fi
 fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$SOURCE_SHA"
 cd "$REPO_ROOT"
+if [[ "$OPERATION" == publish-active ]]; then
+  python3 "$REPO_ROOT/scripts/assert_standard150_promotion_record.py" --source-sha "$SOURCE_SHA"
+  ROUTE_SELECTION="$(node "$REPO_ROOT/scripts/lib/base44-public-routes.mjs")"
+  [[ "$ROUTE_SELECTION" == v9\ * ]] || { echo 'Active V9 publication requires the public V9 manifest.' >&2; exit 2; }
+fi
 
 FUNCTIONS=(
   startStandardScanJobV9
@@ -57,25 +63,26 @@ node "$REPO_ROOT/scripts/base44_release_manifest.mjs" verify --staged
 TASK_TMP="$(mktemp -d)"
 trap 'rm -rf "$TASK_TMP"' EXIT
 chmod 700 "$TASK_TMP"
-node --input-type=module - "$REPO_ROOT" "$TASK_TMP/routes.tsv" "${FUNCTIONS[@]}" <<'NODE'
+node --input-type=module - "$REPO_ROOT" "$TASK_TMP/routes.tsv" "$OPERATION" "${FUNCTIONS[@]}" <<'NODE'
 import fs from 'node:fs';
 import path from 'node:path';
-const [root, output, ...expected] = process.argv.slice(2);
+const [root, output, operation, ...expected] = process.argv.slice(2);
 const routes = JSON.parse(fs.readFileSync(path.join(root,'data/base44-function-routes.json'),'utf8'));
 const record = JSON.parse(fs.readFileSync(path.join(root,'data/beta-crawler-revision.json'),'utf8'));
 const generated = JSON.parse(fs.readFileSync(path.join(root,'data/generated-staged-v9-routes.json'),'utf8'));
-const actual = Object.values(routes.candidate_routes?.v9 || {});
+const active = operation === 'publish-active';
+const actual = Object.values((active ? routes.routes : routes.candidate_routes?.v9) || {});
 const occupied = new Set([
   ...Object.values(routes.routes || {}),
   ...Object.values(routes.historical_routes || {}).flatMap(Object.values),
   ...actual,
 ]);
 if (actual.length !== expected.length || new Set(actual).size !== expected.length || expected.some(name => !actual.includes(name))
-    || Object.values(routes.routes || {}).some(name => expected.includes(name))
+    || (!active && (routes.generation !== 'v8' || Object.values(routes.routes || {}).some(name => expected.includes(name))))
     || !['candidate','frozen_beta'].includes(record.status) || !/^[0-9a-f]{16}$/.test(record.fingerprint || '')
     || generated.schema_version !== 'fixlist_staged_v9_routes_v1'
     || Object.keys(generated.functions ?? {}).length !== expected.length) {
-  throw new Error('V9 publication requires an isolated six-function candidate manifest.');
+  throw new Error('V9 publication does not match its selected six-function manifest.');
 }
 const aliases = expected.map(name => {
   const row = generated.functions[name];
@@ -234,4 +241,8 @@ const result = {schema_version:'fixlist_staged_v9_readiness_v2',source_sha:sourc
   functions:probes.functions.map(row => ({...row,package_digest:packages.get(row.name)}))};
 fs.writeFileSync(output,JSON.stringify(result,null,2)+'\n',{flag:'wx',mode:0o600});
 NODE
-printf 'BASE44_STAGED_V9_CANDIDATE_VERIFIED source_sha=%s readiness=%s production_activation=false\n' "$SOURCE_SHA" "$READINESS_OUTPUT"
+if [[ "$OPERATION" == publish-active ]]; then
+  printf 'BASE44_ACTIVE_V9_PACKAGES_VERIFIED source_sha=%s\n' "$SOURCE_SHA"
+else
+  printf 'BASE44_STAGED_V9_CANDIDATE_VERIFIED source_sha=%s readiness=%s production_activation=false\n' "$SOURCE_SHA" "$READINESS_OUTPUT"
+fi

@@ -27,6 +27,13 @@ command -v node >/dev/null 2>&1 || {
 ROUTE_SELECTION="$(node "$REPO_ROOT/scripts/lib/base44-public-routes.mjs")"
 read -r -a ROUTE_FIELDS <<<"$ROUTE_SELECTION"
 FUNCTION_ROUTES=("${ROUTE_FIELDS[@]:1}")
+if [[ "${ROUTE_FIELDS[0]}" == "v9" ]]; then
+  if [[ "$APP_ID" != "6a498732ec779dfaaeab0e53" || "$PROBE_ORIGIN" != "https://base44.app" ]]; then
+    echo 'Refusing active V9 verification: the FixList app and Base44 origin must match.' >&2
+    exit 2
+  fi
+  RELEASE_CONTRACT_ROOT="$REPO_ROOT" node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --check
+fi
 
 if ! printf '%s' "$PROBE_ATTEMPTS" | grep -Eq '^[1-9][0-9]*$'; then
   echo "Refusing Base44 function verification: PROBE_ATTEMPTS must be a positive integer." >&2
@@ -65,12 +72,17 @@ NODE
 
 for name in "${FUNCTION_ROUTES[@]}"; do
   # Both package bytes and activation must match this checked-out source.
-  expected="$(RELEASE_CONTRACT_ROOT="$REPO_ROOT" node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --build-id "$name")"
+  if [[ "$name" == *V9B* ]]; then
+    identity="$(node "$REPO_ROOT/scripts/lib/base44-public-routes.mjs" --identity "$name")"
+    read -r expected expected_activation <<<"$identity"
+  else
+    expected="$(RELEASE_CONTRACT_ROOT="$REPO_ROOT" node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --build-id "$name")"
+    expected_activation="$(RELEASE_CONTRACT_ROOT="$REPO_ROOT" node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --activation-id "$name")"
+  fi
   if ! printf '%s' "$expected" | grep -Eq '^[0-9a-f]{64}$'; then
     echo "Refusing Base44 function verification: local build ID for $name is invalid." >&2
     exit 2
   fi
-  expected_activation="$(RELEASE_CONTRACT_ROOT="$REPO_ROOT" node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --activation-id "$name")"
   if ! printf '%s' "$expected_activation" | grep -Eq '^[A-Za-z0-9._-]{1,120}$'; then
     echo "Refusing Base44 function verification: local activation marker for $name is invalid." >&2
     exit 2

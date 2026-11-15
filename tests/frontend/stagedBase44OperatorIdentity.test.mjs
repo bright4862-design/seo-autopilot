@@ -126,6 +126,7 @@ console.log(JSON.stringify({
         CONFIRM: options.confirm ?? confirm, STAGED_OPERATOR_USER_ID: options.operatorId || "",
         BASE44_EXPECTED_OWNER: options.expectedCli || "", TEST_CLI_USER: options.actualCli || options.expectedCli || "",
         STAGED_OWNER_USER_ID: selected, EXPECTED_OWNER_USER_ID: selected, BASE44_OBSERVATIONS_DIR: output,
+        STAGED_COHORT_TARGET_ROLE: options.targetRole || "user",
         TEST_CLI: cli, TEST_TRACE: trace, TEST_USER: JSON.stringify(user),
         TEST_PROBE: JSON.stringify(options.probe || {}), TEST_V9: JSON.stringify(options.v9 || {}),
         STAGED_PAID_PAGE_CAP: options.cap || "150", STAGED_GATEWAY_REVISION: gatewayRevision,
@@ -138,12 +139,17 @@ console.log(JSON.stringify({
 }
 
 test("the new London staged cohort uses the signed-in app identity before any Base44 writes", t => {
-  const result = fixture(t)(operator, "prepare-owner", london.id, london);
+  const result = fixture(t)(operator, "prepare-owner", london.id, london, {
+    v9: {
+      staged_owner_cohort_sha256: createHash("sha256").update(JSON.stringify([london.id])).digest("hex"),
+      intake_gate: "disabled",
+    },
+  });
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(result.calls.slice(0, 2), [["exec", "--data-env", "prod"], ["auth.me"]]);
   assert.equal(result.calls.filter(([name]) => name === "secrets").length, 2);
   assert.ok(result.calls.some(row => row.includes(`SCAN_STAGED_OWNER_IDS=${london.id}`)));
-  assert.equal(result.calls.some(row => row[1] === "startStandardScanJobV9"), false);
+  assert.equal(result.calls.filter(row => row[1] === "startStandardScanJobV9").length, 2);
 });
 
 for (const [operation, user] of [
@@ -249,6 +255,23 @@ test("read-only pilot status identifies a different exact cohort without exposin
   assert.equal(result.stdout.includes("9".repeat(64)), false);
 });
 
+test("an authenticated London operator can prepare Bright for an explicit admin canary", t => {
+  const options = pilotOptions(london, { targetRole: "admin" });
+  options.v9.staged_owner_cohort_sha256 = createHash("sha256").update(JSON.stringify([bright.id])).digest("hex");
+  const result = fixture(t)(operator, "prepare-owner", bright.id, london, options);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(result.calls.some(row => row.includes(`SCAN_STAGED_OWNER_IDS=${bright.id}`)));
+  assert.match(result.stdout, /v9_attested=true pilot_cohort_matches=true/);
+});
+
+test("separate preparation requires the selected cohort role to match the test account", t => {
+  for (const [target, role] of [[customer, "admin"], [bright, "user"]]) {
+    const result = fixture(t)(operator, "prepare-owner", target.id, london, pilotOptions(london, { targetRole: role }));
+    assert.equal(result.status, 2);
+    assert.equal(result.calls.some(([command]) => command === "secrets"), false);
+  }
+});
+
 function paidOptions(cap = "150", overrides = {}) {
   return {
     cap, operatorId: london.id, expectedCli: london.email,
@@ -297,6 +320,29 @@ test("paid status cross-checks both runtimes without writing", t => {
   assert.deepEqual(JSON.parse(result.stdout.trim()), {
     base44_v9_attested: true, page_cap: 500, intake_gate: "disabled", admission_gate: "enabled",
   });
+});
+
+test("off status verifies actual V9 rollback and keeps the operator read-only", t => {
+  const v9 = {
+    configured_pipeline_mode: "monolith", pipeline_mode: "monolith", staged_owner_cohort_state: "empty",
+    staged_owner_count: 0, staged_owner_enabled: false, staged_owner_cohort_sha256: emptyCohortDigest,
+    intake_gate: "disabled",
+  };
+  const result = fixture(t)(operator, "status-off", "", london, { ...paidOptions(), v9 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.calls.some(([command]) => command === "secrets" || command === "gateway.health"), false);
+  assert.deepEqual(JSON.parse(result.stdout.trim()), {
+    base44_v9_attested: true, staged_rollout_scope: "off", staged_500_entitled_enabled: false, intake_gate: "disabled",
+  });
+});
+
+test("off status refuses proof while the exact V9 runtime still sees paid settings", t => {
+  const options = paidOptions("500");
+  options.v9.configured_pipeline_mode = "monolith";
+  const result = fixture(t)(operator, "status-off", "", london, options);
+  assert.equal(result.status, 2);
+  assert.equal(result.calls.some(([command]) => command === "secrets"), false);
+  assert.doesNotMatch(result.stdout, /base44_v9_attested/);
 });
 
 test("the collector reads V9 for the selected London app identity", t => {

@@ -154,6 +154,8 @@ Base44 grants `page_cap=500` only from an active server-owned entitlement; the b
 
 `scripts/run-staged-owner-canary.sh` submits one explicitly confirmed staged-150 request through the authenticated pinned CLI. Supply the exact source SHA, expected administrator owner ID, an existing matching project and target URL, `EXPECTED_PAGE_CAP=150`, a stable request ID and a new acceptance-output path. Its confirmation binds that source, owner, project and request ID. It verifies the authenticated user, project and existing active entitlement before starting, and never creates a project or grant. Reuse the request ID after a lost response. The filtered report requires verified authority, the current release fingerprint, staged batch progress, duration and measured memory; absent evidence prevents an acceptance claim. This canary does not configure a cohort, open public claims or freeze a production release.
 
+An approved administrator can prepare the other approved administrator's exact cohort for a controlled browser startup scan. Use `prepare-owner` with the authenticated `STAGED_OPERATOR_USER_ID`, the exact `STAGED_OWNER_USER_ID` signed in to the scanner, and `STAGED_COHORT_TARGET_ROLE=admin`. A regular customer pilot uses a separate normal-role account.
+
 Before expanding the cohort, verify:
 
 - The four reference sites finish end to end with `durable_worker_owned: true`; compare 150-page monolith/staged fixtures and the expected signed authority bounds.
@@ -191,6 +193,8 @@ Once the 500 corpus and production checks pass, `paid-500` enables already-entit
 ## Rollback and recovery
 
 Close staged intake to stop new admissions. Keep the stage endpoints, queue, V9 functions and workspace available for attempts that already own a staged contract. Wait for the admission barrier and entry, stage, and drain queues to clear before changing the serving worker or removing its source tag. Existing sealed authority remains immutable.
+
+When rolling back paid settings, run the Base44 operator's `disable` operation, then use `OPERATION=status-off` to verify that the exact V9 launcher sees both paid switches off and intake closed. Keep intake closed if that readback fails.
 
 The periodic Scheduler calls the canonical service. Before opening normal staged intake, verify the promoted stage-capable worker with `scripts/verify-standard150-reconciler.sh`. Set `RECONCILER_EXPECTED_SOURCE_SHA` and `RECONCILER_EXPECTED_STAGED_CONFIG_SHA256` to the reviewed build values, with the same `TASKS_INVOKER_SERVICE_ACCOUNT` used by the Scheduler. The verifier checks that the canonical service and source-bound tag resolve to the same revision and that the Scheduler uses the canonical OIDC audience.
 

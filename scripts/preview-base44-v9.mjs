@@ -14,7 +14,7 @@ const PUBLIC_SETTINGS = `/api/apps/public/prod/public-settings/by-id/${APP_ID}`;
 const APP_API_PATH = new RegExp(`^/api/apps/${APP_ID}/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_.-]+)*$`);
 const FRONTEND_INPUTS = [
   "index.html", "src", "public", "base44", "package.json", "package-lock.json",
-  "vite.config.js", "postcss.config.js", "tailwind.config.js",
+  "vite.config.js", "postcss.config.js", "tailwind.config.js", "data/base44-function-routes.json",
 ];
 const BUNDLE_MARKERS = [
   "__FIXLIST_SOURCE_SHA__", "startStandardScanJobV9",

@@ -5,6 +5,8 @@
 # For a customer pilot, set STAGED_OPERATOR_USER_ID to the signed-in admin and
 # STAGED_OWNER_USER_ID to the exact tester ID verified in the native preview
 # session. The tester must have role "user" and the intended scan entitlement.
+# Use STAGED_COHORT_TARGET_ROLE=admin to select the other approved administrator
+# for a controlled startup scan.
 set -euo pipefail
 umask 077
 
@@ -18,6 +20,7 @@ CONFIRM="${CONFIRM:-}"
 OPERATION="${OPERATION:-status}"
 OWNER_ID="${STAGED_OWNER_USER_ID:-}"
 OPERATOR_ID="${STAGED_OPERATOR_USER_ID:-$OWNER_ID}"
+TARGET_ROLE="${STAGED_COHORT_TARGET_ROLE:-user}"
 BASE44_EXPECTED_OWNER="${BASE44_EXPECTED_OWNER:-}"
 PAID_PAGE_CAP="${STAGED_PAID_PAGE_CAP:-150}"
 GATEWAY_REVISION="${STAGED_GATEWAY_REVISION:-}"
@@ -40,19 +43,26 @@ if [[ "$OPERATION" == status-paid || "$OPERATION" == prepare-paid ]]; then
   [[ "$GATEWAY_REVISION" =~ ^fixlist-dispatch-gateway-[a-z0-9-]+$ && ${#GATEWAY_REVISION} -le 63 ]] \
     || refuse "exact serving STAGED_GATEWAY_REVISION required"
 fi
+if [[ "$OPERATION" == status-off ]]; then
+  OWNER_ID="${OWNER_ID:-$OPERATOR_ID}"
+  [[ "$OWNER_ID" == "$OPERATOR_ID" ]] || refuse "off status does not take a pilot account"
+fi
 [[ "$OWNER_ID" =~ ^[A-Za-z0-9_-]{6,64}$ ]] || refuse "exact STAGED_OWNER_USER_ID required"
+[[ "$TARGET_ROLE" == user || "$TARGET_ROLE" == admin ]] || refuse "invalid staged cohort target role"
 PILOT=false
 if [[ "$OWNER_ID" != "$OPERATOR_ID" ]]; then
   case "$OWNER_ID" in
     6a498da58ef5cec1f5cd4486|6a498732ec779dfaaeab0e54)
-      refuse "customer pilot target must be separate from the approved administrator accounts" ;;
+      [[ "$TARGET_ROLE" == admin ]] || refuse "customer pilot target must be separate from the approved administrator accounts" ;;
+    *)
+      [[ "$TARGET_ROLE" == user ]] || refuse "administrator target must select an approved FixList administrator" ;;
   esac
   [[ -z "${BASE44_API_KEY:-}" && "$BASE44_EXPECTED_OWNER" == "$OPERATOR_EMAIL" ]] ||
-    refuse "customer pilot requires the selected administrator's authenticated CLI session"
+    refuse "separate target requires the selected administrator's authenticated CLI session"
   PILOT=true
 fi
 case "$OPERATION" in
-  status|status-paid) ;;
+  status|status-paid|status-off) ;;
   deploy-probe)
     [[ "$CONFIRM" == "DEPLOY-BASE44-STAGED-PROBE:$SOURCE_SHA" ]] || refuse "exact deploy-probe confirmation required" ;;
   prepare-owner)
@@ -81,7 +91,7 @@ if (me?.id !== expectedId || String(me?.email || "").trim().toLowerCase() !== ex
 NODE
 } > "$TMP/app-owner.js"
 
-if [[ "$OPERATION" != status && "$OPERATION" != status-paid ]]; then
+if [[ "$OPERATION" != status && "$OPERATION" != status-paid && "$OPERATION" != status-off ]]; then
   # Prove the production app identity before deploying or changing settings.
   cp "$TMP/app-owner.js" "$TMP/preflight.js"
   printf '%s\n' 'console.log("FIXLIST_STAGED_APP_OWNER_VERIFIED");' >> "$TMP/preflight.js"
@@ -161,11 +171,11 @@ NODE
   timeout --signal=TERM --kill-after=5s 55 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" exec --data-env prod \
     < "$TMP/v9-pilot.js" > "$TMP/v9-pilot.out" 2> "$TMP/v9-pilot.err" || return 1
   node --input-type=module - "$TMP/v9-pilot.out" "$TMP/v9-pilot.json" \
-    "$REPO_ROOT" "$V9_BUILD_ID" "$V9_ACTIVATION_ID" "$OWNER_ID" "$phase" "$PAID_PAGE_CAP" "$GATEWAY_ORIGIN" <<'NODE'
+    "$REPO_ROOT" "$V9_BUILD_ID" "$V9_ACTIVATION_ID" "$OWNER_ID" "$OPERATOR_ID" "$phase" "$PAID_PAGE_CAP" "$GATEWAY_ORIGIN" <<'NODE'
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-const [input, output, root, buildId, activationId, targetId, phase, cap, gatewayOrigin] = process.argv.slice(2);
+const [input, output, root, buildId, activationId, targetId, operatorId, phase, cap, gatewayOrigin] = process.argv.slice(2);
 const prefix = 'FIXLIST_V9_PILOT_READBACK=';
 const lines = fs.readFileSync(input, 'utf8').split('\n').filter(line => line.startsWith(prefix));
 if (lines.length !== 1) process.exit(1);
@@ -178,10 +188,21 @@ if (report.success !== true || report.schema_version !== 'fixlist_staged_v9_inta
     || !/^[0-9a-f]{16}$/.test(fingerprint) || report.release_fingerprint !== fingerprint
     || !Number.isFinite(observationAgeMs) || Math.abs(observationAgeMs) > 60_000) process.exit(1);
 const cohortDigest = createHash('sha256').update(JSON.stringify([targetId])).digest('hex');
+const emptyCohort = createHash('sha256').update('[]').digest('hex');
+if (phase === 'off-status') {
+  if (report.configured_pipeline_mode !== 'monolith' || report.staged_rollout_scope !== 'off'
+      || report.staged_500_entitled_enabled !== false || report.pipeline_mode !== 'monolith'
+      || report.staged_owner_enabled !== false || report.staged_owner_cohort_state !== 'empty'
+      || report.staged_owner_count !== 0 || report.staged_owner_cohort_sha256 !== emptyCohort
+      || report.intake_gate !== 'disabled') process.exit(1);
+  fs.writeFileSync(output, JSON.stringify({
+    base44_v9_attested: true, staged_rollout_scope: 'off', staged_500_entitled_enabled: false, intake_gate: 'disabled',
+  }) + '\n', {flag:'w',mode:0o600});
+  process.exit(0);
+}
 if (phase.startsWith('paid-')) {
   if (report.paid_dispatch_gateway_origin !== gatewayOrigin) process.exit(1);
   if (phase !== 'paid-preflight') {
-    const emptyCohort = createHash('sha256').update('[]').digest('hex');
     if (report.configured_pipeline_mode !== 'staged' || report.staged_rollout_scope !== 'paid'
         || report.staged_500_entitled_enabled !== (cap === '500')
         || report.pipeline_mode !== 'monolith' || report.staged_owner_enabled !== false
@@ -197,9 +218,10 @@ if (phase.startsWith('paid-')) {
   }
   process.exit(0);
 }
+const operatorIsTarget = operatorId === targetId;
 const cohortMatches = report.configured_pipeline_mode === 'staged' && report.staged_owner_cohort_state === 'explicit'
   && report.staged_owner_count === 1 && report.staged_owner_cohort_sha256 === cohortDigest
-  && report.pipeline_mode === 'monolith' && report.staged_owner_enabled === false
+  && report.pipeline_mode === (operatorIsTarget ? 'staged' : 'monolith') && report.staged_owner_enabled === operatorIsTarget
   && report.staged_rollout_scope === 'off' && report.staged_500_entitled_enabled === false;
 if (phase === 'prepared' && !(cohortMatches && report.intake_gate === 'disabled')) process.exit(1);
 fs.writeFileSync(output, JSON.stringify(cohortMatches) + '\n', {flag:'w',mode:0o600});
@@ -224,7 +246,7 @@ if (health.ok !== true || health.service !== 'fixlist-dispatch-gateway'
 NODE
 }
 
-if [[ "$PAID" == true || ( "$PILOT" == true && ( "$OPERATION" == status || "$OPERATION" == prepare-owner ) ) ]]; then
+if [[ "$PAID" == true || "$OPERATION" == prepare-owner || "$OPERATION" == status-off || ( "$PILOT" == true && "$OPERATION" == status ) ]]; then
   command -v timeout >/dev/null || refuse "timeout is required for customer pilot readback"
   V9_BUILD_ID="$(node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --build-id startStandardScanJobV9)"
   V9_ACTIVATION_ID="$(node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --activation-id startStandardScanJobV9)"
@@ -261,6 +283,10 @@ NODE
     verify_paid_gateway || refuse "serving gateway does not match the selected paid tier"
     cat "$TMP/v9-pilot.json"
     ;;
+  status-off)
+    v9_intake_readback off-status || refuse "V9 staged settings or closed intake are unverified"
+    cat "$TMP/v9-pilot.json"
+    ;;
   prepare-paid)
     verify_probe_package || refuse "deployed operator package mismatch"
     v9_intake_readback paid-preflight || refuse "deployed V9 intake or dispatcher origin does not match"
@@ -285,7 +311,7 @@ NODE
     ;;
   prepare-owner|disable)
     verify_probe_package || refuse "deployed operator package mismatch"
-    if [[ "$PILOT" == true && "$OPERATION" == prepare-owner ]]; then
+    if [[ "$OPERATION" == prepare-owner ]]; then
       v9_intake_readback preflight || refuse "deployed V9 intake does not match the selected source"
     fi
     # Stop *new* Base44 intake first. Leave admission enabled so committed
@@ -319,7 +345,7 @@ if (operation === 'prepare-owner' && (report.env_mode !== 'staged' || report.own
 if (operation === 'disable' && (report.env_mode !== 'monolith' || report.owner_match !== false || report.cohort_count !== 0)) process.exit(1);
 NODE
     then refuse "runtime configuration did not converge; never infer activation from a secrets write"; fi
-    if [[ "$PILOT" == true && "$OPERATION" == prepare-owner ]]; then
+    if [[ "$OPERATION" == prepare-owner ]]; then
       v9_intake_readback prepared || refuse "intake closed but the exact V9 pilot cohort could not be verified"
       echo "BASE44_STAGED_CONFIG_READBACK_VERIFIED mode=$OPERATION source_sha=$SOURCE_SHA public_intake=closed v9_attested=true pilot_cohort_matches=true"
     else

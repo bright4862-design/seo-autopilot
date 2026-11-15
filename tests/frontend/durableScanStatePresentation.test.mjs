@@ -167,6 +167,34 @@ for (const { name, record, kind } of CASES) {
   });
 }
 
+test("incident-shaped unsaved results are explained as a FixList-side fault, not a retry invitation", () => {
+  // #378: historical terminal row counters are zero defaults, not crawl
+  // evidence. The stored error describes a persistence fingerprint mismatch.
+  const record = {
+    status: "failed",
+    pages_found: 0,
+    pages_crawled: 0,
+    status_detail: "Scan finished, but results could not be saved",
+    error_code: "authority_snapshot_not_eligible__beta_revision_fingerprint__expected_e0eca935c350e590__received_01ebe8e90df1e6bd",
+  };
+  const view = durableScanStatePresentation(record);
+  assert.equal(view.kind, "save_failed");
+  assert.match(view.detail, /nothing was published/i);
+  assert.match(view.nextStep, /contact FixList support/i);
+  assert.match(view.retryAdvice, /may fail the same way until/i);
+  const customerText = [view.title, view.detail, view.nextStep, view.retryAdvice].join(" ");
+  assert.doesNotMatch(customerText, /run the scan again|worth trying now|retry immediately|try again now/i);
+  assert.doesNotMatch(customerText, /authority_snapshot|fingerprint|e0eca935|01ebe8e/i);
+  assert.doesNotMatch(customerText, /website limited|site blocked|robots\.txt/i);
+});
+
+test("a generic failed authority write uses the same cautious saving guidance", () => {
+  const view = durableScanStatePresentation({ status: "failed", error_code: "authority_write_failed" });
+  assert.equal(view.kind, "save_failed");
+  assert.match(view.nextStep, /scan reference/i);
+  assert.doesNotMatch(view.retryAdvice, /worth trying now/i);
+});
+
 test("every kind reads differently to a customer", () => {
   // The fault this patch exists to remove: two runs that stopped for different
   // reasons rendering the same paragraph and the same advice.

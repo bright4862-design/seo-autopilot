@@ -87,7 +87,11 @@ def _evidence_from_page(page: dict, target: str, source: str = "crawl") -> dict:
     indexability_state = str(page.get("indexability_state") or "")
     target_canonical = _normalize_url(page.get("canonical"))
 
-    if indexability_state == "Blocked by robots.txt" or fetch_error == "blocked_by_robots_txt":
+    if status_code == 429:
+        state = "unknown_access_limited"
+        indexability_state = "Unknown"
+        fetch_error = "rate_limited"
+    elif indexability_state == "Blocked by robots.txt" or fetch_error == "blocked_by_robots_txt":
         state = "target_blocked_by_robots"
     elif 300 <= status_code < 400:
         state = "target_redirected"

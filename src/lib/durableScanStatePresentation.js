@@ -119,7 +119,10 @@ function renderingUnverified(record) {
  * text is only a fallback for older rows that carry no usable structured
  * reason: letting a stale heartbeat or write-failure fragment win first can
  * overwrite a current access or coverage verdict and send the customer to fix
- * the wrong thing. Within structured evidence, access limiting comes first
+ * the wrong thing. An explicit terminal release-fingerprint persistence rejection
+ * is different: that error_code describes the failed write, even if the row also
+ * retained earlier crawl-quality diagnostics. Within structured crawl evidence,
+ * access limiting comes first
  * because it explains everything downstream of it; a blocked crawl also runs
  * short of pages and may run out of time. A recorded deadline outranks a thin
  * page count for the same reason. Rendering evidence is considered after page
@@ -130,6 +133,17 @@ function renderingUnverified(record) {
 export function durableScanLimitationKind(record) {
   const source = plainObject(record);
   const text = failureText(source);
+
+  // #378: a definitive terminal authority-write rejection outranks incidental
+  // crawl-quality states. Narrow to the exact release-fingerprint failure code:
+  // generic free-text save errors must NOT silence structured site verdicts.
+  if (cleanText(source.status) === "failed"
+      && /^authority_snapshot_not_eligible__beta_revision_fingerprint(?:__|$)/.test(
+        cleanText(source.error_code).toLowerCase(),
+      )) {
+    return "save_failed";
+  }
+
   const states = new Set([
     cleanText(source.evidence_quality_state).toLowerCase(),
     cleanText(source.coverage_state).toLowerCase(),

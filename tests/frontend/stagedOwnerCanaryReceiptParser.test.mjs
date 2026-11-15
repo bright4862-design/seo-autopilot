@@ -90,6 +90,8 @@ test('an authentic failed receipt remains failed with its original failure code'
 for (const [label, mutate, reason] of [
   ['foreign source SHA', r => {r.source_sha='b'.repeat(40);}, 'cli_report_identity_mismatch'],
   ['foreign project', r => {r.project_id='project_foreign';}, 'cli_report_identity_mismatch'],
+  ['foreign application', r => {r.app_id='foreign_app';}, 'cli_report_identity_mismatch'],
+  ['foreign target URL', r => {r.target_url='https://foreign.example/';}, 'cli_report_identity_mismatch'],
   ['foreign request', r => {r.request_id='request_foreign';}, 'cli_report_identity_mismatch'],
   ['foreign owner identity', r => {r.verified_owner_user_id='owner_foreign';}, 'cli_success_unsubstantiated'],
   ['unverified authority', r => {r.authority_verified=false;}, 'cli_success_unsubstantiated'],

@@ -4,8 +4,8 @@
 // Two jobs:
 //   1. verify   -- prove each function package is portable and self-contained
 //   2. manifest -- emit exact function-package and authority-entity SHA-256
-//                  hashes so a fresh Base44 pull can be compared byte-for-byte
-//                  against this GitHub source
+//                  hashes so a fresh Base44 pull can be verified against
+//                  this GitHub source
 //
 // Integrity rules enforced (each one has burned this repo at least once):
 //   - function.jsonc "entry" must be a RELATIVE filename. The Base44 sandbox
@@ -31,6 +31,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 const FUNCTIONS_DIR = "base44/functions";
 const ENTITIES_DIR = "base44/entities";
@@ -199,6 +200,103 @@ export function auditAll(fns = RELEASE_FUNCTIONS) {
   return fns.map(auditFunction);
 }
 
+function readFunctionPackage(directory) {
+  const files = {};
+  for (const file of fs.readdirSync(directory).sort()) {
+    const full = path.join(directory, file);
+    if (!fs.statSync(full).isFile()) continue;
+    const bytes = fs.readFileSync(full);
+    files[file] = {
+      bytes: bytes.length,
+      sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
+    };
+  }
+  // Hash "name\0sha256" lines in sorted order, independent of metadata.
+  const packageDigest = crypto.createHash("sha256").update(
+    Object.entries(files).map(([name, file]) => `${name}\0${file.sha256}`).join("\n"),
+  ).digest("hex");
+  return { entry: readJsonc(path.join(directory, "function.jsonc")).entry, files, packageDigest };
+}
+
+function pullMismatch(name, detail) {
+  throw new Error(`V9 deployed package differs: ${name} (${detail})`);
+}
+
+function directoryEntries(name, directory) {
+  if (!fs.lstatSync(directory, { throwIfNoEntry: false })?.isDirectory()) {
+    pullMismatch(name, "missing or invalid package directory");
+  }
+  return new Map(fs.readdirSync(directory, { withFileTypes: true }).map(entry => [entry.name, entry]));
+}
+
+function requireInventory(name, directory, expectedFiles, expectedDirectory) {
+  const entries = directoryEntries(name, directory);
+  if (entries.size !== expectedFiles.length + Number(Boolean(expectedDirectory))
+      || !expectedFiles.every(file => entries.get(file)?.isFile())
+      || (expectedDirectory && !entries.get(expectedDirectory)?.isDirectory())) {
+    pullMismatch(name, "unexpected package inventory");
+  }
+}
+
+export function assertPulledFunctionPackage(name, localDir, pulledDir) {
+  if (typeof name !== "string" || !/^[A-Za-z0-9_-]+$/.test(name)) throw new Error("Invalid Base44 function name");
+  const localEntries = directoryEntries(name, localDir);
+  if (![...localEntries.values()].every(entry => entry.isFile()) || !localEntries.has("function.jsonc")) {
+    pullMismatch(name, "invalid local package inventory");
+  }
+  const localConfig = readJsonc(path.join(localDir, "function.jsonc"));
+  if (localConfig?.name !== name || !/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(localConfig.entry)
+      || !localEntries.has(localConfig.entry) || localConfig.entry === "function.jsonc") {
+    pullMismatch(name, "invalid local entry");
+  }
+
+  let sourceDir = pulledDir;
+  let sourceFiles = [...localEntries.keys()];
+  if (directoryEntries(name, pulledDir).has("base44")) {
+    // Base44 CLI 0.1.8 puts repo-relative source paths beneath the pull
+    // directory. Its generated config rewrites entry to the same path.
+    requireInventory(name, pulledDir, ["function.jsonc"], "base44");
+    const base44Dir = path.join(pulledDir, "base44");
+    requireInventory(name, base44Dir, [], "functions");
+    const functionsDir = path.join(base44Dir, "functions");
+    requireInventory(name, functionsDir, [], name);
+    sourceDir = path.join(functionsDir, name);
+    sourceFiles = sourceFiles.filter(file => file !== "function.jsonc");
+    const expectedConfig = { ...localConfig, entry: `base44/functions/${name}/${localConfig.entry}` };
+    const configText = fs.readFileSync(path.join(pulledDir, "function.jsonc"), "utf8");
+    let pulledConfig;
+    try {
+      pulledConfig = JSON.parse(configText);
+    } catch {
+      pullMismatch(name, "unrecognized function config");
+    }
+    if (!isDeepStrictEqual(pulledConfig, expectedConfig) || configText !== JSON.stringify(pulledConfig, null, 2)) {
+      pullMismatch(name, "unrecognized function config");
+    }
+  }
+
+  requireInventory(name, sourceDir, sourceFiles);
+  for (const file of sourceFiles) {
+    if (!fs.readFileSync(path.join(localDir, file)).equals(fs.readFileSync(path.join(sourceDir, file)))) {
+      pullMismatch(name, `file bytes differ for ${file}`);
+    }
+  }
+  return readFunctionPackage(localDir).packageDigest;
+}
+
+function releaseDigests(functions, entities) {
+  const functionDigest = crypto.createHash("sha256").update(
+    Object.entries(functions).map(([name, metadata]) => `${name}\0${metadata.packageDigest}`).join("\n"),
+  ).digest("hex");
+  const entityDigest = crypto.createHash("sha256").update(
+    Object.entries(entities).map(([name, metadata]) => `${name}\0${metadata.sha256}`).join("\n"),
+  ).digest("hex");
+  const releaseDigest = crypto.createHash("sha256").update(
+    `functions\0${functionDigest}\nentities\0${entityDigest}`,
+  ).digest("hex");
+  return { functionDigest, entityDigest, releaseDigest };
+}
+
 export function buildManifest(
   fns = RELEASE_FUNCTIONS,
   functionsDir = FUNCTIONS_DIR,
@@ -207,27 +305,8 @@ export function buildManifest(
 ) {
   const functions = {};
   for (const fnName of fns) {
-    const dir = path.join(functionsDir, fnName);
-    const files = {};
-    for (const file of fs.readdirSync(dir).sort()) {
-      const full = path.join(dir, file);
-      if (!fs.statSync(full).isFile()) continue;
-      const bytes = fs.readFileSync(full);
-      files[file] = {
-        bytes: bytes.length,
-        sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
-      };
-    }
-    // Package digest: hash of "name\0sha256" lines in sorted order. Stable
-    // across checkouts and independent of filesystem metadata.
-    const packageDigest = crypto.createHash("sha256").update(
-      Object.entries(files).map(([n, m]) => `${n}\0${m.sha256}`).join("\n"),
-    ).digest("hex");
-    functions[fnName] = { entry: readJsonc(path.join(dir, "function.jsonc")).entry, files, packageDigest };
+    functions[fnName] = readFunctionPackage(path.join(functionsDir, fnName));
   }
-  const functionDigest = crypto.createHash("sha256").update(
-    Object.entries(functions).map(([n, f]) => `${n}\0${f.packageDigest}`).join("\n"),
-  ).digest("hex");
 
   const entities = {};
   for (const entityName of entitiesToHash) {
@@ -244,16 +323,10 @@ export function buildManifest(
       sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
     };
   }
-  const entityDigest = crypto.createHash("sha256").update(
-    Object.entries(entities).map(([n, metadata]) => `${n}\0${metadata.sha256}`).join("\n"),
-  ).digest("hex");
-  const releaseDigest = crypto.createHash("sha256").update(
-    `functions\0${functionDigest}\nentities\0${entityDigest}`,
-  ).digest("hex");
-  return { functions, entities, functionDigest, entityDigest, releaseDigest };
+  return { functions, entities, ...releaseDigests(functions, entities) };
 }
 
-export function compareReleaseDirectories(remoteFunctionsDir, remoteEntitiesDir, {functions = RELEASE_FUNCTIONS, entities = RELEASE_ENTITIES} = {}) {
+export function compareReleaseDirectories(remoteFunctionsDir, remoteEntitiesDir, {functions = RELEASE_FUNCTIONS, entities = RELEASE_ENTITIES, staged = false} = {}) {
   const remoteRoot = path.resolve(String(remoteFunctionsDir || ""));
   const remoteEntityRoot = path.resolve(String(remoteEntitiesDir || ""));
   const problems = [];
@@ -276,9 +349,18 @@ export function compareReleaseDirectories(remoteFunctionsDir, remoteEntitiesDir,
   if (problems.length) return { ok: false, problems, local: null, remote: null };
 
   const local = buildManifest(functions, FUNCTIONS_DIR, entities);
-  const remote = buildManifest(functions, remoteRoot, entities, remoteEntityRoot);
+  const remote = buildManifest(staged ? [] : functions, remoteRoot, entities, remoteEntityRoot);
   for (const fnName of functions) {
     const localPackage = local.functions[fnName];
+    if (staged) {
+      try {
+        assertPulledFunctionPackage(fnName, path.join(FUNCTIONS_DIR, fnName), path.join(remoteRoot, fnName));
+        remote.functions[fnName] = localPackage;
+      } catch (error) {
+        problems.push(error.message);
+      }
+      continue;
+    }
     const remotePackage = remote.functions[fnName];
     if (localPackage.packageDigest !== remotePackage.packageDigest) {
       problems.push(
@@ -286,6 +368,7 @@ export function compareReleaseDirectories(remoteFunctionsDir, remoteEntitiesDir,
       );
     }
   }
+  if (staged) Object.assign(remote, releaseDigests(remote.functions, remote.entities));
   for (const entityName of entities) {
     const localSchema = local.entities[entityName];
     const remoteSchema = remote.entities[entityName];
@@ -312,7 +395,7 @@ if (invokedDirectly) {
   if (mode === "manifest") {
     process.stdout.write(`${JSON.stringify(buildManifest(functions, FUNCTIONS_DIR, entities), null, 2)}\n`);
   } else if (mode === "compare") {
-    const comparison = compareReleaseDirectories(process.argv[3], process.argv[4], {functions, entities});
+    const comparison = compareReleaseDirectories(process.argv[3], process.argv[4], {functions, entities, staged});
     if (!comparison.ok) {
       for (const problem of comparison.problems) process.stdout.write(`FAIL ${problem}\n`);
       process.exit(1);

@@ -120,10 +120,14 @@ class StagedScanRuntime:
         result.update({"scan_mode": mode, "page_cap": cap, "pipeline_mode": pipeline})
         return result
 
-    async def _lease(self, prefix: str, stage: str, batch: int, recovery_generation: int = 0) -> tuple[dict, int] | None:
+    async def _lease(self, prefix: str, stage: str, batch: int, recovery_generation: int = 0) -> tuple[dict, int, bool] | None:
         key = prefix + "frontier.json"
         stored = await self.store.read(key)
-        current = dict(stored.value) if stored else {"stage": "plan", "batch": 0, "committed_batches": [], "wall_deadline": self.clock() + SCAN_WALL_SECONDS}
+        current = dict(stored.value) if stored else {
+            "stage": "plan", "batch": 0, "committed_batches": [],
+            "wall_deadline": self.clock() + SCAN_WALL_SECONDS,
+            "finalize_optional_probes_claimed": False,
+        }
         if current.get("stage") == "deleted":
             raise StageRetry("The workspace was deleted")
         if current.get("stage") != stage or int(current.get("batch") or 0) != batch:
@@ -157,8 +161,15 @@ class StagedScanRuntime:
             "lease_owner": delivery_id, "lease_until": self.clock() + STAGE_LEASE_SECONDS,
             "telemetry_history_complete": complete_history,
         })
+        allow_optional_probes = False
+        if stage == "finalize":
+            # Spend the attempt's permit before any optional I/O. A lost
+            # receipt, missing result or replacement task must not renew it.
+            # Legacy frontiers and watchdog recovery use retained evidence.
+            allow_optional_probes = not recovery_generation and current.get("finalize_optional_probes_claimed") is False
+            current["finalize_optional_probes_claimed"] = True
         generation = await self.store.write(key, current, generation=stored.generation if stored else 0)
-        return current, generation
+        return current, generation, allow_optional_probes
 
     async def _commit(self, prefix: str, frontier: dict, generation: int, **changes: Any) -> dict:
         if self.clock() >= float(frontier["lease_until"]):
@@ -213,7 +224,7 @@ class StagedScanRuntime:
                 if stage == "finalize" and recovery_generation != int("finalize_recovery_until" in stored.value):
                     return {"success": True, "skipped": "superseded_finalize_delivery"}
                 return await self._replay(client, scan, job, stored.value)
-            frontier, generation = leased
+            frontier, generation, allow_optional_probes = leased
             if recovery_generation and self.clock() >= frontier["finalize_recovery_until"]:
                 # A timed-out persist can outlive its worker's HTTP request.
                 # Fence new finalizers and leave a full lease interval for
@@ -335,7 +346,10 @@ class StagedScanRuntime:
             else:
                 from .robots_policy import owner_robots_override
                 with owner_robots_override(bool(job.get("owner_attested_robots_override"))):
-                    result = await asyncio.wait_for(self.dep.finalize(state), timeout=STAGE_WORK_SECONDS)
+                    result = await asyncio.wait_for(
+                        self.dep.finalize(state, allow_optional_probes=allow_optional_probes),
+                        timeout=STAGE_WORK_SECONDS,
+                    )
                 result.update({
                     "scan_mode": job["scan_mode"], "canonical_mode": job["scan_mode"], "page_cap": job["page_cap"],
                     "advanced_scan_backend": "python_scanner_api", "deno_fallback_used": False,

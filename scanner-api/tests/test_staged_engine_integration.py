@@ -14,8 +14,8 @@ from app import scanner
 from app import scan_job
 from app.main import apply_post_crawl_transforms
 from app.scan_limits import scan_page_limit
-from app.staged_scan import StageDependencies, StagedScanRuntime
-from app.workspace import MemoryWorkspace
+from app.staged_scan import STAGE_LEASE_SECONDS, StageDependencies, StageRetry, StagedScanRuntime
+from app.workspace import MemoryWorkspace, WorkspaceUnavailable
 from scripts.export_staged_500_fixture import export_fixture
 from tests import fixtures as fx
 
@@ -194,6 +194,7 @@ async def test_500_page_scan_commits_ten_batches_and_duplicate_finalization_is_i
         assert len({page["url"] for page in result["pages"]}) == 500
         assert result["page_cap"] == 500
         assert result["pipeline_limited"] is False
+        assert "optional_checks_notice_reason" not in result["crawl_timing"]
         completions.append(result)
         scan["status"] = "complete"
         return {"ok": True, "fix_list_id": "list_500"}
@@ -241,7 +242,7 @@ async def test_500_page_scan_commits_ten_batches_and_duplicate_finalization_is_i
       import {buildAuthoritySnapshot, firstFailedAuthorityPredicate} from './base44/functions/persistDurableScanAuthorityV9/authoritySnapshot.js';
       import {stagedCompletionTime} from './base44/functions/persistDurableScanAuthorityV9/completionTimestamp.js';
       import {authorityRowsFromSnapshot} from './base44/functions/persistDurableScanAuthorityV9/authorityRows.js';
-      import {authoritySnapshotFromRows, createAuthoritySeal, verifyAuthoritySeal} from './base44/functions/getCustomerScanResultV9/projection.js';
+      import {authoritySnapshotFromRows, buildCustomerProjection, createAuthoritySeal, verifyAuthoritySeal} from './base44/functions/getCustomerScanResultV9/projection.js';
       const {body, original, scan} = JSON.parse(readFileSync(0, 'utf8'));
       const finishedAt = stagedCompletionTime(scan, body.scan);
       assert.ok(Date.parse(finishedAt) > Date.parse(scan.started_at));
@@ -258,8 +259,137 @@ async def test_500_page_scan_commits_ten_batches_and_duplicate_finalization_is_i
       assert.equal(await verifyAuthoritySeal(restored,'integration-test-key',proof,webcrypto),true);
       assert.equal(snapshot.scan.pages_crawled,500);
       assert.equal(snapshot.scan.page_cap,500);
+      const timing = {...options.scan.crawl_timing, optional_checks_notice_reason:'site_rate_limited'};
+      const notified = buildAuthoritySnapshot({...options, scan:{...options.scan, crawl_timing:timing}});
+      assert.equal(notified.scan.health_score, snapshot.scan.health_score);
+      assert.deepEqual(notified.recommendations, snapshot.recommendations);
+      const notifiedRows = authorityRowsFromSnapshot(notified,{fixListId:'list_500',ownerUserId:options.userId});
+      const notifiedRun = {...notifiedRows.scanRun,id:body.identity.scan_id,project_id:body.identity.project_id};
+      const notifiedFixList = {...notifiedRows.fixList,id:'list_500'};
+      const notifiedReadback = authoritySnapshotFromRows({run:notifiedRun,fixList:notifiedFixList,fixItems:notifiedRows.fixItems,userId:options.userId});
+      assert.equal(await verifyAuthoritySeal(notifiedReadback,'integration-test-key',await createAuthoritySeal(notified,'integration-test-key',webcrypto),webcrypto),true);
+      const projection = buildCustomerProjection({run:notifiedRun,fixList:notifiedFixList,fixItems:notifiedRows.fixItems,fullAccess:true,authorityVerified:true,verifiedOptionalChecksNoticeReason:notifiedReadback.scan.crawl_timing.optional_checks_notice_reason});
+      assert.equal(projection.run.optional_checks_notice_reason,'site_rate_limited');
+      assert.equal(projection.run.health_score,snapshot.scan.health_score);
     """
     checked = subprocess.run(["node", "--input-type=module", "-e", script],
                              input=json.dumps({"body": envelope, "original": original_envelope, "scan": scan}), text=True, capture_output=True,
                              cwd=Path(__file__).resolve().parents[2], timeout=30)
     assert checked.returncode == 0, checked.stderr
+
+
+@pytest.mark.asyncio
+async def test_finalize_reentry_saves_one_seal_without_repeating_contact_after_worker_loss(mock_network, monkeypatch):
+    origin = "https://interrupted-finalize.example"
+    home = origin + "/"
+    urls = [f"{origin}/products/{number:03d}" for number in range(153)]
+    uncrawled = origin + "/extra-0"
+    canonical = origin + "/extra-canonical"
+    requests = mock_network({
+        home: fx._html(fx._page("Home")),
+        origin + "/sitemap.xml": fx._xml(fx._sitemap(urls)),
+        uncrawled: {"status": 429, "headers": {"retry-after": "3600"}, "body": "Please slow down"},
+        canonical: fx._html(fx._page("Canonical target")),
+        **{url: fx._html(fx._page(f"Product {i}", canonical=home if i == 0 else canonical, links=[uncrawled]))
+           for i, url in enumerate(urls)},
+    })
+    signing_key = "offline-resumed-finalization-key"
+    monkeypatch.setenv("SCAN_EVIDENCE_SIGNING_KEY", signing_key)
+    scan = {"id": "scan_finalize_reentry", "owner_user_id": "owner_150", "project_id": "project_150",
+            "request_id": "request_finalize_reentry", "attempt_count": 1,
+            "scan_mode": "standard_150", "page_cap": 150, "pipeline_mode": "staged", "website_url": home,
+            "respect_robots_txt": True, "owner_attested_robots_override": False, "status": "queued"}
+    job = {**scan, "scan_id": scan["id"]}
+    now = [1000.0]
+    seals = []
+    pending = []
+
+    class CrashBeforeResultStore(MemoryWorkspace):
+        crash_armed = False
+
+        async def write(self, key, value, *, generation=0):
+            if self.crash_armed and (
+                key.endswith("/result.json.gz")
+                or ("/receipts/" in key and value.get("stage") == "finalize")
+                or (key.endswith("/frontier.json") and not value.get("lease_owner"))
+            ):
+                # The old worker cannot save a result, a receipt, or release its lease.
+                raise WorkspaceUnavailable("injected worker loss before durable result")
+            return await super().write(key, value, generation=generation)
+
+    class Dispatcher:
+        async def enqueue(self, _, stage, batch, **options):
+            pending.append((stage, batch, options))
+
+    async def read(client, scan_id):
+        assert scan_id == scan["id"]
+        return dict(scan)
+
+    async def start(client, current):
+        scan.update(status="crawling", started_at=datetime.now(timezone.utc).isoformat())
+
+    async def progress(client, current, crawled, planned, batch=None):
+        scan.update(pages_crawled=crawled, pages_planned=planned, last_committed_batch=batch)
+
+    async def invoke(client, name, envelope, **kwargs):
+        assert name == "persistDurableScanAuthorityV9"
+        assert envelope["identity"]["attempt_count"] == "1"
+        assert envelope["scan"]["crawl_timing"]["optional_checks_notice_reason"] == "repeat_requests_avoided"
+        assert envelope["proof"] == scan_job.create_authority_seal(
+            {key: value for key, value in envelope.items() if key != "proof"}, signing_key,
+        )
+        seals.append(envelope["proof"])
+        scan.update(status="complete", authority_proof=envelope["proof"], fix_list_id="recovered-list")
+        return {"status_code": 200, "body": {"success": True, "fixListVerified": True, "scanRun": dict(scan)}}
+
+    async def fail(*args, **kwargs):
+        pytest.fail(f"The interrupted finalization failed instead of recovering: {args[2]}")
+
+    monkeypatch.setattr(scan_job, "read_scan_run", read)
+    monkeypatch.setattr(scan_job, "invoke_function", invoke)
+    store = CrashBeforeResultStore()
+    dependencies = StageDependencies(
+        read, start, progress, scan_job.complete_authority, apply_post_crawl_transforms, fail,
+        scanner.ScanState, scanner.plan_scan, scanner.crawl_batch, scanner.finalize_scan,
+    )
+    runtime = StagedScanRuntime(store, Dispatcher(), dependencies, clock=lambda: now[0])
+    prefix = runtime._prefix(job)
+    frontier_key = prefix + "frontier.json"
+
+    with scan_page_limit(150), scan_job.worker_function_generation("V9"):
+        await runtime.process(None, "plan", job)
+        while pending[0][0] == "batch":
+            _, batch, options = pending.pop(0)
+            await runtime.process(None, "batch", job, batch=batch, **options)
+        _, batch, options = pending.pop(0)
+        before = len(requests)
+
+        store.crash_armed = True
+        with pytest.raises(StageRetry):
+            await runtime.process(None, "finalize", job, batch=batch, **options)
+        assert [request.url.path for request in requests[before:]] == ["/extra-0"]
+        assert await store.read(prefix + "result.json.gz") is None
+        old = await store.read(frontier_key)
+        owner = old.value["lease_owner"]
+        assert owner and old.value["stage"] == "finalize"
+        assert await store.read(prefix + f"receipts/{owner}.started.json.gz") is None
+        assert await store.read(prefix + f"receipts/{owner}.finished.json.gz") is None
+        assert seals == []
+
+        store.crash_armed = False
+        now[0] += STAGE_LEASE_SECONDS + 1
+        restarted = StagedScanRuntime(store, Dispatcher(), dependencies, clock=lambda: now[0])
+        assert (await restarted.process(None, "finalize", job, batch=batch, **options))["success"] is True
+        assert [request.url.path for request in requests[before:]] == ["/extra-0"]
+        assert (await restarted.process(None, "finalize", job, batch=batch, **options))["skipped"] == "already_terminal"
+
+    assert scan["status"] == "complete" and len(seals) == 1
+    result = (await store.read(prefix + "result.json.gz")).value
+    assert result["pipeline_limited"] is False and result["pages_crawled"] == 150
+    assert result["crawl_timing"]["optional_checks_notice_reason"] == "repeat_requests_avoided"
+    assert result["coverage_probe_evidence"]["stage2_orchestration_reason"] == "finalize_optional_probes_unavailable"
+    assert result["canonical_target_evidence"]["targets_fetched"] == 0
+    canonicals = {page.get("canonical_target_url"): page for page in result["pages"]}
+    assert canonicals[home]["canonical_target_evidence_source"] == "crawl"
+    assert canonicals[canonical]["canonical_target_evidence_source"] == "optional_probe_fence"
+    assert (await store.read(frontier_key)).value["stage"] == "done"

@@ -216,6 +216,7 @@ async function dispatchWorkerRequest(req: Request, body, secret: string) {
               fixItems: replayItems,
               ownerUserId: identity.owner_user_id,
               fullAuthorityProof: scan.authority_proof,
+              verifiedSnapshot: replaySnapshot,
               secret,
             });
           }
@@ -374,6 +375,7 @@ async function dispatchWorkerRequest(req: Request, body, secret: string) {
       fixItems: finalPersistedItems,
       ownerUserId: identity.owner_user_id,
       fullAuthorityProof: finalAuthorityProof,
+      verifiedSnapshot: verifiedPersistedSnapshot,
       secret,
     });
 
@@ -412,6 +414,7 @@ async function ensureVerifiedCustomerPreview({
   fixItems,
   ownerUserId,
   fullAuthorityProof,
+  verifiedSnapshot,
   secret,
 }) {
   const existingPayload = parseCustomerPreviewPayload(scan?.customer_preview_payload);
@@ -430,6 +433,7 @@ async function ensureVerifiedCustomerPreview({
     fixItems,
     ownerUserId,
     fullAuthorityProof,
+    verifiedOptionalChecksNoticeReason: verifiedSnapshot?.scan?.crawl_timing?.optional_checks_notice_reason,
   });
   const customerPreviewProof = await createCustomerPreviewProof(customerPreviewPayload, secret);
   await entities.ScanRun.update(scan.id, {

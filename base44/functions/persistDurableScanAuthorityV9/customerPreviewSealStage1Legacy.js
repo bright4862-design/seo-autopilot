@@ -64,9 +64,14 @@ const PREVIEW_FIX_ITEM_FIELDS = [
   "evidence_class",
 ];
 
-export function buildCustomerPreviewPayload({ run, fixList, fixItems, ownerUserId, fullAuthorityProof }) {
+export function buildCustomerPreviewPayload({
+  run, fixList, fixItems, ownerUserId, fullAuthorityProof, verifiedOptionalChecksNoticeReason,
+}) {
   const customerRun = pickFields(run, PREVIEW_RUN_FIELDS);
   customerRun.health_score_status = "authoritative";
+  if (["site_rate_limited", "repeat_requests_avoided"].includes(verifiedOptionalChecksNoticeReason)) {
+    customerRun.optional_checks_notice_reason = verifiedOptionalChecksNoticeReason;
+  }
   if (usesGeoSnapshotVersion(run?.authority_seal_version)) customerRun.geo_readiness = customerGeoReadiness(run);
   const customerFixList = pickFields(fixList, PREVIEW_FIX_LIST_FIELDS);
   const customerFixItems = [...(Array.isArray(fixItems) ? fixItems : [])]

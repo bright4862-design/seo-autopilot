@@ -15,6 +15,17 @@ export function inventoryCoverageLine(record = {}) {
   return `We checked ${number(checked)} ${checked === 1 ? "page" : "pages"} out of ${capped ? "at least " : ""}${number(found)} found.`;
 }
 
+export function optionalChecksNotice(record = {}) {
+  if (record.status !== "complete" || record.authority_verified !== true) return "";
+  if (record.optional_checks_notice_reason === "site_rate_limited") {
+    return "The site limited automated requests, so some follow-up checks could not be verified.";
+  }
+  if (record.optional_checks_notice_reason === "repeat_requests_avoided") {
+    return "FixList skipped some follow-up checks to avoid sending the site repeat requests.";
+  }
+  return "";
+}
+
 // Ranking, diversity and owner suitability are decided by the server. If its
 // shortlist cannot be mapped exactly, retain the existing complete list.
 export function serverSelectedPriorityCards(cards = [], ids) {

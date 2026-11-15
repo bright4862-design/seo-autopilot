@@ -392,7 +392,10 @@ function previewFixItems(fixItems = []) {
     .map((item, index) => sanitizePreviewFixItem(item, { detailed: index < PREVIEW_DETAILED_FIX_COUNT }));
 }
 
-export function buildCustomerProjection({ run, fixList, fixItems, fullAccess, previewAccess = false, authorityVerified, resultIntegrityVerified, signedPreview = false }) {
+export function buildCustomerProjection({
+  run, fixList, fixItems, fullAccess, previewAccess = false, authorityVerified, resultIntegrityVerified,
+  signedPreview = false, verifiedOptionalChecksNoticeReason,
+}) {
   // A verified limited result is readable and is never authoritative. The two
   // flags stay separate all the way to the customer so nothing downstream can
   // mistake "we verified this provisional record" for "this is authoritative".
@@ -407,6 +410,9 @@ export function buildCustomerProjection({ run, fixList, fixItems, fullAccess, pr
     && fixList?.repair_contract_version === REPAIR_CONTRACT_V2
     && fixList?.repair_snapshot_contract_version === REPAIR_CONTRACT_V2
     && fixList?.repair_snapshot_contract_complete === true;
+  const optionalChecksNotice = canReadSummary && authorityVerified === true && run?.status === "complete"
+    && ["site_rate_limited", "repeat_requests_avoided"].includes(verifiedOptionalChecksNoticeReason)
+    ? { optional_checks_notice_reason: verifiedOptionalChecksNoticeReason } : {};
   const reportEvidence = usesReportEvidenceContract(run);
   const publishedContext = canReadResult && authorityVerified === true && run?.authority_seal_version === PUBLISHED_REVIEW_ATTESTATION_VERSION
     ? { ...publishedIdentityContext(run, PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION), persisted: true } : {};
@@ -427,6 +433,7 @@ export function buildCustomerProjection({ run, fixList, fixItems, fullAccess, pr
     run: {
       ...(previewVerified ? sanitizePreviewRun(run) : sanitizeRun(run, { detailed: canReadResult, healthScoreStatus: customerHealthScoreStatus })),
       ...(canReadSummary && authorityVerified === true ? {geo_readiness: signedPreview && previewVerified ? validatedGeoSummary(run?.geo_readiness ?? geoReadinessSummary(emptyGeoReadiness())) : customerGeoReadiness(run, canReadResult)} : {}),
+      ...optionalChecksNotice,
       ...(limitedVerified && run?.status === "limited" && authorityVerified !== true ? sanitizeLimitedCoverage(run) : {}),
     },
     fixList: canReadResult
@@ -738,6 +745,12 @@ function failedAccessFields(run) {
 
 function sanitizeRun(run, { detailed, healthScoreStatus = "" }) {
   const result = pickFields(run, detailed ? [...PUBLIC_RUN_FIELDS, ...DETAILED_RUN_FIELDS] : PUBLIC_RUN_FIELDS);
+  // Timing predating the v2 authority seal was not signed. The customer
+  // notice is read separately from the verified snapshot or preview payload.
+  if (Object.hasOwn(plainObject(result.crawl_timing), "optional_checks_notice_reason")) {
+    result.crawl_timing = { ...result.crawl_timing };
+    delete result.crawl_timing.optional_checks_notice_reason;
+  }
   if (run?.status === "failed" && ["scan_access_limited", "blocked_by_robots_txt"].includes(run.error_code)) {
     delete result.status_detail;
   }

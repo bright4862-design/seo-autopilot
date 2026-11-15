@@ -6,6 +6,11 @@ from collections import Counter
 from urllib.parse import urldefrag, urljoin, urlparse
 
 from .extract import extract_page
+from .finalize_probe_guard import (
+    FINALIZE_OPTIONAL_PROBES_UNAVAILABLE,
+    FinalizeProbeGuard,
+    FinalizeProbeSuppressed,
+)
 from .redirect_validation import _comparable_origin_key
 from .robots_policy import SCANNER_USER_AGENT, SEARCH_USER_AGENT, annotate_robots_evidence
 from .security import DEFAULT_MAX_DECODED_RESPONSE_BYTES, safe_get_once
@@ -82,7 +87,11 @@ def _evidence_from_page(page: dict, target: str, source: str = "crawl") -> dict:
     indexability_state = str(page.get("indexability_state") or "")
     target_canonical = _normalize_url(page.get("canonical"))
 
-    if indexability_state == "Blocked by robots.txt" or fetch_error == "blocked_by_robots_txt":
+    if status_code == 429:
+        state = "unknown_access_limited"
+        indexability_state = "Unknown"
+        fetch_error = "rate_limited"
+    elif indexability_state == "Blocked by robots.txt" or fetch_error == "blocked_by_robots_txt":
         state = "target_blocked_by_robots"
     elif 300 <= status_code < 400:
         state = "target_redirected"
@@ -107,7 +116,32 @@ def _evidence_from_page(page: dict, target: str, source: str = "crawl") -> dict:
     }
 
 
-async def _fetch_target(client, target: str, robots_policy, deadline: float | None, *, rate_limited: bool = False) -> dict:
+def _unchecked_target(target: str, *, block_reason: str) -> dict:
+    if block_reason == FINALIZE_OPTIONAL_PROBES_UNAVAILABLE:
+        evidence_source = "optional_probe_fence"
+    else:
+        evidence_source = "rate_limit" if block_reason else "budget"
+    return {
+        "state": "not_checked_due_to_limit" if block_reason else "not_checked_due_to_deadline",
+        "target_url": target,
+        "status_code": 0,
+        "indexability_state": "Unknown",
+        "fetch_error": "",
+        "location": "",
+        "target_canonical": "",
+        "evidence_source": evidence_source,
+    }
+
+
+async def _fetch_target(
+    client,
+    target: str,
+    robots_policy,
+    deadline: float | None,
+    *,
+    rate_limited: bool = False,
+    finalize_guard: FinalizeProbeGuard | None = None,
+) -> dict:
     googlebot_allowed = robots_policy.allowed(SEARCH_USER_AGENT, target)
     scanner_allowed = robots_policy.allowed(SCANNER_USER_AGENT, target)
     if googlebot_allowed is False:
@@ -134,17 +168,11 @@ async def _fetch_target(client, target: str, robots_policy, deadline: float | No
         }
 
     remaining = None if deadline is None else deadline - time.monotonic()
-    if rate_limited or (remaining is not None and remaining <= 0):
-        return {
-            "state": "not_checked_due_to_limit" if rate_limited else "not_checked_due_to_deadline",
-            "target_url": target,
-            "status_code": 0,
-            "indexability_state": "Unknown",
-            "fetch_error": "",
-            "location": "",
-            "target_canonical": "",
-            "evidence_source": "rate_limit" if rate_limited else "budget",
-        }
+    block_reason = finalize_guard.reason if finalize_guard else ""
+    if rate_limited and not block_reason:
+        block_reason = "rate_limit"
+    if block_reason or (remaining is not None and remaining <= 0):
+        return _unchecked_target(target, block_reason=block_reason)
 
     timeout = DEFAULT_REQUEST_TIMEOUT_SECONDS if remaining is None else max(0.1, min(DEFAULT_REQUEST_TIMEOUT_SECONDS, remaining))
     try:
@@ -167,6 +195,8 @@ async def _fetch_target(client, target: str, robots_policy, deadline: float | No
                 "target_canonical": "",
                 "evidence_source": "validation",
             }
+    except FinalizeProbeSuppressed as exc:
+        return _unchecked_target(target, block_reason=str(exc))
     except Exception as exc:
         return {
             "state": "target_failed",
@@ -194,11 +224,11 @@ async def _fetch_target(client, target: str, robots_policy, deadline: float | No
         }
     if status_code >= 400:
         return {
-            "state": "target_failed",
+            "state": "unknown_access_limited" if status_code == 429 else "target_failed",
             "target_url": target,
             "status_code": status_code,
-            "indexability_state": "Failed",
-            "fetch_error": "",
+            "indexability_state": "Unknown" if status_code == 429 else "Failed",
+            "fetch_error": "rate_limited" if status_code == 429 else "",
             "location": "",
             "target_canonical": "",
             "evidence_source": "validation",
@@ -260,6 +290,7 @@ async def validate_canonical_targets(
     *,
     deadline: float | None = None,
     rate_limited: bool = False,
+    finalize_guard: FinalizeProbeGuard | None = None,
     max_targets: int = DEFAULT_MAX_TARGETS,
     concurrency: int = DEFAULT_CONCURRENCY,
 ) -> dict:
@@ -326,7 +357,14 @@ async def validate_canonical_targets(
 
     async def inspect(target: str) -> tuple[str, dict]:
         async with semaphore:
-            return target, await _fetch_target(client, target, robots_policy, deadline, rate_limited=rate_limited)
+            return target, await _fetch_target(
+                client,
+                target,
+                robots_policy,
+                deadline,
+                rate_limited=rate_limited,
+                finalize_guard=finalize_guard,
+            )
 
     if selected:
         for target, evidence in await asyncio.gather(*(inspect(target) for target in selected)):

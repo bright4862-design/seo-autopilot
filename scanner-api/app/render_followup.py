@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 from typing import Any, Awaitable, Callable
 
+from .finalize_probe_guard import FinalizeProbeGuard
 from .stage2_hub_render_evidence import build_hub_link_comparison
 
 
@@ -71,6 +72,7 @@ async def run_render_followup(
     max_pages: int = DEFAULT_RENDER_FOLLOWUP_LIMIT,
     *,
     evidence_pages: list[dict] | None = None,
+    finalize_guard: FinalizeProbeGuard | None = None,
 ) -> dict:
     """Run the existing bounded browser policy and attach B12 paired hub evidence.
 
@@ -99,9 +101,11 @@ async def run_render_followup(
         "errors": [],
         "hub_link_comparison": hub_evidence,
     }
+    if finalize_guard and finalize_guard.reason:
+        base["skip_reason"] = finalize_guard.reason
     if not selected:
         return {**base, "status": "not_needed"}
-    if render_page is None:
+    if render_page is None or base.get("skip_reason"):
         return {**base, "status": "recommended_not_run"}
 
     results: list[dict] = []
@@ -117,6 +121,11 @@ async def run_render_followup(
             rendered_page = await value if inspect.isawaitable(value) else value
             if not isinstance(rendered_page, dict):
                 raise TypeError("renderer must return a page evidence object")
+            if finalize_guard and rendered_page.get("status_code") == 429:
+                finalize_guard.observe_status(429)
+                errors.append({"url": url, "error": finalize_guard.reason})
+                failure_reasons[url] = finalize_guard.reason
+                break
             rendered_pages_by_url[url] = rendered_page
             results.append(compare_raw_and_rendered(raw_page, rendered_page))
         except Exception as exc:
@@ -137,10 +146,12 @@ async def run_render_followup(
     status = "rendered_content_recovered" if recovered else (
         "browser_checked_no_material_delta" if results else "browser_followup_failed"
     )
+    if finalize_guard and finalize_guard.reason:
+        base["skip_reason"] = finalize_guard.reason
     return {
         **base,
         "status": status,
-        "attempted_pages": len(selected),
+        "attempted_pages": len(attempted_urls),
         "successful_pages": len(results),
         "content_recovered_pages": recovered,
         "render_regression_pages": regressions,

@@ -94,6 +94,32 @@ async def test_existing_noindexed_canonical_target_generates_confirmed_finding()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("status", "state", "expected_priorities"), [
+    (429, "unknown_access_limited", []),
+    (503, "target_failed", ["high"]),
+])
+async def test_retained_canonical_rate_limit_is_neutral(status, state, expected_priorities):
+    target_url = "https://example.com/target"
+    source = _page("https://example.com/source", canonical=target_url)
+    target = _page(target_url, status=status)
+    client = FakeClient({})
+
+    summary = await validate_canonical_targets(
+        client, [source, target], RobotsPolicy("https://example.com/robots.txt", "missing", 404),
+        rate_limited=True,
+    )
+    failures = [item for item in build_findings([source, target]) if item["rule"] == "canonical_target_failed"]
+
+    assert client.calls == []
+    assert summary["state_counts"] == {state: 1}
+    assert source["canonical_target_evidence_source"] == "crawl"
+    assert source["canonical_target_status_code"] == status
+    assert [item["priority"] for item in failures if item["verification_state"] == "verified"
+            and not item.get("non_scoring")] == expected_priorities
+    assert len(failures) == len(expected_priorities)
+
+
+@pytest.mark.asyncio
 async def test_redirecting_canonical_target_preserves_location():
     source = _page("https://example.com/source", canonical="https://example.com/old")
     client = FakeClient({

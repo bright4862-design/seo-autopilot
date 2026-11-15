@@ -67,7 +67,7 @@ const TOO_FEW_PAGES_REASONS = new Set([
 // Historical rows carry no structured code at all, only free text a human wrote
 // into status_detail or error_code. These patterns exist for those rows and are
 // consulted last; nothing matched here is ever displayed, only classified.
-const SAVE_FAILED_TEXT = /persist|save.?fail|authority.?write|result.?write/;
+const SAVE_FAILED_TEXT = /persist|save.?fail|authority.?write|result.?write|results? could not be saved/;
 const WORKER_STALLED_TEXT = /heartbeat|stalled|orphaned|vanished|no_terminal|progress stopped/;
 const ACCESS_LIMITED_TEXT = /429|rate.?limit|challenge|bot.?protection|access.?limit|scanner.?blocked/;
 const DEADLINE_TEXT = /deadline|timed?.?out|time limit/;

@@ -344,7 +344,9 @@ function contractSource() {
     "",
     `export const RELEASE_CONTRACT_SCHEMA_VERSION = ${JSON.stringify(record.schema_version)};`,
     `export const RELEASE_FINGERPRINT = ${JSON.stringify(record.fingerprint)};`,
-    `export const RELEASE_STATUS = ${JSON.stringify(record.status)};`,
+    // Preserve the unused legacy export in the attested runtime packages. The
+    // mutable acceptance status belongs to the revision record alone.
+    'export const RELEASE_STATUS = "candidate";',
     `export const RELEASE_COMPONENT_VERSIONS = Object.freeze(${JSON.stringify(components, null, 2)});`,
     "",
     "/** Exact-match gate. A missing or unexpected marker is never substituted. */",

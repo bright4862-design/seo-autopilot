@@ -76,11 +76,17 @@ test("the canonical cross-runtime component input exists and is schema-valid", (
   }
 });
 
-test("the recorded candidate stays a candidate until production acceptance", () => {
+test("the release record carries acceptance metadata only for a frozen source", () => {
   const record = readJson(REVISION_RECORD);
-  assert.equal(record.status, "candidate");
-  assert.equal(record.git_commit, "");
-  assert.equal(record.acceptance_report, "");
+  if (record.status === "candidate") {
+    assert.equal(record.git_commit, "");
+    assert.equal(record.acceptance_report, "");
+    return;
+  }
+  assert.equal(record.status, "frozen_beta");
+  assert.match(record.git_commit, /^[0-9a-f]{40}$/);
+  assert.match(record.acceptance_report, /^docs\/.+\.md$/);
+  assert.ok(fs.readFileSync(path.join(ROOT, record.acceptance_report), "utf8").trim());
 });
 
 // -------------------------------------------------- no stale marker path --

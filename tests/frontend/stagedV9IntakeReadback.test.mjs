@@ -3,17 +3,24 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import ts from "typescript";
+import * as runtimeConfig from "../../base44/functions/fixlistStagedRuntimeControl/runtimeConfig.js";
 import * as scanLimits from "../../base44/functions/startStandardScanJobV9/scanLimits.js";
 import * as releaseContract from "../../base44/functions/startStandardScanJobV9/generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "../../base44/functions/startStandardScanJobV9/generatedBuildId.js";
 
 const entry = new URL("../../base44/functions/startStandardScanJobV9/entry.ts", import.meta.url);
 const source = readFileSync(entry, "utf8");
-const compiled = ts.transpileModule(source, {
-  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-}).outputText;
-const loadHandler = new Function("exports", "require", "Deno", compiled);
+const operatorEntry = new URL("../../base44/functions/fixlistStagedRuntimeControl/entry.ts", import.meta.url);
+function compileHandler(text) {
+  const compiled = ts.transpileModule(text, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  return new Function("exports", "require", "Deno", compiled);
+}
+const loadIntake = compileHandler(source);
+const loadOperator = compileHandler(readFileSync(operatorEntry, "utf8"));
 const owner = { id: "6a498da58ef5cec1f5cd4486", email: "bright4862@gmail.com", role: "admin" };
+const london = { id: "6a498732ec779dfaaeab0e54", email: "londonparisbrussels@gmail.com", role: "admin" };
 const secondOwner = "ZZ_owner_002";
 const action = "staged_runtime_status";
 const staged = { SCAN_PIPELINE_MODE: "staged", SCAN_STAGED_OWNER_IDS: owner.id };
@@ -23,6 +30,7 @@ function harness({
   settings = staged,
   gates = { BETA_SCAN_INTAKE_ENABLED: "false", BETA_SCAN_ADMISSION_ENABLED: "true" },
   releaseFingerprint = releaseContract.RELEASE_FINGERPRINT,
+  operator = false,
 } = {}) {
   const envReads = [];
   const secretReads = [];
@@ -33,6 +41,7 @@ function harness({
   }
   const dependencies = {
     "./scanLimits.js": scanLimits,
+    "./runtimeConfig.js": runtimeConfig,
     "./generatedReleaseContract.js": { ...releaseContract, RELEASE_FINGERPRINT: releaseFingerprint },
     "./generatedBuildId.js": { FUNCTION_BUILD_ID },
     "npm:@base44/sdk@0.8.31": {
@@ -45,6 +54,7 @@ function harness({
     },
     "base44:runtime": { secrets: { get: name => {
       secretReads.push(name);
+      if (operator && ["SCAN_PIPELINE_MODE", "SCAN_STAGED_OWNER_IDS"].includes(name)) return settings[name];
       if (name !== "BETA_SCAN_INTAKE_ENABLED" && name !== "BETA_SCAN_ADMISSION_ENABLED") {
         return sideEffect(`secrets.get:${name}`);
       }
@@ -52,6 +62,7 @@ function harness({
     } } },
   };
   const handler = {};
+  const loadHandler = operator ? loadOperator : loadIntake;
   loadHandler(handler, name => dependencies[name] || new Proxy({}, {
     get: (_, key) => sideEffect(`${name}:${String(key)}`),
   }), { env: { get: name => { envReads.push(name); return settings[name]; } } });
@@ -59,8 +70,9 @@ function harness({
     envReads,
     secretReads,
     sideEffects,
-    async post(body = { action }) {
-      const response = await handler.default(new Request("https://base44.example/api/functions/startStandardScanJobV9", {
+    async post(body = { action: operator ? "status" : action }) {
+      const name = operator ? "fixlistStagedRuntimeControl" : "startStandardScanJobV9";
+      const response = await handler.default(new Request(`https://base44.example/api/functions/${name}`, {
         method: "POST",
         body: JSON.stringify(body),
       }));
@@ -96,6 +108,47 @@ test("actual V9 intake returns a closed, no-store owner-only settings and releas
   assert.deepEqual(fixture.envReads.sort(), ["SCAN_PIPELINE_MODE", "SCAN_STAGED_OWNER_IDS"]);
   assert.deepEqual(fixture.secretReads, ["BETA_SCAN_INTAKE_ENABLED", "BETA_SCAN_ADMISSION_ENABLED"]);
   assert.deepEqual(fixture.sideEffects, []);
+});
+
+test("both runtime probes attest only the authenticated Bright or London administrator's cohort membership", async () => {
+  for (const operator of [false, true]) {
+    for (const user of [owner, london]) {
+      for (const stagedAccount of [owner, london]) {
+        const fixture = harness({ user, operator, settings: { ...staged, SCAN_STAGED_OWNER_IDS: stagedAccount.id } });
+        const { status, cacheControl, body } = await fixture.post();
+        assert.equal(status, 200);
+        assert.equal(cacheControl, "no-store");
+        assert.equal(body.success, true);
+        assert.equal(body.staged_owner_enabled, user.id === stagedAccount.id);
+        if (operator) assert.equal(body.owner_match, user.id === stagedAccount.id);
+        const serialized = JSON.stringify(body);
+        for (const account of [owner, london]) {
+          assert.equal(serialized.includes(account.id), false);
+          assert.equal(serialized.includes(account.email), false);
+        }
+        assert.deepEqual(fixture.sideEffects, []);
+      }
+    }
+  }
+});
+
+test("both probes reject crossed ID and email pairs and non-admin London before reading settings", async () => {
+  for (const operator of [false, true]) {
+    for (const user of [
+      { ...owner, email: london.email },
+      { ...london, email: owner.email },
+      { ...london, role: "user" },
+      { ...london, id: "unknown_admin" },
+    ]) {
+      const fixture = harness({ user, operator, settings: { ...staged, SCAN_STAGED_OWNER_IDS: london.id } });
+      const { status, body } = await fixture.post();
+      assert.equal(status, 403);
+      assert.deepEqual(body, { success: false, error_code: "owner_only" });
+      assert.deepEqual(fixture.envReads, []);
+      assert.deepEqual(fixture.secretReads, []);
+      assert.deepEqual(fixture.sideEffects, []);
+    }
+  }
 });
 
 test("readback distinguishes effective launch routing from malformed or incomplete configuration", async () => {

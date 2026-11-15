@@ -19,15 +19,19 @@ BASE44_EXPECTED_OWNER="${BASE44_EXPECTED_OWNER:-}"
 refuse() { echo "BASE44_STAGED_CONTROL_BLOCKED: $*" >&2; exit 2; }
 [[ "$APP_ID" == "6a498732ec779dfaaeab0e53" ]] || refuse "unexpected app"
 [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || refuse "exact SOURCE_SHA required"
+# Application identity is independent of the platform deploy account.
+case "$OWNER_ID" in
+  6a498da58ef5cec1f5cd4486) OWNER_EMAIL=bright4862@gmail.com ;;
+  6a498732ec779dfaaeab0e54) OWNER_EMAIL=londonparisbrussels@gmail.com ;;
+  *) refuse "STAGED_OWNER_USER_ID must select an approved FixList owner" ;;
+esac
 case "$OPERATION" in
   status) ;;
   deploy-probe)
     [[ "$CONFIRM" == "DEPLOY-BASE44-STAGED-PROBE:$SOURCE_SHA" ]] || refuse "exact deploy-probe confirmation required" ;;
   prepare-owner)
-    [[ "$OWNER_ID" == "6a498da58ef5cec1f5cd4486" ]] || refuse "only the fixed owner-test account is allowed"
     [[ "$CONFIRM" == "PREPARE-BASE44-STAGED-150:$SOURCE_SHA:$OWNER_ID" ]] || refuse "exact prepare-owner confirmation required" ;;
   disable)
-    [[ "$OWNER_ID" == "6a498da58ef5cec1f5cd4486" ]] || refuse "only the fixed owner-test account is allowed"
     [[ "$CONFIRM" == "DISABLE-BASE44-STAGED:$SOURCE_SHA:$OWNER_ID" ]] || refuse "exact disable confirmation required" ;;
   *) refuse "unsupported operation" ;;
 esac
@@ -38,6 +42,26 @@ trap 'rm -rf "$TMP"' EXIT
 chmod 700 "$TMP"
 fixlist_install_base44_cli "$TMP/pinned-cli"
 fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TMP/whoami" "$APP_ID"
+
+{
+  printf 'const expectedId = "%s";\nconst expectedEmail = "%s";\n' "$OWNER_ID" "$OWNER_EMAIL"
+  cat <<'NODE'
+const me = await base44.auth.me();
+if (me?.id !== expectedId || String(me?.email || "").trim().toLowerCase() !== expectedEmail
+    || me?.role !== "admin") throw new Error("owner_identity_mismatch");
+NODE
+} > "$TMP/app-owner.js"
+
+if [[ "$OPERATION" != status ]]; then
+  # Prove the production app identity before deploying or changing settings.
+  cp "$TMP/app-owner.js" "$TMP/preflight.js"
+  printf '%s\n' 'console.log("FIXLIST_STAGED_APP_OWNER_VERIFIED");' >> "$TMP/preflight.js"
+  if ! "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" exec --data-env prod \
+      < "$TMP/preflight.js" > "$TMP/owner.out" 2> "$TMP/owner.err" \
+    || [[ "$(grep -Fxc 'FIXLIST_STAGED_APP_OWNER_VERIFIED' "$TMP/owner.out")" != 1 ]]; then
+    refuse "selected production app owner could not be verified"
+  fi
+fi
 
 verify_probe_package() {
   # A runtime response without exact deployed package readback is not source evidence.
@@ -54,20 +78,16 @@ JSON
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 const [root,remote] = process.argv.slice(2);
-const {buildManifest} = await import(pathToFileURL(path.join(root,'scripts/base44_release_manifest.mjs')));
-const names=['fixlistStagedRuntimeControl'];
-const local=buildManifest(names,path.join(root,'base44/functions'),[]);
-const deployed=buildManifest(names,remote,[]);
-if (local.functions[names[0]].packageDigest !== deployed.functions[names[0]].packageDigest)
-  throw Error('Base44 staged runtime operator bytes differ from source');
+const {assertPulledFunctionPackage} = await import(pathToFileURL(path.join(root,'scripts/base44_release_manifest.mjs')));
+const name = 'fixlistStagedRuntimeControl';
+assertPulledFunctionPackage(name, path.join(root, 'base44/functions', name), path.join(remote, name));
 console.log('BASE44_STAGED_OPERATOR_PACKAGE_MATCHED');
 NODE
 }
 
 readback() {
-  cat > "$TMP/readback.js" <<'NODE'
-const me = await base44.auth.me();
-if (me?.id !== "6a498da58ef5cec1f5cd4486" || me?.role !== "admin") throw new Error("owner_identity_mismatch");
+  cp "$TMP/app-owner.js" "$TMP/readback.js"
+  cat >> "$TMP/readback.js" <<'NODE'
 const result = await base44.functions.invoke("fixlistStagedRuntimeControl", {action:"status"});
 const value = result?.data && typeof result.data === "object" ? result.data : result;
 if (value?.success !== true || value.operator_build_id !== "fixlist-staged-runtime-control-v1") throw new Error("runtime_probe_not_ready");

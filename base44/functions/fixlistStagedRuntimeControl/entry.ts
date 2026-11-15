@@ -3,8 +3,10 @@ import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 import { secrets } from "base44:runtime";
 import { summarizeStagedRuntime } from "./runtimeConfig.js";
 
-const OWNER_USER_ID = "6a498da58ef5cec1f5cd4486";
-const OWNER_EMAIL = "bright4862@gmail.com";
+const STAGED_RUNTIME_ADMIN_EMAILS = new Map([
+  ["6a498da58ef5cec1f5cd4486", "bright4862@gmail.com"],
+  ["6a498732ec779dfaaeab0e54", "londonparisbrussels@gmail.com"],
+]);
 const OPERATOR_BUILD_ID = "fixlist-staged-runtime-control-v1";
 
 function response(body: Record<string, unknown>, status = 200): Response {
@@ -16,7 +18,8 @@ export default async function (req: Request): Promise<Response> {
   try {
     const base44 = createClientFromRequest(req);
     const user = await base44.auth.me().catch(() => null);
-    if (user?.id !== OWNER_USER_ID || String(user?.email || "").trim().toLowerCase() !== OWNER_EMAIL
+    const expectedEmail = STAGED_RUNTIME_ADMIN_EMAILS.get(user?.id);
+    if (!user || !expectedEmail || String(user.email || "").trim().toLowerCase() !== expectedEmail
         || String(user?.role || "").trim().toLowerCase() !== "admin") {
       return response({ success: false, error_code: "owner_only" }, 403);
     }
@@ -28,7 +31,7 @@ export default async function (req: Request): Promise<Response> {
     const state = summarizeStagedRuntime({
       readEnv: name => Deno.env.get(name),
       readSecret: name => secrets.get(name),
-      expectedOwnerId: OWNER_USER_ID,
+      expectedOwnerId: user.id,
     });
     return response({ success: true, operator_build_id: OPERATOR_BUILD_ID, ...state });
   } catch {

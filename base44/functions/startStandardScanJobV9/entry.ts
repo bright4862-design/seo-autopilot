@@ -23,8 +23,10 @@ import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedRele
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
 const BASE44_RUNTIME_ACTIVATION_ID = "startStandardScanJobV9-staged-runtime-20261111-v2";
 const STAGED_RUNTIME_ACTION = "staged_runtime_status";
-const STAGED_RUNTIME_OWNER_ID = "6a498da58ef5cec1f5cd4486";
-const STAGED_RUNTIME_OWNER_EMAIL = "bright4862@gmail.com";
+const STAGED_RUNTIME_ADMIN_EMAILS = new Map([
+  ["6a498da58ef5cec1f5cd4486", "bright4862@gmail.com"],
+  ["6a498732ec779dfaaeab0e54", "londonparisbrussels@gmail.com"],
+]);
 
 const CORS_HEADERS = Object.freeze({
   "Access-Control-Allow-Origin": "*",
@@ -85,7 +87,8 @@ async function stagedRuntimeStatus(user, raw) {
   function response(payload: Record<string, unknown>, status = 200) {
     return Response.json(payload, { status, headers: { ...corsHeaders(), "Cache-Control": "no-store" } });
   }
-  if (user.id !== STAGED_RUNTIME_OWNER_ID || String(user.email).trim().toLowerCase() !== STAGED_RUNTIME_OWNER_EMAIL
+  const expectedEmail = STAGED_RUNTIME_ADMIN_EMAILS.get(user.id);
+  if (!expectedEmail || String(user.email).trim().toLowerCase() !== expectedEmail
       || String(user.role || "").trim().toLowerCase() !== "admin") {
     return response({ success: false, error_code: "owner_only" }, 403);
   }

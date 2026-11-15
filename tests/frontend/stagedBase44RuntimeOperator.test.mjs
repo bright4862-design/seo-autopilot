@@ -149,7 +149,7 @@ test("operator source is owner-authenticated, read-only, and emits no cohort sec
   const src=readFileSync("base44/functions/fixlistStagedRuntimeControl/entry.ts","utf8");
   assert.match(src,/createClientFromRequest\(req\)/);
   assert.match(src,/base44\.auth\.me\(\)/);
-  assert.match(src,/user\?\.id !== OWNER_USER_ID/);
+  assert.match(src,/STAGED_RUNTIME_ADMIN_EMAILS\.get\(user\?\.id\)/);
   assert.match(src,/user\?\.role/);
   assert.match(src,/input\.action !== "status"/);
   assert.doesNotMatch(src,/asServiceRole|\.update\(|\.create\(/);
@@ -161,7 +161,7 @@ test("operator shell only changes staged config and intake, never admission rele
   assert.match(src,/functions deploy fixlistStagedRuntimeControl/);
   assert.match(src,/functions pull fixlistStagedRuntimeControl/);
   assert.match(src,/BASE44_STAGED_OPERATOR_PACKAGE_MATCHED/);
-  assert.match(src,/buildManifest\(names,remote,\[\]\)/);
+  assert.match(src,/assertPulledFunctionPackage\(name, path\.join\(root, 'base44\/functions', name\), path\.join\(remote, name\)\)/);
   assert.match(src,/SCAN_PIPELINE_MODE=monolith/);
   assert.match(src,/SCAN_STAGED_OWNER_IDS=/);
   assert.match(src,/BETA_SCAN_INTAKE_ENABLED=false/);

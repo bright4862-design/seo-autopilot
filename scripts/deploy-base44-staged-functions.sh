@@ -102,13 +102,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 const [root, pulled, output] = process.argv.slice(2);
-const {buildManifest, STAGED_RELEASE_FUNCTIONS} = await import(pathToFileURL(path.join(root,'scripts/base44_release_manifest.mjs')));
-const local = buildManifest(STAGED_RELEASE_FUNCTIONS,path.join(root,'base44/functions'),[]);
-const remote = buildManifest(STAGED_RELEASE_FUNCTIONS,pulled,[]);
-for (const name of STAGED_RELEASE_FUNCTIONS) {
-  if (local.functions[name].packageDigest !== remote.functions[name].packageDigest) throw new Error(`V9 deployed package differs: ${name}`);
-}
-fs.writeFileSync(output,JSON.stringify(Object.fromEntries(STAGED_RELEASE_FUNCTIONS.map(name => [name,local.functions[name].packageDigest]))));
+const {assertPulledFunctionPackage, STAGED_RELEASE_FUNCTIONS} = await import(pathToFileURL(path.join(root,'scripts/base44_release_manifest.mjs')));
+const packages = STAGED_RELEASE_FUNCTIONS.map(name => [
+  name,
+  assertPulledFunctionPackage(name, path.join(root,'base44/functions',name), path.join(pulled,name)),
+]);
+fs.writeFileSync(output,JSON.stringify(Object.fromEntries(packages)));
 NODE
 
 SOURCE_SHA="$SOURCE_SHA" BASE44_APP_ID="$APP_ID" PROBE_REPORT="$TASK_TMP/runtime.json" \

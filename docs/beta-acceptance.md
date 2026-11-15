@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `2678b7511b2c5190` |
+| Candidate fingerprint | `b36ca24b8e0f728e` |
 | Classifier | `archetype_classifier_v12_locale_normalized_structural_routes` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,12 +15,14 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `2678b7511b2c5190` with classifier
+fingerprint `b36ca24b8e0f728e` with classifier
 `archetype_classifier_v12_locale_normalized_structural_routes`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v7_content_applicability`.
 
-The current `2678b7511b2c5190` candidate gives planned pages priority across crawl batches and checkpoint restores. Newly discovered links still supply backfill. Offline replays of the deployed fixture retained the exact planned URL sets at both caps. Fresh live acceptance for this candidate remains pending.
+The current `b36ca24b8e0f728e` candidate prevents optional finalization requests during a crawl rate-limit stop or an outstanding 429 cooldown. Reports can still use evidence the crawl already saved. Verified limited reports explain throttling and distinguish usable pages from attempted URLs. Fresh live acceptance for this candidate remains pending.
+
+The historical `2678b7511b2c5190` candidate protected the planned sample from backfill. A controlled live Standard 150 scan matched all 150 planned URLs in its signed result. In a separate short-throttle scan, the crawler retried after 3.03 seconds and saved all 60 planned URLs. The persistent-throttle scan saved a verified limited report with 50 usable pages and eight rate-limit diagnostics. Its fixture logs exposed two finalization requests during the site's cooldown. Offline replays of the prior candidate retained the exact planned URL set at 500 pages. A live ordinary-customer Standard 500 run remains pending.
 
 The historical `118544dcf77d86cf` candidate completed a controlled 150-page scan on November 15, 2026, and saved a signed report. Its plan selected 38 product pages and its crawler checked 145. The controlled run verified the cap and persistence and exposed a coverage failure. V9 retains historical reads of sealed reports from that candidate.
 

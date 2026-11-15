@@ -64,7 +64,7 @@ from .security import is_public_http_url, safe_get
 from .sitemap import load_sitemap_urls
 from .url_frontier_policy import FRONTIER_POLICY_VERSION, classify_frontier_url
 
-VERSION = "python_scanner_v5_observed_finding_identity"
+VERSION = "python_scanner_v6_finalize_rate_limit_backoff"
 RENDER_EVIDENCE_VERSION = "render_evidence_v1"
 FINAL_URL_DEDUP_VERSION = "final_url_dedup_v1_normalized_identity"
 # How findings become customer repair cards. A change here changes what the

@@ -64,7 +64,7 @@
     "scan_history_version": "scan_history_v3_focused_parent_children",
     "scan_page_cap_contract_version": "server_scan_page_caps_v1_150_500",
     "scanner_build_revision": "authenticated_health_probe_v1",
-    "scanner_version": "python_scanner_v5_observed_finding_identity",
+    "scanner_version": "python_scanner_v6_finalize_rate_limit_backoff",
     "search_applicability_version": "search_applicability_v1_evidence_relevance",
     "sitemap_parser_version": "sitemap_parser_v3_exact_origin_lastmod_inventory_cap",
     "sitemap_time_reservation_version": "sitemap_time_reservation_v1_crawl_first",
@@ -75,10 +75,10 @@
     "visible_template_evidence_version": "visible_template_evidence_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "2678b7511b2c5190",
+  "fingerprint": "b36ca24b8e0f728e",
   "git_commit": "",
-  "note": "Candidate: preserve planned section coverage when new links enter the crawl frontier. Live 150 and 500 acceptance is pending.",
-  "recorded_at": "2026-11-15T21:23:31.616881+00:00",
+  "note": "Candidate: honor crawl rate limits during finalization and report signed usable coverage. Fresh live acceptance is pending.",
+  "recorded_at": "2026-11-15T22:23:53.010772+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"
 }

@@ -137,7 +137,7 @@ async function stagedRuntimeStatus(user, raw) {
   }
 }
 
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "2678b7511b2c5190";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "b36ca24b8e0f728e";
 const VERSION = "startStandardScanJob_v3_server_admission";
 const PUBLIC_SCAN_MODE = "standard_150";
 

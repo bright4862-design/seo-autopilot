@@ -3,7 +3,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, readdir, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import stagedDeployments from "../data/generated-staged-v9-routes.json" with { type: "json" };
@@ -12,6 +12,7 @@ const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const APP_ID = "6a498732ec779dfaaeab0e53";
 const APP_ORIGIN = "https://getfixlist.base44.app";
 const PUBLIC_SETTINGS = `/api/apps/public/prod/public-settings/by-id/${APP_ID}`;
+const AUTH_CALLBACK = "/api/apps/auth/final-callback";
 const APP_API_PATH = new RegExp(`^/api/apps/${APP_ID}/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_.-]+)*$`);
 const FRONTEND_INPUTS = [
   "index.html", "src", "public", "base44", "package.json", "package-lock.json",
@@ -41,7 +42,22 @@ function fixlistApiProxy() {
   };
 }
 
-function restrictApiPaths() {
+export function isPreviewAuthCallback(path, method, query, origin) {
+  if (path !== AUTH_CALLBACK || method !== "GET" || query.size !== 2) return false;
+  const code = query.get("login_code");
+  const data = query.get("state");
+  if (!/^[A-Za-z0-9_-]{16,500}$/.test(code ?? "") || !data || data.length > 3000) return false;
+  try {
+    const state = JSON.parse(data);
+    const target = new URL(state.from_url);
+    return state.app_id === APP_ID && state.domain === origin && target.origin === origin
+      && !target.username && !target.password && !target.hash;
+  } catch {
+    return false;
+  }
+}
+
+function restrictApiPaths(origin) {
   return {
     name: "fixlist-preview-scope",
     configurePreviewServer(server) {
@@ -54,11 +70,12 @@ function restrictApiPaths() {
         const publicSettings = rawPath === PUBLIC_SETTINGS && ["GET", "HEAD"].includes(request.method);
         const sameApp = APP_API_PATH.test(rawPath) && !rawPath.split("/").some((part) => part === "." || part === "..");
         const query = new URLSearchParams(requestUrl.slice(rawPath.length));
+        const authCallback = isPreviewAuthCallback(rawPath, request.method, query, origin);
         // The application normally accepts app parameters from the entry URL.
         // Keep those parameters pinned even on an auth callback.
         const expectedApp = query.getAll("app_id").every((id) => id === APP_ID)
           && query.getAll("app_base_url").every((url) => url === APP_ORIGIN);
-        if (absolutePath && expectedApp && (!localApi || publicSettings || sameApp)) {
+        if (absolutePath && expectedApp && (!localApi || publicSettings || sameApp || authCallback)) {
           next();
           return;
         }
@@ -136,9 +153,10 @@ async function main() {
       }],
     });
     await verifyBundle(join(directory, "dist"), source);
+    const origin = `http://127.0.0.1:${port}`;
     server = await preview({
       ...config,
-      plugins: [restrictApiPaths()],
+      plugins: [restrictApiPaths(origin)],
       preview: {
         host: "127.0.0.1",
         port,
@@ -148,7 +166,6 @@ async function main() {
         proxy: { "/api/": fixlistApiProxy() },
       },
     });
-    const origin = `http://127.0.0.1:${port}`;
     const settings = await fetch(origin + PUBLIC_SETTINGS, { redirect: "error", signal: AbortSignal.timeout(10000) });
     assert(settings.ok && settings.headers.get("content-type")?.includes("application/json"), "FixList public settings did not reach the preview.");
     const body = await settings.json();
@@ -172,7 +189,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(`FixList preview failed: ${error.message}`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  main().catch((error) => {
+    console.error(`FixList preview failed: ${error.message}`);
+    process.exitCode = 1;
+  });
+}

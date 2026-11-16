@@ -95,14 +95,31 @@ gcloud run services describe "$WORKER" --project="$PROJECT" --region="$REGION" -
 
 readarray -t VALUES < <(python3 - "$WORKER_JSON" <<'PY'
 import json,sys
-v=json.load(open(sys.argv[1])); spec=v.get('spec',{}).get('template',{}).get('spec',{}); c=(spec.get('containers') or [{}])[0]
+v=json.load(open(sys.argv[1])); spec=v.get('spec',{}).get('template',{}).get('spec',{})
+containers=spec.get('containers')
+if not isinstance(containers,list) or len(containers)!=1 or not isinstance(containers[0],dict):
+    raise SystemExit('Refusing: worker template must have exactly one container')
+c=containers[0]
+entries=c.get('env')
+if not isinstance(entries,list) or any(not isinstance(i,dict) or not isinstance(i.get('name'),str) for i in entries):
+    raise SystemExit('Refusing: worker template environment is missing or malformed')
+names=[i['name'] for i in entries]
+if len(names)!=len(set(names)):
+    raise SystemExit('Refusing: duplicate worker template environment name')
 image=str(c.get('image') or '')
 if not image: raise SystemExit('worker image missing')
 base=image.split('@',1)[0]
 last=base.rsplit('/',1)[-1]
 if ':' in last: base=base.rsplit(':',1)[0]
-env={i.get('name'):i for i in c.get('env',[])}
+env={i['name']:i for i in entries}
 def val(k): return str(env.get(k,{}).get('value') or '')
+# A wrong-but-nonempty app or API origin would be inherited by the candidate
+# even when its release fingerprint and source SHA are otherwise correct.
+# Check before Cloud Build (and before any immutable source tag is written).
+if val('BASE44_APP_ID') != '6a498732ec779dfaaeab0e53':
+    raise SystemExit('Refusing: worker Base44 app routing differs from the pinned GetFixList app')
+if val('BASE44_API_URL') != 'https://base44.app':
+    raise SystemExit('Refusing: worker Base44 API origin differs from the pinned origin')
 ref=env.get('SCAN_EVIDENCE_SIGNING_KEY',{}).get('valueFrom',{}).get('secretKeyRef',{})
 secret=str(ref.get('name') or ''); version=str(ref.get('key') or '')
 items=[base,str(spec.get('serviceAccountName') or ''),val('TASKS_INVOKER_SERVICE_ACCOUNT'),val('BASE44_APP_ID'),val('BASE44_API_URL'),secret,version]

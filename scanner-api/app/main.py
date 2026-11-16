@@ -241,7 +241,13 @@ def authenticated_health(x_scanner_key: str | None = Header(default=None)):
 def revision():
     """Live beta-revision fingerprint for verifying a deployed scanner against
     the recorded freeze in data/beta-crawler-revision.json."""
-    return {**live_revision(), "source_sha": WORKER_SOURCE_SHA}
+    # Source/fingerprint alone cannot identify which Cloud Run revision answered
+    # a traffic-switch probe when consecutive revisions share the same image.
+    return JSONResponse({
+        **live_revision(),
+        "source_sha": WORKER_SOURCE_SHA,
+        "worker_revision": os.getenv("K_REVISION", "").strip(),
+    }, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/staged/base44-runtime")

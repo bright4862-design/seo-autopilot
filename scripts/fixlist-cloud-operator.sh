@@ -601,11 +601,11 @@ PY
       ;;
   esac
 
-  python3 - "$response" "$recorded" "$expected_sha" <<'PY' || compare_status=$?
+  python3 - "$response" "$recorded" "$expected_sha" "$revision" <<'PY' || compare_status=$?
 # runtime-revision-comparator
 import json, sys
 
-response_path, recorded_path, expected_sha = sys.argv[1:4]
+response_path, recorded_path, expected_sha, expected_revision = sys.argv[1:5]
 try:
     live = json.load(open(response_path, encoding="utf-8"))
 except Exception:
@@ -624,6 +624,14 @@ print("recorded fingerprint: %s" % (recorded_fingerprint or "(absent)"))
 print("runtime source_sha:   %s" % (live_sha or "(unset)"))
 
 failed = False
+# Compare the executing process identity, not just source/build markers.
+# A previous Ready revision can carry the identical source and fingerprint.
+executing_revision = str(live.get("worker_revision") or "")
+print("executing revision:   %s" % (executing_revision or "(absent)"))
+print("expected revision:    %s" % expected_revision)
+if not executing_revision or executing_revision != expected_revision:
+    failed = True
+    print("FAIL: /revision did not come from the requested Cloud Run revision.")
 live_components = live.get("component_versions")
 recorded_components = recorded.get("component_versions") or {}
 

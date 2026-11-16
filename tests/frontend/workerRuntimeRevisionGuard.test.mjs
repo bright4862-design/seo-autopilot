@@ -74,9 +74,13 @@ const RECORDED = {
   component_versions: COMPONENTS,
 };
 
+const WORKER_REVISION = "worker-00054-trs";
 function compare(live, recorded = RECORDED, expectedSha = "") {
-  return withFixtures({ live, recorded }, (paths) =>
-    runPython(COMPARATOR, [paths.live, paths.recorded, expectedSha]),
+  const withRevision = live && typeof live === "object" && !Array.isArray(live)
+    ? { worker_revision: WORKER_REVISION, ...live }
+    : live;
+  return withFixtures({ live: withRevision, recorded }, (paths) =>
+    runPython(COMPARATOR, [paths.live, paths.recorded, expectedSha, WORKER_REVISION]),
   );
 }
 
@@ -345,6 +349,7 @@ const LIVE_MATCHING = {
   component_versions: FREEZE.component_versions,
   fingerprint: FREEZE.fingerprint,
   source_sha: PROMOTED_SHA,
+  worker_revision: WORKER_REVISION,
 };
 const serving = (revisionName, extra = {}) => ({
   status: {
@@ -359,6 +364,39 @@ test("end to end: a worker serving the recorded identity passes", () => {
   assert.match(result.stdout, /PASS: the running worker computes/);
   assert.match(result.curl, new RegExp(`${SERVICE_URL}/revision`));
   assert.match(result.curl, /authorization: Bearer stub-token/);
+});
+
+test("end to end: a source-identical responder from the wrong revision is rejected", () => {
+  // Simulates a stale response during traffic propagation: SHA, fingerprint,
+  // and full component map all match, but K_REVISION tells the truth.
+  for (const worker_revision of ["", "worker-00053-abc"]) {
+    const result = runGuard({
+      service: serving(WORKER_REVISION),
+      revision: WORKER_REVISION,
+      body: { ...LIVE_MATCHING, worker_revision },
+    });
+    assert.notEqual(result.status, 0, "missing/wrong executing revision must fail");
+    assert.match(result.stdout, /did not come from the requested Cloud Run revision/);
+    assert.doesNotMatch(result.stdout, /PASS:/);
+  }
+});
+
+test("end to end: even a tagged 0%-candidate must be the actual responder", () => {
+  const candidate = {
+    status: {
+      url: SERVICE_URL,
+      traffic: [
+        { revisionName: "worker-00053-abc", percent: 100 },
+        { revisionName: WORKER_REVISION, percent: 0, tag: "candidate", url: TAG_URL },
+      ],
+    },
+  };
+  const result = runGuard({
+    service: candidate, revision: WORKER_REVISION, probeUrl: TAG_URL,
+    body: { ...LIVE_MATCHING, worker_revision: "worker-00053-abc" },
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /did not come from the requested Cloud Run revision/);
 });
 
 test("end to end: a worker serving a different identity fails and is diagnosed", () => {

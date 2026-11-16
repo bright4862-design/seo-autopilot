@@ -336,6 +336,7 @@ printf '%s' "${code}"
     return {
       status: error.status,
       stdout: String(error.stdout || ""),
+      stderr: String(error.stderr || ""),
       curl: fs.existsSync(curlLog) ? fs.readFileSync(curlLog, "utf8") : "",
     };
   } finally {
@@ -548,7 +549,7 @@ test("end to end: with no revision named, the one serving all traffic is the sub
   assert.doesNotMatch(ambiguous.stdout, /PASS:/);
   // It must say there is no subject, not invent one and then send the operator
   // off to tag a revision that does not exist.
-  assert.match(ambiguous.stdout, /no reconciled Ready 100%-serving worker revision/);
+  assert.match(ambiguous.stderr, /no reconciled Ready 100%-serving worker revision/);
   assert.doesNotMatch(ambiguous.stdout, /revision under test:/);
 });
 

@@ -11,7 +11,7 @@ const sourceSha = 'a'.repeat(40);
 const appId = '6a498732ec779dfaaeab0e53';
 const entities = ['ScanRun', 'FixList', 'FixItem', 'Access'];
 const fields = {
-  ScanRun: ['page_cap', 'pipeline_mode', 'staged_rollout_scope', 'pages_planned', 'workspace_cleanup_state', 'workspace_cleanup_completed_at', 'last_committed_batch'],
+  ScanRun: ['page_cap', 'pipeline_mode', 'staged_rollout_scope', 'pages_planned', 'workspace_cleanup_state', 'workspace_cleanup_completed_at', 'last_committed_batch', 'admission_target_origin'],
   FixItem: ['affected_page_count', 'affected_page_count_is_lower_bound', 'template_impact_estimates'],
   Access: ['page_cap'],
 };
@@ -33,7 +33,7 @@ function run(script, args, options = {}) {
     child.on('close', status => resolveRun({status, stdout, stderr}));
   });
 }
-async function fixture(t, {schemas = baseline(), rows = {}, changeReadback = false, driftBeforeWrite = false, rowsMalformed = false} = {}) {
+async function fixture(t, {schemas = baseline(), rows = {}, changeReadback = false, omitOriginRls = false, driftBeforeWrite = false, rowsMalformed = false} = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'staged-schema-')));
   const artifactRoot = realpathSync(mkdtempSync(join(tmpdir(), 'staged-schema-reports-')));
   mkdirSync(join(root, 'scripts/lib'), {recursive: true});
@@ -69,6 +69,7 @@ async function fixture(t, {schemas = baseline(), rows = {}, changeReadback = fal
         assert.equal(payload.entity_schema.name, name);
         state[name] = payload.entity_schema;
         if (changeReadback) state[name].rls.update = {user_condition: {role: 'user'}};
+        if (omitOriginRls && name === 'ScanRun') delete state[name].properties.admission_target_origin.rls;
         response.end('{}');
       } else if (url.pathname.includes('/entities/')) {
         const name = url.pathname.split('/entities/')[1].split('/')[0];
@@ -119,7 +120,7 @@ test('staged plan allows exactly the known additions while preserving the live d
   delete before.ScanRun.properties.website_url.description;
   const plan = planStagedSchemas(before);
   assert.equal(plan.decision, 'apply');
-  assert.equal(plan.operations.length, 12);
+  assert.equal(plan.operations.length, 13);
   assert.equal(plan.after.ScanRun.platform_marker, 'preserve');
   assert.deepEqual(plan.after.ScanRun.properties.created_date, {type: 'string'});
   assert.equal(Object.hasOwn(plan.after.ScanRun.properties.website_url, 'description'), false);
@@ -150,7 +151,7 @@ test('offline plan writes a source-bound report without authentication or reques
   assert.equal(result.data.source_sha, sourceSha);
   assert.equal(result.data.live_verified, false);
   assert.match(result.data.contract_sha256, /^[a-f0-9]{64}$/);
-  assert.equal(result.data.operations.length, 12);
+  assert.equal(result.data.operations.length, 13);
   assert.equal(f.requests.length, 0);
   assert.equal(existsSync(f.events), false);
 });
@@ -195,6 +196,57 @@ test('apply refuses a dangling report symlink before authentication or schema re
   assert.notEqual(result.status, 0);
   assert.equal(f.requests.length, 0);
   assert.equal(existsSync(f.events), false);
+});
+
+test('apply adds only the optional protected origin when the installed staged schemas otherwise match', async t => {
+  const before = local();
+  delete before.ScanRun.properties.admission_target_origin;
+  before.ScanRun.platform_marker = 'preserve';
+  const f = await fixture(t, {schemas: before});
+  const result = await f.command('apply');
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.data.operations, [{entity: 'ScanRun', kind: 'add_property', property: 'admission_target_origin'}]);
+  assert.equal(result.data.readback_verified, true);
+  assert.deepEqual(f.requests.filter(row => row.method === 'PUT').map(row => row.path.split('/').at(-1)), ['ScanRun']);
+  const property = f.state.ScanRun.properties.admission_target_origin;
+  assert.equal(property.type, 'string');
+  assert.deepEqual(property.rls, {write: {user_condition: {role: 'admin'}}});
+  assert.equal(Object.hasOwn(property, 'default'), false);
+  assert.equal(f.state.ScanRun.required.includes('admission_target_origin'), false);
+  const restored = structuredClone(f.state);
+  delete restored.ScanRun.properties.admission_target_origin;
+  assert.deepEqual(restored, before);
+  assert.match(readFileSync(f.events, 'utf8'), /^source\nbarrier\nowner\nbarrier\n$/);
+});
+
+test('origin apply never attests a provider readback missing the admin write rule', async t => {
+  const before = local();
+  delete before.ScanRun.properties.admission_target_origin;
+  const f = await fixture(t, {schemas: before, omitOriginRls: true});
+  const result = await f.command('apply');
+  assert.equal(result.status, 2);
+  assert.equal(result.data.status, 'failed');
+  assert.equal(result.data.readback_verified, false);
+  assert.match(result.stderr, /fresh readback changed more than the intended additions/);
+  assert.deepEqual(f.requests.filter(row => row.method === 'PUT').map(row => row.path.split('/').at(-1)), ['ScanRun']);
+});
+
+test('plan rejects locally weakened origin property controls and remote origin RLS drift', async () => {
+  const {planStagedSchemas} = await moduleUnderTest();
+  const before = local();
+  delete before.ScanRun.properties.admission_target_origin;
+  for (const change of [
+    schema => { delete schema.properties.admission_target_origin.rls; },
+    schema => { schema.properties.admission_target_origin.type = 'object'; },
+    schema => { schema.properties.admission_target_origin.default = ''; },
+    schema => { schema.required.push('admission_target_origin'); },
+  ]) {
+    const weakened = local(); change(weakened.ScanRun);
+    assert.throws(() => planStagedSchemas(before, weakened), /admission_target_origin.*protected optional string/);
+  }
+  const drift = local();
+  delete drift.ScanRun.properties.admission_target_origin.rls;
+  assert.throws(() => planStagedSchemas(drift), /schema drift beyond staged additions/);
 });
 
 test('apply adds three named schemas and freshly compares all four without touching unrelated fields', async t => {
@@ -249,11 +301,16 @@ test('rollback removes only this receipt additions after full paginated row proo
   const rowReads = f.requests.filter(row => row.path.includes('/entities/'));
   assert.ok(rowReads.some(row => row.query.cursor === 'next'));
   assert.ok(rowReads.every(row => row.query.fields && row.query.limit === '500' && row.query.sort === 'created_date'));
+  assert.ok(rowReads.filter(row => row.path.includes('/entities/ScanRun/')).every(row => row.query.fields.split(',').includes('admission_target_origin')));
 });
 
 test('rollback preserves staged properties that were already present before this apply receipt', async t => {
-  const before = baseline(); before.Access.properties.page_cap = local().Access.properties.page_cap;
-  const f = await fixture(t, {schemas: before});
+  const before = baseline();
+  before.Access.properties.page_cap = local().Access.properties.page_cap;
+  before.ScanRun.properties.admission_target_origin = local().ScanRun.properties.admission_target_origin;
+  const f = await fixture(t, {schemas: before, rows: {ScanRun: [[{
+    id: 'older', status: 'complete', pipeline_mode: 'monolith', admission_target_origin: 'https://fixture.example:443',
+  }]]}});
   const applied = await f.command('apply'); assert.equal(applied.status, 0, applied.stderr);
   assert.equal(applied.data.operations.some(operation => operation.entity === 'Access'), false);
   const {receiptDigest} = await moduleUnderTest();
@@ -278,6 +335,7 @@ for (const [label, rows, rowsMalformed] of [
   ['active scan', {ScanRun: [[{id: 'active', status: 'crawling'}]]}, false],
   ['terminal staged scan', {ScanRun: [[{id: 'staged', status: 'complete', pipeline_mode: 'staged'}]]}, false],
   ['later-page staged scan', {ScanRun: [[{id: 'old', status: 'complete'}], [{id: 'staged', status: 'limited', pipeline_mode: 'staged'}]]}, false],
+  ['retained origin provenance', {ScanRun: [[{id: 'origin', status: 'complete', pipeline_mode: 'monolith', admission_target_origin: 'https://fixture.example:443'}]]}, false],
   ['500 entitlement', {Access: [[{id: 'grant', page_cap: 500}]]}, false],
   ['retained FixItem evidence', {FixItem: [[{id: 'fix', affected_page_count: 20}]]}, false],
   ['unverifiable rows', {}, true],

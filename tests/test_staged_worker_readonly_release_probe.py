@@ -137,6 +137,7 @@ exec "$REAL_GIT" "$@"
 case "$1 $2 $3 ${!#}" in
   "config set project test-project") ;;
   "run revisions describe --format=value(spec.containers[0].image)") printf '%s\\n' "$PROBE_IMAGE" ;;
+  "run revisions describe --format=json") printf '%s\\n' "$PROBE_REVISION" ;;
   "run revisions describe --format=value(spec.timeoutSeconds)") echo 480 ;;
   "builds list "*) printf '%s\\n' "$PROBE_BUILDS" ;;
   *) exit 99 ;;
@@ -150,10 +151,18 @@ esac
         "REAL_GIT": shutil.which("git"),
         "PROBE_SOURCE": str(source_file),
         "PROBE_SHA": source_sha,
-        "PROBE_IMAGE": "test.example/worker@" + digest,
+        "PROBE_IMAGE": "test.example/worker:release-tag",
+        # A healthy revision is resolved to immutable bytes even if its spec
+        # refers to a tag. The operator now requires this independent JSON.
+        "PROBE_REVISION": json.dumps({
+            "spec": {"containers": [{"image": "test.example/worker:release-tag"}]},
+            "status": {"imageDigest": "test.example/worker@" + digest},
+        }),
         "PROBE_BUILDS": json.dumps([{
+            "id": "fixture-build-1",
+            "status": "SUCCESS",
             "substitutions": {"_RELEASE_SHA": source_sha},
-            "results": {"images": [{"digest": digest}]},
+            "results": {"images": [{"name": "test.example/worker:build-tag", "digest": digest}]},
         }]),
         "GCP_PROJECT": "test-project",
         "GCP_REGION": "test-region",

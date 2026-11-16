@@ -361,11 +361,12 @@ async def publish_target_cooldown(client: httpx.AsyncClient, scan: dict[str, Any
     """Relay the same observed timestamp and TTL through signed, physical V9."""
     signing_key = str(os.getenv("SCAN_EVIDENCE_SIGNING_KEY") or "")
     identity = _scan_identity(scan)
-    if not signing_key or not all(identity.values()):
+    attempt = scan.get("attempt_count")
+    if not signing_key or not all(identity.values()) or type(attempt) is not int or not 1 <= attempt < 2**53:
         return False
     envelope = build_control_envelope(
         "observe_target_cooldown", signing_key, scan_id=identity["scan_id"],
-        identity=identity, target_cooldown=observation,
+        identity={**identity, "attempt_count": attempt}, target_cooldown=observation,
     )
     response = await invoke_function(client, "durableScanWorkerControlV9", envelope, timeout=20.0)
     body = response["body"]

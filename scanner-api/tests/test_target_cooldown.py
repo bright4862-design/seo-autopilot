@@ -125,7 +125,7 @@ async def test_relay_signs_observation_inside_physical_v9_control(monkeypatch, s
             "scan_id": "scan_test", "identity": {
                 "scan_id": "scan_test", "request_id": "request_test", "idempotency_key": "request_test",
                 "project_id": "project_test", "owner_user_id": "owner_test",
-                "normalized_domain": "example.com", "attempt_count": "2",
+                "normalized_domain": "example.com", "attempt_count": 2,
             }, "failure": None, "target_cooldown": observation,
         }
         assert envelope["proof"] == scan_job.create_authority_seal(payload, key)

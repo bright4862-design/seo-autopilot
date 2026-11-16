@@ -336,7 +336,8 @@ async function controlHarness(recordOverrides = {}) {
   const coordinator = await import("../../base44/functions/durableScanWorkerControlV9/admissionClient.js");
   const runtime = await import("../../base44/functions/durableScanWorkerControlV9/workerRuntime.js");
   const signedKey="control-test-key";
-  const buildId = "a".repeat(64);
+  const routes = JSON.parse(readFileSync("data/generated-staged-v9-routes.json", "utf8"));
+  const buildId = routes.functions.durableScanWorkerControlV9.build_id;
   const submissions = [];
   const sdkSecrets = {
     BETA_SCAN_ADMISSION_ENABLED: "true",
@@ -364,7 +365,15 @@ async function controlHarness(recordOverrides = {}) {
   const source=ts.transpileModule(readFileSync("base44/functions/durableScanWorkerControlV9/entry.ts","utf8"),{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText.replace(/^import[\s\S]*?;\s*$/gm,"");
   new Function("createClientFromRequest","secrets","verifyAuthoritySeal","progressFields","RELEASE_FINGERPRINT","FUNCTION_BUILD_ID","Deno","releaseExactTerminalAdmission","handleWorkerRuntime","createAuthoritySeal","admissionTargetOrigin","observeTargetCooldownClient",source)(client,{get:name=>sdkSecrets[name]||""},control.verifyAuthoritySeal,limits.progressFields,release.RELEASE_FINGERPRINT,buildId,deno,reconciliation.releaseExactTerminalAdmission,runtime.handleWorkerRuntime,control.createAuthoritySeal,coordinator.admissionTargetOrigin,relay);
   const identity={scan_id:record.id,project_id:record.project_id,owner_user_id:record.owner_user_id,request_id:record.request_id,idempotency_key:record.idempotency_key,attempt_count:2,normalized_domain:"example.com"};
-  return {updates,record,submissions,invoke:async({action="progress",progress={pages_crawled:50,pages_planned:500,batch_committed:0},observation,wrapped=false,alter=()=>{},identityOverride={}}={})=>{
+  const dispatch = async (body) => {
+    const response = await handler(new Request("https://control.example", {
+      method: "POST",
+      headers: { "X-FixList-Worker": "scan_job_worker_v1_cloud_tasks" },
+      body: JSON.stringify(body),
+    }));
+    return { status: response.status, body: await response.json() };
+  };
+  return {updates,record,submissions,dispatch,invoke:async({action="progress",progress={pages_crawled:50,pages_planned:500,batch_committed:0},observation,wrapped=false,alter=()=>{},identityOverride={}}={})=>{
     const document={version:"durable_standard150_control_v1",action,scan_id:record.id,identity:{...identity,...identityOverride},failure:null,...(action==="progress"?{progress}:{}),...(observation?{target_cooldown:observation}:{})};
     const proof=await createAuthoritySeal(document,signedKey,webcrypto);
     let body={...document,proof};alter(body);
@@ -376,8 +385,7 @@ async function controlHarness(recordOverrides = {}) {
       };
       body = { runtime_request: request, runtime_proof: await createAuthoritySeal(request, signedKey, webcrypto) };
     }
-    const response=await handler(new Request("https://control.example",{method:"POST",headers:{"X-FixList-Worker":"scan_job_worker_v1_cloud_tasks"},body:JSON.stringify(body)}));
-    return {status:response.status,body:await response.json()};
+    return dispatch(body);
   }};
 }
 
@@ -443,6 +451,63 @@ test("V9 target cooldown relay authenticates exact origin and bound attempt unde
     assert.deepEqual(rejected.submissions, []);
     assert.deepEqual(rejected.updates, []);
   }
+});
+
+test("the actual Python cooldown request reaches the signed V9 control route", async () => {
+  const live = await controlHarness({
+    admission_barrier_generation: 5,
+    admission_claim_sequence: 47,
+    admission_target_origin: "https://example.com:443",
+  });
+  const { spawnSync } = await import("node:child_process");
+  const emitted = spawnSync("python", ["-c", `
+import asyncio
+import json
+import sys
+import httpx
+
+sys.path.insert(0, "scanner-api")
+from app.scan_job import publish_target_cooldown
+
+outgoing = []
+
+def intercept(request):
+    outgoing.append(json.loads(request.content))
+    return httpx.Response(503, json={"success": False})
+
+async def run():
+    scan = json.load(sys.stdin)
+    observation = {
+        "status_code": 429,
+        "target_origin": "https://example.com:443",
+        "observed_at": 1794786000,
+        "retry_after_seconds": 3600,
+    }
+    async with httpx.AsyncClient(transport=httpx.MockTransport(intercept)) as client:
+        await publish_target_cooldown(client, scan, observation)
+    assert len(outgoing) == 1
+    print(json.dumps(outgoing[0]))
+
+asyncio.run(run())
+`], {
+    input: JSON.stringify(live.record),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      BASE44_API_URL: "https://base44.app",
+      BASE44_APP_ID: "fixture-app",
+      SCAN_EVIDENCE_SIGNING_KEY: "control-test-key",
+    },
+  });
+  assert.equal(emitted.status, 0, emitted.stderr || String(emitted.error || ""));
+  const response = await live.dispatch(JSON.parse(emitted.stdout));
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  assert.equal(response.body.outcome, "recorded");
+  assert.equal(response.body._worker_runtime.receipt.http_status, 200);
+  assert.equal(live.submissions.length, 1);
+  assert.equal(live.submissions[0].scan_id, live.record.id);
+  assert.equal(live.submissions[0].claim_sequence, 47);
+  assert.equal(live.submissions[0].retry_after_seconds, 3600);
 });
 
 test("V9 preserves explicitly unknown reach denominators through strict Stage3 publication and rejects false known claims",async()=>{

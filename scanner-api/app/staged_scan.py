@@ -27,6 +27,7 @@ from .scan_job import (
 from .observability import website_host
 from .scan_limits import standard_scan_contract, task_matches_scan_contract
 from .staged_telemetry import MAX_RECORDED_DELIVERIES, DeliveryReceipt, active_delivery
+from .target_cooldown import TargetCooldownPending, TargetCooldownRelay, explicit_http_origin, target_cooldown_scope
 from .workspace import WorkspaceConflict, WorkspaceUnavailable, attempt_prefix
 
 
@@ -64,6 +65,7 @@ class StageDependencies:
     crawl: Callable
     finalize: Callable
     review: Callable | None = None
+    publish_target_cooldown: Callable | None = None
 
 
 class StagedScanRuntime:
@@ -119,6 +121,21 @@ class StagedScanRuntime:
         result["normalized_domain"] = result.get("normalized_domain") or website_host(result["website_url"])
         result.update({"scan_mode": mode, "page_cap": cap, "pipeline_mode": pipeline})
         return result
+
+    def _target_cooldown(self, client: Any, scan: dict, job: dict, prefix: str, stage: str) -> TargetCooldownRelay | None:
+        origin = scan.get("admission_target_origin")
+        publish = self.dep.publish_target_cooldown
+        if publish is None or not origin or explicit_http_origin(job["website_url"]) != origin:
+            return None
+        return TargetCooldownRelay(
+            self.store, prefix, origin, lambda observation: publish(client, scan, observation), self.clock,
+            optional=stage == "finalize",
+        )
+
+    @staticmethod
+    def _require_contact_ready(cooldown: TargetCooldownRelay | None) -> None:
+        if cooldown is not None and (waiting := cooldown.remaining_hold()):
+            raise StageRetry("A replayed target cooldown is still active", retry_after=waiting)
 
     async def _lease(self, prefix: str, stage: str, batch: int, recovery_generation: int = 0) -> tuple[dict, int, bool] | None:
         key = prefix + "frontier.json"
@@ -215,6 +232,7 @@ class StagedScanRuntime:
         frontier = None
         receipt = None
         receipt_context = None
+        cooldown = None
         try:
             leased = await self._lease(prefix, stage, batch, recovery_generation)
             if leased is None:
@@ -256,6 +274,9 @@ class StagedScanRuntime:
                 if already_terminal(persisted):
                     return {"success": True, "skipped": "already_terminal", "status": status}
                 raise StageRetry("The finalization timeout was not persisted")
+            cooldown = self._target_cooldown(client, scan, job, prefix, stage)
+            if cooldown is not None:
+                await cooldown.resume()
             receipt = DeliveryReceipt(self.store, prefix, job, stage, batch, frontier["lease_owner"], generation)
             receipt_context = active_delivery.set(receipt)
             receipt.start()
@@ -270,13 +291,16 @@ class StagedScanRuntime:
                     if remaining < 20:
                         await self.dep.fail(client, job["scan_id"], "scanner_wall_timeout", "The scan exhausted its time budget before collecting page evidence. Please try again.", attempt_count=job.get("attempt_count"))
                         return {"success": False, "error_code": "scanner_wall_timeout"}
+                    self._require_contact_ready(cooldown)
                     from .robots_policy import owner_robots_override
-                    with owner_robots_override(bool(job.get("owner_attested_robots_override"))):
+                    with owner_robots_override(bool(job.get("owner_attested_robots_override"))), target_cooldown_scope(cooldown):
                         state = await asyncio.wait_for(self.dep.plan(
                             website_url=job["website_url"], path_prefix=job.get("path_prefix"),
                             scan_mode=job["scan_mode"], timeout_seconds=remaining,
                             job_mode=True, staged=True,
                         ), timeout=STAGE_WORK_SECONDS)
+                    if cooldown is not None:
+                        await cooldown.require_acknowledged()
                     plan = {"job": job, "state": state.to_dict(), "wall_deadline": frontier["wall_deadline"]}
                     # Recheck cancellation immediately before evidence enters storage.
                     _, stopped = await self._fence(client, job)
@@ -302,9 +326,12 @@ class StagedScanRuntime:
             deadline_hit = self.clock() >= float(frontier["wall_deadline"])
             if stage == "batch":
                 if not deadline_hit:
+                    self._require_contact_ready(cooldown)
                     from .robots_policy import owner_robots_override
-                    with owner_robots_override(bool(job.get("owner_attested_robots_override"))):
+                    with owner_robots_override(bool(job.get("owner_attested_robots_override"))), target_cooldown_scope(cooldown):
                         await asyncio.wait_for(self.dep.crawl(state, max_pages=BATCH_SIZE), timeout=STAGE_WORK_SECONDS)
+                    if cooldown is not None:
+                        await cooldown.require_acknowledged()
                 _, stopped = await self._fence(client, job)
                 if stopped:
                     return stopped
@@ -345,7 +372,9 @@ class StagedScanRuntime:
                 receipt.observe_artifact("result", result_snapshot.generation, produced=False)
             else:
                 from .robots_policy import owner_robots_override
-                with owner_robots_override(bool(job.get("owner_attested_robots_override"))):
+                if cooldown is not None and cooldown.remaining_hold():
+                    allow_optional_probes = False
+                with owner_robots_override(bool(job.get("owner_attested_robots_override"))), target_cooldown_scope(cooldown):
                     result = await asyncio.wait_for(
                         self.dep.finalize(state, allow_optional_probes=allow_optional_probes),
                         timeout=STAGE_WORK_SECONDS,
@@ -368,6 +397,10 @@ class StagedScanRuntime:
                     return stopped
                 result_generation = await self.store.write(prefix + "result.json.gz", result)
                 receipt.observe_artifact("result", result_generation, produced=True)
+                # Persist the valid final report before a failed relay asks
+                # Cloud Tasks to retry. Replacement never repeats its probes.
+                if cooldown is not None:
+                    await cooldown.require_acknowledged()
             fresh, stopped = await self._fence(client, job)
             if stopped:
                 return stopped
@@ -421,6 +454,8 @@ class StagedScanRuntime:
             )
             receipt.stage_committed = True
             return {"success": True, "scan_id": job["scan_id"], "pages_crawled": len(state.pages), "fix_list_id": outcome.get("fix_list_id")}
+        except TargetCooldownPending as exc:
+            raise StageRetry(str(exc)) from exc
         except (WorkspaceConflict, WorkspaceUnavailable, asyncio.TimeoutError) as exc:
             raise StageRetry("The stage did not finish its durable commit") from exc
         finally:
@@ -428,6 +463,8 @@ class StagedScanRuntime:
                 receipt.stop_sampling()
             if receipt_context is not None:
                 active_delivery.reset(receipt_context)
+            if cooldown is not None:
+                await cooldown.drain()
             # Release stopped deliveries immediately; a process crash instead
             # recovers through the bounded lease and duplicate Retry-After.
             if frontier and frontier.get("lease_owner"):

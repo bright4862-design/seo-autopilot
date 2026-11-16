@@ -6,6 +6,7 @@
 // absent. Every live gate also carries a traceable receipt/reference; a claimed
 // state with no observable receipt is not enough to establish release evidence.
 import { RELEASE_FUNCTIONS } from "./base44_release_manifest.mjs";
+import { RELEASE_FINGERPRINT, RELEASE_COMPONENT_VERSIONS } from "../src/lib/generatedReleaseContract.js";
 
 export const STAGE4_RELEASE_RECORD_VERSION = "stage4_exact_source_customer_acceptance_v1";
 export const SCANNER_RUNTIME_ROLES = Object.freeze([
@@ -51,6 +52,15 @@ function isSha(value, width) {
 
 function hasReceipt(value) {
   return clean(value).length >= 8;
+}
+
+// Exact generated release map, not a subset or a source-SHA-only assertion.
+function matchesSourceComponentVersions(candidate) {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return false;
+  const expected = Object.keys(RELEASE_COMPONENT_VERSIONS);
+  return Object.keys(candidate).length === expected.length
+    && expected.every((key) => Object.hasOwn(candidate, key)
+      && candidate[key] === RELEASE_COMPONENT_VERSIONS[key]);
 }
 
 function add(failures, condition, message) {
@@ -108,6 +118,10 @@ export function evaluateStage4ReleaseAcceptance(record) {
   const worker = record.deployment?.worker || {};
   add(failures, worker.verified === true, "worker identity is not verified");
   add(failures, clean(worker.source_sha) === sha, "worker source does not match merged SHA");
+  add(failures, clean(worker.beta_revision_fingerprint) === RELEASE_FINGERPRINT,
+    "worker release fingerprint does not match frozen source");
+  add(failures, matchesSourceComponentVersions(worker.component_versions),
+    "worker component versions do not match frozen source");
   add(failures, /^sha256:[a-f0-9]{64}$/.test(clean(worker.image_digest)), "worker image digest invalid");
   add(failures, Number(worker.traffic_percent) === 100, "worker is not at 100% traffic");
   add(failures, Boolean(clean(worker.revision)), "worker revision missing");
@@ -138,6 +152,8 @@ export function evaluateStage4ReleaseAcceptance(record) {
   add(failures, isSha(scan.authority_proof, 64), "customer acceptance authority proof invalid");
   add(failures, Boolean(clean(scan.fix_list_id)), "customer acceptance FixList id missing");
   add(failures, clean(scan.source_sha) === sha, "customer acceptance source does not match merged SHA");
+  add(failures, clean(scan.beta_revision_fingerprint) === RELEASE_FINGERPRINT,
+    "customer acceptance fingerprint does not match frozen source");
 
   const reload = record.acceptance?.reload || {};
   add(failures, time(reload.observed_at) !== null, "reload observation timestamp missing");

@@ -196,6 +196,33 @@ test("rescan comparison and rollback readiness are explicit rather than inferred
   assert.ok(result.failures.some((value) => value.includes("comparison evidence")));
 });
 
+test("CI evidence URL must identify the same run in the source repository", () => {
+  const baseline = validRecord();
+  assert.equal(evaluateStage4ReleaseAcceptance(baseline).pass, true);
+
+  const mutations = [
+    ["different run", (record) => {
+      record.ci.run_url = "https://github.com/bright4862-design/seo-autopilot/actions/runs/654321";
+    }],
+    ["different repository", (record) => {
+      record.ci.run_url = "https://github.com/another-owner/seo-autopilot/actions/runs/123456";
+    }],
+    ["unsafe numeric run ID", (record) => {
+      record.ci.run_id = Number.MAX_SAFE_INTEGER + 1;
+      record.ci.run_url = `https://github.com/bright4862-design/seo-autopilot/actions/runs/${record.ci.run_id}`;
+    }],
+  ];
+
+  for (const [description, mutate] of mutations) {
+    const record = validRecord();
+    mutate(record);
+    const result = evaluateStage4ReleaseAcceptance(record);
+    assert.equal(result.status, "failed", description);
+    assert.equal(result.pass, false, description);
+    assert.ok(result.failures.some((failure) => failure.includes("CI run")), description);
+  }
+});
+
 test("claimed live state without traceable receipts fails closed", () => {
   const record = validRecord();
   record.review.evidence_reference = "";

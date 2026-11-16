@@ -91,7 +91,7 @@ export function evaluateStage4ReleaseAcceptance(record) {
   add(failures, hasReceipt(site.verification_reference), "Base44 site verification receipt missing");
   const hosts = Array.isArray(site.hosts_verified) ? site.hosts_verified.map(clean) : [];
   add(failures, hosts.includes("getfixlist.com"), "getfixlist.com source identity not verified");
-  add(failures, hosts.some((host) => host.endsWith(".base44.app")), "Base44-hosted source identity not verified");
+  add(failures, hosts.includes("getfixlist.base44.app"), "Base44-hosted source identity not verified");
 
   const functions = Array.isArray(record.deployment?.functions) ? record.deployment.functions : [];
   const byName = new Map(functions.map((fn) => [clean(fn?.name), fn]));

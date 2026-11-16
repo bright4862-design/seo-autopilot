@@ -2,16 +2,16 @@
   "schema_version": "fixlist_staged_v9_routes_v1",
   "functions": {
     "startStandardScanJobV9": {
-      "route_name": "startStandardScanJobV9B92976cbd3fcf77f7",
-      "build_id": "29b42aa5af4aab1206810639a71154ddf2ee1ef4dc3a7cd9b71bc33e020a060d",
+      "route_name": "startStandardScanJobV9B2861ca601a7db86c",
+      "build_id": "2a664de19a43ec52a339e4cd5c797281646f3408ff6f80bb4bdf629afcf16974",
       "runtime_activation_id": "startStandardScanJobV9-staged-runtime-20261111-v5",
-      "package_digest": "8552bc35f739382ec6929ba5e8bce82832f4a21898ea653d560ee9ae3032b72d"
+      "package_digest": "0d5cf6f42490e3f631865b46edc6dcd2f2e1a001da534c9965a3801c5e40f6ad"
     },
     "durableScanWorkerControlV9": {
-      "route_name": "durableScanWorkerControlV9B6190fcd1bdcf9a79",
-      "build_id": "fbe0f00d633a9625514f46b84216ec1bb37a0edbb89b995bebb8164799227afa",
+      "route_name": "durableScanWorkerControlV9B884cea23230530fd",
+      "build_id": "4902406202f23068f3f6b9c8953988cd5b8e408ec2ac9f2b90887eef8d8be601",
       "runtime_activation_id": "durableScanWorkerControlV9-staged-runtime-20261111-v3",
-      "package_digest": "f3b97de7c25f7b5096c3994c78988bcd7d21a53fd23517d2e76cf2f50764c1ae"
+      "package_digest": "b98f90e6e887dcb7327ef66c83aaf29e7c193f40ee0d07a814bf160b02011241"
     },
     "persistDurableScanAuthorityV9": {
       "route_name": "persistDurableScanAuthorityV9B42ff88927d79017d",

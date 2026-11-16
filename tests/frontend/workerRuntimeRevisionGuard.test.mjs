@@ -156,7 +156,7 @@ test("a missing fingerprint is a failure, never a pass by absence", () => {
 test("a non-JSON or non-object body is a failure", () => {
   for (const body of ["<html>403 Forbidden</html>", "", '["5d94e93c54a9efb6"]', '"5d94e93c54a9efb6"']) {
     const result = withFixtures({ live: body, recorded: RECORDED }, (paths) =>
-      runPython(COMPARATOR, [paths.live, paths.recorded, ""]),
+      runPython(COMPARATOR, [paths.live, paths.recorded, "", WORKER_REVISION]),
     );
     assert.equal(result.status, 1, `${body.slice(0, 20)} must not pass as a revision answer`);
   }

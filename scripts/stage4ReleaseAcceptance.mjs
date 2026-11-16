@@ -80,8 +80,13 @@ export function evaluateStage4ReleaseAcceptance(record) {
   add(failures, hasReceipt(record.review?.evidence_reference), "independent review evidence reference missing");
   add(failures, clean(record.ci?.conclusion) === "success", "exact-source CI is not successful");
   add(failures, clean(record.ci?.sha) === sha, "CI SHA does not match merged source SHA");
-  add(failures, Number.isInteger(record.ci?.run_id) && record.ci.run_id > 0, "exact-source CI run id missing");
-  add(failures, /^https:\/\/github\.com\/[^/]+\/[^/]+\/actions\/runs\/\d+$/.test(clean(record.ci?.run_url)), "exact-source CI run URL invalid");
+  const ciRunId = record.ci?.run_id;
+  const validCiRunId = Number.isSafeInteger(ciRunId) && ciRunId > 0;
+  add(failures, validCiRunId, "exact-source CI run id missing or unsafe");
+  add(failures,
+    validCiRunId && clean(record.ci?.run_url)
+      === `https://github.com/bright4862-design/seo-autopilot/actions/runs/${ciRunId}`,
+    "exact-source CI run URL invalid or not bound to run id/repository");
   add(failures, record.schema?.named_schema_parity === true, "named schema parity is not verified");
   add(failures, hasReceipt(record.schema?.evidence_reference), "named schema parity evidence reference missing");
 

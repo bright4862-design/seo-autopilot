@@ -333,7 +333,28 @@ async function controlHarness(recordOverrides = {}) {
   const release = await import("../../base44/functions/durableScanWorkerControlV9/generatedReleaseContract.js");
   const limits = await import("../../base44/functions/durableScanWorkerControlV9/scanLimits.js");
   const reconciliation = await import("../../base44/functions/durableScanWorkerControlV9/reconciliation.js");
+  const coordinator = await import("../../base44/functions/durableScanWorkerControlV9/admissionClient.js");
+  const runtime = await import("../../base44/functions/durableScanWorkerControlV9/workerRuntime.js");
   const signedKey="control-test-key";
+  const buildId = "a".repeat(64);
+  const submissions = [];
+  const sdkSecrets = {
+    BETA_SCAN_ADMISSION_ENABLED: "true",
+    SCAN_ADMISSION_COORDINATOR_URL: "https://coordinator.example",
+    SCAN_EVIDENCE_SIGNING_KEY: signedKey,
+  };
+  const relay = options => coordinator.observeTargetCooldown({
+    ...options,
+    fetchImpl: async (url, request) => {
+      assert.equal(url, "https://coordinator.example/observe-target-cooldown");
+      const expected = await coordinator.admissionSignature(
+        signedKey, request.headers["x-fixlist-timestamp"], request.body,
+      );
+      assert.equal(request.headers["x-fixlist-signature"], expected);
+      submissions.push(JSON.parse(request.body));
+      return Response.json({ success: true, outcome: "recorded" });
+    },
+  });
   const record={...large,id:"scan_123",project_id:"project_123",owner_user_id:"owner_123",request_id:"request_123",idempotency_key:"request_123",attempt_count:2,status:"crawling",website_url:"https://example.com/",...recordOverrides};
   const updates=[];
   const entities={ScanRun:{get:async()=>structuredClone(record),update:async(_,fields)=>{updates.push(fields);Object.assign(record,fields);}},BusinessProject:{get:async()=>({id:"project_123",owner_user_id:"owner_123",website_url:"https://example.com/"})}};
@@ -341,12 +362,20 @@ async function controlHarness(recordOverrides = {}) {
   let handler;
   const deno={serve:fn=>{handler=fn;},env:{get:()=>""}};
   const source=ts.transpileModule(readFileSync("base44/functions/durableScanWorkerControlV9/entry.ts","utf8"),{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText.replace(/^import[\s\S]*?;\s*$/gm,"");
-  new Function("createClientFromRequest","secrets","verifyAuthoritySeal","progressFields","RELEASE_FINGERPRINT","FUNCTION_BUILD_ID","Deno","releaseExactTerminalAdmission",source)(client,{get:()=>signedKey},control.verifyAuthoritySeal,limits.progressFields,release.RELEASE_FINGERPRINT,"test-build",deno,reconciliation.releaseExactTerminalAdmission);
+  new Function("createClientFromRequest","secrets","verifyAuthoritySeal","progressFields","RELEASE_FINGERPRINT","FUNCTION_BUILD_ID","Deno","releaseExactTerminalAdmission","handleWorkerRuntime","createAuthoritySeal","admissionTargetOrigin","observeTargetCooldownClient",source)(client,{get:name=>sdkSecrets[name]||""},control.verifyAuthoritySeal,limits.progressFields,release.RELEASE_FINGERPRINT,buildId,deno,reconciliation.releaseExactTerminalAdmission,runtime.handleWorkerRuntime,control.createAuthoritySeal,coordinator.admissionTargetOrigin,relay);
   const identity={scan_id:record.id,project_id:record.project_id,owner_user_id:record.owner_user_id,request_id:record.request_id,idempotency_key:record.idempotency_key,attempt_count:2,normalized_domain:"example.com"};
-  return {updates,record,invoke:async({action="progress",progress={pages_crawled:50,pages_planned:500,batch_committed:0},alter=()=>{},identityOverride={}}={})=>{
-    const document={version:"durable_standard150_control_v1",action,scan_id:record.id,identity:{...identity,...identityOverride},failure:null,...(action==="progress"?{progress}:{})};
+  return {updates,record,submissions,invoke:async({action="progress",progress={pages_crawled:50,pages_planned:500,batch_committed:0},observation,wrapped=false,alter=()=>{},identityOverride={}}={})=>{
+    const document={version:"durable_standard150_control_v1",action,scan_id:record.id,identity:{...identity,...identityOverride},failure:null,...(action==="progress"?{progress}:{}),...(observation?{target_cooldown:observation}:{})};
     const proof=await createAuthoritySeal(document,signedKey,webcrypto);
-    const body={...document,proof};alter(body);
+    let body={...document,proof};alter(body);
+    if (wrapped) {
+      const request = {
+        protocol: "fixlist_worker_runtime_v1", function_name: "durableScanWorkerControlV9", action: "invoke",
+        nonce: "9".repeat(32), issued_at: Math.floor(Date.now() / 1000), expected_build_id: buildId,
+        expected_runtime_activation_id: source.match(/BASE44_RUNTIME_ACTIVATION_ID = "([^"]+)"/)[1], payload: body,
+      };
+      body = { runtime_request: request, runtime_proof: await createAuthoritySeal(request, signedKey, webcrypto) };
+    }
     const response=await handler(new Request("https://control.example",{method:"POST",headers:{"X-FixList-Worker":"scan_job_worker_v1_cloud_tasks"},body:JSON.stringify(body)}));
     return {status:response.status,body:await response.json()};
   }};
@@ -361,6 +390,59 @@ test("actual V9 control handler authenticates progress, persists batch heartbeat
   const oversized=await controlHarness();assert.equal((await oversized.invoke({progress:{pages_crawled:501,pages_planned:500}})).status,400);assert.equal(oversized.updates.length,0);
   const activeCleanup=await controlHarness();assert.equal((await activeCleanup.invoke({action:"workspace_deleted"})).status,409);
   const finishedCleanup=await controlHarness({status:"limited"});assert.equal((await finishedCleanup.invoke({action:"workspace_deleted"})).status,200);assert.equal(finishedCleanup.record.workspace_cleanup_state,"complete");
+});
+
+test("V9 target cooldown clients agree on exact origin keys", async () => {
+  const launcher = await import("../../base44/functions/startStandardScanJobV9/admissionClient.js");
+  const control = await import("../../base44/functions/durableScanWorkerControlV9/admissionClient.js");
+  for (const [input, expected] of [
+    ["https://WWW.BÜCHER.example.:443/path?x=y", "https://www.xn--bcher-kva.example.:443"],
+    ["http://example.com/", "http://example.com:80"],
+    ["https://example.com:8443/", "https://example.com:8443"],
+    ["https://[2606:4700::1111]:443/path", "https://[2606:4700::1111]:443"],
+    ["https://8.8.8.8/", "https://8.8.8.8:443"],
+    ["https://secret@example.com/", ""],
+    ["https://invalid_host.example/", ""],
+    ["ftp://example.com/", ""],
+  ]) {
+    assert.equal(launcher.admissionTargetOrigin(input), expected);
+    assert.equal(control.admissionTargetOrigin(input), expected);
+  }
+});
+
+test("V9 target cooldown relay authenticates exact origin and bound attempt under both worker seals", async () => {
+  const admission = { admission_barrier_generation: 5, admission_claim_sequence: 47, admission_target_origin: "https://example.com:443" };
+  const observation = { status_code: 429, target_origin: "https://example.com:443", observed_at: 1794786000, retry_after_seconds: 3600 };
+  const settings = { action: "observe_target_cooldown", observation, wrapped: true };
+  const live = await controlHarness(admission);
+  const result = await live.invoke(settings);
+  assert.equal(result.status, 200);
+  assert.equal(result.body.success, true);
+  assert.equal(result.body.outcome, "recorded");
+  assert.equal(result.body._worker_runtime.receipt.http_status, 200);
+  assert.deepEqual(live.submissions, [{
+    action: "observe_target_cooldown_v1", status_code: 429, owner_user_id: "owner_123",
+    request_id: "request_123", scan_id: "scan_123", barrier_generation: 5, claim_sequence: 47,
+    target_origin: "https://example.com:443", observed_at: 1794786000, retry_after_seconds: 3600,
+  }]);
+  assert.deepEqual(live.updates, []);
+  for (const [overrides, input, status] of [
+    [admission, { wrapped: false }, 403],
+    [admission, { identityOverride: { attempt_count: 1 } }, 409],
+    [admission, { identityOverride: { attempt_count: 2.5 } }, 409],
+    [admission, { observation: { ...observation, target_origin: "https://www.example.com:443" } }, 409],
+    [admission, { observation: { ...observation, target_origin: "https://example.com:443/path" } }, 400],
+    [admission, { observation: { ...observation, status_code: 503 } }, 400],
+    [admission, { alter: body => { body.target_cooldown.retry_after_seconds = 1; } }, 409],
+    [{ ...admission, status: "complete" }, {}, 409],
+    [{ ...admission, admission_claim_sequence: null }, {}, 409],
+    [{ ...admission, admission_target_origin: undefined }, {}, 409],
+  ]) {
+    const rejected = await controlHarness(overrides);
+    assert.equal((await rejected.invoke({ ...settings, ...input, observation: { ...(input.observation || observation) } })).status, status);
+    assert.deepEqual(rejected.submissions, []);
+    assert.deepEqual(rejected.updates, []);
+  }
 });
 
 test("V9 preserves explicitly unknown reach denominators through strict Stage3 publication and rejects false known claims",async()=>{

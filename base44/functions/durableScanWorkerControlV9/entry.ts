@@ -7,6 +7,8 @@ const BASE44_RUNTIME_ACTIVATION_ID = "durableScanWorkerControlV9-staged-runtime-
 import { createAuthoritySeal, verifyAuthoritySeal } from "./authoritySeal.js";
 import { handleWorkerRuntime } from "./workerRuntime.js";
 import {
+  admissionTargetOrigin,
+  observeTargetCooldown as observeTargetCooldownClient,
   finishReconciliationInvocation as finishReconciliationInvocationClient,
   releaseAdmission as releaseAdmissionClient,
   satisfyUnboundAdmission as satisfyUnboundAdmissionClient,
@@ -116,12 +118,12 @@ Deno.serve(async (req) => {
       build_id: FUNCTION_BUILD_ID,
       runtime_activation_id: BASE44_RUNTIME_ACTIVATION_ID,
       release_fingerprint: RELEASE_FINGERPRINT,
-    }, secret, { verify: verifyAuthoritySeal, sign: createAuthoritySeal }, payload => dispatchWorkerRequest(req, payload, secret));
+    }, secret, { verify: verifyAuthoritySeal, sign: createAuthoritySeal }, payload => dispatchWorkerRequest(req, payload, secret, true));
   }
   return dispatchWorkerRequest(req, body, secret);
 });
 
-async function dispatchWorkerRequest(req: Request, body, secret: string) {
+async function dispatchWorkerRequest(req: Request, body, secret: string, exactRuntime = false) {
   try {
     const signedDocument = {
       version: body?.version,
@@ -130,6 +132,7 @@ async function dispatchWorkerRequest(req: Request, body, secret: string) {
       identity: body?.identity,
       failure: body?.failure,
       ...(body?.action === "progress" ? {progress: body?.progress} : {}),
+      ...(body?.action === "observe_target_cooldown" ? {target_cooldown: body?.target_cooldown} : {}),
     };
     const proof = cleanProof(body?.proof);
     if (!secret) throw new RequestProblem(503, "authority_not_configured", "Server scan authority is not configured.");
@@ -153,10 +156,13 @@ async function dispatchWorkerRequest(req: Request, body, secret: string) {
       return Response.json(await reconcileDurableScans(entities));
     }
 
-    if (!["start", "fail", "progress", "workspace_deleted"].includes(action)) {
+    if (!["start", "fail", "progress", "workspace_deleted", "observe_target_cooldown"].includes(action)) {
       throw new RequestProblem(400, "worker_action_invalid", "The durable worker action is not supported.");
     }
 
+    if (action === "observe_target_cooldown" && !exactRuntime) {
+      throw new RequestProblem(403, "worker_runtime_required", "Target cooldown observation requires the exact worker runtime.");
+    }
     const identity = normalizeIdentity(body?.identity);
     if (
       !identity.scan_id
@@ -180,6 +186,14 @@ async function dispatchWorkerRequest(req: Request, body, secret: string) {
     const rowAttempt = normalizeAttempt(scan.attempt_count);
     if (claimedAttempt !== rowAttempt) {
       throw new RequestProblem(409, "superseded_attempt", "A newer attempt owns this scan.");
+    }
+
+    if (action === "observe_target_cooldown") {
+      if (body?.scan_id !== identity.scan_id || !Number.isSafeInteger(body?.identity?.attempt_count)
+          || body.identity.attempt_count < 1 || body.identity.attempt_count !== scan.attempt_count) {
+        throw new RequestProblem(409, "target_cooldown_claim_conflict", "The cooldown observation no longer matches the active scan.");
+      }
+      return await relayTargetCooldown(scan, project, identity, body.target_cooldown);
     }
 
     if (action === "workspace_deleted") {
@@ -555,6 +569,43 @@ function closedReleaseFailureCode(value) {
   ]);
   const candidate = String(value || "").trim().toLowerCase();
   return safe.has(candidate) ? candidate : "admission_release_failed";
+}
+
+async function relayTargetCooldown(scan, project, identity, value) {
+  const observation = objectValue(value);
+  const origin = admissionTargetOrigin(observation.target_origin);
+  if (Object.keys(observation).length !== 4 || observation.status_code !== 429
+      || !origin || observation.target_origin !== origin
+      || !Number.isSafeInteger(observation.observed_at) || observation.observed_at <= 0
+      || !Number.isSafeInteger(observation.retry_after_seconds) || observation.retry_after_seconds <= 0) {
+    throw new RequestProblem(400, "target_cooldown_observation_invalid", "The target cooldown observation is invalid.");
+  }
+  const generation = scan.admission_barrier_generation;
+  const sequence = scan.admission_claim_sequence;
+  if (!["crawling", "reviewing"].includes(scan.status)
+      || scan.owner_user_id !== identity.owner_user_id || project.owner_user_id !== identity.owner_user_id
+      || project.id !== identity.project_id || scan.request_id !== identity.request_id
+      || scan.idempotency_key !== identity.idempotency_key || identity.idempotency_key !== identity.request_id
+      || !Number.isSafeInteger(generation) || generation < 0 || !Number.isSafeInteger(sequence) || sequence < 1
+      || scan.admission_target_origin !== origin || admissionTargetOrigin(scan.website_url) !== origin) {
+    throw new RequestProblem(409, "target_cooldown_claim_conflict", "The cooldown observation no longer matches the active scan.");
+  }
+  const result = await observeTargetCooldownClient({
+    ownerUserId: scan.owner_user_id,
+    requestId: scan.request_id,
+    scanId: scan.id,
+    barrierGeneration: generation,
+    claimSequence: sequence,
+    observation,
+    env: mutableScanAdmissionEnv,
+  });
+  if (result.ok && result.success === true && ["recorded", "unchanged", "expired"].includes(result.outcome)) {
+    return Response.json({ success: true, outcome: result.outcome });
+  }
+  if (result.status === 409 && result.failureCode === "target_cooldown_claim_conflict") {
+    throw new RequestProblem(409, "target_cooldown_claim_conflict", "The cooldown observation no longer matches the active scan.");
+  }
+  throw new RequestProblem(503, "target_cooldown_publish_unavailable", "The target cooldown observation could not be recorded yet.");
 }
 
 function normalizeIdentity(value) {

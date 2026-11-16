@@ -41,6 +41,7 @@ export const SAFE_COORDINATOR_ERRORS = new Set([
   "invalid_scan_id",
   "invalid_claim_token_format",
   "admission_busy",
+  "target_cooldown_claim_conflict",
   "request_conflict",
   "scan_identity_conflict",
   "barrier_generation_conflict",
@@ -97,6 +98,25 @@ export async function admissionSignature(rootSecret, timestamp, payloadText) {
   const derivedKey = await hmacBytes(new TextEncoder().encode(rootSecret), ADMISSION_LABEL);
   const signature = await hmacBytes(derivedKey, `${timestamp}\n${payloadText}`);
   return Array.from(signature, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+// The V9 packages deploy independently. Keep the explicit-port origin format
+// identical in the launcher and signed worker client.
+export function admissionTargetOrigin(value) {
+  if (typeof value !== "string") return "";
+  try {
+    const url = new URL(value);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.port === "0") return "";
+    const host = url.hostname;
+    const dns = host.replace(/\.$/, "");
+    const validDns = dns.length <= 253 && dns.split(".").every(
+      (label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label),
+    );
+    if (!validDns && !/^\[[a-f0-9:]+\]$/.test(host)) return "";
+    return `${url.protocol}//${host}:${url.port || (url.protocol === "https:" ? "443" : "80")}`;
+  } catch {
+    return "";
+  }
 }
 
 function normalizeError(value) {
@@ -212,6 +232,24 @@ export async function releaseAdmission({ ownerUserId, scanId, terminalStatus, ..
     owner_user_id: String(ownerUserId ?? ""),
     scan_id: String(scanId ?? ""),
     terminal_status: String(terminalStatus ?? ""),
+  }, options);
+}
+
+export async function observeTargetCooldown({ ownerUserId, requestId, scanId, barrierGeneration, claimSequence, observation, ...options } = {}) {
+  if (!admissionEnabled(options.env ?? readEnv)) {
+    return { ok: false, outcomeUnknown: false, failureCode: "admission_disabled" };
+  }
+  return callCoordinator("/observe-target-cooldown", {
+    action: "observe_target_cooldown_v1",
+    status_code: 429,
+    owner_user_id: ownerUserId,
+    request_id: requestId,
+    scan_id: scanId,
+    barrier_generation: barrierGeneration,
+    claim_sequence: claimSequence,
+    target_origin: observation.target_origin,
+    observed_at: observation.observed_at,
+    retry_after_seconds: observation.retry_after_seconds,
   }, options);
 }
 

@@ -43,6 +43,7 @@ export const SAFE_COORDINATOR_ERRORS = new Set([
   "invalid_scan_id",
   "invalid_claim_token_format",
   "admission_busy",
+  "target_cooldown_active",
   "request_conflict",
   "scan_identity_conflict",
   "barrier_generation_conflict",
@@ -175,6 +176,25 @@ export async function verifyAdmissionClaimEvidence({ evidence, proof, signingKey
   }
 }
 
+// The V9 packages deploy independently. Keep the explicit-port origin format
+// identical in the launcher and signed worker client.
+export function admissionTargetOrigin(value) {
+  if (typeof value !== "string") return "";
+  try {
+    const url = new URL(value);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.port === "0") return "";
+    const host = url.hostname;
+    const dns = host.replace(/\.$/, "");
+    const validDns = dns.length <= 253 && dns.split(".").every(
+      (label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label),
+    );
+    if (!validDns && !/^\[[a-f0-9:]+\]$/.test(host)) return "";
+    return `${url.protocol}//${host}:${url.port || (url.protocol === "https:" ? "443" : "80")}`;
+  } catch {
+    return "";
+  }
+}
+
 function normalizeError(value) {
   const code = String(value ?? "").trim();
   return SAFE_COORDINATOR_ERRORS.has(code) ? code : "coordinator_rejected";
@@ -229,13 +249,15 @@ async function callCoordinator(path, payload, { coordinatorUrl, signingKey, fetc
   }
 
   if (!response.ok) {
+    const failureCode = normalizeError(parsed?.error);
     return {
       ok: false,
       // A 5xx leaves the coordinator's state genuinely unknown; a 4xx is a
       // decision, and the decision is always "nothing was written".
       outcomeUnknown: response.status >= 500,
-      failureCode: normalizeError(parsed?.error),
-      retryAfterSeconds: Number(parsed?.retry_after_seconds) || 0,
+      failureCode,
+      retryAfterSeconds: failureCode === "target_cooldown_active"
+        ? parsed?.retry_after_seconds : Number(parsed?.retry_after_seconds) || 0,
       status: response.status,
     };
   }
@@ -246,7 +268,7 @@ async function callCoordinator(path, payload, { coordinatorUrl, signingKey, fetc
 /**
  * Step 1 of admission. Wins, replays, or is told to wait. Creates nothing.
  */
-export async function claimAdmission({ ownerUserId, requestId, requestFingerprint, ...options } = {}) {
+export async function claimAdmission({ ownerUserId, requestId, requestFingerprint, targetOrigin, ...options } = {}) {
   if (!admissionEnabled(options.env ?? readEnv)) {
     return { ok: false, outcomeUnknown: false, failureCode: "admission_disabled" };
   }
@@ -254,6 +276,7 @@ export async function claimAdmission({ ownerUserId, requestId, requestFingerprin
     owner_user_id: String(ownerUserId ?? ""),
     request_id: String(requestId ?? ""),
     request_fingerprint: String(requestFingerprint ?? ""),
+    ...(targetOrigin ? { target_origin: targetOrigin } : {}),
   }, options);
 }
 

@@ -453,6 +453,22 @@ test("Stage-4 evidence refuses timestamps that reverse the scan-to-readback sequ
 });
 
 
+test("rollback cannot point back to the serving worker revision", () => {
+  const record = validRecord();
+  assert.equal(evaluateStage4ReleaseAcceptance(record).pass, true, "distinct rollback baseline");
+  record.deployment.worker.rollback_target = record.deployment.worker.revision;
+  let result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.pass, false, "self-rollback must fail");
+  assert.ok(result.failures.some((failure) => failure.includes("rollback target must differ")));
+
+  record.deployment.worker.rollback_target = `  ${record.deployment.worker.revision}  `;
+  result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.pass, false, "whitespace must not disguise a self-rollback");
+
+  record.deployment.worker.rollback_target = "fixlist-standard150-worker-00122-old";
+  assert.equal(evaluateStage4ReleaseAcceptance(record).pass, true, "distinct rollback remains allowed");
+});
+
 test("composition does not short-circuit simultaneous cross-family regressions", () => {
   const record = validRecord();
   assert.equal(evaluateStage4ReleaseAcceptance(record).pass, true, "positive composed control");
@@ -465,6 +481,7 @@ test("composition does not short-circuit simultaneous cross-family regressions",
   record.acceptance.cohort.per_owner_claim_budget = 1;
   record.acceptance.rescan.pages_crawled = 151;
   record.acceptance.reload.observed_at = "2026-09-19T20:09:59Z";
+  record.deployment.worker.rollback_target = record.deployment.worker.revision;
 
   const result = evaluateStage4ReleaseAcceptance(record);
   assert.equal(result.status, "failed");
@@ -476,5 +493,6 @@ test("composition does not short-circuit simultaneous cross-family regressions",
     "per-owner claim budget",
     "rescan pages_crawled",
     "reload observation precedes accepted scan",
+    "rollback target must differ from serving worker revision",
   ]) assert.ok(result.failures.some((failure) => failure.includes(reason)), reason);
 });

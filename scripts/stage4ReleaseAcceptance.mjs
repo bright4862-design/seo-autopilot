@@ -206,21 +206,42 @@ export function evaluateStage4ReleaseAcceptance(record) {
     "customer acceptance fingerprint does not match frozen source");
 
   const reload = record.acceptance?.reload || {};
+  // The service-role ScanRun holds the authority HMAC; the independently
+  // verifying customer reader deliberately never exposes its proof bytes.
+  // Consume an identity-only extract of the sanitized V9 response instead
+  // of copying the stored HMAC into a fictional customer-reload field.
+  const customer = reload.customer_result || {};
   add(failures, time(reload.observed_at) !== null, "reload observation timestamp missing");
   add(failures, observedAfter(reload.observed_at, scan.observed_at),
     "reload observation precedes accepted scan");
   add(failures, hasReceipt(reload.evidence_reference), "reload evidence reference missing");
-  add(failures, clean(reload.requested_scan_id) === scanId && clean(reload.loaded_scan_id) === scanId,
+  add(failures, customer.success === true, "customer reload response not successful");
+  add(failures, clean(reload.requested_scan_id) === scanId
+    && clean(customer.scan_id) === scanId && clean(customer.run?.id) === scanId,
     "exact scan_id reload did not load the same scan");
-  add(failures, clean(reload.fix_list_id) === clean(scan.fix_list_id), "reload returned a different FixList");
-  add(failures, clean(reload.authority_proof) === clean(scan.authority_proof), "reload authority proof changed");
-  // Echoing the original HMAC string and IDs does not prove that the independent
-  // customer reader verified saved authority. Preview access takes another path.
-  add(failures, clean(reload.access) === "full",
+  add(failures, clean(customer.fix_list_id) === clean(scan.fix_list_id)
+    && clean(customer.fixList?.id) === clean(scan.fix_list_id)
+    && clean(customer.fixList?.scan_run_id) === scanId,
+    "reload returned a different FixList");
+  add(failures, Boolean(clean(scan.project_id))
+    && clean(customer.run?.project_id) === clean(scan.project_id)
+    && clean(customer.fixList?.project_id) === clean(scan.project_id),
+    "customer reload project does not match persisted ScanRun");
+  add(failures, clean(customer.run?.status) === "complete"
+    && clean(customer.run?.beta_revision_fingerprint) === RELEASE_FINGERPRINT,
+    "customer reload is not the completed current-release result");
+  // Proof bytes must stay in private persistence evidence, not in a reported
+  // owner-facing response; no copied proof may count as reader verification.
+  add(failures, !Object.hasOwn(reload, "authority_proof")
+    && !Object.hasOwn(customer, "authority_proof")
+    && !Object.hasOwn(customer.run || {}, "authority_proof")
+    && !Object.hasOwn(customer.fixList || {}, "authority_proof"),
+    "customer reload must not echo private persisted proof");
+  add(failures, clean(customer.access) === "full",
     "customer reload did not return full-access FixList");
-  add(failures, reload.authority_verified === true,
+  add(failures, customer.authority_verified === true,
     "customer reload did not verify full signed authority");
-  add(failures, reload.release_contract_current === true,
+  add(failures, customer.release_contract_current === true,
     "customer reload did not verify current release contract");
 
   const history = record.acceptance?.history || {};

@@ -31,6 +31,8 @@ def _target_check(target: str, confirmation: str) -> subprocess.CompletedProcess
     program = "\n".join([
         "set -euo pipefail",
         "gcloud() { return 0; }",
+        "GCP_REGION=test-region",
+        "GCP_PROJECT=test-project",
         f"TARGET_REVISION='{target}'",
         f"CONFIRM='{confirmation}'",
         _shell_function("require_confirmation"),

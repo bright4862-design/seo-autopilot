@@ -214,6 +214,14 @@ export function evaluateStage4ReleaseAcceptance(record) {
     "exact scan_id reload did not load the same scan");
   add(failures, clean(reload.fix_list_id) === clean(scan.fix_list_id), "reload returned a different FixList");
   add(failures, clean(reload.authority_proof) === clean(scan.authority_proof), "reload authority proof changed");
+  // Echoing the original HMAC string and IDs does not prove that the independent
+  // customer reader verified saved authority. Preview access takes another path.
+  add(failures, clean(reload.access) === "full",
+    "customer reload did not return full-access FixList");
+  add(failures, reload.authority_verified === true,
+    "customer reload did not verify full signed authority");
+  add(failures, reload.release_contract_current === true,
+    "customer reload did not verify current release contract");
 
   const history = record.acceptance?.history || {};
   const historyIds = Array.isArray(history.scan_ids) ? history.scan_ids.map(clean) : [];

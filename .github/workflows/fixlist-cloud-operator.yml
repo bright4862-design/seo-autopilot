@@ -44,9 +44,9 @@ on:
           - apply-scanrun-comparison-evidence
           - rollback-scanrun-comparison-evidence
       revision:
-        description: "Exact Cloud Run revision for promote/rollback/activate. Prefilled for the currently verified Standard 150 worker candidate."
+        description: "Explicit Cloud Run revision for target-specific operations; select from fresh independently verified evidence. No prefilled revision."
         required: false
-        default: "fixlist-standard150-worker-00011-v7m"
+        default: ""
         type: string
       confirm:
         description: "Exact operation confirmation. V8 preflight: READONLY-BASE44-V8-PREFLIGHT:<main-sha>. Schema apply: APPLY-SCANRUN-COMPARISON-EVIDENCE:<main-sha>:<generation>. Schema rollback: ROLLBACK-SCANRUN-COMPARISON-EVIDENCE:<main-sha>:<generation>. Rollback when the row scan cannot finish: ROLLBACK-SCANRUN-COMPARISON-EVIDENCE-UNVERIFIED-ROWS:<main-sha>:<generation>."

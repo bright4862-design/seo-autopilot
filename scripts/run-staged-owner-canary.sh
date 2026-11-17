@@ -114,7 +114,7 @@ function safeInteger(value) { return Number.isInteger(value) && value >= 0; }
 // The V9 launch response marks idempotent recovery (including terminal rows) as
 // accepted:true. Recovery is valuable, but it is not a fresh owner canary.
 function freshAdmissionClaim(accepted) {
-  return accepted?.replayed === false && accepted?.replay_reason === '';
+  return accepted?.replayed === false && accepted?.replay_reason === 'server_admitted';
 }
 function verifiedCustomerReopen(reopened, original, scanId, projectId, fingerprint) {
   const initialFixListId = String(original?.fix_list_id || '');

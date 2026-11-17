@@ -55,7 +55,7 @@ const base44={auth:{me:async()=>{track('auth.me');return{id:scenario==='wrongOwn
 BusinessProject:{get:async(id)=>{track('BusinessProject.get',id);return{id,owner_user_id:scenario==='wrongProject'?'other_123':owner,website_url:url};},create:denied,update:denied},
 Access:{filter:async(query)=>{track('Access.filter',query);return scenario==='duplicateGrant'?[grant,{...grant,id:'access_456'}]:[grant];},create:denied,update:denied},
 ScanRun:{get:async(id)=>{track('ScanRun.get',id);return run;},create:denied,update:denied}
-},functions:{invoke:async(name,payload)=>{track(name,payload);if(name==='${launchRoute}')return{data:{success:true,accepted:true,scan_id:run.id,scan_mode:'standard_150',page_cap:150,pipeline_mode:scenario==='monolith'?'monolith':'staged'}};if(name==='${resultRoute}'){ const fixListId='fixlist_123456'; const isReopen=payload?.action==='get'; return {data:{success:true,access:'full',scan_id:run.id,fix_list_id:isReopen&&scenario==='reopenMismatch'?'fixlist_foreign':fixListId,authority_verified:true,release_contract_current:true,run:projected,fixList:{id:fixListId,scan_run_id:run.id,project_id:project}}}; }throw new Error('Unexpected function');}}};
+},functions:{invoke:async(name,payload)=>{track(name,payload);if(name==='${launchRoute}')return{data:{success:true,accepted:true,replayed:scenario==='replayed'||scenario==='replayedRecovered',replay_reason:scenario==='replayed'?'request_replay':scenario==='replayedRecovered'?'request_replay_recovered':scenario==='unmarked'?'':'server_admitted',scan_id:run.id,scan_mode:'standard_150',page_cap:150,pipeline_mode:scenario==='monolith'?'monolith':'staged'}};if(name==='${resultRoute}'){ const fixListId='fixlist_123456'; const isReopen=payload?.action==='get'; return {data:{success:true,access:'full',scan_id:run.id,fix_list_id:isReopen&&scenario==='reopenMismatch'?'fixlist_foreign':fixListId,authority_verified:true,release_contract_current:true,run:projected,fixList:{id:fixListId,scan_run_id:run.id,project_id:project}}}; }throw new Error('Unexpected function');}}};
 const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
 await new AsyncFunction('base44',readFileSync(0,'utf8'))(base44);
 `);
@@ -79,6 +79,21 @@ await new AsyncFunction('base44',readFileSync(0,'utf8'))(base44);
         calls:existsSync(trace)?readFileSync(trace,'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)):[]};
     },
   };
+}
+
+for (const [scenario, description] of [
+  ['replayed', 'terminal idempotency replay'],
+  ['replayedRecovered', 'recovered idempotency replay'],
+  ['unmarked', 'unmarked browser-row admission response'],
+]) {
+  test('owner canary refuses '+description+' before polling a saved result', t => {
+    const result=fixture(t).run(scenario);
+    assert.equal(result.status,1);
+    assert.equal(result.report.acceptance_verified,false);
+    assert.equal(result.report.failure_code,'canary_fresh_admission_unverified');
+    assert.equal(result.calls.filter(row=>row.name===launchRoute).length,1);
+    assert.equal(result.calls.filter(row=>row.name===resultRoute).length,0);
+  });
 }
 
 test('canary refuses absent exact one-scan confirmation before any CLI call', t => {

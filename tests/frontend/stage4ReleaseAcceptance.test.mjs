@@ -424,7 +424,7 @@ test("a linked rescan needs a second fresh claim for the same owner", () => {
     if (perOwner === undefined) delete record.acceptance.cohort.per_owner_claim_budget;
     else record.acceptance.cohort.per_owner_claim_budget = perOwner;
     const result = evaluateStage4ReleaseAcceptance(record);
-    assert.equal(result.status, "failed", \`total=\${total}, perOwner=\${perOwner}\`);
+    assert.equal(result.status, "failed", `total=${total}, perOwner=${perOwner}`);
     assert.ok(result.failures.some((value) => value.includes(fragment)));
   }
   const spare = validRecord();

@@ -174,6 +174,10 @@ wait_for_empty_feeders() {
 
 status_command() {
   local state count first origin
+  # Status is a read-only inventory, never a release-acceptance verdict.
+  # Spell out which checks actually ran so a green workflow cannot be
+  # mistaken for authenticated worker, Base44, or customer-readback proof.
+  local candidate_scope="not_requested" infra_scope="not_checked" gcp_intake_scope="not_verified"
   describe_worker
   origin="$("${GUARD[@]}" origin "$WORK/service.json")"
   state="$(queue_state "$STAGE_QUEUE")"
@@ -185,12 +189,15 @@ status_command() {
     echo "STAGED_CANDIDATE_CONFIG $found"
     target="$(sed -n 's/.*target=\([^ ]*\).*/\1/p' <<< "$found")"
     verify_infra "$state" "$target" "$origin" "$first"
+    candidate_scope="configuration_only"
+    infra_scope="verified"
   fi
   if describe_gateway && "${GUARD[@]}" intake-disabled "$WORK/service.json" "$WORK/gateway-revision.json" "$WORK"/revision-*.json; then
-    :
+    gcp_intake_scope="disabled"
   else
     echo "STAGED_INTAKE_ENABLED somewhere GCP can read (see refusal above); Base44 is not readable from here."
   fi
+  echo "STAGED_QUEUE_STATUS_SCOPE candidate=$candidate_scope infrastructure=$infra_scope gcp_intake=$gcp_intake_scope worker_runtime=not_checked base44_intake=not_checked release_authorization=not_evaluated"
 }
 
 require_paused_and_empty() {

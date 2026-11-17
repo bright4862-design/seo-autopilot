@@ -63,6 +63,13 @@ function time(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+// Internal chronology only: timestamps are not themselves authenticated receipts.
+function observedAfter(later, earlier, strict = false) {
+  const late = time(later);
+  const early = time(earlier);
+  return late !== null && early !== null && (strict ? late > early : late >= early);
+}
+
 function isSha(value, width) {
   return new RegExp(`^[a-f0-9]{${width}}$`).test(clean(value));
 }
@@ -167,8 +174,13 @@ export function evaluateStage4ReleaseAcceptance(record) {
 
   const cohort = record.acceptance?.cohort || {};
   add(failures, clean(cohort.mode) === "acceptance_only", "acceptance cohort was not acceptance_only");
-  add(failures, Number.isInteger(cohort.total_claim_budget) && cohort.total_claim_budget > 0 && cohort.total_claim_budget <= 3,
-    "acceptance cohort claim budget is missing or unbounded");
+  // Baseline scan and its linked rescan each require a fresh owner claim.
+  // Completing a scan does not refund its admission quota.
+  add(failures, Number.isInteger(cohort.total_claim_budget) && cohort.total_claim_budget >= 2 && cohort.total_claim_budget <= 3,
+    "acceptance cohort total claim budget cannot cover baseline and rescan");
+  add(failures, Number.isInteger(cohort.per_owner_claim_budget) && cohort.per_owner_claim_budget >= 2
+    && cohort.per_owner_claim_budget <= cohort.total_claim_budget,
+    "acceptance cohort per-owner claim budget cannot cover baseline and rescan");
   add(failures, cohort.public_claims_closed === true, "public claims were not closed during bounded acceptance");
   add(failures, hasReceipt(cohort.activation_reference), "acceptance-only activation receipt missing");
 
@@ -191,6 +203,8 @@ export function evaluateStage4ReleaseAcceptance(record) {
 
   const reload = record.acceptance?.reload || {};
   add(failures, time(reload.observed_at) !== null, "reload observation timestamp missing");
+  add(failures, observedAfter(reload.observed_at, scan.observed_at),
+    "reload observation precedes accepted scan");
   add(failures, hasReceipt(reload.evidence_reference), "reload evidence reference missing");
   add(failures, clean(reload.requested_scan_id) === scanId && clean(reload.loaded_scan_id) === scanId,
     "exact scan_id reload did not load the same scan");
@@ -200,6 +214,8 @@ export function evaluateStage4ReleaseAcceptance(record) {
   const history = record.acceptance?.history || {};
   const historyIds = Array.isArray(history.scan_ids) ? history.scan_ids.map(clean) : [];
   add(failures, time(history.observed_at) !== null, "history observation timestamp missing");
+  add(failures, observedAfter(history.observed_at, scan.observed_at),
+    "history observation precedes accepted scan");
   add(failures, hasReceipt(history.evidence_reference), "history evidence reference missing");
   add(failures, history.owner_scoped === true, "history is not verified owner-scoped");
   add(failures, historyIds.includes(scanId), "history does not include the exact acceptance scan_id");
@@ -207,12 +223,21 @@ export function evaluateStage4ReleaseAcceptance(record) {
   const rescan = record.acceptance?.rescan || {};
   const rescanId = clean(rescan.scan_id);
   add(failures, time(rescan.observed_at) !== null, "rescan observation timestamp missing");
+  add(failures, observedAfter(rescan.observed_at, scan.observed_at, true),
+    "rescan observation must follow accepted scan");
   add(failures, hasReceipt(rescan.evidence_reference), "rescan evidence reference missing");
   add(failures, Boolean(rescanId) && rescanId !== scanId, "rescan scan_id missing or reused");
   add(failures, clean(rescan.parent_scan_id) === scanId, "rescan is not linked to the accepted baseline scan");
   add(failures, clean(rescan.normalized_domain) === clean(scan.normalized_domain) && Boolean(clean(scan.normalized_domain)),
     "rescan domain does not match acceptance baseline");
   add(failures, clean(rescan.status) === "complete", "rescan did not complete");
+  add(failures, clean(rescan.mode) === "standard_150", "rescan was not Standard 150");
+  add(failures, Number.isInteger(rescan.pages_crawled) && rescan.pages_crawled > 0 && rescan.pages_crawled <= 150,
+    "rescan pages_crawled is outside Standard 150 bounds");
+  add(failures, isSha(rescan.authority_proof, 64), "rescan authority proof missing or invalid");
+  add(failures, clean(rescan.authority_proof) !== clean(scan.authority_proof), "rescan reused baseline authority proof");
+  add(failures, Boolean(clean(rescan.fix_list_id)), "rescan FixList id missing");
+  add(failures, clean(rescan.source_sha) === sha, "rescan source does not match merged SHA");
   add(failures, ["improved", "unchanged", "regressed"].includes(clean(rescan.comparison)), "rescan comparison result missing");
   add(failures, rescan.comparison_evidence_verified === true, "rescan comparison evidence is not verified");
 

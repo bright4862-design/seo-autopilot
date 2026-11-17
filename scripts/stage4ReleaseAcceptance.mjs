@@ -167,6 +167,10 @@ export function evaluateStage4ReleaseAcceptance(record) {
   add(failures, Number(worker.traffic_percent) === 100, "worker is not at 100% traffic");
   add(failures, Boolean(clean(worker.revision)), "worker revision missing");
   add(failures, Boolean(clean(worker.rollback_target)), "rollback target missing");
+  // A rollback to the same 100%-serving revision is not an available recovery path.
+  add(failures, !clean(worker.revision) || !clean(worker.rollback_target)
+    || clean(worker.rollback_target) !== clean(worker.revision),
+    "rollback target must differ from serving worker revision");
   add(failures, worker.rollback_ready === true, "rollback path is not verified ready");
   add(failures, worker.private_scan_job_unauth_status === 403, "private /scan-job boundary is not verified 403");
   add(failures, hasReceipt(worker.promotion_reference), "worker promotion receipt missing");

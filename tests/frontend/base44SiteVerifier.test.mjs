@@ -94,7 +94,9 @@ function sandbox(t, routes) {
 }
 
 const page = `<!doctype html><html><head><script type="module" src="${ASSET}"></script></head><body></body></html>`;
-const bundle = (sha) => `(()=>{window.__FIXLIST_SOURCE_SHA__="${sha}";})();`;
+const ROUTE_V8 = 'FIXLIST_SELECTED_SCAN_ROUTES_V8_V1';
+const ROUTE_V9 = 'FIXLIST_SELECTED_SCAN_ROUTES_V9_V1';
+const bundle = (sha, markers = [ROUTE_V8]) => `(()=>{window.__FIXLIST_SOURCE_SHA__="${sha}";window.__FIXLIST_SCAN_ROUTE_MARKER__="${markers.join('|')}";})();`;
 const servingSite = (origin, sha = SHA) => [
   ["200", `${origin}/`, page],
   ["200", `${origin}${ASSET}`, bundle(sha)],
@@ -187,4 +189,178 @@ test("both release paths still rely on the verifier's canonical defaults", () =>
   for (const source of [publish, operator]) {
     assert.doesNotMatch(source, /BASE44_URL|rich-rank-pilot-flow/, "a caller override would bring the stale-alias failure back");
   }
+});
+
+
+test("an HTML comment carrying a matching old bundle cannot certify the executing entry", (t) => {
+  const decoy = "/assets/index-decoy123.js";
+  const html = '<!doctype html><html><head><!-- ' + decoy + ' -->' +
+    '<script type="module" src="' + ASSET + '"></script></head></html>';
+  const box = sandbox(t, [
+    ["200", PUBLIC + "/", html],
+    ["200", PUBLIC + decoy, bundle(SHA)],
+    ["200", PUBLIC + ASSET, bundle(OTHER_SHA)],
+    ...servingSite(BASE44),
+  ]);
+  const result = box.run();
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /SITE SOURCE SHA MISMATCH/);
+  assert.ok(result.requests.some((url) => new URL(url).pathname === ASSET));
+  assert.ok(!result.requests.some((url) => new URL(url).pathname === decoy));
+});
+
+test("a comment-only index filename cannot certify a page with no executable module", (t) => {
+  const html = '<!doctype html><html><!-- <script type="module" src="' +
+    ASSET + '"></script> --></html>';
+  const box = sandbox(t, [
+    ["200", PUBLIC + "/", html],
+    ["200", PUBLIC + ASSET, bundle(SHA)],
+    ...servingSite(BASE44),
+  ]);
+  const result = box.run();
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /SITE_ENTRY_AMBIGUOUS_OR_MISSING/);
+  assert.ok(!result.requests.some((url) => url.includes("/assets/")));
+});
+
+test("modulepreload and classic-script decoys cannot substitute for the Vite module entry", (t) => {
+  const decoy = "/assets/index-decoy123.js";
+  for (const decoyTag of [
+    '<link rel="modulepreload" href="' + decoy + '">',
+    '<template><script type="module" src="' + decoy + '"></script></template>',
+  ]) {
+    const html = '<!doctype html><head>' + decoyTag +
+      '<script src="' + ASSET + '" crossorigin type="module"></script></head>';
+    const box = sandbox(t, [
+      ["200", PUBLIC + "/", html],
+      ["200", PUBLIC + decoy, bundle(SHA)],
+      ["200", PUBLIC + ASSET, bundle(OTHER_SHA)],
+      ...servingSite(BASE44),
+    ]);
+    const result = box.run();
+    assert.equal(result.status, 1, decoyTag + " " + result.stderr);
+    assert.ok(result.requests.some((url) => new URL(url).pathname === ASSET));
+    assert.ok(!result.requests.some((url) => new URL(url).pathname === decoy));
+  }
+});
+
+test("unattested scripts fail before any bundle fetch even with a correct SHA and V8 marker", (t) => {
+  for (const stray of [
+    '<script src="/assets/foreign.js"></script>',
+    '<script src="/assets/foreign.js" defer type="text/javascript"></script>',
+    '<script type="application/javascript">window.unverified=true</script>',
+    '<script>window.unverified=true</script>',
+    '<script type="importmap">{"imports":{"x":"/assets/foreign.js"}}</script>',
+  ]) {
+    for (const before of [true, false]) {
+      const html = '<!doctype html><head>' +
+        (before ? stray : '') + '<script type="module" src="' + ASSET + '"></script>' +
+        (before ? '' : stray) + '</head>';
+      const box = sandbox(t, [
+        ["200", PUBLIC + "/", html],
+        ["200", PUBLIC + ASSET, bundle(SHA)],
+        ...servingSite(BASE44),
+      ]);
+      const result = box.run();
+      assert.equal(result.status, 1, stray + ": " + result.stderr);
+      assert.match(result.stderr, /SITE_UNATTESTED_SCRIPT/);
+      assert.ok(!result.requests.some((url) => new URL(url).pathname.startsWith("/assets/")),
+        "unattested code must be rejected before any release-bundle probe");
+    }
+  }
+});
+
+test("one Base44 inline analytics module and non-executable structured data remain compatible", (t) => {
+  const html = '<!doctype html><script type="module" src="' + ASSET + '"></script>' +
+    '<script type="module">trackPageView()</script>' +
+    '<script type="application/ld+json">{"@context":"https://schema.org"}</script>' +
+    '<script type="application/json">{"page":"landing"}</script>' +
+    '<template><script src="/assets/inert.js"></script></template>';
+  const box = sandbox(t, [
+    ["200", PUBLIC + "/", html],
+    ["200", PUBLIC + ASSET, bundle(SHA)],
+    ...servingSite(BASE44),
+  ]);
+  const result = box.run();
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /BASE44_SITE_SOURCE_VERIFIED/);
+});
+
+test("an additional inline module is not silently exempted by Base44 analytics compatibility", (t) => {
+  const html = '<script type="module" src="' + ASSET + '"></script>' +
+    '<script type="module">trackPageView()</script>' +
+    '<script type="module">window.unverified=true</script>';
+  const box = sandbox(t, [
+    ["200", PUBLIC + "/", html],
+    ["200", PUBLIC + ASSET, bundle(SHA)],
+    ...servingSite(BASE44),
+  ]);
+  const result = box.run();
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /SITE_UNATTESTED_SCRIPT/);
+  assert.ok(!result.requests.some((url) => new URL(url).pathname.startsWith("/assets/")));
+});
+
+test("two executable module entries fail closed even when the first has the expected SHA", (t) => {
+  const other = "/assets/index-second123.js";
+  const html = '<!doctype html><script type="module" src="' + ASSET + '"></script>' +
+    '<script type="module" src="' + other + '"></script>';
+  const box = sandbox(t, [
+    ["200", PUBLIC + "/", html],
+    ["200", PUBLIC + ASSET, bundle(SHA)],
+    ["200", PUBLIC + other, bundle(OTHER_SHA)],
+    ...servingSite(BASE44),
+  ]);
+  const result = box.run();
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /SITE_ENTRY_AMBIGUOUS_OR_MISSING/);
+  assert.ok(!result.requests.some((url) => url.includes("/assets/")));
+});
+
+test("the parser accepts a sole real module entry with reordered attributes", (t) => {
+  const html = '<!doctype html><script src="' + ASSET + '" crossorigin type="module"></script>';
+  const box = sandbox(t, [
+    ["200", PUBLIC + "/", html],
+    ["200", PUBLIC + ASSET, bundle(SHA)],
+    ...servingSite(BASE44),
+  ]);
+  const result = box.run();
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /BASE44_SITE_SOURCE_VERIFIED/);
+});
+
+test("correct source SHA with selected V9 routes is not V8 release acceptance", (t) => {
+  const box = sandbox(t, [
+    ...servingSite(PUBLIC).map(([status, url, body]) =>
+      url.endsWith(ASSET) ? [status, url, bundle(SHA, [ROUTE_V9])] : [status, url, body]),
+    ...servingSite(BASE44),
+  ]);
+  const result = box.run();
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /SITE SCAN ROUTE GENERATION MISMATCH.*expected=V8/);
+  assert.doesNotMatch(result.stdout, /BASE44_SITE_SOURCE_VERIFIED/);
+});
+
+test("missing or contradictory selected-route markers fail closed", (t) => {
+  for (const markers of [[], [ROUTE_V8, ROUTE_V9]]) {
+    const box = sandbox(t, [
+      ...servingSite(PUBLIC).map(([status, url, body]) =>
+        url.endsWith(ASSET) ? [status, url, bundle(SHA, markers)] : [status, url, body]),
+      ...servingSite(BASE44),
+    ]);
+    const result = box.run();
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /SITE SCAN ROUTE GENERATION MISMATCH/);
+    assert.ok(result.requests.every((url) => new URL(url).host === "getfixlist.com"));
+  }
+});
+
+test("the emitted route marker and SDK invocation share one build selector", () => {
+  const selector = fs.readFileSync("src/lib/scanFunctionGeneration.js", "utf8");
+  const client = fs.readFileSync("src/api/base44Client.js", "utf8");
+  const entry = fs.readFileSync("src/main.jsx", "utf8");
+  assert.match(selector, /VITE_SCAN_FUNCTION_GENERATION/);
+  assert.match(client, /resolveScanFunctionRoute\(legacyResolved, SELECTED_SCAN_FUNCTION_GENERATION\)/);
+  assert.doesNotMatch(client, /import\.meta\.env\?\.VITE_SCAN_FUNCTION_GENERATION/);
+  assert.match(entry, /value: SELECTED_SCAN_ROUTE_MARKER/);
 });

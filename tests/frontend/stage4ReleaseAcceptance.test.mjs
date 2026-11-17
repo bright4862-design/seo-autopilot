@@ -113,6 +113,38 @@ function validRecord(overrides = {}) {
   return { ...record, ...overrides };
 }
 
+test("chronological Stage-4 evidence is accepted as a shape, not as live deployment proof", () => {
+  const record = validRecord();
+  const result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.pass, true);
+  assert.equal(result.status, "pass");
+});
+
+test("same-instant customer observations may use clocks with coarse precision", () => {
+  const record = validRecord();
+  record.acceptance.reload.observed_at = record.acceptance.scan.observed_at;
+  record.acceptance.history.observed_at = record.acceptance.scan.observed_at;
+  record.acceptance.rescan.observed_at = record.acceptance.scan.observed_at;
+  assert.equal(evaluateStage4ReleaseAcceptance(record).pass, true);
+});
+
+test("a historical observation cannot be relabeled as a post-scan customer proof", () => {
+  for (const [field, message] of [
+    ["reload", "customer reload was observed before its acceptance scan"],
+    ["history", "customer history was observed before its acceptance scan"],
+    ["rescan", "customer rescan was observed before its acceptance scan"],
+  ]) {
+    const record = validRecord();
+    // All identities, receipts, statuses, and claimed provenance remain valid.
+    // The sole falsifier is the observation occurring BEFORE the scan.
+    record.acceptance[field].observed_at = "2026-09-19T20:09:59Z";
+    const result = evaluateStage4ReleaseAcceptance(record);
+    assert.equal(result.pass, false, field);
+    assert.equal(result.status, "failed", field);
+    assert.ok(result.failures.includes(message), field);
+  }
+});
+
 test("source release manifest supplies all six scanner roles at one route generation", () => {
   assert.equal(EXPECTED_SCANNER_FUNCTIONS.length, SCANNER_RUNTIME_ROLES.length);
   assert.equal(SCANNER_RUNTIME_ROLES.length, 6);

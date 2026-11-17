@@ -45,6 +45,14 @@ function time(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+// Evidence observations are allowed to share a timestamp at a coarse clock
+// resolution, but a reader cannot precede the scan it claims to read.
+function observedNotBefore(earlier, later) {
+  const a = time(earlier);
+  const b = time(later);
+  return a !== null && b !== null && b >= a;
+}
+
 function isSha(value, width) {
   return new RegExp(`^[a-f0-9]{${width}}$`).test(clean(value));
 }
@@ -165,6 +173,16 @@ export function evaluateStage4ReleaseAcceptance(record) {
   add(failures, clean(rescan.status) === "complete", "rescan did not complete");
   add(failures, ["improved", "unchanged", "regressed"].includes(clean(rescan.comparison)), "rescan comparison result missing");
   add(failures, rescan.comparison_evidence_verified === true, "rescan comparison evidence is not verified");
+
+  // Receipt references and Boolean flags do not prove temporal causality. In
+  // particular, a previously observed reload/history/rescan must not qualify
+  // as evidence collected after the accepted scan.
+  add(failures, observedNotBefore(scan.observed_at, reload.observed_at),
+    "customer reload was observed before its acceptance scan");
+  add(failures, observedNotBefore(scan.observed_at, history.observed_at),
+    "customer history was observed before its acceptance scan");
+  add(failures, observedNotBefore(scan.observed_at, rescan.observed_at),
+    "customer rescan was observed before its acceptance scan");
 
   add(failures, record.acceptance?.closed_and_drained === true, "acceptance cohort was not closed and drained after verification");
   add(failures, hasReceipt(record.acceptance?.close_drain_reference), "acceptance close/drain receipt missing");

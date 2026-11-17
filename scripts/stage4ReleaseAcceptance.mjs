@@ -5,7 +5,9 @@
 // when exact-source, rollback, authority, reload/history, or rescan evidence is
 // absent. Every live gate also carries a traceable receipt/reference; a claimed
 // state with no observable receipt is not enough to establish release evidence.
+import { readFileSync } from "node:fs";
 import { RELEASE_FUNCTIONS } from "./base44_release_manifest.mjs";
+import { RELEASE_FINGERPRINT, RELEASE_COMPONENT_VERSIONS } from "../src/lib/generatedReleaseContract.js";
 
 export const STAGE4_RELEASE_RECORD_VERSION = "stage4_exact_source_customer_acceptance_v1";
 export const SCANNER_RUNTIME_ROLES = Object.freeze([
@@ -36,6 +38,22 @@ const SOURCE_RUNTIME_CONTRACT = scannerRuntimeContract(RELEASE_FUNCTIONS);
 export const EXPECTED_SCANNER_FUNCTIONS = Object.freeze(SOURCE_RUNTIME_CONTRACT.functions);
 export const EXPECTED_SCANNER_ROUTE_GENERATION = SOURCE_RUNTIME_CONTRACT.route_generation;
 
+// Each routed Base44 package already carries a source-generated SHA-256 build ID.
+// A nonempty runtime label is not evidence that the deployed package matches.
+function sourcePackageBuildId(name) {
+  if (!/^[A-Za-z][A-Za-z0-9]*$/.test(name)) return "";
+  try {
+    const source = readFileSync(new URL(`../base44/functions/${name}/generatedBuildId.js`, import.meta.url), "utf8");
+    return source.match(/^export const FUNCTION_BUILD_ID = "([0-9a-f]{64})";$/m)?.[1] || "";
+  } catch {
+    return "";
+  }
+}
+
+export const EXPECTED_SCANNER_BUILD_IDS = Object.freeze(Object.fromEntries(
+  EXPECTED_SCANNER_FUNCTIONS.map((name) => [name, sourcePackageBuildId(name)]),
+));
+
 function clean(value) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -51,6 +69,15 @@ function isSha(value, width) {
 
 function hasReceipt(value) {
   return clean(value).length >= 8;
+}
+
+// Exact generated release map, not a subset or a source-SHA-only assertion.
+function matchesSourceComponentVersions(candidate) {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return false;
+  const expected = Object.keys(RELEASE_COMPONENT_VERSIONS);
+  return Object.keys(candidate).length === expected.length
+    && expected.every((key) => Object.hasOwn(candidate, key)
+      && candidate[key] === RELEASE_COMPONENT_VERSIONS[key]);
 }
 
 function add(failures, condition, message) {
@@ -80,8 +107,13 @@ export function evaluateStage4ReleaseAcceptance(record) {
   add(failures, hasReceipt(record.review?.evidence_reference), "independent review evidence reference missing");
   add(failures, clean(record.ci?.conclusion) === "success", "exact-source CI is not successful");
   add(failures, clean(record.ci?.sha) === sha, "CI SHA does not match merged source SHA");
-  add(failures, Number.isInteger(record.ci?.run_id) && record.ci.run_id > 0, "exact-source CI run id missing");
-  add(failures, /^https:\/\/github\.com\/[^/]+\/[^/]+\/actions\/runs\/\d+$/.test(clean(record.ci?.run_url)), "exact-source CI run URL invalid");
+  const ciRunId = record.ci?.run_id;
+  const validCiRunId = Number.isSafeInteger(ciRunId) && ciRunId > 0;
+  add(failures, validCiRunId, "exact-source CI run id missing or unsafe");
+  add(failures,
+    validCiRunId && clean(record.ci?.run_url)
+      === `https://github.com/bright4862-design/seo-autopilot/actions/runs/${ciRunId}`,
+    "exact-source CI run URL invalid or not bound to run id/repository");
   add(failures, record.schema?.named_schema_parity === true, "named schema parity is not verified");
   add(failures, hasReceipt(record.schema?.evidence_reference), "named schema parity evidence reference missing");
 
@@ -94,6 +126,14 @@ export function evaluateStage4ReleaseAcceptance(record) {
   add(failures, hosts.some((host) => host.endsWith(".base44.app")), "Base44-hosted source identity not verified");
 
   const functions = Array.isArray(record.deployment?.functions) ? record.deployment.functions : [];
+  const functionNames = functions.map((fn) => clean(fn?.name));
+  const expectedNames = new Set(EXPECTED_SCANNER_FUNCTIONS);
+  // A Map silently overwrites duplicate names. A valid final row must not conceal
+  // a conflicting runtime observation, nor may an extra V8/V9 route be ignored.
+  add(failures, functions.length === EXPECTED_SCANNER_FUNCTIONS.length
+    && new Set(functionNames).size === functions.length
+    && functionNames.every((name) => expectedNames.has(name)),
+  "Base44 runtime identity roster must contain exactly the distinct source-declared functions");
   const byName = new Map(functions.map((fn) => [clean(fn?.name), fn]));
   for (const name of EXPECTED_SCANNER_FUNCTIONS) {
     const fn = byName.get(name);
@@ -102,12 +142,20 @@ export function evaluateStage4ReleaseAcceptance(record) {
     add(failures, fn.verified === true, `${name} runtime is not verified`);
     add(failures, clean(fn.source_sha) === sha, `${name} source does not match merged SHA`);
     add(failures, Boolean(clean(fn.runtime_build_id)), `${name} runtime_build_id missing`);
+    const expectedBuildId = EXPECTED_SCANNER_BUILD_IDS[name];
+    add(failures, /^[a-f0-9]{64}$/.test(expectedBuildId || ""), `${name} source package build ID missing or invalid`);
+    add(failures, clean(fn.runtime_build_id) === expectedBuildId,
+      `${name} runtime package build ID does not match frozen source`);
     add(failures, hasReceipt(fn.verification_reference), `${name} verification receipt missing`);
   }
 
   const worker = record.deployment?.worker || {};
   add(failures, worker.verified === true, "worker identity is not verified");
   add(failures, clean(worker.source_sha) === sha, "worker source does not match merged SHA");
+  add(failures, clean(worker.beta_revision_fingerprint) === RELEASE_FINGERPRINT,
+    "worker release fingerprint does not match frozen source");
+  add(failures, matchesSourceComponentVersions(worker.component_versions),
+    "worker component versions do not match frozen source");
   add(failures, /^sha256:[a-f0-9]{64}$/.test(clean(worker.image_digest)), "worker image digest invalid");
   add(failures, Number(worker.traffic_percent) === 100, "worker is not at 100% traffic");
   add(failures, Boolean(clean(worker.revision)), "worker revision missing");
@@ -138,6 +186,8 @@ export function evaluateStage4ReleaseAcceptance(record) {
   add(failures, isSha(scan.authority_proof, 64), "customer acceptance authority proof invalid");
   add(failures, Boolean(clean(scan.fix_list_id)), "customer acceptance FixList id missing");
   add(failures, clean(scan.source_sha) === sha, "customer acceptance source does not match merged SHA");
+  add(failures, clean(scan.beta_revision_fingerprint) === RELEASE_FINGERPRINT,
+    "customer acceptance fingerprint does not match frozen source");
 
   const reload = record.acceptance?.reload || {};
   add(failures, time(reload.observed_at) !== null, "reload observation timestamp missing");

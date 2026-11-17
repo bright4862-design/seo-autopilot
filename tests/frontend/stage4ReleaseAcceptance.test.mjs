@@ -92,6 +92,9 @@ function validRecord(overrides = {}) {
         loaded_scan_id: "scan-acceptance-1",
         fix_list_id: "fix-list-1",
         authority_proof: PROOF,
+        access: "full",
+        authority_verified: true,
+        release_contract_current: true,
       },
       history: {
         observed_at: "2026-09-19T20:12:00Z",
@@ -495,4 +498,27 @@ test("composition does not short-circuit simultaneous cross-family regressions",
     "reload observation precedes accepted scan",
     "rollback target must differ from serving worker revision",
   ]) assert.ok(result.failures.some((failure) => failure.includes(reason)), reason);
+});
+
+test("matching ScanRun, FixList and HMAC text cannot masquerade as a verified full customer read-back", () => {
+  assert.equal(evaluateStage4ReleaseAcceptance(validRecord()).pass, true, "synthetic baseline");
+
+  for (const [field, bad, message] of [
+    ["access", "preview", "customer reload did not return full-access FixList"],
+    ["authority_verified", false, "customer reload did not verify full signed authority"],
+    ["release_contract_current", false, "customer reload did not verify current release contract"],
+  ]) {
+    const record = validRecord();
+    // The old release gate accepted these: IDs and serialized authority_proof
+    // still match, but the customer reader either took the preview path or
+    // did not attest an independently verified current-release full result.
+    record.acceptance.reload[field] = bad;
+    let result = evaluateStage4ReleaseAcceptance(record);
+    assert.equal(result.pass, false, field);
+    assert.ok(result.failures.includes(message), field);
+    delete record.acceptance.reload[field];
+    result = evaluateStage4ReleaseAcceptance(record);
+    assert.equal(result.pass, false, `missing ${field}`);
+    assert.ok(result.failures.includes(message), `missing ${field}`);
+  }
 });

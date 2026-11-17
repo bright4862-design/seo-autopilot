@@ -12,15 +12,16 @@ import {
 
 import { RELEASE_FINGERPRINT, RELEASE_COMPONENT_VERSIONS } from "../../src/lib/generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID as V9_START_BUILD_ID } from "../../base44/functions/startStandardScanJobV9/generatedBuildId.js";
-import { buildCustomerProjection } from "../../base44/functions/getCustomerScanResultV9/projection.js";
+import { buildCustomerProjection as buildPublicV8Projection } from "../../base44/functions/getCustomerScanResultV8/projection.js";
+import { buildCustomerProjection as buildStagedV9Projection } from "../../base44/functions/getCustomerScanResultV9/projection.js";
 
 const SHA = "a".repeat(40);
 const PROOF = "b".repeat(64);
 const DIGEST = `sha256:${"c".repeat(64)}`;
 const RECEIPT = "receipt:verified-stage4-evidence";
 
-function actualCustomerProjection() {
-  return buildCustomerProjection({
+function actualCustomerProjection(projection = buildPublicV8Projection) {
+  return projection({
     // Construct a real, sanitized V9 customer response from synthetic persisted
     // rows. The stored HMAC is deliberately absent from the reader projection.
     run: {
@@ -535,14 +536,19 @@ test("matching ScanRun, FixList and HMAC text cannot masquerade as a verified fu
   }
 });
 
-test("V9 sanitized customer projection passes without exposing stored authority proof", () => {
-  const response = actualCustomerProjection();
-  for (const row of [response, response.run, response.fixList]) {
-    assert.equal(Object.hasOwn(row, "authority_proof"), false);
+test("public V8 and staged V9 sanitized projections both omit the stored authority proof", () => {
+  for (const [generation, builder] of [["public V8", buildPublicV8Projection], ["staged V9", buildStagedV9Projection]]) {
+    const response = actualCustomerProjection(builder);
+    for (const row of [response, response.run, response.fixList]) {
+      assert.equal(Object.hasOwn(row, "authority_proof"), false, generation);
+    }
+    const record = validRecord();
+    record.acceptance.reload.customer_result = response;
+    assert.equal(evaluateStage4ReleaseAcceptance(record).pass, true, generation);
   }
   const record = validRecord();
   assert.equal(Object.hasOwn(record.acceptance.reload, "authority_proof"), false);
-  assert.equal(evaluateStage4ReleaseAcceptance(record).pass, true, "sanitized V9 baseline");
+  assert.equal(evaluateStage4ReleaseAcceptance(record).pass, true, "sanitized public V8 baseline");
 
   record.acceptance.reload.authority_proof = PROOF;
   let result = evaluateStage4ReleaseAcceptance(record);

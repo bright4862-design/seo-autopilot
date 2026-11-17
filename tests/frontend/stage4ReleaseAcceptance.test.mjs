@@ -65,7 +65,8 @@ function validRecord(overrides = {}) {
     acceptance: {
       cohort: {
         mode: "acceptance_only",
-        total_claim_budget: 1,
+        total_claim_budget: 2,
+        per_owner_claim_budget: 2,
         public_claims_closed: true,
         activation_reference: `${RECEIPT}:cohort`,
       },
@@ -105,6 +106,11 @@ function validRecord(overrides = {}) {
         parent_scan_id: "scan-acceptance-1",
         normalized_domain: "example.com",
         status: "complete",
+        mode: "standard_150",
+        pages_crawled: 150,
+        authority_proof: "d".repeat(64),
+        fix_list_id: "fix-list-2",
+        source_sha: SHA,
         comparison: "improved",
         comparison_evidence_verified: true,
       },
@@ -357,4 +363,91 @@ test("CI evidence URL must identify the same run in the source repository", () =
     assert.equal(result.pass, false, description);
     assert.ok(result.failures.some((failure) => failure.includes("CI run")), description);
   }
+});
+
+
+// Composition on #496: full seven-draft matrix, sourced from #458/#459/#470.
+test("independently persisted rescan identity is required even if comparison is verified", () => {
+  const baseline = evaluateStage4ReleaseAcceptance(validRecord());
+  assert.equal(baseline.status, "pass", JSON.stringify(baseline.failures));
+
+  const cases = [
+    ["mode", "standard_500", "rescan was not Standard 150"],
+    ["pages_crawled", 151, "rescan pages_crawled"],
+    ["pages_crawled", 0, "rescan pages_crawled"],
+    ["pages_crawled", 2.5, "rescan pages_crawled"],
+    ["authority_proof", "", "rescan authority proof"],
+    ["authority_proof", "not-a-proof", "rescan authority proof"],
+    ["authority_proof", PROOF, "rescan reused baseline authority proof"],
+    ["fix_list_id", "", "rescan FixList id"],
+    ["source_sha", "9".repeat(40), "rescan source"],
+  ];
+  for (const [field, invalid, reason] of cases) {
+    const record = validRecord();
+    record.acceptance.rescan[field] = invalid;
+    const result = evaluateStage4ReleaseAcceptance(record);
+    assert.equal(result.status, "failed", field);
+    assert.ok(result.failures.some((value) => value.includes(reason)), field);
+  }
+
+  const unsigned = validRecord();
+  for (const key of ["mode", "pages_crawled", "authority_proof", "fix_list_id", "source_sha"]) {
+    delete unsigned.acceptance.rescan[key];
+  }
+  const result = evaluateStage4ReleaseAcceptance(unsigned);
+  assert.equal(result.status, "failed");
+  assert.equal(result.failures.filter((value) => value.startsWith("rescan ")).length, 5);
+});
+
+test("a distinct, valid, bounded Standard 150 rescan retains the acceptance shape", () => {
+  const record = validRecord();
+  record.acceptance.rescan.scan_id = "scan-acceptance-3";
+  record.acceptance.rescan.pages_crawled = 1;
+  record.acceptance.rescan.authority_proof = "e".repeat(64);
+  record.acceptance.rescan.fix_list_id = "fix-list-3";
+  assert.equal(evaluateStage4ReleaseAcceptance(record).pass, true);
+});
+
+test("a linked rescan needs a second fresh claim for the same owner", () => {
+  assert.equal(evaluateStage4ReleaseAcceptance(validRecord()).pass, true);
+  for (const [total, perOwner, fragment] of [
+    [1, 1, "total claim budget"],
+    [2, 1, "per-owner claim budget"],
+    [2, undefined, "per-owner claim budget"],
+    [2, 3, "per-owner claim budget"],
+    [2, 1.5, "per-owner claim budget"],
+    [0, 0, "total claim budget"],
+    [4, 2, "total claim budget"],
+  ]) {
+    const record = validRecord();
+    record.acceptance.cohort.total_claim_budget = total;
+    if (perOwner === undefined) delete record.acceptance.cohort.per_owner_claim_budget;
+    else record.acceptance.cohort.per_owner_claim_budget = perOwner;
+    const result = evaluateStage4ReleaseAcceptance(record);
+    assert.equal(result.status, "failed", \`total=\${total}, perOwner=\${perOwner}\`);
+    assert.ok(result.failures.some((value) => value.includes(fragment)));
+  }
+  const spare = validRecord();
+  spare.acceptance.cohort.total_claim_budget = 3;
+  spare.acceptance.cohort.per_owner_claim_budget = 2;
+  assert.equal(evaluateStage4ReleaseAcceptance(spare).pass, true);
+});
+
+test("Stage-4 evidence refuses timestamps that reverse the scan-to-readback sequence", () => {
+  assert.equal(evaluateStage4ReleaseAcceptance(validRecord()).pass, true, "chronological control");
+  for (const [step, observedAt, message] of [
+    ["reload", "2026-09-19T20:09:59Z", "reload observation precedes accepted scan"],
+    ["history", "2026-09-19T20:09:59Z", "history observation precedes accepted scan"],
+    ["rescan", "2026-09-19T20:09:59Z", "rescan observation must follow accepted scan"],
+    ["rescan", "2026-09-19T20:10:00Z", "rescan observation must follow accepted scan"],
+  ]) {
+    const record = validRecord();
+    record.acceptance[step].observed_at = observedAt;
+    const result = evaluateStage4ReleaseAcceptance(record);
+    assert.equal(result.status, "failed", step);
+    assert.ok(result.failures.includes(message), step);
+  }
+  const offset = validRecord();
+  offset.acceptance.reload.observed_at = "2026-09-19T22:11:00+02:00";
+  assert.equal(evaluateStage4ReleaseAcceptance(offset).pass, true, "equivalent timezone");
 });

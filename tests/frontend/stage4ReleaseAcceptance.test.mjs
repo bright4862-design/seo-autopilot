@@ -12,11 +12,29 @@ import {
 
 import { RELEASE_FINGERPRINT, RELEASE_COMPONENT_VERSIONS } from "../../src/lib/generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID as V9_START_BUILD_ID } from "../../base44/functions/startStandardScanJobV9/generatedBuildId.js";
+import { buildCustomerProjection } from "../../base44/functions/getCustomerScanResultV9/projection.js";
 
 const SHA = "a".repeat(40);
 const PROOF = "b".repeat(64);
 const DIGEST = `sha256:${"c".repeat(64)}`;
 const RECEIPT = "receipt:verified-stage4-evidence";
+
+function actualCustomerProjection() {
+  return buildCustomerProjection({
+    // Construct a real, sanitized V9 customer response from synthetic persisted
+    // rows. The stored HMAC is deliberately absent from the reader projection.
+    run: {
+      id: "scan-acceptance-1", project_id: "project-acceptance-1",
+      status: "complete", scan_mode: "standard_150",
+      beta_revision_fingerprint: RELEASE_FINGERPRINT, authority_proof: PROOF,
+    },
+    fixList: {
+      id: "fix-list-1", project_id: "project-acceptance-1",
+      scan_run_id: "scan-acceptance-1", authority_proof: PROOF,
+    },
+    fixItems: [], fullAccess: true, authorityVerified: true,
+  });
+}
 
 function validRecord(overrides = {}) {
   const record = {
@@ -73,6 +91,7 @@ function validRecord(overrides = {}) {
       scan: {
         beta_revision_fingerprint: RELEASE_FINGERPRINT,
         scan_id: "scan-acceptance-1",
+        project_id: "project-acceptance-1",
         mode: "standard_150",
         submission_surface: "published_customer_ui",
         observed_at: "2026-09-19T20:10:00Z",
@@ -89,12 +108,7 @@ function validRecord(overrides = {}) {
         observed_at: "2026-09-19T20:11:00Z",
         evidence_reference: `${RECEIPT}:reload`,
         requested_scan_id: "scan-acceptance-1",
-        loaded_scan_id: "scan-acceptance-1",
-        fix_list_id: "fix-list-1",
-        authority_proof: PROOF,
-        access: "full",
-        authority_verified: true,
-        release_contract_current: true,
+        customer_result: actualCustomerProjection(),
       },
       history: {
         observed_at: "2026-09-19T20:12:00Z",
@@ -190,13 +204,13 @@ test("Standard 150 page cap and persisted authority are mandatory", () => {
 
 test("exact scan reload and owner-scoped history cannot drift to a different result", () => {
   const record = validRecord();
-  record.acceptance.reload.loaded_scan_id = "scan-other";
-  record.acceptance.reload.authority_proof = "d".repeat(64);
+  record.acceptance.reload.customer_result.run.id = "scan-other";
+  record.acceptance.reload.customer_result.fixList.scan_run_id = "scan-other";
   record.acceptance.history.scan_ids = ["scan-other"];
   const result = evaluateStage4ReleaseAcceptance(record);
   assert.equal(result.pass, false);
   assert.ok(result.failures.some((value) => value.includes("exact scan_id reload")));
-  assert.ok(result.failures.some((value) => value.includes("authority proof changed")));
+  assert.ok(result.failures.some((value) => value.includes("reload returned a different FixList")));
   assert.ok(result.failures.some((value) => value.includes("history does not include")));
 });
 
@@ -509,16 +523,52 @@ test("matching ScanRun, FixList and HMAC text cannot masquerade as a verified fu
     ["release_contract_current", false, "customer reload did not verify current release contract"],
   ]) {
     const record = validRecord();
-    // The old release gate accepted these: IDs and serialized authority_proof
-    // still match, but the customer reader either took the preview path or
-    // did not attest an independently verified current-release full result.
-    record.acceptance.reload[field] = bad;
+    // Persisted proof existence does not substitute for verified reader response.
+    record.acceptance.reload.customer_result[field] = bad;
     let result = evaluateStage4ReleaseAcceptance(record);
     assert.equal(result.pass, false, field);
     assert.ok(result.failures.includes(message), field);
-    delete record.acceptance.reload[field];
+    delete record.acceptance.reload.customer_result[field];
     result = evaluateStage4ReleaseAcceptance(record);
     assert.equal(result.pass, false, `missing ${field}`);
     assert.ok(result.failures.includes(message), `missing ${field}`);
+  }
+});
+
+test("V9 sanitized customer projection passes without exposing stored authority proof", () => {
+  const response = actualCustomerProjection();
+  for (const row of [response, response.run, response.fixList]) {
+    assert.equal(Object.hasOwn(row, "authority_proof"), false);
+  }
+  const record = validRecord();
+  assert.equal(Object.hasOwn(record.acceptance.reload, "authority_proof"), false);
+  assert.equal(evaluateStage4ReleaseAcceptance(record).pass, true, "sanitized V9 baseline");
+
+  record.acceptance.reload.authority_proof = PROOF;
+  let result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.pass, false);
+  assert.ok(result.failures.includes("customer reload must not echo private persisted proof"));
+  delete record.acceptance.reload.authority_proof;
+  record.acceptance.reload.customer_result.run.authority_proof = PROOF;
+  result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.pass, false);
+  assert.ok(result.failures.includes("customer reload must not echo private persisted proof"));
+});
+
+test("customer read-back binds scan, FixList, project and release separately", () => {
+  for (const [name, change, reason] of [
+    ["foreign customer project", r => { r.customer_result.run.project_id = "foreign"; }, "customer reload project"],
+    ["foreign FixList project", r => { r.customer_result.fixList.project_id = "foreign"; }, "customer reload project"],
+    ["foreign scan", r => { r.customer_result.run.id = "foreign"; }, "exact scan_id reload"],
+    ["foreign FixList scan", r => { r.customer_result.fixList.scan_run_id = "foreign"; }, "reload returned a different FixList"],
+    ["foreign release", r => { r.customer_result.run.beta_revision_fingerprint = "f".repeat(16); }, "completed current-release result"],
+    ["incomplete scan", r => { r.customer_result.run.status = "limited"; }, "completed current-release result"],
+    ["missing response", r => { delete r.customer_result; }, "customer reload response not successful"],
+  ]) {
+    const record = validRecord();
+    change(record.acceptance.reload);
+    const result = evaluateStage4ReleaseAcceptance(record);
+    assert.equal(result.pass, false, name);
+    assert.ok(result.failures.some(x => x.includes(reason)), name);
   }
 });

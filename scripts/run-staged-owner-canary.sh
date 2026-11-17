@@ -111,6 +111,11 @@ function body(response) { return response?.data && typeof response.data === 'obj
 function canonicalUrl(value) { try { return new URL(String(value)).href; } catch { return ''; } }
 function finitePositive(value) { return typeof value === 'number' && Number.isFinite(value) && value > 0; }
 function safeInteger(value) { return Number.isInteger(value) && value >= 0; }
+// The V9 launch response marks idempotent recovery (including terminal rows) as
+// accepted:true. Recovery is valuable, but it is not a fresh owner canary.
+function freshAdmissionClaim(accepted) {
+  return accepted?.replayed === false && accepted?.replay_reason === '';
+}
 function verifiedCustomerReopen(reopened, original, scanId, projectId, fingerprint) {
   const initialFixListId = String(original?.fix_list_id || '');
   const reopenedFixListId = String(reopened?.fix_list_id || '');
@@ -173,6 +178,7 @@ try {
     scan_mode:'standard_150', source:'staged_owner_canary',
   })));
   requireCondition(accepted?.success === true && accepted?.accepted === true, 'scan_not_accepted');
+  requireCondition(freshAdmissionClaim(accepted), 'canary_fresh_admission_unverified');
   report.accepted = true;
   requireCondition(accepted.page_cap === 150 && accepted.pipeline_mode === 'staged' && accepted.scan_mode === 'standard_150', 'accepted_scan_contract_mismatch');
   report.scan_id = String(accepted.scan_id || accepted.scan_run_id || '');

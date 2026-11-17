@@ -451,3 +451,30 @@ test("Stage-4 evidence refuses timestamps that reverse the scan-to-readback sequ
   offset.acceptance.reload.observed_at = "2026-09-19T22:11:00+02:00";
   assert.equal(evaluateStage4ReleaseAcceptance(offset).pass, true, "equivalent timezone");
 });
+
+
+test("composition does not short-circuit simultaneous cross-family regressions", () => {
+  const record = validRecord();
+  assert.equal(evaluateStage4ReleaseAcceptance(record).pass, true, "positive composed control");
+
+  // Five independent families can fail at once. One repaired predicate must
+  // not conceal the others in a short-circuited release decision.
+  record.ci.run_url = "https://github.com/unrelated/seo-autopilot/actions/runs/123456";
+  record.deployment.functions[0].runtime_build_id = V9_START_BUILD_ID;
+  record.acceptance.cohort.total_claim_budget = 1;
+  record.acceptance.cohort.per_owner_claim_budget = 1;
+  record.acceptance.rescan.pages_crawled = 151;
+  record.acceptance.reload.observed_at = "2026-09-19T20:09:59Z";
+
+  const result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.status, "failed");
+  assert.equal(result.pass, false);
+  for (const reason of [
+    "CI run URL",
+    "runtime package build ID",
+    "total claim budget",
+    "per-owner claim budget",
+    "rescan pages_crawled",
+    "reload observation precedes accepted scan",
+  ]) assert.ok(result.failures.some((failure) => failure.includes(reason)), reason);
+});

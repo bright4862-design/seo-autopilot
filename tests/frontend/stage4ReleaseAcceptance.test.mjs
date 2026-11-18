@@ -127,6 +127,8 @@ function validRecord(overrides = {}) {
         status: "complete",
         mode: "standard_150",
         pages_crawled: 150,
+        beta_revision_fingerprint: RELEASE_FINGERPRINT,
+        release_gate_eligible: true,
         authority_proof: "d".repeat(64),
         fix_list_id: "fix-list-2",
         source_sha: SHA,
@@ -609,6 +611,24 @@ test("linked rescan must retain the accepted owner project identity", () => {
     const result = evaluateStage4ReleaseAcceptance(record);
     assert.equal(result.pass, false, label);
     assert.ok(result.failures.includes("rescan project does not match acceptance baseline"), label);
+  }
+});
+
+test("a linked comparison rescan must be eligible under the exact frozen release", () => {
+  assert.equal(evaluateStage4ReleaseAcceptance(validRecord()).pass, true, "current eligible rescan positive control");
+  for (const [name, mutate, reason] of [
+    ["historical fingerprint", r => { r.acceptance.rescan.beta_revision_fingerprint = "0".repeat(16); }, "rescan fingerprint does not match frozen source"],
+    ["missing fingerprint", r => { delete r.acceptance.rescan.beta_revision_fingerprint; }, "rescan fingerprint does not match frozen source"],
+    ["ineligible rescan", r => { r.acceptance.rescan.release_gate_eligible = false; }, "rescan is not release-gate eligible"],
+    ["missing eligibility", r => { delete r.acceptance.rescan.release_gate_eligible; }, "rescan is not release-gate eligible"],
+  ]) {
+    const record = validRecord();
+    mutate(record);
+    // Distinct ScanRun/FixList, matching project, source SHA, and HMAC-shaped
+    // proof remain valid, isolating the release-identity and authority checks.
+    const verdict = evaluateStage4ReleaseAcceptance(record);
+    assert.equal(verdict.pass, false, name);
+    assert.ok(verdict.failures.includes(reason), name);
   }
 });
 

@@ -122,6 +122,7 @@ function validRecord(overrides = {}) {
         evidence_reference: `${RECEIPT}:rescan`,
         scan_id: "scan-acceptance-2",
         parent_scan_id: "scan-acceptance-1",
+        project_id: "project-acceptance-1",
         normalized_domain: "example.com",
         status: "complete",
         mode: "standard_150",
@@ -576,6 +577,24 @@ test("customer read-back binds scan, FixList, project and release separately", (
     const result = evaluateStage4ReleaseAcceptance(record);
     assert.equal(result.pass, false, name);
     assert.ok(result.failures.some(x => x.includes(reason)), name);
+  }
+});
+
+test("linked rescan must retain the accepted owner project identity", () => {
+  assert.equal(evaluateStage4ReleaseAcceptance(validRecord()).pass, true, "same-project positive control");
+
+  for (const [label, mutate] of [
+    ["foreign project", (record) => { record.acceptance.rescan.project_id = "project-foreign"; }],
+    ["missing project", (record) => { delete record.acceptance.rescan.project_id; }],
+    ["empty project", (record) => { record.acceptance.rescan.project_id = "  "; }],
+  ]) {
+    const record = validRecord();
+    mutate(record);
+    // Matching parent_scan_id, domain, distinct HMAC shape and completed status
+    // cannot substitute for an owner/project-bound rescan receipt.
+    const result = evaluateStage4ReleaseAcceptance(record);
+    assert.equal(result.pass, false, label);
+    assert.ok(result.failures.includes("rescan project does not match acceptance baseline"), label);
   }
 });
 

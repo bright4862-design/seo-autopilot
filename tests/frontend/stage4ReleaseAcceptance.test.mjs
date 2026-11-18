@@ -578,3 +578,26 @@ test("customer read-back binds scan, FixList, project and release separately", (
     assert.ok(result.failures.some(x => x.includes(reason)), name);
   }
 });
+
+test("an operator-CLI canary is not a published customer-UI Stage-4 journey", () => {
+  // Positive control: an otherwise complete synthetic release record has the
+  // expected evidence shapes. Neither control is live release proof.
+  assert.equal(evaluateStage4ReleaseAcceptance(validRecord()).pass, true);
+  const record = validRecord();
+  // The authenticated staged owner canary calls Base44 functions from a CLI.
+  // It does not submit from the published customer UI, observe saved history,
+  // or perform the distinct comparison rescan required by Stage 4.
+  record.acceptance.scan.submission_surface = "staged_owner_canary_cli";
+  record.acceptance.history = {};
+  record.acceptance.rescan = {};
+  const result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.pass, false);
+  assert.equal(result.status, "failed");
+  for (const required of [
+    "published customer UI",
+    "history",
+    "rescan",
+  ]) {
+    assert.ok(result.failures.some(message => message.includes(required)), required);
+  }
+});

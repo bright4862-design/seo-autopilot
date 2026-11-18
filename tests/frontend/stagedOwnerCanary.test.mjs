@@ -54,7 +54,7 @@ const denied=async()=>{track('forbidden_mutation');throw new Error('Mutation for
 const base44={auth:{me:async()=>{track('auth.me');return{id:scenario==='wrongOwner'?'other_123':owner,email:'never-print@example.com',role:scenario==='nonAdmin'?'user':'admin'};}},entities:{
 BusinessProject:{get:async(id)=>{track('BusinessProject.get',id);return{id,owner_user_id:scenario==='wrongProject'?'other_123':owner,website_url:url};},create:denied,update:denied},
 Access:{filter:async(query)=>{track('Access.filter',query);return scenario==='duplicateGrant'?[grant,{...grant,id:'access_456'}]:[grant];},create:denied,update:denied},
-ScanRun:{get:async(id)=>{track('ScanRun.get',id);return run;},create:denied,update:denied}
+ScanRun:{filter:async(query)=>{track('ScanRun.filter',query);return scenario==='priorRequest'?[run]:scenario==='historyUnavailable'?null:[];},get:async(id)=>{track('ScanRun.get',id);return run;},create:denied,update:denied}
 },functions:{invoke:async(name,payload)=>{track(name,payload);if(name==='${launchRoute}')return{data:{success:true,accepted:true,replayed:scenario==='replayed'||scenario==='replayedRecovered',replay_reason:scenario==='replayed'?'request_replay':scenario==='replayedRecovered'?'request_replay_recovered':scenario==='unmarked'?'':'server_admitted',scan_id:run.id,scan_mode:'standard_150',page_cap:150,pipeline_mode:scenario==='monolith'?'monolith':'staged'}};if(name==='${resultRoute}'){ const fixListId='fixlist_123456'; const isReopen=payload?.action==='get'; return {data:{success:true,access:'full',scan_id:run.id,fix_list_id:isReopen&&scenario==='reopenMismatch'?'fixlist_foreign':fixListId,authority_verified:true,release_contract_current:true,run:projected,fixList:{id:fixListId,scan_run_id:run.id,project_id:project}}}; }throw new Error('Unexpected function');}}};
 const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
 await new AsyncFunction('base44',readFileSync(0,'utf8'))(base44);
@@ -152,6 +152,22 @@ for (const scenario of ['grant500','duplicateGrant','revokedGrant']) {
     const result=fixture(t).run(scenario);
     assert.equal(result.status,1);
     assert.equal(result.calls.filter(row=>row.name===launchRoute).length,0);
+    assert.equal(result.calls.some(row=>row.name==='forbidden_mutation'),false);
+  });
+}
+
+for (const [scenario, code] of [
+  ['priorRequest', 'canary_request_preexisting'],
+  ['historyUnavailable', 'canary_request_history_unavailable'],
+]) {
+  test('owner canary refuses '+scenario+' before calling the launcher', t => {
+    const result=fixture(t).run(scenario);
+    assert.equal(result.status,1);
+    assert.equal(result.report.acceptance_verified,false);
+    assert.equal(result.report.failure_code,code);
+    assert.equal(result.calls.filter(row=>row.name==='ScanRun.filter').length,1);
+    assert.equal(result.calls.filter(row=>row.name===launchRoute).length,0);
+    assert.equal(result.calls.filter(row=>row.name===resultRoute).length,0);
     assert.equal(result.calls.some(row=>row.name==='forbidden_mutation'),false);
   });
 }

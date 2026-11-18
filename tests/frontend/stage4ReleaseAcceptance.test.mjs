@@ -216,6 +216,20 @@ test("exact scan reload and owner-scoped history cannot drift to a different res
   assert.ok(result.failures.some((value) => value.includes("history does not include")));
 });
 
+test("distinct signed-shaped rescan cannot reuse the baseline FixList identity", () => {
+  const baseline = validRecord();
+  assert.equal(evaluateStage4ReleaseAcceptance(baseline).pass, true);
+  // V8 persistence associates each FixList with the exact ScanRun. A new ScanRun
+  // must not be certified using the previous run's saved FixList.
+  for (const duplicate of [baseline.acceptance.scan.fix_list_id, `  ${baseline.acceptance.scan.fix_list_id}  `]) {
+    const record = validRecord();
+    record.acceptance.rescan.fix_list_id = duplicate;
+    const result = evaluateStage4ReleaseAcceptance(record);
+    assert.equal(result.status, "failed");
+    assert.ok(result.failures.includes("rescan FixList must differ from baseline acceptance FixList"));
+  }
+});
+
 test("rescan comparison and rollback readiness are explicit rather than inferred", () => {
   const record = validRecord();
   record.deployment.worker.rollback_ready = false;

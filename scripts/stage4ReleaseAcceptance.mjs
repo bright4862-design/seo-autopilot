@@ -283,6 +283,12 @@ export function evaluateStage4ReleaseAcceptance(record) {
       "rescan FixList must differ from baseline acceptance FixList");
   }
   add(failures, clean(rescan.source_sha) === sha, "rescan source does not match merged SHA");
+  // An independently saved comparison scan must also use the accepted worker
+  // release and carry authority eligibility; a shaped HMAC is not sufficient.
+  add(failures, clean(rescan.beta_revision_fingerprint) === RELEASE_FINGERPRINT,
+    "rescan fingerprint does not match frozen source");
+  add(failures, rescan.release_gate_eligible === true,
+    "rescan is not release-gate eligible");
   add(failures, ["improved", "unchanged", "regressed"].includes(clean(rescan.comparison)), "rescan comparison result missing");
   add(failures, rescan.comparison_evidence_verified === true, "rescan comparison evidence is not verified");
 

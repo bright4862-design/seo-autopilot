@@ -276,9 +276,12 @@ export function evaluateStage4ReleaseAcceptance(record) {
   add(failures, Boolean(clean(rescan.fix_list_id)), "rescan FixList id missing");
   // Persistence owns FixLists by exact ScanRun. Reusing the baseline FixList
   // for a nominally distinct rescan is not a second saved customer result.
-  add(failures, Boolean(clean(rescan.fix_list_id))
-    && clean(rescan.fix_list_id) !== clean(scan.fix_list_id),
-    "rescan FixList must differ from baseline acceptance FixList");
+  // A missing ID is already rejected above; emit the distinctness failure
+  // only for a supplied ID, preserving one diagnostic per missing field.
+  if (clean(rescan.fix_list_id)) {
+    add(failures, clean(rescan.fix_list_id) !== clean(scan.fix_list_id),
+      "rescan FixList must differ from baseline acceptance FixList");
+  }
   add(failures, clean(rescan.source_sha) === sha, "rescan source does not match merged SHA");
   add(failures, ["improved", "unchanged", "regressed"].includes(clean(rescan.comparison)), "rescan comparison result missing");
   add(failures, rescan.comparison_evidence_verified === true, "rescan comparison evidence is not verified");

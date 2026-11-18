@@ -274,6 +274,11 @@ export function evaluateStage4ReleaseAcceptance(record) {
   add(failures, isSha(rescan.authority_proof, 64), "rescan authority proof missing or invalid");
   add(failures, clean(rescan.authority_proof) !== clean(scan.authority_proof), "rescan reused baseline authority proof");
   add(failures, Boolean(clean(rescan.fix_list_id)), "rescan FixList id missing");
+  // Persistence owns FixLists by exact ScanRun. Reusing the baseline FixList
+  // for a nominally distinct rescan is not a second saved customer result.
+  add(failures, Boolean(clean(rescan.fix_list_id))
+    && clean(rescan.fix_list_id) !== clean(scan.fix_list_id),
+    "rescan FixList must differ from baseline acceptance FixList");
   add(failures, clean(rescan.source_sha) === sha, "rescan source does not match merged SHA");
   add(failures, ["improved", "unchanged", "regressed"].includes(clean(rescan.comparison)), "rescan comparison result missing");
   add(failures, rescan.comparison_evidence_verified === true, "rescan comparison evidence is not verified");

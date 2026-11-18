@@ -261,6 +261,10 @@ export function evaluateStage4ReleaseAcceptance(record) {
   add(failures, hasReceipt(rescan.evidence_reference), "rescan evidence reference missing");
   add(failures, Boolean(rescanId) && rescanId !== scanId, "rescan scan_id missing or reused");
   add(failures, clean(rescan.parent_scan_id) === scanId, "rescan is not linked to the accepted baseline scan");
+  // A matching parent ID and domain are insufficient if the saved rescan
+  // belongs to a different owner/project. Fail closed on missing identity.
+  add(failures, Boolean(clean(scan.project_id)) && clean(rescan.project_id) === clean(scan.project_id),
+    "rescan project does not match acceptance baseline");
   add(failures, clean(rescan.normalized_domain) === clean(scan.normalized_domain) && Boolean(clean(scan.normalized_domain)),
     "rescan domain does not match acceptance baseline");
   add(failures, clean(rescan.status) === "complete", "rescan did not complete");

@@ -171,6 +171,15 @@ try {
   const ownerGrant = access.grant_source === 'owner_test' && datedGrant && email === 'bright4862@gmail.com' && me.id === '6a498da58ef5cec1f5cd4486';
   requireCondition(paidGrant || manualGrant || ownerGrant, 'access_grant_unverified');
 
+  // A fresh coordinator claim can recover an already-persisted ScanRun for the
+  // same request. Reject any pre-existing owner/request row before one launch.
+  // This is a read-only fail-closed preflight, not proof of live creation.
+  const priorRuns = await bounded(() => base44.entities.ScanRun.filter(
+    {owner_user_id:config.ownerId, request_id:config.requestId}, '-created_date', 2,
+  ));
+  requireCondition(Array.isArray(priorRuns), 'canary_request_history_unavailable');
+  requireCondition(priorRuns.length === 0, 'canary_request_preexisting');
+
   // One start call only. The operator must reuse REQUEST_ID to recover a lost response.
   const accepted = body(await bounded(() => base44.functions.invoke(config.launchRoute, {
     request_id:config.requestId, idempotency_key:config.requestId,

@@ -26,6 +26,11 @@ REVISION_RE = re.compile(r"fixlist-standard150-worker-[0-9]{5}-[a-z0-9]{3}\Z")
 OWNER_RE = re.compile(r"[A-Za-z0-9_-]{6,64}\Z")
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 MAX_OWNERS = 5
+# Only intake switches are strictly read back. Unrelated service secrets
+# (for example signing credentials) may remain secret-backed.
+INTAKE_CONTROL_KEYS = frozenset({
+    "SCAN_PIPELINE_MODE", "SCAN_STAGED_OWNER_IDS", "SCAN_PIPELINE_OWNER_IDS",
+})
 
 
 class GuardError(ValueError):
@@ -97,9 +102,19 @@ def revision_env(revision: dict) -> dict[str, str]:
     containers = ((revision.get("spec") or {}).get("containers")) or []
     require(len(containers) == 1, "Worker revision must have exactly one container")
     env: dict[str, str] = {}
+    seen_controls: set[str] = set()
     for item in containers[0].get("env") or []:
+        name = str(item.get("name") or "")
+        if name in INTAKE_CONTROL_KEYS:
+            # Cloud Run can expose secret-backed env as valueFrom rather than
+            # value. Omitting it would misread staged admission as disabled.
+            require("valueFrom" not in item,
+                    f"Staged intake control {name} is secret-backed; cannot prove it disabled")
+            require(name not in seen_controls,
+                    f"Duplicate staged intake control {name} in revision readback")
+            seen_controls.add(name)
         if "value" in item:
-            env[str(item.get("name"))] = str(item.get("value") or "")
+            env[name] = str(item.get("value") or "")
     return env
 
 

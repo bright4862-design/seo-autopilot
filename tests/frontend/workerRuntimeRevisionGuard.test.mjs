@@ -91,6 +91,20 @@ test("a worker computing the recorded identity passes", () => {
   assert.match(result.stdout, /runtime fingerprint:  5d94e93c54a9efb6/);
 });
 
+
+test("the exact-source comparator refuses an absent or malformed expected SHA", () => {
+  const live = {
+    component_versions: COMPONENTS,
+    fingerprint: RECORDED.fingerprint,
+    source_sha: "a".repeat(40),
+  };
+  for (const expected of ["", "abc", "A".repeat(40)]) {
+    const result = compare(live, RECORDED, expected);
+    assert.equal(result.status, 1, `expected SHA ${JSON.stringify(expected)} must not be optional`);
+    assert.match(result.stdout, /expected release source SHA is missing or malformed/);
+  }
+});
+
 test("a divergent fingerprint fails and names the component that diverged", () => {
   // This is the shape of the production incident: one component behind, every
   // other component identical, so the fingerprint alone says only "different".
@@ -273,7 +287,7 @@ test("an untagged revision that does not hold all traffic yields no probe URL", 
 // Running the real operation end to end against stubbed gcloud/curl is the only
 // way to prove the refusal paths refuse. Asserting on their prose would pass a
 // guard that printed INDETERMINATE and then fell through to PASS.
-function runGuard({ service, revision = "", body, code = "200", token = "stub-token", audience = "", probeUrl = "", sourceSha = "" }) {
+function runGuard({ service, revision = "", body, code = "200", token = "stub-token", audience = "", probeUrl = "", sourceSha = PROMOTED_SHA }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-revision-e2e-"));
   const bin = path.join(dir, "bin");
   fs.mkdirSync(bin);
@@ -359,6 +373,19 @@ test("end to end: a worker serving the recorded identity passes", () => {
   assert.match(result.stdout, /PASS: the running worker computes/);
   assert.match(result.curl, new RegExp(`${SERVICE_URL}/revision`));
   assert.match(result.curl, /authorization: Bearer stub-token/);
+});
+
+
+test("end to end: a missing expected SHA refuses before spending an invoker token", () => {
+  const result = runGuard({
+    service: serving("worker-00054-trs"),
+    revision: "worker-00054-trs",
+    body: LIVE_MATCHING,
+    sourceSha: "",
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /expected release source SHA is missing or malformed/);
+  assert.equal(result.curl, "", "no authenticated HTTP call is permitted without exact source binding");
 });
 
 test("end to end: a worker serving a different identity fails and is diagnosed", () => {

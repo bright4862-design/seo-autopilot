@@ -469,6 +469,13 @@ verify_worker_runtime_revision() {
   echo
   echo "=== Runtime revision fingerprint ==="
 
+  # A diagnostic without a frozen source identity cannot attest a release.
+  # Refuse before fetching Cloud Run state or spending the invoker token.
+  if [[ ! "$expected_sha" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "INDETERMINATE: expected release source SHA is missing or malformed; no runtime proof was attempted."
+    return 1
+  fi
+
   RUNTIME_PROBE_TMP="$(mktemp -d)"
   chmod 700 "$RUNTIME_PROBE_TMP"
   service_json="$RUNTIME_PROBE_TMP/service.json"
@@ -603,7 +610,7 @@ PY
 
   python3 - "$response" "$recorded" "$expected_sha" <<'PY' || compare_status=$?
 # runtime-revision-comparator
-import json, sys
+import json, re, sys
 
 response_path, recorded_path, expected_sha = sys.argv[1:4]
 try:
@@ -624,6 +631,9 @@ print("recorded fingerprint: %s" % (recorded_fingerprint or "(absent)"))
 print("runtime source_sha:   %s" % (live_sha or "(unset)"))
 
 failed = False
+if not re.fullmatch(r"[0-9a-f]{40}", expected_sha):
+    failed = True
+    print("FAIL: expected release source SHA is missing or malformed.")
 live_components = live.get("component_versions")
 recorded_components = recorded.get("component_versions") or {}
 

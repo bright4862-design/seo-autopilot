@@ -8,18 +8,33 @@ Workload Identity Federation (WIF). Each GitHub Actions run receives a
 short-lived Google credential; no long-lived Google key is created, stored,
 or printed.
 
+
 ## Operations
 
-| Operation | Mutating | Confirmation |
+This page describes the **current main-branch workflow**, not authorization to
+change production. Read-only observations do not establish Standard 150 release
+readiness. The workflow itself requires a dispatch from the pinned owner on
+`main`; its dispatch form includes a required `confirm` field even when the
+selected read-only operation does not consume a promotion confirmation.
+
+| Operation | Mutating | Purpose |
 |---|---|---|
-| `status` | no | — |
-| `verify-iam` | no | — |
-| `verify-worker-routes` | no | — |
-| `promote-worker` | yes | exact revision name |
-| `rollback-worker` | yes | exact revision name |
-| `pause-queue` | yes | `PAUSE` |
-| `resume-queue` | yes | `RESUME` |
-| `activate-beta` | yes | exact revision name |
+| `status` | no | Cloud Run/queue/coordinator status; **not** live release identity proof |
+| `verify-iam` | no | Inspect worker IAM |
+| `verify-worker-routes` | no | Source/build route provenance; **not** authenticated `/revision` parity |
+| `verify-serving-worker-release` | no | Resolve the 100%-serving revision and check its authenticated `/revision` against exact main |
+| `verify-staged-worker-release` | no | Check an explicitly tagged, zero-traffic candidate's routes, `/revision` and signed Base44 runtime |
+| `barrier-status` | no | Read coordinator barrier state and generation |
+| `verify-zero-admission-obligations` | no | Inspect closed/drained obligation evidence |
+| `staged-queue-status` | no | Read staged-queue state, not readiness authorization |
+| `tag-worker-candidate` | **yes** | Traffic-tag mutation, requires exact revision confirmation |
+| `promote-worker` / `rollback-worker` | **yes** | Cloud Run traffic mutation, requires separate approval |
+| `cutover-pause` / `cutover-resume` / `open-claim-barrier` / `acceptance-only` | **yes** | Admission-barrier mutations with separate confirmation and generation controls |
+
+The old `pause-queue`, `resume-queue` and `activate-beta` operation names are
+**unsupported unsafe operations** in the current shell dispatcher, even though
+`activate-beta` remains a legacy workflow choice. Do not use these as runbook
+instructions, and do not bypass the guarded admission/drain procedure.
 
 ### Why traffic operations name a revision
 
@@ -31,30 +46,63 @@ revision and uses `--to-revisions=<revision>=100`.
 The confirmation string for those operations is the revision name itself, so
 a stale confirmation cannot promote a different revision.
 
-### `verify-worker-routes`
 
-The durable pipeline sends Cloud Tasks to `POST /scan-job` and the watchdog to
-`POST /scan-job-drain`. Both routes and `scanner-api/app/scan_job.py` are now
-present on `main` as of the durable Standard 150 merge. A previously deployed
-worker can still have been built from older source, so source readiness alone
-does not prove the running revision serves those routes.
+### Read-only Standard 150 incident triage: authenticated `/revision`
 
-Because the worker is private, unauthenticated HTTP probes are rejected by
-Cloud Run IAM before application routing. `verify-worker-routes` therefore
-reports the running revision, image identity, Cloud Build provenance including
-`_RELEASE_SHA`, and request timeout. A human must confirm that the reported
-release SHA is a commit that declares both durable routes.
+Incident [#378](https://github.com/bright4862-design/seo-autopilot/issues/378)
+records worker/Base44 release-fingerprint drift at signed persistence.
+A green source commit, matching function name, working `/health` endpoint,
+or a successful `status` call cannot resolve that mismatch.
 
-Run this before `activate-beta`.
+For an **owner-authorized diagnostic, not a release operation**:
 
-### `activate-beta` ordering
+1. In the pinned [FixList Cloud Operator workflow](../.github/workflows/fixlist-cloud-operator.yml)
+   on exact `main`, select `verify-serving-worker-release`. Do not select a
+   mutating operation and do not change traffic or queues. The workflow's
+   prefilled historical `revision` value is **ignored** by this serving-worker
+   verifier; it resolves the actual serving revision from Cloud Run at probe
+   time.
+2. The workflow reads the canonical Cloud Run service URL, mints a short-lived
+   invoker ID token for that service's audience, and calls
+   `verify_worker_runtime_revision`. Its target must be attributable to the
+   **100%-serving revision**; ambiguous traffic or an unaddressable revision
+   must remain unverified.
+3. The authenticated `GET /revision` comparison checks the worker's runtime
+   fingerprint, **complete component-version map**, and nonempty exact source
+   SHA against the frozen checked-out candidate contract. Record the
+   observed revision and the verifier's verdict without recording token or
+   signing-key contents.
+4. Treat `FAIL` or `INDETERMINATE` as a **NO-GO**, not as permission to
+   edit a Base44 fingerprint literal, loosen signed persistence, rerun the
+   failed customer scans, or promote a different revision by guesswork.
 
-1. Promote the explicitly named revision.
-2. Probe the private worker and require an IAM rejection (`401` or `403`).
-3. Resume the queue only if the promotion and privacy probe succeed.
+`verify-worker-routes` is a narrower source/build provenance diagnostic: it
+checks whether durable `POST /scan-job` and `POST /scan-job-drain` routes were
+declared, along with the worker build and timeout. It cannot establish which
+fingerprint a running container actually computes.
 
-A failure leaves the queue paused. The operator does not publish Base44; the
-Base44 durable backend must already be published before the queue is resumed.
+### A staged candidate is different from the public serving revision
+
+`verify-staged-worker-release` checks the specific tagged **0%-traffic**
+candidate, using the verified tag URL but the canonical service token
+audience. This is a read-only comparison; creating or changing a tag is
+a **different, mutating** operation requiring distinct approval.
+
+Even a successful worker `/revision` probe is **necessary, not sufficient**.
+The release also needs matching Base44 executing package identities, a
+closed/drained admission barrier, exact signing authority, a specifically
+approved owner-only Standard 150 canary, durable signed persistence,
+independent full-access customer re-open and rollback continuity.
+An unmerged draft, candidate fingerprint or editor-preview checkpoint is
+not a verified production promotion.
+
+### Activation is not implicit
+
+The current operator shell deliberately rejects `pause-queue`,
+`resume-queue` and `activate-beta`. Do not infer that a successful
+`verify-worker-routes` or `verify-serving-worker-release` run authorizes
+queues, payment checkout, public reopening or customer scans. The separate
+barrier-generation and release-approval runbooks govern those mutations.
 
 ## One-time WIF setup
 
@@ -105,22 +153,26 @@ This prevents another workflow on the same repository and branch from borrowing
 the operator service account merely because it also has `id-token: write`.
 The workflow's explicit ref guard and pinned source provide defense in depth.
 
-## Release sequence
 
-After the one-time WIF setup:
+## Release decision boundary
 
-1. Run `verify-worker-routes` against the current worker revision.
-2. If provenance does not map to a commit containing both durable routes,
-   rebuild/deploy the worker from the exact approved `main` release SHA before
-   any queue activation.
-3. Deploy and verify the keyless dispatch gateway from canonical
-   `dispatch-gateway/` source.
-4. Publish the audited Base44 durable backend and configure
-   `SCAN_DISPATCH_GATEWAY_URL`.
-5. Run a controlled dispatch probe and verify the exact Cloud Task and worker
-   request.
-6. Run one fresh customer Funbooker scan end to end.
+The **read-only** checks above are safe diagnostic prerequisites, not a
+substitute for a documented release decision. Before any separately approved
+Standard 150 cutover, the operator must establish exact accepted source and
+package identities, a Ready/attributable serving worker, the full
+fingerprint/component parity, privacy and signing boundaries, a recoverable
+rollback, and closed/drained admission obligations.
 
-Standard 150 is restored only after the real customer flow completes:
+Only **after distinct explicit approval** may a bounded owner canary be
+performed. It must use the Standard 150 entitlement and the exact approved
+route; successful completion alone is not enough without the independently
+verified signed FixList and authenticated full-access customer read-back.
+Public opening and payments are separate decisions, and the post-opening
+Stage-4 audit cannot substitute for pre-opening approval.
 
-`Browser → Base44 → Cloud Task → Python worker → crawl → review → durable callbacks → persisted FixList → authority proof → exact browser result`.
+The required end-to-end customer journey is:
+
+`Browser → Base44 → Cloud Task → Python worker → crawl → review → durable callbacks → persisted FixList → authority proof → exact customer re-open`.
+
+**Incident #378 remains NO-GO until observed production evidence proves that
+journey.** Preserve the failed historical ScanRuns as auditable failures.

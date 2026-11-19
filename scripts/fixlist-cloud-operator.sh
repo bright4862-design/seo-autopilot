@@ -150,8 +150,12 @@ describe_or_explain() {
   fi
   if grep -q 'PERMISSION_DENIED' "$err_file"; then
     echo "read_denied=$label"
-  else
+  elif grep -q 'NOT_FOUND' "$err_file"; then
     echo "not_deployed=$label"
+  else
+    # Authentication, transport, quota, and API failures prove neither
+    # presence nor absence. Never recommend recreating an unverified resource.
+    echo "status_unverified=$label"
   fi
   rm -f "$err_file"
 }

@@ -74,6 +74,43 @@ def verify_active_v9_packages(root: Path, accepted_sha: str, source_sha: str, de
         raise PromotionRecordError("active_v9_accepted_packages_or_history_unverified") from exc
 
 
+VERDICT_HEADER = "<!-- fixlist-standard150-acceptance-v1\n"
+VERDICT_FOOTER = "\n-->"
+
+
+def verify_acceptance_report_verdict(body: str, accepted_sha: str, fingerprint: str) -> None:
+    """Require a singular, source-bound GO decision, not reassuring report prose.
+
+    This is metadata validation, NOT evidence that a canary or deployment succeeded.
+    """
+    if not body.startswith(VERDICT_HEADER) or body.count(VERDICT_HEADER) != 1:
+        raise PromotionRecordError("acceptance_verdict_missing_or_ambiguous")
+    payload, separator, _rest = body[len(VERDICT_HEADER):].partition(VERDICT_FOOTER)
+    if not separator or len(payload) > 2048:
+        raise PromotionRecordError("acceptance_verdict_invalid")
+
+    def no_duplicate_keys(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate verdict field")
+            result[key] = value
+        return result
+
+    try:
+        verdict = json.loads(payload, object_pairs_hook=no_duplicate_keys)
+    except (ValueError, TypeError):
+        raise PromotionRecordError("acceptance_verdict_invalid") from None
+    if not isinstance(verdict, dict) or set(verdict) != {
+        "decision", "accepted_source_sha", "fingerprint"
+    }:
+        raise PromotionRecordError("acceptance_verdict_invalid")
+    if verdict["decision"] != "GO":
+        raise PromotionRecordError("acceptance_verdict_not_go")
+    if verdict["accepted_source_sha"] != accepted_sha or verdict["fingerprint"] != fingerprint:
+        raise PromotionRecordError("acceptance_verdict_identity_mismatch")
+
+
 def verify_promotion_record(root: Path, source_sha: str, base44_v9: str | None = None) -> str:
     """Check frozen metadata and ancestry, without trusting runtime claims."""
     if not SHA40.fullmatch(source_sha):
@@ -109,7 +146,8 @@ def verify_promotion_record(root: Path, source_sha: str, base44_v9: str | None =
     if (document.is_symlink() or not document.is_file()
             or not document.resolve().is_relative_to(root.resolve())):
         raise PromotionRecordError("acceptance_report_unavailable")
-    if not document.read_text("utf-8").strip():
+    report_body = document.read_text("utf-8")
+    if not report_body.strip():
         raise PromotionRecordError("acceptance_report_empty")
     components = record.get("component_versions")
     if (not isinstance(components, dict) or not components
@@ -125,6 +163,7 @@ def verify_promotion_record(root: Path, source_sha: str, base44_v9: str | None =
             or not FINGERPRINT16.fullmatch(fingerprint)
             or fingerprint != calculated):
         raise PromotionRecordError("release_fingerprint_inconsistent")
+    verify_acceptance_report_verdict(report_body, accepted_sha, fingerprint)
     if base44_v9:
         verify_active_v9_packages(root, accepted_sha, source_sha, base44_v9)
     return fingerprint

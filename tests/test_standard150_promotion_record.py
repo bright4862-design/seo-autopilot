@@ -15,17 +15,23 @@ if str(ROOT) not in sys.path:
 from scripts import assert_standard150_promotion_record as gate
 
 
+def verdict(sha: str, fingerprint: str, decision: str = "GO") -> str:
+    payload = {"decision": decision, "accepted_source_sha": sha, "fingerprint": fingerprint}
+    return f"{gate.VERDICT_HEADER}{json.dumps(payload)}{gate.VERDICT_FOOTER}\n# Acceptance report\n"
+
+
 @pytest.fixture
 def frozen_record(tmp_path, monkeypatch):
     # A successful ancestry result stands in for an accepted ancestor.
     monkeypatch.setattr(gate.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0))
     (tmp_path / "data").mkdir()
     (tmp_path / "docs").mkdir()
-    (tmp_path / "docs/accepted.md").write_text("Accepted by the release gate\n")
+
     components = {"scanner_version": "v8", "sampling_version": "v7"}
     fingerprint = hashlib.sha256(
         json.dumps(components, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()[:16]
+    (tmp_path / "docs/accepted.md").write_text(verdict("b" * 40, fingerprint))
     payload = {
         "status": "frozen_beta",
         "git_commit": "b" * 40,
@@ -42,6 +48,59 @@ def frozen_record(tmp_path, monkeypatch):
 def test_frozen_record_with_accepted_ancestor_passes_source_gate(frozen_record):
     root, record, _ = frozen_record
     assert gate.verify_promotion_record(root, "a" * 40) == record["fingerprint"]
+
+
+
+def test_report_explicit_no_go_is_not_acceptance(frozen_record):
+    root, record, _ = frozen_record
+    (root / "docs/accepted.md").write_text(verdict(record["git_commit"], record["fingerprint"], "NO-GO"))
+    with pytest.raises(gate.PromotionRecordError, match="acceptance_verdict_not_go"):
+        gate.verify_promotion_record(root, "a" * 40)
+
+
+def test_prose_only_no_go_is_not_acceptance(frozen_record):
+    root, _, _ = frozen_record
+    (root / "docs/accepted.md").write_text("# NO-GO — no signed canary or rollback proof\n")
+    with pytest.raises(gate.PromotionRecordError, match="acceptance_verdict_missing_or_ambiguous"):
+        gate.verify_promotion_record(root, "a" * 40)
+
+
+@pytest.mark.parametrize("mutation", ["source_sha", "fingerprint"])
+def test_report_verdict_must_bind_release_identity(frozen_record, mutation):
+    root, record, _ = frozen_record
+    source = "c" * 40 if mutation == "source_sha" else record["git_commit"]
+    fp = "f" * 16 if mutation == "fingerprint" else record["fingerprint"]
+    (root / "docs/accepted.md").write_text(verdict(source, fp))
+    with pytest.raises(gate.PromotionRecordError, match="acceptance_verdict_identity_mismatch"):
+        gate.verify_promotion_record(root, "a" * 40)
+
+
+def test_duplicate_verdict_blocks_and_fields_are_ambiguous(frozen_record):
+    root, record, _ = frozen_record
+    doc = root / "docs/accepted.md"
+    valid = verdict(record["git_commit"], record["fingerprint"])
+    doc.write_text(valid + valid)
+    with pytest.raises(gate.PromotionRecordError, match="acceptance_verdict_missing_or_ambiguous"):
+        gate.verify_promotion_record(root, "a" * 40)
+    double_decision = (
+        gate.VERDICT_HEADER + '{"decision":"GO","decision":"NO-GO",'
+        f'"accepted_source_sha":"{record["git_commit"]}",'
+        f'"fingerprint":"{record["fingerprint"]}"}}'
+        + gate.VERDICT_FOOTER
+    )
+    doc.write_text(double_decision)
+    with pytest.raises(gate.PromotionRecordError, match="acceptance_verdict_invalid"):
+        gate.verify_promotion_record(root, "a" * 40)
+
+
+def test_malformed_or_extra_verdict_fields_fail_closed(frozen_record):
+    root, record, _ = frozen_record
+    doc = root / "docs/accepted.md"
+    for payload in ['{"decision":"GO"}', 'not json', '{"decision":"GO","reason":"trust me"}']:
+        doc.write_text(gate.VERDICT_HEADER + payload + gate.VERDICT_FOOTER)
+        with pytest.raises(gate.PromotionRecordError, match="acceptance_verdict_invalid"):
+            gate.verify_promotion_record(root, "a" * 40)
+
 
 
 def test_explicit_candidate_is_blocked_even_if_fingerprint_matches(frozen_record):
@@ -126,7 +185,8 @@ def v9_release_history(tmp_path):
 
     def accept(source):
         components = {"scanner_version": "v9"}
-        files("docs/accepted.md", "Accepted source\n")
+        fingerprint = hashlib.sha256(json.dumps(components, separators=(",", ":")).encode()).hexdigest()[:16]
+        files("docs/accepted.md", verdict(source, fingerprint))
         files("data/beta-crawler-revision.json", json.dumps({
             "status": "frozen_beta", "git_commit": source, "acceptance_report": "docs/accepted.md",
             "component_versions": components,

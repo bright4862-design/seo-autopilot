@@ -98,6 +98,11 @@ function validRecord(overrides = {}) {
         parent_scan_id: "scan-acceptance-1",
         normalized_domain: "example.com",
         status: "complete",
+        mode: "standard_150",
+        pages_crawled: 150,
+        authority_proof: "d".repeat(64),
+        fix_list_id: "fix-list-2",
+        source_sha: SHA,
         comparison: "improved",
         comparison_evidence_verified: true,
       },
@@ -218,4 +223,45 @@ test("claimed live state without traceable receipts fails closed", () => {
     "close/drain receipt",
     "public opening receipt",
   ]) assert.ok(result.failures.some((value) => value.includes(fragment)), fragment);
+});
+
+test("independently persisted rescan identity is required even if comparison is verified", () => {
+  const baseline = evaluateStage4ReleaseAcceptance(validRecord());
+  assert.equal(baseline.status, "pass", JSON.stringify(baseline.failures));
+
+  const cases = [
+    ["mode", "standard_500", "rescan was not Standard 150"],
+    ["pages_crawled", 151, "rescan pages_crawled"],
+    ["pages_crawled", 0, "rescan pages_crawled"],
+    ["pages_crawled", 2.5, "rescan pages_crawled"],
+    ["authority_proof", "", "rescan authority proof"],
+    ["authority_proof", "not-a-proof", "rescan authority proof"],
+    ["authority_proof", PROOF, "rescan reused baseline authority proof"],
+    ["fix_list_id", "", "rescan FixList id"],
+    ["source_sha", "9".repeat(40), "rescan source"],
+  ];
+  for (const [field, invalid, reason] of cases) {
+    const record = validRecord();
+    record.acceptance.rescan[field] = invalid;
+    const result = evaluateStage4ReleaseAcceptance(record);
+    assert.equal(result.status, "failed", field);
+    assert.ok(result.failures.some((value) => value.includes(reason)), `${field}: ${JSON.stringify(result.failures)}`);
+  }
+
+  const unsigned = validRecord();
+  for (const key of ["mode", "pages_crawled", "authority_proof", "fix_list_id", "source_sha"]) {
+    delete unsigned.acceptance.rescan[key];
+  }
+  const result = evaluateStage4ReleaseAcceptance(unsigned);
+  assert.equal(result.status, "failed");
+  assert.equal(result.failures.filter((value) => value.startsWith("rescan ")).length, 5);
+});
+
+test("a distinct, valid, bounded Standard 150 rescan retains the acceptance shape", () => {
+  const record = validRecord();
+  record.acceptance.rescan.scan_id = "scan-acceptance-3";
+  record.acceptance.rescan.pages_crawled = 1;
+  record.acceptance.rescan.authority_proof = "e".repeat(64);
+  record.acceptance.rescan.fix_list_id = "fix-list-3";
+  assert.equal(evaluateStage4ReleaseAcceptance(record).pass, true);
 });

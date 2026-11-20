@@ -351,6 +351,14 @@ export function evaluateStage4ReleaseAcceptance(record) {
   add(failures, rescanCustomer.release_contract_current === true,
     "rescan customer reload did not verify current release contract");
 
+  // Reopening the comparison once is not enough if it vanishes from the
+  // customer's saved history. Require a fresh owner-scoped history observation
+  // after the second signed reader response, showing both distinct ScanRuns.
+  add(failures, observedAfter(history.observed_at, rescanReload.observed_at),
+    "customer history observation precedes verified comparison customer read-back");
+  add(failures, historyIds.includes(rescanId) && Boolean(rescanId),
+    "customer history does not include comparison rescan");
+
   add(failures, record.acceptance?.closed_and_drained === true, "acceptance cohort was not closed and drained after verification");
   add(failures, hasReceipt(record.acceptance?.close_drain_reference), "acceptance close/drain receipt missing");
   // This is a post-opening audit, not permission to open public claims. The

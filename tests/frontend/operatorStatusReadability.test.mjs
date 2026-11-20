@@ -50,6 +50,20 @@ test("a genuinely absent resource is still reported as not deployed", () => {
   assert.equal(absent, "not_deployed=fixlist-standard150-drain");
 });
 
+test("an indeterminate resource read never claims the resource is absent", () => {
+  for (const stderr of [
+    "ERROR: (gcloud.run.services.describe) UNAUTHENTICATED: Login required.",
+    "ERROR: (gcloud.run.services.describe) DEADLINE_EXCEEDED: Request timed out.",
+    "ERROR: (gcloud.run.services.describe) RESOURCE_EXHAUSTED: Quota exceeded.",
+    "ERROR: connection reset by peer",
+    "",
+  ]) {
+    const result = describeOrExplain({ exitCode: 1, stderr });
+    assert.equal(result, "status_unverified=fixlist-standard150-drain", stderr);
+    assert.ok(!result.includes("not_deployed"), "unknown read failure cannot prove absence");
+  }
+});
+
 test("a readable resource passes its description through unchanged", () => {
   const ok = describeOrExplain({ exitCode: 0, stderr: "", stdout: "state: RUNNING" });
   assert.equal(ok, "state: RUNNING");

@@ -443,7 +443,17 @@ test("independently persisted rescan identity is required even if comparison is 
   }
   const result = evaluateStage4ReleaseAcceptance(unsigned);
   assert.equal(result.status, "failed");
-  assert.equal(result.failures.filter((value) => value.startsWith("rescan ")).length, 5);
+  // Five independent persisted-row predicates still fail. The new customer
+  // reader identity guard correctly adds a sixth failure for the missing
+  // FixList id, rather than accepting the old customer response as proof.
+  for (const message of [
+    "rescan was not Standard 150",
+    "rescan pages_crawled is outside Standard 150 bounds",
+    "rescan authority proof missing or invalid",
+    "rescan FixList id missing",
+    "rescan source does not match merged SHA",
+    "rescan customer reload returned a different FixList",
+  ]) assert.ok(result.failures.includes(message), message);
 });
 
 test("a distinct, valid, bounded Standard 150 rescan retains the acceptance shape", () => {

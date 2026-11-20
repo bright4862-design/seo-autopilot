@@ -16,7 +16,7 @@ const secret = (version) => ({
 });
 const service = (templateVersion, revisionName = "worker-00007") => ({
   metadata: { name: "worker", generation: 4 },
-  status: { observedGeneration: 4, traffic: revisionName ? [{ revisionName, percent: 100 }] : [] },
+  status: { observedGeneration: 4, traffic: revisionName ? [{ revisionName, percent: 100 }] : [], conditions: [{ type: "Ready", status: "True" }] },
   spec: { template: { spec: { containers: [{ env: [secret(templateVersion)] }] } } },
 });
 const revision = (name, version) => ({
@@ -91,6 +91,7 @@ function scenario(sequence) {
     "service-desired-ahead.json": service("8"),
     "service-switched.json": service("7", "worker-00008"),
     "service-no-traffic.json": service("7", null),
+    "service-unready.json": { ...service("7"), status: { ...service("7").status, conditions: [{ type: "Ready", status: "False" }] } },
     "revision-worker-00007.json": revision("worker-00007", "7"),
     "revision-worker-00008.json": revision("worker-00008", "7"),
   })) fs.writeFileSync(path.join(fixtures, name), JSON.stringify(body));
@@ -134,6 +135,14 @@ test("no observed serving traffic fails before CLI or key access", () => {
   assert.notEqual(run.code, 0);
   assert.match(run.output, /no observed Cloud Run serving traffic/);
   assert.deepEqual(run.events, []);
+});
+
+test("unready Service blocks import before npm or key access", () => {
+  const run = scenario(["unready"]);
+  assert.notEqual(run.code, 0);
+  assert.match(run.output, /Cloud Run service is not confirmed Ready/);
+  assert.deepEqual(run.events, []);
+  assert.equal(run.probes, 1);
 });
 
 test("same-key revision switch during login fails before secret read", () => {

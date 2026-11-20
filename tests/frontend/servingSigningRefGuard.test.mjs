@@ -97,6 +97,15 @@ test("rejects foreign revision service identity", () => {
   assert.notEqual(invoke("select", service(), other).status, 0);
 });
 
+test("rejects a serving revision without service ownership metadata", () => {
+  const unlabeled = revision();
+  delete unlabeled.metadata.labels["serving.knative.dev/service"];
+  assert.notEqual(invoke("select", service(), unlabeled).status, 0);
+  const unnamed = service();
+  delete unnamed.metadata.name;
+  assert.notEqual(invoke("select", unnamed, revision()).status, 0);
+});
+
 test("rejects unpinned latest and duplicate signing-key references", () => {
   assert.notEqual(invoke("select", service("latest"), revision("latest")).status, 0);
   const duplicated = revision();

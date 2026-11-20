@@ -25,7 +25,9 @@ def serving_revision(service):
     status = service.get("status") or {}
     generation = metadata.get("generation")
     observed = status.get("observedGeneration")
-    if generation is not None and observed is not None and str(generation) != str(observed):
+    if generation is None or observed is None:
+        fail("Cloud Run service generation observation is missing")
+    if str(generation) != str(observed):
         fail("Cloud Run service generation has not been observed")
 
     traffic = status.get("traffic")
@@ -96,13 +98,15 @@ def main(argv):
         fail("usage: guard.py revision-name SERVICE | select|verify SERVICE REVISION REF")
     mode, service_path, revision_path, reference_path = argv[1:]
     name, (secret, version) = select(load(service_path), load(revision_path))
-    value = f"{secret} {version}\n"
+    # Keep line one compatible with an eventual shell `read` of the key reference.
+    # The second line binds verification to the exact revision selected earlier.
+    value = f"{secret} {version}\n{name}\n"
     if mode == "select":
         Path(reference_path).write_text(value, encoding="utf-8")
         print(f"OK - Ready 100%-serving revision {name} uses pinned {secret} version {version}")
     else:
         if Path(reference_path).read_text(encoding="utf-8") != value:
-            fail("serving key changed since selection; refusing Base44 import")
+            fail("serving key or revision identity changed since selection; refusing Base44 import")
         print(f"OK - serving revision {name} and pinned key still match")
 
 

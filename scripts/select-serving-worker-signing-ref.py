@@ -29,6 +29,12 @@ def serving_revision(service):
         fail("Cloud Run service generation observation is missing")
     if str(generation) != str(observed):
         fail("Cloud Run service generation has not been observed")
+    # A Ready revision can remain on the route while the Service itself is
+    # reconciling or failing. Do not import a key during that uncertainty.
+    conditions = status.get("conditions") or []
+    ready = [item for item in conditions if isinstance(item, dict) and item.get("type") == "Ready"]
+    if len(ready) != 1 or ready[0].get("status") != "True":
+        fail("Cloud Run service is not confirmed Ready")
 
     traffic = status.get("traffic")
     if not isinstance(traffic, list) or not traffic:

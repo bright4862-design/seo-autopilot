@@ -353,6 +353,19 @@ export function evaluateStage4ReleaseAcceptance(record) {
 
   add(failures, record.acceptance?.closed_and_drained === true, "acceptance cohort was not closed and drained after verification");
   add(failures, hasReceipt(record.acceptance?.close_drain_reference), "acceptance close/drain receipt missing");
+  // This is a post-opening audit, not permission to open public claims. The
+  // operator's affirmative ordering flag is not a substitute for coherent
+  // timestamps in the receipts for the completed and reopened rescan.
+  const closedAt = record.acceptance?.closed_and_drained_at;
+  const openedAt = record.public_release?.opened_at;
+  add(failures, time(closedAt) !== null, "acceptance close/drain timestamp missing or invalid");
+  add(failures, observedAfter(closedAt, rescanReload.observed_at),
+    "acceptance close/drain precedes verified comparison customer read-back");
+  add(failures, time(openedAt) !== null, "public opening timestamp missing or invalid");
+  add(failures, observedAfter(openedAt, closedAt, true),
+    "public opening must follow completed acceptance close/drain");
+  add(failures, observedAfter(record.observed_at, openedAt),
+    "Stage-4 observation predates public opening");
   add(failures, record.public_release?.opened_after_acceptance === true, "public opening was not verified to occur after acceptance");
   add(failures, record.public_release?.claims_open === true, "public claims are not verified open");
   add(failures, hasReceipt(record.public_release?.opening_reference), "public opening receipt missing");

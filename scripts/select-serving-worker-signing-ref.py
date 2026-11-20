@@ -76,8 +76,8 @@ def select(service, revision):
         fail("revision metadata does not match observed serving target")
     service_name = (service.get("metadata") or {}).get("name")
     revision_service = (metadata.get("labels") or {}).get("serving.knative.dev/service")
-    if revision_service is not None and revision_service != service_name:
-        fail("serving revision belongs to another service")
+    if not isinstance(service_name, str) or not service_name or revision_service != service_name:
+        fail("serving revision lacks matching service ownership metadata")
     conditions = (revision.get("status") or {}).get("conditions") or []
     ready = [item for item in conditions if isinstance(item, dict) and item.get("type") == "Ready"]
     if len(ready) != 1 or ready[0].get("status") != "True":

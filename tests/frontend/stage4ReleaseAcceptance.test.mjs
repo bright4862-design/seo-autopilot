@@ -123,10 +123,10 @@ function validRecord(overrides = {}) {
         customer_result: actualCustomerProjection(),
       },
       history: {
-        observed_at: "2026-09-19T20:12:00Z",
+        observed_at: "2026-09-19T20:25:00Z",
         evidence_reference: `${RECEIPT}:history`,
         owner_scoped: true,
-        scan_ids: ["scan-acceptance-1"],
+        scan_ids: ["scan-acceptance-1", "scan-acceptance-2"],
       },
       rescan: {
         observed_at: "2026-09-19T20:20:00Z",
@@ -807,4 +807,34 @@ test("public opening chronology is independently checked against verified compar
       assert.ok(result.failures.some(message => message.includes(expected)), label + ": " + JSON.stringify(result.failures));
     }
   }
+});
+
+test("comparison rescan remains discoverable in refreshed owner history after signed read-back", () => {
+  assert.equal(evaluateStage4ReleaseAcceptance(validRecord()).pass, true, "two scans visible after second read");
+
+  for (const [label, mutate, expected] of [
+    ["baseline-only saved history", r => {
+      r.acceptance.history.scan_ids = ["scan-acceptance-1"];
+    }, "customer history does not include comparison rescan"],
+    ["wrong rescan history identity", r => {
+      r.acceptance.history.scan_ids = ["scan-acceptance-1", "scan-other"];
+    }, "customer history does not include comparison rescan"],
+    ["stale history before second reader", r => {
+      r.acceptance.history.observed_at = "2026-09-19T20:20:30Z";
+    }, "customer history observation precedes verified comparison customer read-back"],
+    ["old history with both IDs asserted", r => {
+      r.acceptance.history.observed_at = "2026-09-19T20:12:00Z";
+    }, "customer history observation precedes verified comparison customer read-back"],
+  ]) {
+    const record = validRecord();
+    mutate(record);
+    const verdict = evaluateStage4ReleaseAcceptance(record);
+    assert.equal(verdict.status, "failed", label);
+    assert.ok(verdict.failures.includes(expected), label + ": " + JSON.stringify(verdict.failures));
+  }
+
+  const sameTick = validRecord();
+  sameTick.acceptance.history.observed_at = sameTick.acceptance.rescan_reload.observed_at;
+  assert.equal(evaluateStage4ReleaseAcceptance(sameTick).pass, true,
+    "same-tick customer reload and subsequent history observation remain permitted");
 });

@@ -45,7 +45,7 @@ function validRecord(overrides = {}) {
   const record = {
     version: STAGE4_RELEASE_RECORD_VERSION,
     provenance: "live_authorized",
-    observed_at: "2026-09-19T20:00:00Z",
+    observed_at: "2026-09-19T20:40:00Z",
     source: { merged_sha: SHA },
     review: { status: "approved", evidence_reference: RECEIPT },
     ci: {
@@ -156,10 +156,12 @@ function validRecord(overrides = {}) {
         }),
       },
       closed_and_drained: true,
+      closed_and_drained_at: "2026-09-19T20:30:00Z",
       close_drain_reference: `${RECEIPT}:close-drain`,
     },
     public_release: {
       opened_after_acceptance: true,
+      opened_at: "2026-09-19T20:35:00Z",
       claims_open: true,
       opening_reference: `${RECEIPT}:public-open`,
     },
@@ -775,4 +777,34 @@ test("Stage-4 cannot accept an unverified or historical checkout package", () =>
   assert.equal(result.pass, false);
   assert.ok(result.failures.some((reason) => reason.includes("checkout runtime function identity")));
   assert.ok(result.failures.some((reason) => reason.includes("distinct source-declared functions")));
+});
+
+test("public opening chronology is independently checked against verified comparison and audit time", () => {
+  // Source-executed, synthetic post-opening audit only: these times are not
+  // proof that Base44's real admission barrier moved in this order.
+  assert.equal(evaluateStage4ReleaseAcceptance(validRecord()).pass, true, "positive timeline");
+  const cases = [
+    ["missing close timestamp", r => { delete r.acceptance.closed_and_drained_at; }, "acceptance close/drain timestamp"],
+    ["malformed close timestamp", r => { r.acceptance.closed_and_drained_at = "not-a-date"; }, "acceptance close/drain timestamp"],
+    ["closure before verified comparison reader", r => { r.acceptance.closed_and_drained_at = "2026-09-19T20:20:00Z"; }, "acceptance close/drain precedes verified comparison"],
+    ["closure at reader timestamp", r => { r.acceptance.closed_and_drained_at = r.acceptance.rescan_reload.observed_at; }, null],
+    ["missing opening time", r => { delete r.public_release.opened_at; }, "public opening timestamp"],
+    ["public opened before owner acceptance", r => { r.public_release.opened_at = "2026-09-19T20:05:00Z"; }, "public opening must follow"],
+    ["public opened exactly at close", r => { r.public_release.opened_at = r.acceptance.closed_and_drained_at; }, "public opening must follow"],
+    ["future opening after audit", r => { r.public_release.opened_at = "2100-01-01T00:00:00Z"; }, "Stage-4 observation predates public opening"],
+    ["audit recorded before public opening", r => { r.observed_at = "2026-09-19T20:32:00Z"; }, "Stage-4 observation predates public opening"],
+  ];
+  for (const [label, mutate, expected] of cases) {
+    const record = validRecord();
+    mutate(record);
+    const result = evaluateStage4ReleaseAcceptance(record);
+    if (label === "closure at reader timestamp") {
+      // Equal timestamps are accepted because the closure and read-back may
+      // be recorded in the same clock tick, but opening must still be later.
+      assert.equal(result.pass, true, label);
+    } else {
+      assert.equal(result.status, "failed", label);
+      assert.ok(result.failures.some(message => message.includes(expected)), label + ": " + JSON.stringify(result.failures));
+    }
+  }
 });

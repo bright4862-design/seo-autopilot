@@ -469,6 +469,8 @@ test("independently persisted rescan identity is required even if comparison is 
 test("a distinct, valid, bounded Standard 150 rescan retains the acceptance shape", () => {
   const record = validRecord();
   record.acceptance.rescan.scan_id = "scan-acceptance-3";
+  // History must include the same distinct comparison run this test rebinds.
+  record.acceptance.history.scan_ids = ["scan-acceptance-1", "scan-acceptance-3"];
   record.acceptance.rescan.pages_crawled = 1;
   record.acceptance.rescan.authority_proof = "e".repeat(64);
   record.acceptance.rescan.fix_list_id = "fix-list-3";

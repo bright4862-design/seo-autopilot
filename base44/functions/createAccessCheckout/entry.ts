@@ -59,6 +59,12 @@ function resolveCheckoutReturnOrigin(value) {
 }
 
 function checkoutPolicy() {
+  // Public checkout still requires the owner-controlled disabled-first release switch.
+  // CHECKOUT_ENABLED is a separate veto, not a substitute for this kill switch.
+  if (Deno.env.get("BETA_CHECKOUT_ENABLED") !== "true") {
+    return { ok: false, code: "checkout_paused", generation: "" };
+  }
+
   const configuredEnabled = String(Deno.env.get("CHECKOUT_ENABLED") || "").trim().toLowerCase();
   if (configuredEnabled === "false") {
     return { ok: false, code: "checkout_paused", generation: "" };

@@ -12,7 +12,7 @@ const secret = (version) => ({
 });
 const service = (templateVersion = "7", traffic = [{ revisionName: "worker-00007", percent: 100 }]) => ({
   metadata: { name: "worker", generation: 4 },
-  status: { observedGeneration: 4, traffic },
+  status: { observedGeneration: 4, traffic, conditions: [{ type: "Ready", status: "True" }] },
   spec: { template: { spec: { containers: [{ env: [secret(templateVersion)] }] } } },
 });
 const revision = (version = "7", ready = "True") => ({
@@ -78,6 +78,20 @@ for (const [label, svc] of invalid) {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /ERROR:/);
     assert.equal(result.ref, null);
+  });
+}
+
+for (const state of ["False", "Unknown", "missing"]) {
+  test("rejects service Ready=" + state + " even when serving revision is Ready", () => {
+    const svc = service();
+    if (state === "missing") delete svc.status.conditions;
+    else svc.status.conditions[0].status = state;
+    const selected = invoke("select", svc);
+    assert.notEqual(selected.status, 0);
+    assert.match(selected.stderr, /Cloud Run service is not confirmed Ready/);
+    assert.equal(selected.ref, null);
+    const routeOnly = invoke("revision-name", svc);
+    assert.notEqual(routeOnly.status, 0);
   });
 }
 

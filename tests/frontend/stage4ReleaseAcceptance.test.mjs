@@ -654,3 +654,28 @@ test("an operator-CLI canary is not a published customer-UI Stage-4 journey", ()
     assert.ok(result.failures.some(message => message.includes(required)), required);
   }
 });
+
+
+test("Base44 site identity requires GetFixList's exact published hostname", () => {
+  const baseline = validRecord();
+  assert.equal(evaluateStage4ReleaseAcceptance(baseline).pass, true, "exact host positive control");
+
+  for (const impostor of [
+    "unrelated-tenant.base44.app",
+    "getfixlist-preview.base44.app",
+    "sub.getfixlist.base44.app",
+    "base44.app",
+    "",
+  ]) {
+    const record = validRecord();
+    record.deployment.site.hosts_verified = ["getfixlist.com", impostor];
+    const result = evaluateStage4ReleaseAcceptance(record);
+    assert.equal(result.status, "failed", impostor);
+    assert.ok(result.failures.includes("Base44-hosted source identity not verified"), impostor);
+  }
+
+  const both = validRecord();
+  both.deployment.site.hosts_verified = ["getfixlist.com", "unrelated-tenant.base44.app", "getfixlist.base44.app"];
+  assert.equal(evaluateStage4ReleaseAcceptance(both).pass, true,
+    "the exact GetFixList host, rather than a provider-wide suffix, carries the identity");
+});

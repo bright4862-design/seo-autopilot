@@ -100,12 +100,21 @@ test("checkout accepts only exact trusted return origins", () => {
   }
 });
 
-test("production checkout is enabled by default and can be explicitly paused", () => {
+test("disabled-first checkout release switch overrides the public checkout flag", () => {
   const priorDeno = globalThis.Deno;
   const values = new Map();
   globalThis.Deno = { env: { get: (name) => values.get(name) } };
 
   try {
+    const paused = { ok: false, code: "checkout_paused", generation: "" };
+    assert.deepEqual(checkoutHelpers.checkoutPolicy(), paused, "missing release switch must pause");
+    values.set("CHECKOUT_ENABLED", "true");
+    assert.deepEqual(checkoutHelpers.checkoutPolicy(), paused, "public switch cannot override absent release switch");
+    values.set("BETA_CHECKOUT_ENABLED", "false");
+    assert.deepEqual(checkoutHelpers.checkoutPolicy(), paused, "disabled-first setup must pause");
+    values.set("BETA_CHECKOUT_ENABLED", "TRUE");
+    assert.deepEqual(checkoutHelpers.checkoutPolicy(), paused, "release opt-in must be exact true");
+    values.set("BETA_CHECKOUT_ENABLED", "true");
     assert.deepEqual(checkoutHelpers.checkoutPolicy(), {
       ok: true,
       code: "",
@@ -204,6 +213,7 @@ test("pending checkout retries reuse one user-stable Stripe idempotency key", as
 test("the checkout handler enforces admission without mutating durable entitlement state", async () => {
   const priorDeno = globalThis.Deno;
   const env = new Map([
+    ["BETA_CHECKOUT_ENABLED", "true"],
     ["CHECKOUT_ENABLED", "true"],
     ["CHECKOUT_GENERATION", "public-2026-09"],
   ]);
@@ -329,6 +339,14 @@ test("the checkout handler enforces admission without mutating durable entitleme
     assert.equal((await rejected.json()).code, "checkout_origin_not_allowed");
     assert.equal(accessCreateCount, 0);
     assert.equal(sessionCreateCalls.length, 0);
+
+    env.set("BETA_CHECKOUT_ENABLED", "false");
+    const betaPaused = await invoke("https://rich-rank-pilot-flow.base44.app");
+    assert.equal(betaPaused.status, 503);
+    assert.equal((await betaPaused.json()).code, "checkout_paused");
+    assert.equal(accessCreateCount, 0);
+    assert.equal(sessionCreateCalls.length, 0);
+    env.set("BETA_CHECKOUT_ENABLED", "true");
 
     env.set("CHECKOUT_ENABLED", "false");
     const paused = await invoke("https://rich-rank-pilot-flow.base44.app");

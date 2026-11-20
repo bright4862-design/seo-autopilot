@@ -12,6 +12,7 @@ import {
 
 import { RELEASE_FINGERPRINT, RELEASE_COMPONENT_VERSIONS } from "../../src/lib/generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID as V9_START_BUILD_ID } from "../../base44/functions/startStandardScanJobV9/generatedBuildId.js";
+import { FUNCTION_BUILD_ID as CHECKOUT_BUILD_ID } from "../../base44/functions/createAccessCheckout/generatedBuildId.js";
 import { buildCustomerProjection as buildPublicV8Projection } from "../../base44/functions/getCustomerScanResultV8/projection.js";
 import { buildCustomerProjection as buildStagedV9Projection } from "../../base44/functions/getCustomerScanResultV9/projection.js";
 
@@ -56,6 +57,13 @@ function validRecord(overrides = {}) {
     schema: { named_schema_parity: true, evidence_reference: RECEIPT },
     deployment: {
       route_generation: EXPECTED_SCANNER_ROUTE_GENERATION,
+      checkout: {
+        name: "createAccessCheckout",
+        verified: true,
+        source_sha: SHA,
+        runtime_build_id: CHECKOUT_BUILD_ID,
+        verification_reference: `${RECEIPT}:checkout-live-package`,
+      },
       site: {
         verified: true,
         source_sha: SHA,
@@ -732,4 +740,39 @@ test("comparison rescan requires a second independently verified customer reopen
     assert.equal(verdict.status, "failed", label);
     assert.ok(verdict.failures.includes(expected), label + ": " + JSON.stringify(verdict.failures));
   }
+});
+
+test("Stage-4 cannot accept an unverified or historical checkout package", () => {
+  assert.equal(evaluateStage4ReleaseAcceptance(validRecord()).pass, true, "complete fixture");
+  assert.match(CHECKOUT_BUILD_ID, /^[a-f0-9]{64}$/);
+  const historicalBuild = "98dd951c04127e83cba8ed0677e82f7954adf07fa24752486555a632e91ac69f";
+  assert.notEqual(CHECKOUT_BUILD_ID, historicalBuild, "old checkout package differs from tested emergency stop");
+  const mutations = [
+    ["missing checkout evidence", (r) => { delete r.deployment.checkout; }, "checkout runtime function identity"],
+    ["old deployed checkout build", (r) => { r.deployment.checkout.runtime_build_id = historicalBuild; }, "checkout runtime package build ID"],
+    ["foreign function", (r) => { r.deployment.checkout.name = "otherTenantCheckout"; }, "checkout runtime function identity"],
+    ["unverified package", (r) => { r.deployment.checkout.verified = false; }, "checkout runtime is not verified"],
+    ["foreign source SHA", (r) => { r.deployment.checkout.source_sha = "f".repeat(40); }, "checkout source does not match merged SHA"],
+    ["missing receipt", (r) => { r.deployment.checkout.verification_reference = ""; }, "checkout runtime verification receipt"],
+  ];
+  for (const [label, mutate, expected] of mutations) {
+    const record = validRecord();
+    mutate(record);
+    const result = evaluateStage4ReleaseAcceptance(record);
+    assert.equal(result.pass, false, label);
+    assert.ok(result.failures.some((reason) => reason.includes(expected)), label);
+  }
+
+  // The six scanner routes form a closed roster. Hiding checkout as an extra
+  // scanner function cannot substitute for its independent package receipt.
+  const misplaced = validRecord();
+  delete misplaced.deployment.checkout;
+  misplaced.deployment.functions.push({
+    name: "createAccessCheckout", verified: true, source_sha: SHA,
+    runtime_build_id: CHECKOUT_BUILD_ID, verification_reference: RECEIPT,
+  });
+  const result = evaluateStage4ReleaseAcceptance(misplaced);
+  assert.equal(result.pass, false);
+  assert.ok(result.failures.some((reason) => reason.includes("checkout runtime function identity")));
+  assert.ok(result.failures.some((reason) => reason.includes("distinct source-declared functions")));
 });

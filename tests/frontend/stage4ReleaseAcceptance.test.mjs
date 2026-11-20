@@ -20,18 +20,21 @@ const PROOF = "b".repeat(64);
 const DIGEST = `sha256:${"c".repeat(64)}`;
 const RECEIPT = "receipt:verified-stage4-evidence";
 
-function actualCustomerProjection(projection = buildPublicV8Projection) {
+function actualCustomerProjection(projection = buildPublicV8Projection, {
+  scanId = "scan-acceptance-1",
+  fixListId = "fix-list-1",
+} = {}) {
   return projection({
     // Construct a real, sanitized V9 customer response from synthetic persisted
     // rows. The stored HMAC is deliberately absent from the reader projection.
     run: {
-      id: "scan-acceptance-1", project_id: "project-acceptance-1",
+      id: scanId, project_id: "project-acceptance-1",
       status: "complete", scan_mode: "standard_150",
       beta_revision_fingerprint: RELEASE_FINGERPRINT, authority_proof: PROOF,
     },
     fixList: {
-      id: "fix-list-1", project_id: "project-acceptance-1",
-      scan_run_id: "scan-acceptance-1", authority_proof: PROOF,
+      id: fixListId, project_id: "project-acceptance-1",
+      scan_run_id: scanId, authority_proof: PROOF,
     },
     fixItems: [], fullAccess: true, authorityVerified: true,
   });
@@ -134,6 +137,15 @@ function validRecord(overrides = {}) {
         source_sha: SHA,
         comparison: "improved",
         comparison_evidence_verified: true,
+      },
+      rescan_reload: {
+        observed_at: "2026-09-19T20:21:00Z",
+        evidence_reference: `${RECEIPT}:rescan-reload`,
+        requested_scan_id: "scan-acceptance-2",
+        customer_result: actualCustomerProjection(buildPublicV8Projection, {
+          scanId: "scan-acceptance-2",
+          fixListId: "fix-list-2",
+        }),
       },
       closed_and_drained: true,
       close_drain_reference: `${RECEIPT}:close-drain`,
@@ -440,6 +452,11 @@ test("a distinct, valid, bounded Standard 150 rescan retains the acceptance shap
   record.acceptance.rescan.pages_crawled = 1;
   record.acceptance.rescan.authority_proof = "e".repeat(64);
   record.acceptance.rescan.fix_list_id = "fix-list-3";
+  record.acceptance.rescan_reload.requested_scan_id = "scan-acceptance-3";
+  record.acceptance.rescan_reload.customer_result = actualCustomerProjection(buildPublicV8Projection, {
+    scanId: "scan-acceptance-3",
+    fixListId: "fix-list-3",
+  });
   assert.equal(evaluateStage4ReleaseAcceptance(record).pass, true);
 });
 
@@ -678,4 +695,31 @@ test("Base44 site identity requires GetFixList's exact published hostname", () =
   both.deployment.site.hosts_verified = ["getfixlist.com", "unrelated-tenant.base44.app", "getfixlist.base44.app"];
   assert.equal(evaluateStage4ReleaseAcceptance(both).pass, true,
     "the exact GetFixList host, rather than a provider-wide suffix, carries the identity");
+});
+
+test("comparison rescan requires a second independently verified customer reopening", () => {
+  assert.equal(evaluateStage4ReleaseAcceptance(validRecord()).pass, true, "both read-backs present");
+
+  const cases = [
+    ["no second customer receipt", r => { delete r.acceptance.rescan_reload; }, "rescan customer reload evidence reference missing"],
+    ["second receipt missing observation", r => { delete r.acceptance.rescan_reload.observed_at; }, "rescan customer reload observation timestamp missing"],
+    ["receipt before comparison result", r => { r.acceptance.rescan_reload.observed_at = r.acceptance.rescan.observed_at; }, "rescan customer reload must follow completed rescan"],
+    ["replayed first reload", r => { r.acceptance.rescan_reload = structuredClone(r.acceptance.reload); }, "rescan customer reload did not return exact ScanRun"],
+    ["wrong request identity", r => { r.acceptance.rescan_reload.requested_scan_id = "scan-acceptance-1"; }, "rescan customer reload did not return exact ScanRun"],
+    ["failed 409 read", r => { r.acceptance.rescan_reload.customer_result = { success: false, status: 409, error: "authority verification failed" }; }, "rescan customer reload response not successful"],
+    ["foreign FixList", r => { r.acceptance.rescan_reload.customer_result.fixList.id = "fix-list-foreign"; }, "rescan customer reload returned a different FixList"],
+    ["foreign project", r => { r.acceptance.rescan_reload.customer_result.run.project_id = "project-foreign"; }, "rescan customer reload project does not match persisted rescan"],
+    ["historical fingerprint", r => { r.acceptance.rescan_reload.customer_result.run.beta_revision_fingerprint = "0".repeat(16); }, "rescan customer reload is not the completed current-release result"],
+    ["preview instead of full result", r => { r.acceptance.rescan_reload.customer_result.access = "preview"; }, "rescan customer reload did not return full-access FixList"],
+    ["unsigned successful response", r => { r.acceptance.rescan_reload.customer_result.authority_verified = false; }, "rescan customer reload did not verify full signed authority"],
+    ["old release contract", r => { r.acceptance.rescan_reload.customer_result.release_contract_current = false; }, "rescan customer reload did not verify current release contract"],
+    ["private proof copied into customer evidence", r => { r.acceptance.rescan_reload.customer_result.run.authority_proof = "d".repeat(64); }, "rescan customer reload must not echo private persisted proof"],
+  ];
+  for (const [label, mutate, expected] of cases) {
+    const record = validRecord();
+    mutate(record);
+    const verdict = evaluateStage4ReleaseAcceptance(record);
+    assert.equal(verdict.status, "failed", label);
+    assert.ok(verdict.failures.includes(expected), label + ": " + JSON.stringify(verdict.failures));
+  }
 });

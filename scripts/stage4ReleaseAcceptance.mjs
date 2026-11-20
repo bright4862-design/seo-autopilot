@@ -54,6 +54,10 @@ export const EXPECTED_SCANNER_BUILD_IDS = Object.freeze(Object.fromEntries(
   EXPECTED_SCANNER_FUNCTIONS.map((name) => [name, sourcePackageBuildId(name)]),
 ));
 
+// The disabled-first checkout stop is packaged separately from the six scanner
+// routes; a green scanner roster cannot prove its deployed package identity.
+const EXPECTED_CHECKOUT_BUILD_ID = sourcePackageBuildId("createAccessCheckout");
+
 function clean(value) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -131,6 +135,20 @@ export function evaluateStage4ReleaseAcceptance(record) {
   const hosts = Array.isArray(site.hosts_verified) ? site.hosts_verified.map(clean) : [];
   add(failures, hosts.includes("getfixlist.com"), "getfixlist.com source identity not verified");
   add(failures, hosts.includes("getfixlist.base44.app"), "Base44-hosted source identity not verified");
+
+  // Independently attest the live checkout package, even while checkout is
+  // disabled. No value here activates checkout or authorizes payments.
+  const checkout = record.deployment?.checkout || {};
+  add(failures, clean(checkout.name) === "createAccessCheckout",
+    "checkout runtime function identity is not verified");
+  add(failures, checkout.verified === true, "checkout runtime is not verified");
+  add(failures, clean(checkout.source_sha) === sha, "checkout source does not match merged SHA");
+  add(failures, /^[a-f0-9]{64}$/.test(EXPECTED_CHECKOUT_BUILD_ID || ""),
+    "source checkout package build ID missing or invalid");
+  add(failures, clean(checkout.runtime_build_id) === EXPECTED_CHECKOUT_BUILD_ID,
+    "checkout runtime package build ID does not match frozen source");
+  add(failures, hasReceipt(checkout.verification_reference),
+    "checkout runtime verification receipt missing");
 
   const functions = Array.isArray(record.deployment?.functions) ? record.deployment.functions : [];
   const functionNames = functions.map((fn) => clean(fn?.name));

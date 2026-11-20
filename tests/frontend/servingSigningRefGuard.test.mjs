@@ -47,7 +47,7 @@ function invoke(mode, svc, rev = revision(), initialRef) {
 test("selects only the observed Ready 100%-serving revision's pinned reference", () => {
   const selected = invoke("select", service(), revision());
   assert.equal(selected.status, 0, selected.stderr);
-  assert.equal(selected.ref, "synthetic-scan-key 7\n");
+  assert.equal(selected.ref, "synthetic-scan-key 7\nworker-00007\n");
   assert.equal(invoke("revision-name", service()).stdout, "worker-00007\n");
   const verified = invoke("verify", service(), revision(), selected.ref);
   assert.equal(verified.status, 0, verified.stderr);
@@ -62,6 +62,12 @@ const invalid = [
   ])],
   ["not yet observed service generation", {
     ...service(), status: { observedGeneration: 3, traffic: service().status.traffic },
+  }],
+  ["missing service observedGeneration", {
+    ...service(), status: { traffic: service().status.traffic },
+  }],
+  ["missing metadata generation", {
+    ...service(), metadata: { name: "worker" },
   }],
   ["traffic without an explicit revision identity", service("7", [{ latestRevision: true, percent: 100 }])],
 ];
@@ -111,4 +117,22 @@ test("refuses changed key or traffic during pre-import verification", () => {
   const moved = service("7", [{ revisionName: "worker-00008", percent: 100 }]);
   assert.notEqual(invoke("verify", moved, revision(), "synthetic-scan-key 7\n").status, 0);
   assert.notEqual(invoke("verify", service(), revision(), "synthetic-scan-key 8\n").status, 0);
+});
+
+test("rejects a new Ready serving revision that reuses the original key reference", () => {
+  const original = invoke("select", service(), revision());
+  assert.equal(original.status, 0, original.stderr);
+  const switchedService = service("7", [{ revisionName: "worker-00008", percent: 100 }]);
+  const switchedRevision = revision();
+  switchedRevision.metadata.name = "worker-00008";
+  // The old two-token receipt permitted this same-secret revision swap.
+  // The additional pinned revision line must now reject it.
+  const check = invoke("verify", switchedService, switchedRevision, original.ref);
+  assert.notEqual(check.status, 0, check.stdout);
+  assert.match(check.stderr, /revision identity changed/);
+});
+
+test("rejects legacy key-only receipts without selected revision identity", () => {
+  const check = invoke("verify", service(), revision(), "synthetic-scan-key 7\n");
+  assert.notEqual(check.status, 0);
 });

@@ -292,6 +292,47 @@ export function evaluateStage4ReleaseAcceptance(record) {
   add(failures, ["improved", "unchanged", "regressed"].includes(clean(rescan.comparison)), "rescan comparison result missing");
   add(failures, rescan.comparison_evidence_verified === true, "rescan comparison evidence is not verified");
 
+  // A persisted rescan is not a verified *customer* rescan until the published
+  // reader reopens its own signed result. The sanitized response must bind to
+  // the distinct ScanRun/FixList, owner project and frozen release. A copied
+  // HMAC or the original scan's verified reload cannot establish this.
+  const rescanReload = record.acceptance?.rescan_reload || {};
+  const rescanCustomer = rescanReload.customer_result || {};
+  add(failures, time(rescanReload.observed_at) !== null,
+    "rescan customer reload observation timestamp missing");
+  add(failures, observedAfter(rescanReload.observed_at, rescan.observed_at, true),
+    "rescan customer reload must follow completed rescan");
+  add(failures, hasReceipt(rescanReload.evidence_reference),
+    "rescan customer reload evidence reference missing");
+  add(failures, rescanCustomer.success === true,
+    "rescan customer reload response not successful");
+  add(failures, clean(rescanReload.requested_scan_id) === rescanId
+    && clean(rescanCustomer.scan_id) === rescanId
+    && clean(rescanCustomer.run?.id) === rescanId,
+    "rescan customer reload did not return exact ScanRun");
+  add(failures, clean(rescanCustomer.fix_list_id) === clean(rescan.fix_list_id)
+    && clean(rescanCustomer.fixList?.id) === clean(rescan.fix_list_id)
+    && clean(rescanCustomer.fixList?.scan_run_id) === rescanId,
+    "rescan customer reload returned a different FixList");
+  add(failures, Boolean(clean(rescan.project_id))
+    && clean(rescanCustomer.run?.project_id) === clean(rescan.project_id)
+    && clean(rescanCustomer.fixList?.project_id) === clean(rescan.project_id),
+    "rescan customer reload project does not match persisted rescan");
+  add(failures, clean(rescanCustomer.run?.status) === "complete"
+    && clean(rescanCustomer.run?.beta_revision_fingerprint) === RELEASE_FINGERPRINT,
+    "rescan customer reload is not the completed current-release result");
+  add(failures, !Object.hasOwn(rescanReload, "authority_proof")
+    && !Object.hasOwn(rescanCustomer, "authority_proof")
+    && !Object.hasOwn(rescanCustomer.run || {}, "authority_proof")
+    && !Object.hasOwn(rescanCustomer.fixList || {}, "authority_proof"),
+    "rescan customer reload must not echo private persisted proof");
+  add(failures, clean(rescanCustomer.access) === "full",
+    "rescan customer reload did not return full-access FixList");
+  add(failures, rescanCustomer.authority_verified === true,
+    "rescan customer reload did not verify full signed authority");
+  add(failures, rescanCustomer.release_contract_current === true,
+    "rescan customer reload did not verify current release contract");
+
   add(failures, record.acceptance?.closed_and_drained === true, "acceptance cohort was not closed and drained after verification");
   add(failures, hasReceipt(record.acceptance?.close_drain_reference), "acceptance close/drain receipt missing");
   add(failures, record.public_release?.opened_after_acceptance === true, "public opening was not verified to occur after acceptance");

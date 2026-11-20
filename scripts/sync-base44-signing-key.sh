@@ -30,39 +30,26 @@ trap cleanup EXIT
 
 echo
 echo "[2/8] Reading the signing-secret reference from the LIVE Python worker..."
-gcloud run services describe "$WORKER" \
-  --project="$PROJECT" \
-  --region="$REGION" \
-  --format=json > "$TMP/worker.json"
+# Refuse to select from the desired service template alone: the active
+# revision can still be an older 100%-serving release.
+GUARD="$REPO_ROOT/scripts/select-serving-worker-signing-ref.py"
+test -f "$GUARD"
 
-python3 - "$TMP/worker.json" "$TMP/ref.txt" <<'PY'
-import json, sys
+refresh_serving_proof() {
+  gcloud run services describe "$WORKER" \
+    --project="$PROJECT" \
+    --region="$REGION" \
+    --format=json > "$TMP/worker.json"
+  local revision
+  revision="$(python3 "$GUARD" revision-name "$TMP/worker.json")"
+  gcloud run revisions describe "$revision" \
+    --project="$PROJECT" \
+    --region="$REGION" \
+    --format=json > "$TMP/revision.json"
+}
 
-src, output = sys.argv[1], sys.argv[2]
-with open(src, encoding="utf-8") as handle:
-    data = json.load(handle)
-
-containers = data.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
-if not containers:
-    raise SystemExit("ERROR: worker container configuration not found")
-
-for item in containers[0].get("env", []):
-    if item.get("name") != "SCAN_EVIDENCE_SIGNING_KEY":
-        continue
-    ref = item.get("valueFrom", {}).get("secretKeyRef", {})
-    name = str(ref.get("name") or "").strip()
-    version = str(ref.get("key") or "").strip()
-    if not name or not version:
-        raise SystemExit("ERROR: signing-secret reference is incomplete")
-    if version == "latest" or not version.isdigit():
-        raise SystemExit("ERROR: live worker signing secret is not pinned to a numeric version")
-    with open(output, "w", encoding="utf-8") as handle:
-        handle.write(f"{name} {version}\n")
-    print(f"OK — live worker uses secret {name}, pinned version {version}")
-    break
-else:
-    raise SystemExit("ERROR: live worker has no SCAN_EVIDENCE_SIGNING_KEY")
-PY
+refresh_serving_proof
+python3 "$GUARD" select "$TMP/worker.json" "$TMP/revision.json" "$TMP/ref.txt"
 
 read -r SIGNING_SECRET SIGNING_VERSION < "$TMP/ref.txt"
 
@@ -113,6 +100,11 @@ echo
 echo
 echo "OK — Base44 authenticated"
 
+# Device authorization may take time. Recheck the *executing* revision before
+# accessing any signing-key bytes; a desired-template match is insufficient.
+refresh_serving_proof
+python3 "$GUARD" verify "$TMP/worker.json" "$TMP/revision.json" "$TMP/ref.txt"
+
 echo
 echo "[5/8] Reading that exact pinned secret version from Secret Manager..."
 echo "The secret VALUE will NOT be displayed."
@@ -157,6 +149,11 @@ print("OK — Base44 import contains the canonical signing-key bytes exactly")
 VERIFY
 
 echo
+# Recheck after encoding and byte verification, immediately before the
+# irreversible Base44 secret write. Refuse even a same-key revision change.
+refresh_serving_proof
+python3 "$GUARD" verify "$TMP/worker.json" "$TMP/revision.json" "$TMP/ref.txt"
+
 echo "[8/8] Synchronizing Base44 with the LIVE worker signing key..."
 "$CLI" --app-id "$APP_ID" secrets set --env-file "$TMP/base44.env"
 

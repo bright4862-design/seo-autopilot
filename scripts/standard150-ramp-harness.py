@@ -230,7 +230,9 @@ def _result_summary(item: Submission) -> dict[str, Any]:
     return {
         "scan_id": item.scan_id,
         "status": str(item.run.get("status") or ""),
-        "authority_verified": result.get("authority_verified") is True,
+        "authority_verified": result.get("access") == "full" and result.get("authority_verified") is True,
+        "preview_integrity_verified": result.get("access") == "preview" and result.get("authority_verified") is True,
+        "customer_access": str(result.get("access") or ""),
         "result_integrity_verified": result.get("result_integrity_verified") is True,
         "release_contract_current": result.get("release_contract_current") is True,
         "fix_list_present": bool(fix_list),
@@ -318,6 +320,7 @@ def report(items: list[Submission], logs: dict[str, Any], before: set[str] | Non
     authoritative_complete = [
         i for i in terminal
         if str(i.run.get("status") or "").lower() == "complete"
+        and i.customer_result.get("access") == "full"
         and i.customer_result.get("authority_verified") is True
     ]
     limited = [i for i in terminal if str(i.run.get("status") or "").lower() == "limited"]
@@ -340,6 +343,8 @@ def report(items: list[Submission], logs: dict[str, Any], before: set[str] | Non
                 + ", ".join(summary["matrix_failures"])
             )
         if status == "complete":
+            if result.get("access") != "full":
+                failures.append(f"{item.scan_id}: complete result lacks full-access customer read-back")
             if result.get("authority_verified") is not True:
                 failures.append(f"{item.scan_id}: complete result is not authority_verified")
             if result.get("release_contract_current") is not True:

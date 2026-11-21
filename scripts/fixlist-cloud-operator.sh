@@ -716,10 +716,11 @@ def attributed(path):
         if not isinstance(row, dict) or row.get("revisionName") != revision:
             continue
         # 100% service routing is valid only while that exact revision serves.
-        if probe_url == audience and row.get("percent") == 100:
-            return True
+        if probe_url == audience:
+            if row.get("percent") == 100:
+                return True
         # A tagged URL addresses only the revision the tag currently names.
-        if row.get("tag") and row.get("url") == probe_url:
+        elif row.get("tag") and row.get("url") == probe_url:
             return True
     return False
 

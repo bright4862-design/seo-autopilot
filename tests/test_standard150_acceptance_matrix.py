@@ -31,6 +31,43 @@ sys.modules[SPEC.name] = HARNESS
 SPEC.loader.exec_module(HARNESS)
 
 
+def test_ramp_acceptance_targets_the_browser_v8_routes_not_legacy_aliases():
+    # Independently pin the live customer form and history reader to the same
+    # release-manifest mapping used by the CLI acceptance ramp.
+    assert HARNESS.load_customer_routes() == (
+        "startStandardScanJobV8", "getCustomerScanResultV8",
+    )
+    active = json.loads((ROOT / "data/base44-function-routes.json").read_text())
+    assert active["generation"] == "v8"
+    assert HARNESS.START_CUSTOMER_FUNCTION == active["routes"]["startStandardScanJob"]
+    assert HARNESS.READ_CUSTOMER_FUNCTION == active["routes"]["getCustomerScanResult"]
+    form = (ROOT / "src/components/scan/ScanWebsiteForm.jsx").read_text()
+    reader = (ROOT / "src/lib/scanRuns.js").read_text()
+    assert 'const ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV8"' in form
+    assert 'base44.functions.invoke("getCustomerScanResultV8"' in reader
+
+
+def test_ramp_routes_fail_closed_on_legacy_staged_or_unreviewed_mapping(tmp_path):
+    current = json.loads((ROOT / "data/base44-function-routes.json").read_text())
+    invalid = [
+        {**current, "generation": "v9"},
+        {**current, "routes": {**current["routes"], "getCustomerScanResult": "getCustomerScanResult"}},
+        {**current, "routes": {**current["routes"], "startStandardScanJob": "startStandardScanJob"}},
+        {**current, "routes": {**current["routes"], "getCustomerScanResult": "getCustomerScanResultV9"}},
+        {**current, "routes": {}},
+    ]
+    for candidate in invalid:
+        path = tmp_path / "candidate-routes.json"
+        path.write_text(json.dumps(candidate), encoding="utf-8")
+        try:
+            HARNESS.load_customer_routes(path)
+        except RuntimeError as error:
+            assert "refusing legacy aliases" in str(error)
+        else:
+            raise AssertionError("unsafe customer route mapping passed ramp acceptance")
+
+
+
 def _complete_item(scan_id: str = "scan_complete"):
     item = HARNESS.Submission(
         email="acceptance@example.com",
@@ -166,7 +203,7 @@ def test_fresh_reopen_downgrade_fails_even_if_terminal_poll_was_full(monkeypatch
     assert HARNESS.report([item], {})["passed"] is True  # cached poll baseline
 
     async def fresh_preview(_client, _token, function, payload):
-        assert function == "getCustomerScanResult"
+        assert function == HARNESS.READ_CUSTOMER_FUNCTION
         assert payload == {"action": "get", "scan_id": item.scan_id}
         return 200, {
             **item.customer_result,
@@ -240,7 +277,7 @@ def test_successful_fresh_reopen_retains_full_and_limited_contracts(monkeypatch)
         fresh_body = {**item.customer_result, "run": dict(item.run)}
 
         async def fresh_read(_client, _token, function, payload):
-            assert function == "getCustomerScanResult"
+            assert function == HARNESS.READ_CUSTOMER_FUNCTION
             assert payload["scan_id"] == item.scan_id
             return 200, fresh_body
 
@@ -272,7 +309,7 @@ def test_main_exit_fails_when_independent_customer_reopen_is_unavailable(tmp_pat
         return None
 
     async def unavailable_reopen(_client, _token, function, payload):
-        assert function == "getCustomerScanResult"
+        assert function == HARNESS.READ_CUSTOMER_FUNCTION
         assert payload == {"action": "get", "scan_id": "scan_reopen_integration"}
         return 503, {"failure_code": "temporarily_unavailable"}
 
@@ -488,7 +525,7 @@ def test_terminal_poll_durably_checkpoints_the_completed_site(
     checkpoint = tmp_path / "acceptance.json"
 
     async def fake_invoke(_client, _token, function, payload):
-        assert function == "getCustomerScanResult"
+        assert function == HARNESS.READ_CUSTOMER_FUNCTION
         assert payload == {"action": "get", "scan_id": "scan_1"}
         return 200, {
             "scan_id": "scan_1",
@@ -535,7 +572,7 @@ def test_transition_checkpoint_failure_does_not_abort_terminal_reporting(
     item.customer_result = {}
 
     async def fake_invoke(_client, _token, function, payload):
-        assert function == "getCustomerScanResult"
+        assert function == HARNESS.READ_CUSTOMER_FUNCTION
         return 200, {
             "scan_id": payload["scan_id"],
             "run": {
@@ -587,7 +624,7 @@ def test_poll_failure_does_not_cancel_sibling_or_lose_checkpoint(
     attempts = {"scan_retry": 0}
 
     async def fake_invoke(_client, _token, function, payload):
-        assert function == "getCustomerScanResult"
+        assert function == HARNESS.READ_CUSTOMER_FUNCTION
         scan_id = payload["scan_id"]
         if scan_id == "scan_retry":
             attempts[scan_id] += 1

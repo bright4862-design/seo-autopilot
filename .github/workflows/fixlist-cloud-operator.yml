@@ -444,7 +444,28 @@ jobs:
           FIXLIST_OPERATOR_ID_TOKEN: ${{ steps.operator-id-token.outputs.id_token }}
           FIXLIST_OPERATOR_TOKEN_AUDIENCE: ${{ env.ADMISSION_OPERATOR_AUDIENCE }}
         shell: bash
-        run: bash ./scripts/fixlist-cloud-operator.sh
+        run: |
+          set -euo pipefail
+          if [[ "$OPERATION" == "verify-worker-routes" ]]; then
+            # The workflow's generic revision input defaults to a historical
+            # candidate. Never let that silently stand for the serving route.
+            get_serving_revision() {
+              gcloud run services describe "$CLOUD_RUN_SERVICE" \
+                --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json |
+                python3 scripts/resolve_serving_worker_revision.py "$CLOUD_RUN_SERVICE"
+            }
+            route_revision="$(get_serving_revision)"
+            echo "Route verification target (100%-serving): $route_revision"
+            export TARGET_REVISION="$route_revision"
+            bash ./scripts/fixlist-cloud-operator.sh
+            after_revision="$(get_serving_revision)"
+            [[ "$after_revision" == "$route_revision" ]] || {
+              echo 'Refusing route verification: 100%-serving revision changed during check.' >&2
+              exit 2
+            }
+          else
+            bash ./scripts/fixlist-cloud-operator.sh
+          fi
 
       - name: Build isolated Standard 150 worker candidate
         if: inputs.operation == 'build-worker-candidate'

@@ -279,14 +279,21 @@ function runGuard({ service, revision = "", body, code = "200", token = "stub-to
   fs.mkdirSync(bin);
   const servicePath = path.join(dir, "service.json");
   const bodyPath = path.join(dir, "revision.json");
+  const revisionMetadataPath = path.join(dir, "control-plane-revision.json");
   const curlLog = path.join(dir, "curl.log");
   fs.writeFileSync(servicePath, JSON.stringify(service));
   fs.writeFileSync(bodyPath, typeof body === "string" ? body : JSON.stringify(body));
+  const selectedRevision = service?.status?.traffic?.find((entry) => entry.percent === 100)?.revisionName || "worker-00054-trs";
+  fs.writeFileSync(revisionMetadataPath, JSON.stringify({
+    metadata: { name: selectedRevision, generation: 1, labels: { "serving.knative.dev/service": "fixlist-standard150-worker" } },
+    status: { observedGeneration: 1, conditions: [{ type: "Ready", status: "True" }] },
+  }));
   fs.writeFileSync(
     path.join(bin, "gcloud"),
     `#!/usr/bin/env bash
 if [ "$1 $2" = "config set" ]; then exit 0; fi
 if [ "$1 $2 $3" = "run services describe" ]; then cat "${servicePath}"; exit 0; fi
+if [ "$1 $2 $3" = "run revisions describe" ]; then cat "${revisionMetadataPath}"; exit 0; fi
 echo "unexpected gcloud: $*" >&2; exit 1
 `,
     { mode: 0o755 },
@@ -329,6 +336,7 @@ printf '%s' "${code}"
     return {
       status: error.status,
       stdout: String(error.stdout || ""),
+      stderr: String(error.stderr || ""),
       curl: fs.existsSync(curlLog) ? fs.readFileSync(curlLog, "utf8") : "",
     };
   } finally {
@@ -347,7 +355,10 @@ const LIVE_MATCHING = {
   source_sha: PROMOTED_SHA,
 };
 const serving = (revisionName, extra = {}) => ({
+  metadata: { name: "fixlist-standard150-worker", generation: 1 },
   status: {
+    observedGeneration: 1,
+    conditions: [{ type: "Ready", status: "True" }],
     url: SERVICE_URL,
     traffic: [{ revisionName, percent: 100, ...extra }],
   },
@@ -538,8 +549,26 @@ test("end to end: with no revision named, the one serving all traffic is the sub
   assert.doesNotMatch(ambiguous.stdout, /PASS:/);
   // It must say there is no subject, not invent one and then send the operator
   // off to tag a revision that does not exist.
-  assert.match(ambiguous.stdout, /none serves 100% of traffic/);
+  assert.match(ambiguous.stderr, /no reconciled Ready 100%-serving worker revision/);
   assert.doesNotMatch(ambiguous.stdout, /revision under test:/);
+});
+
+test("end to end: automatic worker lookup fails closed before curl on a stale service", () => {
+  const cases = [
+    { name: "service not Ready", mutate: (s) => { s.status.conditions[0].status = "False"; } },
+    { name: "service generation not reconciled", mutate: (s) => { s.status.observedGeneration = 0; } },
+    { name: "contradictory 100% traffic", mutate: (s) => {
+      s.status.traffic.push({ revisionName: "worker-00055-other", percent: 100 });
+    } },
+  ];
+  for (const { name, mutate } of cases) {
+    const service = serving("worker-00054-trs");
+    mutate(service);
+    const result = runGuard({ service, body: LIVE_MATCHING });
+    assert.notEqual(result.status, 0, name);
+    assert.equal(result.curl, "", `${name}: no identity token may be sent`);
+    assert.doesNotMatch(result.stdout, /PASS:/, name);
+  }
 });
 
 test("the operator exposes the check as a read-only operation", () => {

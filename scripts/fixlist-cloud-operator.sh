@@ -498,13 +498,24 @@ PY
   fi
 
   if [ -z "$revision" ]; then
-    revision="$(python3 - "$service_json" <<'PY'
-import json, sys
-status = json.load(open(sys.argv[1], encoding="utf-8")).get("status") or {}
-traffic = status.get("traffic") or []
-print(next((str(t.get("revisionName") or "") for t in traffic if int(t.get("percent") or 0) == 100), ""))
-PY
-)"
+    # Check the Ready/reconciled serving control plane independently of /revision.
+    # Explicit tagged 0%-traffic candidates keep their separate verified path.
+    if ! revision="$(python3 "$REPO_ROOT/scripts/verify_standard150_serving_revision.py" \
+      --service-json "$service_json")"; then
+      echo "INDETERMINATE: no reconciled Ready 100%-serving worker revision." >&2
+      return 1
+    fi
+    local serving_revision_json="$RUNTIME_PROBE_TMP/serving-revision.json"
+    if ! gcloud run revisions describe "$revision" \
+      --region="$GCP_REGION" --project="$GCP_PROJECT" --format=json > "$serving_revision_json"; then
+      echo "INDETERMINATE: could not read the selected Cloud Run revision." >&2
+      return 1
+    fi
+    if ! python3 "$REPO_ROOT/scripts/verify_standard150_serving_revision.py" \
+      --service-json "$service_json" --revision-json "$serving_revision_json" >/dev/null; then
+      echo "INDETERMINATE: selected worker revision is not Ready and reconciled." >&2
+      return 1
+    fi
   fi
   if [ -z "$revision" ]; then
     echo "INDETERMINATE: no revision was named and none serves 100% of traffic."

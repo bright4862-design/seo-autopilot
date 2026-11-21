@@ -161,6 +161,99 @@ def test_expected_busy_double_submit_exception_is_narrow():
     assert HARNESS.report([busy], {}, allow_busy_rejection=True)["passed"] is False
 
 
+def test_fresh_reopen_downgrade_fails_even_if_terminal_poll_was_full(monkeypatch):
+    item = _fully_qualifying_ramp_item("scan_reopen_preview")
+    assert HARNESS.report([item], {})["passed"] is True  # cached poll baseline
+
+    async def fresh_preview(_client, _token, function, payload):
+        assert function == "getCustomerScanResult"
+        assert payload == {"action": "get", "scan_id": item.scan_id}
+        return 200, {
+            **item.customer_result,
+            "scan_id": item.scan_id,
+            "run": dict(item.run),
+            "access": "preview",
+            "authority_verified": True,
+        }
+
+    monkeypatch.setattr(HARNESS, "invoke", fresh_preview)
+    errors = asyncio.run(HARNESS.reopen_customer_results(
+        object(), {item.email: "fake-token"}, [item],
+    ))
+    assert errors == []
+    assert item.customer_result["access"] == "preview"
+    observed = HARNESS.report([item], {})
+    assert observed["passed"] is False
+    assert any("lacks full-access customer read-back" in x for x in observed["failures"])
+
+
+def test_failed_fresh_reopen_never_reuses_green_terminal_poll(monkeypatch):
+    item = _fully_qualifying_ramp_item("scan_reopen_503")
+    assert HARNESS.report([item], {})["passed"] is True
+
+    async def unavailable(_client, _token, _function, _payload):
+        return 503, {"failure_code": "temporarily_unavailable"}
+
+    monkeypatch.setattr(HARNESS, "invoke", unavailable)
+    errors = asyncio.run(HARNESS.reopen_customer_results(
+        object(), {item.email: "fake-token"}, [item],
+    ))
+    assert errors == [f"{item.scan_id}: fresh customer read-back HTTP 503"]
+    assert item.customer_result == {}
+    assert HARNESS.report([item], {})["passed"] is False
+
+
+def test_fresh_reopen_rejects_foreign_scan_and_regressed_terminal(monkeypatch):
+    for scenario in ("foreign_scan", "regressed_status"):
+        item = _fully_qualifying_ramp_item(f"scan_{scenario}")
+
+        async def wrong_read(_client, _token, _function, _payload):
+            fresh_run = dict(item.run)
+            if scenario == "regressed_status":
+                fresh_run["status"] = "crawling"
+            return 200, {
+                **item.customer_result,
+                "scan_id": "different_scan" if scenario == "foreign_scan" else item.scan_id,
+                "run": fresh_run,
+            }
+
+        monkeypatch.setattr(HARNESS, "invoke", wrong_read)
+        errors = asyncio.run(HARNESS.reopen_customer_results(
+            object(), {item.email: "fake-token"}, [item],
+        ))
+        assert len(errors) == 1
+        assert ("identity mismatch" if scenario == "foreign_scan" else "terminal status changed") in errors[0]
+        assert item.customer_result == {}
+        assert HARNESS.report([item], {})["passed"] is False
+
+
+def test_successful_fresh_reopen_retains_full_and_limited_contracts(monkeypatch):
+    for status in ("complete", "limited"):
+        item = _fully_qualifying_ramp_item(f"scan_reopened_{status}")
+        item.run["status"] = status
+        if status == "limited":
+            item.run["error_code"] = "scan_access_limited"
+            item.customer_result.update({
+                "access": "limited", "authority_verified": False,
+                "result_integrity_verified": True, "fixList": None, "fixItems": [],
+            })
+        fresh_body = {**item.customer_result, "run": dict(item.run)}
+
+        async def fresh_read(_client, _token, function, payload):
+            assert function == "getCustomerScanResult"
+            assert payload["scan_id"] == item.scan_id
+            return 200, fresh_body
+
+        monkeypatch.setattr(HARNESS, "invoke", fresh_read)
+        errors = asyncio.run(HARNESS.reopen_customer_results(
+            object(), {item.email: "fake-token"}, [item],
+        ))
+        assert errors == []
+        observed = HARNESS.report([item], {})
+        assert observed["passed"] is True
+        assert observed["authoritative_complete"] == (1 if status == "complete" else 0)
+
+
 def test_failed_and_cancelled_terminals_never_pass_customer_acceptance():
     # Negative controls keep all ten dimensions measured and the exact
     # release matched, so failure must derive from terminal outcome itself.

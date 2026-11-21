@@ -314,7 +314,14 @@ def write_checkpoint(path: str, items: list[Submission]) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def report(items: list[Submission], logs: dict[str, Any], before: set[str] | None = None, after: set[str] | None = None) -> dict[str, Any]:
+def report(
+    items: list[Submission],
+    logs: dict[str, Any],
+    before: set[str] | None = None,
+    after: set[str] | None = None,
+    *,
+    allow_busy_rejection: bool = False,
+) -> dict[str, Any]:
     accepted = [i for i in items if i.accepted]
     terminal = [i for i in accepted if str(i.run.get("status") or "").lower() in TERMINAL]
     authoritative_complete = [
@@ -326,6 +333,20 @@ def report(items: list[Submission], logs: dict[str, Any], before: set[str] | Non
     limited = [i for i in terminal if str(i.run.get("status") or "").lower() == "limited"]
     scores = [float(i.run.get("evidence_quality_score") or 0) for i in authoritative_complete]
     failures: list[str] = []
+    # A zero-accepted run must never certify a release. An isolated owner
+    # canary also fails if any submission is rejected. The deliberate loser
+    # of --double-submit is the only exception, checked again by main_async.
+    if not accepted:
+        failures.append("no scan was accepted; cannot certify customer result")
+    for index, item in enumerate(items, start=1):
+        if item.accepted:
+            continue
+        if allow_busy_rejection and item.failure_code == "scan_admission_busy":
+            continue
+        failures.append(
+            f"submission {index} was not accepted: "
+            f"{item.failure_code or 'unknown_rejection'}"
+        )
     if len(terminal) != len(accepted):
         failures.append(f"{len(accepted) - len(terminal)} accepted scan(s) did not terminalize")
     for item in terminal:
@@ -412,7 +433,12 @@ async def main_async(args: argparse.Namespace) -> int:
             after = {str(r.get("id") or r.get("scan_id") or "") for r in await list_runs(client, tokens[items[0].email], items[0].project_id)}
 
     logs = log_quality([i.scan_id for i in items if i.scan_id], started, args.gcp_project)
-    result = report(items, logs, before if args.double_submit else None, after if args.double_submit else None)
+    result = report(
+        items, logs,
+        before if args.double_submit else None,
+        after if args.double_submit else None,
+        allow_busy_rejection=args.double_submit,
+    )
     if args.checkpoint:
         try:
             write_checkpoint(args.checkpoint, items)

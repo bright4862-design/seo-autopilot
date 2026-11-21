@@ -55,6 +55,7 @@ def _complete_item(scan_id: str = "scan_complete"):
         "review_version": "review_1",
     }
     item.customer_result = {
+        "access": "full",
         "scan_id": scan_id,
         "authority_verified": True,
         "result_integrity_verified": False,
@@ -64,6 +65,35 @@ def _complete_item(scan_id: str = "scan_complete"):
     }
     return item
 
+
+
+def test_preview_integrity_does_not_satisfy_full_customer_readback():
+    # A real V8 reader can return authority_verified=True for a separately
+    # signed unpaid preview without checking the full persisted HMAC.
+    item = _complete_item("scan_preview_only")
+    item.run.update({
+        "coverage_authority_evidence": {"state": "sufficient"},
+        "classification_integrity": {"state": "verified"},
+        "peak_memory_bytes": 4096,
+        "beta_revision_fingerprint": HARNESS.EXPECTED_RELEASE_FINGERPRINT,
+    })
+
+    control = HARNESS.report([item], {})
+    assert control["passed"] is True
+    assert control["authoritative_complete"] == 1
+    assert control["results"][0]["acceptance_matrix"]["authority_outcome"]["state"] == "authoritative"
+
+    for access in ("preview", "locked", ""):
+        item.customer_result["access"] = access
+        observed = HARNESS.report([item], {})
+        expected = "preview_only" if access == "preview" else "unverified"
+        authority = observed["results"][0]["acceptance_matrix"]["authority_outcome"]
+        assert authority["state"] == expected
+        assert authority["authority_verified"] is False
+        assert authority["preview_integrity_verified"] is (access == "preview")
+        assert observed["authoritative_complete"] == 0
+        assert observed["passed"] is False
+        assert any("lacks full-access customer read-back" in failure for failure in observed["failures"])
 
 def test_matrix_has_ten_independent_dimensions_and_only_real_gaps():
     item = _complete_item()

@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 import httpx
-from fastapi import Body, FastAPI, Header, HTTPException
+from fastapi import Body, FastAPI, Header, HTTPException, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -238,10 +238,21 @@ def authenticated_health(x_scanner_key: str | None = Header(default=None)):
 
 
 @app.get("/revision")
-def revision():
+def revision(response: Response = None):
     """Live beta-revision fingerprint for verifying a deployed scanner against
     the recorded freeze in data/beta-crawler-revision.json."""
-    return {**live_revision(), "source_sha": WORKER_SOURCE_SHA}
+    # Source/fingerprint alone cannot identify which Cloud Run revision answered
+    # a traffic-switch probe when consecutive revisions share the same image.
+    # Keep a dict return for existing in-process provenance checks; FastAPI
+    # injects the response object for HTTP requests so caches cannot retain
+    # an earlier serving revision's answer.
+    if response is not None:
+        response.headers["Cache-Control"] = "no-store"
+    return {
+        **live_revision(),
+        "source_sha": WORKER_SOURCE_SHA,
+        "worker_revision": os.getenv("K_REVISION", "").strip(),
+    }
 
 
 @app.get("/staged/base44-runtime")

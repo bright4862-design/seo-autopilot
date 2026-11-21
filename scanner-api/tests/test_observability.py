@@ -218,3 +218,15 @@ def test_review_endpoint_logs_completion_metrics(monkeypatch, capsys):
     assert completed[0]["scan_status"] == "complete"
     assert completed[0]["health_score"] == 90
     assert "beta_revision_fingerprint" in completed[0]
+
+
+def test_revision_exposes_only_the_executing_cloud_run_revision(monkeypatch):
+    from app import main
+
+    monkeypatch.setenv("K_REVISION", "fixlist-standard150-worker-00110-abc")
+    response = TestClient(main.app).get("/revision")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json()["worker_revision"] == "fixlist-standard150-worker-00110-abc"
+    monkeypatch.delenv("K_REVISION")
+    assert TestClient(main.app).get("/revision").json()["worker_revision"] == ""

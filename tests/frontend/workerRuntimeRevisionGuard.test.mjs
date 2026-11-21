@@ -416,6 +416,26 @@ test("end to end: a candidate tag reassignment during probing fails closed", () 
   assert.doesNotMatch(result.stdout, /PASS: the running worker computes/);
 });
 
+test("end to end: a forged zero-percent tag cannot impersonate the canonical service URL", () => {
+  // Even contradictory control-plane metadata must not rescue a serving
+  // revision whose routing weight fell from 100 to zero.
+  const impossibleButHostile = {
+    status: {
+      url: SERVICE_URL,
+      traffic: [
+        { revisionName: "worker-00054-trs", percent: 0, tag: "candidate", url: SERVICE_URL },
+        { revisionName: "worker-00055-new", percent: 100 },
+      ],
+    },
+  };
+  const result = runGuard({
+    service: serving("worker-00054-trs"), serviceAfter: impossibleButHostile,
+    revision: "worker-00054-trs", body: LIVE_MATCHING,
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /INDETERMINATE: Cloud Run routing/);
+});
+
 test("end to end: unrelated zero-traffic tag movement does not invalidate the serving binding", () => {
   const initial = {
     status: {

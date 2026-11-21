@@ -152,10 +152,25 @@ def build_acceptance_matrix(observation: dict[str, Any]) -> dict[str, dict[str, 
     ) else ""
 
     terminal_observed = status in TERMINAL_STATUSES
+    # A paid/full read verifies the complete persisted authority HMAC.
+    # A signed unpaid preview verifies only its independent bounded payload.
+    full_authority_verified = (
+        status == "complete"
+        and result.get("access") == "full"
+        and result.get("authority_verified") is True
+    )
+    preview_integrity_verified = (
+        status == "complete"
+        and result.get("access") == "preview"
+        and result.get("authority_verified") is True
+    )
     if not terminal_observed or not result:
         authority_state = "unavailable"
     elif status == "complete":
-        authority_state = "authoritative" if result.get("authority_verified") is True else "unverified"
+        authority_state = (
+            "authoritative" if full_authority_verified
+            else "preview_only" if preview_integrity_verified else "unverified"
+        )
     elif status == "limited":
         authority_state = "integrity_only" if result.get("result_integrity_verified") is True else "unverified"
     else:
@@ -177,7 +192,8 @@ def build_acceptance_matrix(observation: dict[str, Any]) -> dict[str, dict[str, 
         "authority_outcome": {
             "available": terminal_observed and bool(result),
             "state": authority_state,
-            "authority_verified": result.get("authority_verified") is True,
+            "authority_verified": full_authority_verified,
+            "preview_integrity_verified": preview_integrity_verified,
             "result_integrity_verified": result.get("result_integrity_verified") is True,
             "release_contract_current": result.get("release_contract_current") is True,
         },

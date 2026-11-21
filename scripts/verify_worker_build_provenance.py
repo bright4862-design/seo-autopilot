@@ -98,6 +98,20 @@ def derive_source_sha(revision: object, builds: object, *, expected_revision: st
                and img.get("digest") == resolved_digest for img in images):
             if not isinstance(record.get("id"), str) or not record["id"].strip():
                 raise ProvenanceUnavailable("matching_build_id_missing")
+            # Locally submitted build archives have *storage* provenance, not
+            # necessarily a resolved Git commit. Never require RepoSource,
+            # but do not ignore a contradictory Git commit when one is present.
+            provenance = record.get("sourceProvenance")
+            if provenance is not None:
+                if not isinstance(provenance, dict):
+                    raise ProvenanceUnavailable("matching_build_provenance_malformed")
+                repo_source = provenance.get("resolvedRepoSource")
+                if repo_source is not None:
+                    if not isinstance(repo_source, dict):
+                        raise ProvenanceUnavailable("matching_build_repo_source_malformed")
+                    if ("commitSha" in repo_source
+                            and repo_source["commitSha"] != release_sha):
+                        raise ProvenanceUnavailable("matching_build_repo_commit_conflicts_with_release_label")
             matches.append((release_sha, record["id"], resolved_ref))
     if not matches:
         raise ProvenanceUnavailable("resolved_digest_has_no_successful_source_pinned_build_in_window")

@@ -81,6 +81,7 @@ def _complete_item(scan_id: str = "scan_complete"):
     item.terminal_at = 102.5
     item.run = {
         "id": scan_id,
+        "project_id": "project_1",
         "status": "complete",
         "error_code": "",
         "fix_list_id": "fixlist_1",
@@ -97,7 +98,7 @@ def _complete_item(scan_id: str = "scan_complete"):
         "authority_verified": True,
         "result_integrity_verified": False,
         "release_contract_current": True,
-        "fixList": {"id": "fixlist_1"},
+        "fixList": {"id": "fixlist_1", "project_id": "project_1", "scan_run_id": scan_id},
         "fixItems": [],
     }
     return item
@@ -142,6 +143,69 @@ def _fully_qualifying_ramp_item(scan_id="scan_accepted"):
         "beta_revision_fingerprint": HARNESS.EXPECTED_RELEASE_FINGERPRINT,
     })
     return item
+
+
+def test_signed_full_result_must_also_satisfy_browser_row_identity():
+    # A raw V8 endpoint can report release/authority flags while the browser's
+    # getScanRunWithFixList still refuses internally inconsistent row IDs.
+    # The controls deliberately keep every other acceptance dimension green.
+    clean = _fully_qualifying_ramp_item("scan_row_identity")
+    clean.customer_result["fixItems"] = [{
+        "id": "fix_1", "project_id": "project_1",
+        "scan_run_id": clean.scan_id, "fix_list_id": "fixlist_1",
+    }]
+    assert HARNESS.report([clean], {})["passed"] is True
+
+    for mismatch in (
+        "fixlist_project", "fixlist_scan", "item_project", "item_scan",
+        "item_fixlist", "orphan_item", "non_array_items",
+        "run_project", "wrong_submitted_project",
+    ):
+        item = _fully_qualifying_ramp_item("scan_row_identity")
+        item.customer_result["fixItems"] = [{
+            "id": "fix_1", "project_id": "project_1",
+            "scan_run_id": item.scan_id, "fix_list_id": "fixlist_1",
+        }]
+        if mismatch == "fixlist_project":
+            item.customer_result["fixList"]["project_id"] = "foreign_project"
+        elif mismatch == "fixlist_scan":
+            item.customer_result["fixList"]["scan_run_id"] = "foreign_scan"
+        elif mismatch == "item_project":
+            item.customer_result["fixItems"][0]["project_id"] = "foreign_project"
+        elif mismatch == "item_scan":
+            item.customer_result["fixItems"][0]["scan_run_id"] = "foreign_scan"
+        elif mismatch == "item_fixlist":
+            item.customer_result["fixItems"][0]["fix_list_id"] = "foreign_fixlist"
+        elif mismatch == "orphan_item":
+            item.customer_result["fixList"] = None
+        elif mismatch == "non_array_items":
+            item.customer_result["fixItems"] = {}
+        elif mismatch == "run_project":
+            item.run["project_id"] = ""
+        elif mismatch == "wrong_submitted_project":
+            item.project_id = "different_project"
+
+        observed = HARNESS.report([item], {})
+        assert observed["passed"] is False, mismatch
+        assert any(
+            "customer browser would reject saved result" in error
+            for error in observed["failures"]
+        ), mismatch
+
+
+def test_customer_row_check_preserves_zero_fix_and_signed_limited_results():
+    zero_fix = _fully_qualifying_ramp_item("scan_zero_fixes")
+    assert HARNESS.report([zero_fix], {})["passed"] is True
+    limited = _fully_qualifying_ramp_item("scan_limited_no_fixes")
+    limited.run["status"] = "limited"
+    limited.run["error_code"] = "scan_access_limited"
+    limited.customer_result.update({
+        "authority_verified": False,
+        "result_integrity_verified": True,
+        "fixList": None,
+        "fixItems": [],
+    })
+    assert HARNESS.report([limited], {})["passed"] is True
 
 
 def _rejected_ramp_item(failure_code):
@@ -805,7 +869,7 @@ def _stub_main_dependencies(monkeypatch):
     monkeypatch.setattr(HARNESS, "submit", no_submit)
     monkeypatch.setattr(HARNESS, "wait_terminal", no_wait)
     monkeypatch.setattr(HARNESS, "log_quality", lambda *_args: {"available": False})
-    monkeypatch.setattr(HARNESS, "report", lambda *_args: {
+    monkeypatch.setattr(HARNESS, "report", lambda *_args, **_kwargs: {
         "failures": [],
         "passed": True,
         "results": [],

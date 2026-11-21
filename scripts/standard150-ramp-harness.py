@@ -378,6 +378,46 @@ def write_checkpoint(path: str, items: list[Submission]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def customer_browser_identity_failure(item: Submission) -> str:
+    """Mirror the saved-result row links rejected by getScanRunWithFixList.
+
+    A signed V8 response can still be unusable in the browser if a writer or
+    projection produces inconsistent row references. This does not verify HMAC
+    bytes; full/limited integrity checks remain independent and mandatory.
+    """
+    result = item.customer_result
+    run = item.run
+    scan_id = str(run.get("id") or "")
+    project_id = str(run.get("project_id") or "").strip()
+    if not scan_id or scan_id != item.scan_id or not project_id:
+        return "ScanRun identity or project_id is invalid"
+    if project_id != item.project_id:
+        return "ScanRun belongs to a different submitted project"
+
+    fix_list = result.get("fixList")
+    fix_items = result.get("fixItems")
+    if fix_list is not None and not isinstance(fix_list, dict):
+        return "FixList is not an object"
+    if not isinstance(fix_items, list):
+        return "FixItems is not an array"
+    if fix_list is not None and (
+        str(fix_list.get("project_id") or "") != project_id
+        or str(fix_list.get("scan_run_id") or "") != scan_id
+    ):
+        return "FixList project/scan reference mismatch"
+    if fix_list is None and fix_items:
+        return "FixItems exist without a FixList"
+    if any(
+        not isinstance(row, dict)
+        or str(row.get("project_id") or "") != project_id
+        or str(row.get("scan_run_id") or "") != scan_id
+        or str(row.get("fix_list_id") or "") != str((fix_list or {}).get("id") or "")
+        for row in fix_items
+    ):
+        return "FixItem project/scan/FixList reference mismatch"
+    return ""
+
+
 def report(
     items: list[Submission],
     logs: dict[str, Any],
@@ -417,6 +457,12 @@ def report(
         status = str(item.run.get("status") or "").lower()
         result = item.customer_result
         summary = _result_summary(item)
+        if status in {"complete", "limited"} and result.get("access") == "full":
+            identity_error = customer_browser_identity_failure(item)
+            if identity_error:
+                failures.append(
+                    f"{item.scan_id}: customer browser would reject saved result: {identity_error}"
+                )
         if summary["matrix_gaps"]:
             failures.append(
                 f"{item.scan_id}: acceptance matrix missing required evidence: "

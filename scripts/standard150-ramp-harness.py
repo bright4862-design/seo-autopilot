@@ -41,6 +41,30 @@ BASE44_API = "https://base44.app"
 TERMINAL = {"complete", "limited", "failed", "cancelled"}
 EXPECTED_RELEASE_FINGERPRINT = load_expected_release_fingerprint()
 
+# Release acceptance must exercise the same V8 public routes that the actual
+# customer browser selects, not the obsolete unsuffixed Base44 functions.
+# V9 uses build-qualified function names and requires an explicit harness
+# update and approval before it can be used for release acceptance.
+CUSTOMER_ROUTE_MANIFEST = Path(__file__).resolve().parents[1] / "data/base44-function-routes.json"
+
+
+def load_customer_routes(manifest: Path = CUSTOMER_ROUTE_MANIFEST) -> tuple[str, str]:
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    selected = payload.get("routes") if isinstance(payload.get("routes"), dict) else {}
+    if (
+        payload.get("generation") != "v8"
+        or selected.get("startStandardScanJob") != "startStandardScanJobV8"
+        or selected.get("getCustomerScanResult") != "getCustomerScanResultV8"
+    ):
+        raise RuntimeError(
+            "Standard 150 ramp acceptance requires the exact active V8 browser routes; "
+            "refusing legacy aliases, unreviewed route changes, and staged V9"
+        )
+    return selected["startStandardScanJob"], selected["getCustomerScanResult"]
+
+
+START_CUSTOMER_FUNCTION, READ_CUSTOMER_FUNCTION = load_customer_routes()
+
 
 def build_acceptance_matrix(scan: dict[str, Any]) -> dict[str, Any]:
     """Build the one canonical, tightened matrix used by final and checkpoint views."""
@@ -104,7 +128,7 @@ class Submission:
 
 
 async def list_runs(client: httpx.AsyncClient, token: str, project_id: str) -> list[dict[str, Any]]:
-    status, body = await invoke(client, token, "getCustomerScanResult", {
+    status, body = await invoke(client, token, READ_CUSTOMER_FUNCTION, {
         "action": "list", "project_id": project_id, "limit": 20,
     })
     if status != 200:
@@ -115,7 +139,7 @@ async def list_runs(client: httpx.AsyncClient, token: str, project_id: str) -> l
 
 async def submit(client: httpx.AsyncClient, token: str, item: Submission) -> None:
     item.submitted_at = time.monotonic()
-    status, body = await invoke(client, token, "startStandardScanJob", {
+    status, body = await invoke(client, token, START_CUSTOMER_FUNCTION, {
         "request_id": item.request_id,
         "idempotency_key": item.request_id,
         "project_id": item.project_id,
@@ -136,7 +160,7 @@ async def submit(client: httpx.AsyncClient, token: str, item: Submission) -> Non
 async def poll_one(client: httpx.AsyncClient, token: str, item: Submission) -> bool:
     if not item.scan_id:
         return False
-    status, body = await invoke(client, token, "getCustomerScanResult", {
+    status, body = await invoke(client, token, READ_CUSTOMER_FUNCTION, {
         "action": "get", "scan_id": item.scan_id,
     })
     if status != 200:
@@ -207,7 +231,7 @@ async def reopen_customer_results(
         item.customer_result = {}
         try:
             http_status, body = await invoke(
-                client, tokens[item.email], "getCustomerScanResult",
+                client, tokens[item.email], READ_CUSTOMER_FUNCTION,
                 {"action": "get", "scan_id": item.scan_id},
             )
         except Exception as exc:

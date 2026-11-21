@@ -485,6 +485,11 @@ def report(
             if not isinstance(result.get("fixItems"), list):
                 failures.append(f"{item.scan_id}: complete result is missing FixItems")
         elif status == "limited":
+            # The paid V8 reader exposes a successfully integrity-verified
+            # limited result with access=full. A locked or preview response is
+            # not a complete customer reopen, regardless of any flag it carries.
+            if result.get("access") != "full":
+                failures.append(f"{item.scan_id}: limited result lacks full-access customer read-back")
             if result.get("result_integrity_verified") is not True:
                 failures.append(f"{item.scan_id}: limited result is not result_integrity_verified")
         else:

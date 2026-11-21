@@ -234,7 +234,7 @@ def test_successful_fresh_reopen_retains_full_and_limited_contracts(monkeypatch)
         if status == "limited":
             item.run["error_code"] = "scan_access_limited"
             item.customer_result.update({
-                "access": "limited", "authority_verified": False,
+                "access": "full", "authority_verified": False,
                 "result_integrity_verified": True, "fixList": None, "fixItems": [],
             })
         fresh_body = {**item.customer_result, "run": dict(item.run)}
@@ -252,6 +252,42 @@ def test_successful_fresh_reopen_retains_full_and_limited_contracts(monkeypatch)
         observed = HARNESS.report([item], {})
         assert observed["passed"] is True
         assert observed["authoritative_complete"] == (1 if status == "complete" else 0)
+
+
+def test_main_exit_fails_when_independent_customer_reopen_is_unavailable(tmp_path, monkeypatch, capsys):
+    # Full integration through main_async: the cached terminal result is green,
+    # but the fresh customer GET on a separate client fails closed.
+    async def fake_submit(_client, _token, item):
+        seeded = _fully_qualifying_ramp_item("scan_reopen_integration")
+        item.scan_id = seeded.scan_id
+        item.accepted = True
+        item.http_status = 200
+        item.submitted_at = seeded.submitted_at
+        item.terminal_at = seeded.terminal_at
+        item.run = seeded.run
+        item.customer_result = seeded.customer_result
+        assert HARNESS.report([item], {})["passed"] is True
+
+    async def fake_wait(_client, _tokens, _items, _timeout, *, checkpoint_path=""):
+        return None
+
+    async def unavailable_reopen(_client, _token, function, payload):
+        assert function == "getCustomerScanResult"
+        assert payload == {"action": "get", "scan_id": "scan_reopen_integration"}
+        return 503, {"failure_code": "temporarily_unavailable"}
+
+    monkeypatch.setattr(HARNESS.httpx, "AsyncClient", _DummyAsyncClient)
+    monkeypatch.setattr(HARNESS, "submit", fake_submit)
+    monkeypatch.setattr(HARNESS, "wait_terminal", fake_wait)
+    monkeypatch.setattr(HARNESS, "invoke", unavailable_reopen)
+    monkeypatch.setattr(HARNESS, "log_quality", lambda *_args: {"available": False})
+
+    status = asyncio.run(HARNESS.main_async(_main_args(tmp_path, checkpoint="")))
+    receipt = json.loads(capsys.readouterr().out)
+    assert status == 1
+    assert receipt["passed"] is False
+    assert any("fresh customer read-back HTTP 503" in failure for failure in receipt["failures"])
+    assert receipt["authoritative_complete"] == 0
 
 
 def test_failed_and_cancelled_terminals_never_pass_customer_acceptance():

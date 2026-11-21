@@ -4,7 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    # Allow exact-head CI on the parent branch of an unmerged Standard 150 draft.
+    # Do not expand push, WIF or deployment workflow triggers.
+    branches: [main, 'investigation/standard150-**']
+
+# CI executes PR source code; provide the minimum read-only token scope.
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -16,6 +22,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
 
       - name: Verify immutable checkout
         env:
@@ -63,6 +70,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
 
       - name: Verify immutable checkout
         env:

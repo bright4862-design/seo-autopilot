@@ -1,5 +1,4 @@
 """Adversarial, offline controls for immutable Standard 150 build attribution."""
-from copy import deepcopy
 import importlib.util
 import json
 from pathlib import Path
@@ -132,4 +131,18 @@ def test_spec_digest_must_agree_with_resolved_digest():
     rev = revision(tag=False)
     rev["spec"]["containers"][0]["image"] = REPO + "@" + DIG_A
     with pytest.raises(module.ProvenanceUnavailable, match="image_spec_and_resolved_digest_disagree"):
+        check(rev=rev)
+
+
+def test_matching_build_missing_id_refuses_specific_attribution():
+    matched = build(SHA_B, DIG_B)
+    matched["id"] = ""
+    with pytest.raises(module.ProvenanceUnavailable, match="matching_build_id_missing"):
+        check(builds=[matched])
+
+
+def test_duplicate_ready_conditions_do_not_prove_readiness():
+    rev = revision()
+    rev["status"]["conditions"].append({"type": "Ready", "status": "False"})
+    with pytest.raises(module.ProvenanceUnavailable, match="revision_not_ready"):
         check(rev=rev)

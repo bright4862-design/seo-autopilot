@@ -7,12 +7,15 @@ import { spawnSync } from "node:child_process";
 
 // Only read-only describes are permitted by this allowlisted fake gcloud.
 const SCRIPT = "scripts/inspect-serving-worker-signing-metadata.sh";
+const WORKER = "fixlist-standard150-worker";
+const REV_7 = `${WORKER}-00007`;
+const REV_8 = `${WORKER}-00008`;
 const secret = (version) => ({
   name: "SCAN_EVIDENCE_SIGNING_KEY",
   valueFrom: { secretKeyRef: { name: "synthetic-key", key: version } },
 });
-const service = (desired = "7", serving = "worker-00007") => ({
-  metadata: { name: "worker", generation: 4 },
+const service = (desired = "7", serving = REV_7) => ({
+  metadata: { name: WORKER, generation: 4 },
   status: {
     observedGeneration: 4,
     conditions: [{ type: "Ready", status: "True" }],
@@ -21,7 +24,7 @@ const service = (desired = "7", serving = "worker-00007") => ({
   spec: { template: { spec: { containers: [{ env: [secret(desired)] }] } } },
 });
 const revision = (name) => ({
-  metadata: { name, labels: { "serving.knative.dev/service": "worker" } },
+  metadata: { name, labels: { "serving.knative.dev/service": WORKER } },
   status: { conditions: [{ type: "Ready", status: "True" }] },
   spec: { containers: [{ env: [secret("7")] }] },
 });
@@ -52,7 +55,7 @@ const GCLOUD = [
   'esac',
 ].join("\n") + "\n";
 
-function scenario(sequence, { deny = false } = {}) {
+function scenario(sequence, { deny = false, overrides = {} } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fixlist-keyless-preflight-"));
   const bin = path.join(dir, "bin");
   const fixtures = path.join(dir, "fixtures");
@@ -62,10 +65,10 @@ function scenario(sequence, { deny = false } = {}) {
     "service-ok": service(),
     "service-ahead": service("8"),
     "service-unready": { ...service(), status: { ...service().status, conditions: [{ type: "Ready", status: "False" }] } },
-    "service-switched": service("7", "worker-00008"),
+    "service-switched": service("7", REV_8),
     "service-foreign": { ...service(), metadata: { name: "other", generation: 4 } },
-    "revision-worker-00007": revision("worker-00007"),
-    "revision-worker-00008": revision("worker-00008"),
+    [`revision-${REV_7}`]: revision(REV_7),
+    [`revision-${REV_8}`]: revision(REV_8),
   })) fs.writeFileSync(path.join(fixtures, name + ".json"), JSON.stringify(body));
   fs.writeFileSync(path.join(bin, "gcloud"), GCLOUD, { mode: 0o700 });
   const events = path.join(dir, "events");
@@ -74,12 +77,13 @@ function scenario(sequence, { deny = false } = {}) {
     PATH: bin + path.delimiter + process.env.PATH,
     GCP_PROJECT: "seo-autopilot-501517",
     GCP_REGION: "europe-west1",
-    CLOUD_RUN_SERVICE: "worker",
+    CLOUD_RUN_SERVICE: WORKER,
     FAKE_FIXTURES: fixtures,
     FAKE_EVENTS: events,
     FAKE_COUNTER: path.join(dir, "counter"),
     FAKE_SEQUENCE: sequence.join(","),
     FAKE_DENY: deny ? "1" : "0",
+    ...overrides,
   };
   try {
     const run = spawnSync("bash", [SCRIPT], { cwd: process.cwd(), env, encoding: "utf8", timeout: 20000 });
@@ -97,7 +101,7 @@ test("aligned two-observation preflight reports metadata only", () => {
   const result = scenario(["ok", "ok"]);
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(result.observed, ["service", "revision", "service", "revision"]);
-  assert.match(result.stdout, /KEYLESS_METADATA_PREFLIGHT_OK revision=worker-00007/);
+  assert.ok(result.stdout.includes(`KEYLESS_METADATA_PREFLIGHT_OK project=seo-autopilot-501517 region=europe-west1 service=${WORKER} revision=${REV_7}`));
   assert.match(result.stdout, /does NOT prove/);
   assert.doesNotMatch(result.stdout + result.stderr, /synthetic-key|SCAN_EVIDENCE_SIGNING_KEY/);
 });
@@ -137,4 +141,19 @@ test("read denied is unknown, not absent or successful", () => {
   assert.notEqual(result.status, 0);
   assert.deepEqual(result.observed, ["service"]);
   assert.doesNotMatch(result.stdout, /PREFLIGHT_OK|not_deployed/);
+});
+
+test("metadata preflight refuses foreign project, region and service before Cloud Run reads", () => {
+  const cases = [
+    { GCP_PROJECT: "unrelated-project-12345" },
+    { GCP_REGION: "us-central1" },
+    { CLOUD_RUN_SERVICE: "other-worker" },
+  ];
+  for (const overrides of cases) {
+    const result = scenario(["ok", "ok"], { overrides });
+    assert.notEqual(result.status, 0, JSON.stringify(overrides));
+    assert.deepEqual(result.observed, [], "incorrect namespace must not query gcloud");
+    assert.match(result.stderr, /production scope mismatch/);
+    assert.doesNotMatch(result.stdout, /PREFLIGHT_OK/);
+  }
 });

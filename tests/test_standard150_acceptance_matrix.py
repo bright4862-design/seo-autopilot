@@ -95,6 +95,72 @@ def test_preview_integrity_does_not_satisfy_full_customer_readback():
         assert observed["passed"] is False
         assert any("lacks full-access customer read-back" in failure for failure in observed["failures"])
 
+
+def _fully_qualifying_ramp_item(scan_id="scan_accepted"):
+    item = _complete_item(scan_id)
+    item.run.update({
+        "coverage_authority_evidence": {"state": "sufficient"},
+        "classification_integrity": {"state": "verified"},
+        "peak_memory_bytes": 4096,
+        "beta_revision_fingerprint": HARNESS.EXPECTED_RELEASE_FINGERPRINT,
+    })
+    return item
+
+
+def _rejected_ramp_item(failure_code):
+    item = HARNESS.Submission(
+        email="acceptance@example.com",
+        url="https://example.com",
+        project_id="project_1",
+    )
+    item.http_status = 503
+    item.accepted = False
+    item.failure_code = failure_code
+    return item
+
+
+def test_no_accepted_submissions_cannot_pass_release_acceptance():
+    rejected = _rejected_ramp_item("scan_admission_unavailable")
+    observed = HARNESS.report([rejected], {})
+    assert observed["submitted"] == 1
+    assert observed["accepted"] == 0
+    assert observed["terminal"] == 0
+    assert observed["passed"] is False
+    assert any("no scan was accepted" in failure for failure in observed["failures"])
+    assert any("scan_admission_unavailable" in failure for failure in observed["failures"])
+    assert HARNESS.report([], {})["passed"] is False
+
+
+def test_partially_rejected_ramp_does_not_pass_even_with_one_full_verified_result():
+    winner = _fully_qualifying_ramp_item()
+    assert HARNESS.report([winner], {})["passed"] is True
+    rejected = _rejected_ramp_item("admission_capacity_limited")
+    observed = HARNESS.report([winner, rejected], {})
+    assert observed["authoritative_complete"] == 1
+    assert observed["passed"] is False
+    assert any("admission_capacity_limited" in failure for failure in observed["failures"])
+
+
+def test_expected_busy_double_submit_exception_is_narrow():
+    winner = _fully_qualifying_ramp_item()
+    busy = _rejected_ramp_item("scan_admission_busy")
+    control = HARNESS.report([winner, busy], {}, allow_busy_rejection=True)
+    assert control["passed"] is True
+    assert control["authoritative_complete"] == 1
+
+    # The same busy rejection is unexpected during an ordinary canary.
+    assert HARNESS.report([winner, busy], {})["passed"] is False
+
+    # The double-submit flag must not excuse a different rejection or
+    # turn two denied admissions into a successful release receipt.
+    busy.failure_code = "scan_admission_unavailable"
+    unexpected = HARNESS.report([winner, busy], {}, allow_busy_rejection=True)
+    assert unexpected["passed"] is False
+    assert any("scan_admission_unavailable" in x for x in unexpected["failures"])
+    busy.failure_code = "scan_admission_busy"
+    assert HARNESS.report([busy], {}, allow_busy_rejection=True)["passed"] is False
+
+
 def test_matrix_has_ten_independent_dimensions_and_only_real_gaps():
     item = _complete_item()
     matrix = build_acceptance_matrix(HARNESS._matrix_observation(item))

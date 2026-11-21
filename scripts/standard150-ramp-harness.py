@@ -191,6 +191,46 @@ async def wait_terminal(
             await asyncio.sleep(5)
 
 
+async def reopen_customer_results(
+    client: httpx.AsyncClient,
+    tokens: dict[str, str],
+    items: list[Submission],
+) -> list[str]:
+    """Re-read successful terminals on a fresh HTTP session; never trust a cached poll."""
+    failures: list[str] = []
+    for item in items:
+        status = str(item.run.get("status") or "").lower()
+        if not (item.accepted and item.scan_id and status in {"complete", "limited"}):
+            continue
+        # The terminal polling response is progress evidence, not evidence that
+        # the saved result can be opened again. Never fall back to its seal.
+        item.customer_result = {}
+        try:
+            http_status, body = await invoke(
+                client, tokens[item.email], "getCustomerScanResult",
+                {"action": "get", "scan_id": item.scan_id},
+            )
+        except Exception as exc:
+            failures.append(f"{item.scan_id}: fresh customer read-back failed: {type(exc).__name__}")
+            continue
+        if http_status != 200:
+            failures.append(f"{item.scan_id}: fresh customer read-back HTTP {http_status}")
+            continue
+        fresh_run = body.get("run") if isinstance(body.get("run"), dict) else {}
+        if (
+            str(body.get("scan_id") or "") != item.scan_id
+            or str(fresh_run.get("id") or fresh_run.get("scan_id") or "") != item.scan_id
+        ):
+            failures.append(f"{item.scan_id}: fresh customer read-back scan identity mismatch")
+            continue
+        if str(fresh_run.get("status") or "").lower() != status:
+            failures.append(f"{item.scan_id}: fresh customer read-back terminal status changed")
+            continue
+        item.run = fresh_run
+        item.customer_result = body
+    return failures
+
+
 def log_quality(scan_ids: list[str], since: datetime, project: str | None) -> dict[str, Any]:
     if not project or not scan_ids:
         return {"available": False, "reason": "gcp project or scan ids not supplied"}
@@ -436,6 +476,11 @@ async def main_async(args: argparse.Namespace) -> int:
         if args.double_submit:
             after = {str(r.get("id") or r.get("scan_id") or "") for r in await list_runs(client, tokens[items[0].email], items[0].project_id)}
 
+    # A separate transport/request is the customer's reopen, not the cached
+    # terminal polling response. This is read-only; it never starts a scan.
+    async with httpx.AsyncClient() as reopen_client:
+        reopen_failures = await reopen_customer_results(reopen_client, tokens, items)
+
     logs = log_quality([i.scan_id for i in items if i.scan_id], started, args.gcp_project)
     result = report(
         items, logs,
@@ -443,6 +488,7 @@ async def main_async(args: argparse.Namespace) -> int:
         after if args.double_submit else None,
         allow_busy_rejection=args.double_submit,
     )
+    result["failures"].extend(reopen_failures)
     if args.checkpoint:
         try:
             write_checkpoint(args.checkpoint, items)

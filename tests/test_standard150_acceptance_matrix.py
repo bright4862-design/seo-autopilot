@@ -416,6 +416,31 @@ def test_failed_and_cancelled_terminals_never_pass_customer_acceptance():
         )
 
 
+def test_limited_integrity_flag_cannot_substitute_for_full_customer_readback():
+    # The paid V8 limited path verifies a distinct HMAC and sets access=full.
+    # A synthetic preview/locked response carrying that flag must not certify
+    # a customer journey even when every other release dimension is green.
+    item = _fully_qualifying_ramp_item("scan_limited_access")
+    item.run["status"] = "limited"
+    item.run["error_code"] = "scan_access_limited"
+    item.customer_result.update({
+        "authority_verified": False,
+        "result_integrity_verified": True,
+        "fixList": None,
+        "fixItems": [],
+    })
+    assert HARNESS.report([item], {})["passed"] is True
+
+    for access in ("preview", "locked", "limited", ""):
+        item.customer_result["access"] = access
+        observed = HARNESS.report([item], {})
+        assert observed["passed"] is False, access
+        assert any(
+            "limited result lacks full-access customer read-back" in reason
+            for reason in observed["failures"]
+        ), access
+
+
 def test_integrity_verified_limited_terminal_remains_success_eligible():
     # A correctly limited but integrity-verified customer result is a
     # legitimate Standard 150 outcome; do not regress that existing contract.
@@ -423,7 +448,7 @@ def test_integrity_verified_limited_terminal_remains_success_eligible():
     item.run["status"] = "limited"
     item.run["error_code"] = "scan_access_limited"
     item.customer_result.update({
-        "access": "limited",
+        "access": "full",
         "authority_verified": False,
         "result_integrity_verified": True,
         "fixList": None,

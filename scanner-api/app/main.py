@@ -241,7 +241,7 @@ def authenticated_health(x_scanner_key: str | None = Header(default=None)):
 def revision():
     """Live beta-revision fingerprint for verifying a deployed scanner against
     the recorded freeze in data/beta-crawler-revision.json."""
-    return {**live_revision(), "source_sha": WORKER_SOURCE_SHA}
+    return {**live_revision(), "source_sha": WORKER_SOURCE_SHA, "worker_revision": os.getenv("K_REVISION", "")}
 
 
 @app.get("/staged/base44-runtime")

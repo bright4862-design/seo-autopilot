@@ -41,6 +41,30 @@ BASE44_API = "https://base44.app"
 TERMINAL = {"complete", "limited", "failed", "cancelled"}
 EXPECTED_RELEASE_FINGERPRINT = load_expected_release_fingerprint()
 
+# Release acceptance must exercise the same V8 public routes that the actual
+# customer browser selects, not the obsolete unsuffixed Base44 functions.
+# V9 uses build-qualified function names and requires an explicit harness
+# update and approval before it can be used for release acceptance.
+CUSTOMER_ROUTE_MANIFEST = Path(__file__).resolve().parents[1] / "data/base44-function-routes.json"
+
+
+def load_customer_routes(manifest: Path = CUSTOMER_ROUTE_MANIFEST) -> tuple[str, str]:
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    selected = payload.get("routes") if isinstance(payload.get("routes"), dict) else {}
+    if (
+        payload.get("generation") != "v8"
+        or selected.get("startStandardScanJob") != "startStandardScanJobV8"
+        or selected.get("getCustomerScanResult") != "getCustomerScanResultV8"
+    ):
+        raise RuntimeError(
+            "Standard 150 ramp acceptance requires the exact active V8 browser routes; "
+            "refusing legacy aliases, unreviewed route changes, and staged V9"
+        )
+    return selected["startStandardScanJob"], selected["getCustomerScanResult"]
+
+
+START_CUSTOMER_FUNCTION, READ_CUSTOMER_FUNCTION = load_customer_routes()
+
 
 def build_acceptance_matrix(scan: dict[str, Any]) -> dict[str, Any]:
     """Build the one canonical, tightened matrix used by final and checkpoint views."""
@@ -104,7 +128,7 @@ class Submission:
 
 
 async def list_runs(client: httpx.AsyncClient, token: str, project_id: str) -> list[dict[str, Any]]:
-    status, body = await invoke(client, token, "getCustomerScanResult", {
+    status, body = await invoke(client, token, READ_CUSTOMER_FUNCTION, {
         "action": "list", "project_id": project_id, "limit": 20,
     })
     if status != 200:
@@ -115,7 +139,7 @@ async def list_runs(client: httpx.AsyncClient, token: str, project_id: str) -> l
 
 async def submit(client: httpx.AsyncClient, token: str, item: Submission) -> None:
     item.submitted_at = time.monotonic()
-    status, body = await invoke(client, token, "startStandardScanJob", {
+    status, body = await invoke(client, token, START_CUSTOMER_FUNCTION, {
         "request_id": item.request_id,
         "idempotency_key": item.request_id,
         "project_id": item.project_id,
@@ -136,7 +160,7 @@ async def submit(client: httpx.AsyncClient, token: str, item: Submission) -> Non
 async def poll_one(client: httpx.AsyncClient, token: str, item: Submission) -> bool:
     if not item.scan_id:
         return False
-    status, body = await invoke(client, token, "getCustomerScanResult", {
+    status, body = await invoke(client, token, READ_CUSTOMER_FUNCTION, {
         "action": "get", "scan_id": item.scan_id,
     })
     if status != 200:
@@ -191,6 +215,46 @@ async def wait_terminal(
             await asyncio.sleep(5)
 
 
+async def reopen_customer_results(
+    client: httpx.AsyncClient,
+    tokens: dict[str, str],
+    items: list[Submission],
+) -> list[str]:
+    """Re-read successful terminals on a fresh HTTP session; never trust a cached poll."""
+    failures: list[str] = []
+    for item in items:
+        status = str(item.run.get("status") or "").lower()
+        if not (item.accepted and item.scan_id and status in {"complete", "limited"}):
+            continue
+        # The terminal polling response is progress evidence, not evidence that
+        # the saved result can be opened again. Never fall back to its seal.
+        item.customer_result = {}
+        try:
+            http_status, body = await invoke(
+                client, tokens[item.email], READ_CUSTOMER_FUNCTION,
+                {"action": "get", "scan_id": item.scan_id},
+            )
+        except Exception as exc:
+            failures.append(f"{item.scan_id}: fresh customer read-back failed: {type(exc).__name__}")
+            continue
+        if http_status != 200:
+            failures.append(f"{item.scan_id}: fresh customer read-back HTTP {http_status}")
+            continue
+        fresh_run = body.get("run") if isinstance(body.get("run"), dict) else {}
+        if (
+            str(body.get("scan_id") or "") != item.scan_id
+            or str(fresh_run.get("id") or fresh_run.get("scan_id") or "") != item.scan_id
+        ):
+            failures.append(f"{item.scan_id}: fresh customer read-back scan identity mismatch")
+            continue
+        if str(fresh_run.get("status") or "").lower() != status:
+            failures.append(f"{item.scan_id}: fresh customer read-back terminal status changed")
+            continue
+        item.run = fresh_run
+        item.customer_result = body
+    return failures
+
+
 def log_quality(scan_ids: list[str], since: datetime, project: str | None) -> dict[str, Any]:
     if not project or not scan_ids:
         return {"available": False, "reason": "gcp project or scan ids not supplied"}
@@ -230,7 +294,9 @@ def _result_summary(item: Submission) -> dict[str, Any]:
     return {
         "scan_id": item.scan_id,
         "status": str(item.run.get("status") or ""),
-        "authority_verified": result.get("authority_verified") is True,
+        "authority_verified": result.get("access") == "full" and result.get("authority_verified") is True,
+        "preview_integrity_verified": result.get("access") == "preview" and result.get("authority_verified") is True,
+        "customer_access": str(result.get("access") or ""),
         "result_integrity_verified": result.get("result_integrity_verified") is True,
         "release_contract_current": result.get("release_contract_current") is True,
         "fix_list_present": bool(fix_list),
@@ -312,23 +378,91 @@ def write_checkpoint(path: str, items: list[Submission]) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def report(items: list[Submission], logs: dict[str, Any], before: set[str] | None = None, after: set[str] | None = None) -> dict[str, Any]:
+def customer_browser_identity_failure(item: Submission) -> str:
+    """Mirror the saved-result row links rejected by getScanRunWithFixList.
+
+    A signed V8 response can still be unusable in the browser if a writer or
+    projection produces inconsistent row references. This does not verify HMAC
+    bytes; full/limited integrity checks remain independent and mandatory.
+    """
+    result = item.customer_result
+    run = item.run
+    scan_id = str(run.get("id") or "")
+    project_id = str(run.get("project_id") or "").strip()
+    if not scan_id or scan_id != item.scan_id or not project_id:
+        return "ScanRun identity or project_id is invalid"
+    if project_id != item.project_id:
+        return "ScanRun belongs to a different submitted project"
+
+    fix_list = result.get("fixList")
+    fix_items = result.get("fixItems")
+    if fix_list is not None and not isinstance(fix_list, dict):
+        return "FixList is not an object"
+    if not isinstance(fix_items, list):
+        return "FixItems is not an array"
+    if fix_list is not None and (
+        str(fix_list.get("project_id") or "") != project_id
+        or str(fix_list.get("scan_run_id") or "") != scan_id
+    ):
+        return "FixList project/scan reference mismatch"
+    if fix_list is None and fix_items:
+        return "FixItems exist without a FixList"
+    if any(
+        not isinstance(row, dict)
+        or str(row.get("project_id") or "") != project_id
+        or str(row.get("scan_run_id") or "") != scan_id
+        or str(row.get("fix_list_id") or "") != str((fix_list or {}).get("id") or "")
+        for row in fix_items
+    ):
+        return "FixItem project/scan/FixList reference mismatch"
+    return ""
+
+
+def report(
+    items: list[Submission],
+    logs: dict[str, Any],
+    before: set[str] | None = None,
+    after: set[str] | None = None,
+    *,
+    allow_busy_rejection: bool = False,
+) -> dict[str, Any]:
     accepted = [i for i in items if i.accepted]
     terminal = [i for i in accepted if str(i.run.get("status") or "").lower() in TERMINAL]
     authoritative_complete = [
         i for i in terminal
         if str(i.run.get("status") or "").lower() == "complete"
+        and i.customer_result.get("access") == "full"
         and i.customer_result.get("authority_verified") is True
     ]
     limited = [i for i in terminal if str(i.run.get("status") or "").lower() == "limited"]
     scores = [float(i.run.get("evidence_quality_score") or 0) for i in authoritative_complete]
     failures: list[str] = []
+    # A zero-accepted run must never certify a release. An isolated owner
+    # canary also fails if any submission is rejected. The deliberate loser
+    # of --double-submit is the only exception, checked again by main_async.
+    if not accepted:
+        failures.append("no scan was accepted; cannot certify customer result")
+    for index, item in enumerate(items, start=1):
+        if item.accepted:
+            continue
+        if allow_busy_rejection and item.failure_code == "scan_admission_busy":
+            continue
+        failures.append(
+            f"submission {index} was not accepted: "
+            f"{item.failure_code or 'unknown_rejection'}"
+        )
     if len(terminal) != len(accepted):
         failures.append(f"{len(accepted) - len(terminal)} accepted scan(s) did not terminalize")
     for item in terminal:
         status = str(item.run.get("status") or "").lower()
         result = item.customer_result
         summary = _result_summary(item)
+        if status in {"complete", "limited"} and result.get("access") == "full":
+            identity_error = customer_browser_identity_failure(item)
+            if identity_error:
+                failures.append(
+                    f"{item.scan_id}: customer browser would reject saved result: {identity_error}"
+                )
         if summary["matrix_gaps"]:
             failures.append(
                 f"{item.scan_id}: acceptance matrix missing required evidence: "
@@ -340,6 +474,8 @@ def report(items: list[Submission], logs: dict[str, Any], before: set[str] | Non
                 + ", ".join(summary["matrix_failures"])
             )
         if status == "complete":
+            if result.get("access") != "full":
+                failures.append(f"{item.scan_id}: complete result lacks full-access customer read-back")
             if result.get("authority_verified") is not True:
                 failures.append(f"{item.scan_id}: complete result is not authority_verified")
             if result.get("release_contract_current") is not True:
@@ -351,6 +487,10 @@ def report(items: list[Submission], logs: dict[str, Any], before: set[str] | Non
         elif status == "limited":
             if result.get("result_integrity_verified") is not True:
                 failures.append(f"{item.scan_id}: limited result is not result_integrity_verified")
+        else:
+            # Terminal is not synonymous with successful: failed/cancelled are
+            # auditable outcomes, never evidence of an accepted customer result.
+            failures.append(f"{item.scan_id}: unsuccessful terminal status {status}")
     bad_codes = {str(i.run.get("error_code") or "") for i in terminal}
     for code in {"worker_terminal_drain_timeout", "orphaned_no_terminal_state"} & bad_codes:
         failures.append(f"lifecycle failure observed: {code}")
@@ -406,8 +546,19 @@ async def main_async(args: argparse.Namespace) -> int:
         if args.double_submit:
             after = {str(r.get("id") or r.get("scan_id") or "") for r in await list_runs(client, tokens[items[0].email], items[0].project_id)}
 
+    # A separate transport/request is the customer's reopen, not the cached
+    # terminal polling response. This is read-only; it never starts a scan.
+    async with httpx.AsyncClient() as reopen_client:
+        reopen_failures = await reopen_customer_results(reopen_client, tokens, items)
+
     logs = log_quality([i.scan_id for i in items if i.scan_id], started, args.gcp_project)
-    result = report(items, logs, before if args.double_submit else None, after if args.double_submit else None)
+    result = report(
+        items, logs,
+        before if args.double_submit else None,
+        after if args.double_submit else None,
+        allow_busy_rejection=args.double_submit,
+    )
+    result["failures"].extend(reopen_failures)
     if args.checkpoint:
         try:
             write_checkpoint(args.checkpoint, items)

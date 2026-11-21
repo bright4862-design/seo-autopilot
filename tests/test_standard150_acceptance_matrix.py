@@ -31,6 +31,43 @@ sys.modules[SPEC.name] = HARNESS
 SPEC.loader.exec_module(HARNESS)
 
 
+def test_ramp_acceptance_targets_the_browser_v8_routes_not_legacy_aliases():
+    # Independently pin the live customer form and history reader to the same
+    # release-manifest mapping used by the CLI acceptance ramp.
+    assert HARNESS.load_customer_routes() == (
+        "startStandardScanJobV8", "getCustomerScanResultV8",
+    )
+    active = json.loads((ROOT / "data/base44-function-routes.json").read_text())
+    assert active["generation"] == "v8"
+    assert HARNESS.START_CUSTOMER_FUNCTION == active["routes"]["startStandardScanJob"]
+    assert HARNESS.READ_CUSTOMER_FUNCTION == active["routes"]["getCustomerScanResult"]
+    form = (ROOT / "src/components/scan/ScanWebsiteForm.jsx").read_text()
+    reader = (ROOT / "src/lib/scanRuns.js").read_text()
+    assert 'const ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV8"' in form
+    assert 'base44.functions.invoke("getCustomerScanResultV8"' in reader
+
+
+def test_ramp_routes_fail_closed_on_legacy_staged_or_unreviewed_mapping(tmp_path):
+    current = json.loads((ROOT / "data/base44-function-routes.json").read_text())
+    invalid = [
+        {**current, "generation": "v9"},
+        {**current, "routes": {**current["routes"], "getCustomerScanResult": "getCustomerScanResult"}},
+        {**current, "routes": {**current["routes"], "startStandardScanJob": "startStandardScanJob"}},
+        {**current, "routes": {**current["routes"], "getCustomerScanResult": "getCustomerScanResultV9"}},
+        {**current, "routes": {}},
+    ]
+    for candidate in invalid:
+        path = tmp_path / "candidate-routes.json"
+        path.write_text(json.dumps(candidate), encoding="utf-8")
+        try:
+            HARNESS.load_customer_routes(path)
+        except RuntimeError as error:
+            assert "refusing legacy aliases" in str(error)
+        else:
+            raise AssertionError("unsafe customer route mapping passed ramp acceptance")
+
+
+
 def _complete_item(scan_id: str = "scan_complete"):
     item = HARNESS.Submission(
         email="acceptance@example.com",
@@ -44,6 +81,7 @@ def _complete_item(scan_id: str = "scan_complete"):
     item.terminal_at = 102.5
     item.run = {
         "id": scan_id,
+        "project_id": "project_1",
         "status": "complete",
         "error_code": "",
         "fix_list_id": "fixlist_1",
@@ -55,14 +93,347 @@ def _complete_item(scan_id: str = "scan_complete"):
         "review_version": "review_1",
     }
     item.customer_result = {
+        "access": "full",
         "scan_id": scan_id,
         "authority_verified": True,
         "result_integrity_verified": False,
         "release_contract_current": True,
-        "fixList": {"id": "fixlist_1"},
+        "fixList": {"id": "fixlist_1", "project_id": "project_1", "scan_run_id": scan_id},
         "fixItems": [],
     }
     return item
+
+
+
+def test_preview_integrity_does_not_satisfy_full_customer_readback():
+    # A real V8 reader can return authority_verified=True for a separately
+    # signed unpaid preview without checking the full persisted HMAC.
+    item = _complete_item("scan_preview_only")
+    item.run.update({
+        "coverage_authority_evidence": {"state": "sufficient"},
+        "classification_integrity": {"state": "verified"},
+        "peak_memory_bytes": 4096,
+        "beta_revision_fingerprint": HARNESS.EXPECTED_RELEASE_FINGERPRINT,
+    })
+
+    control = HARNESS.report([item], {})
+    assert control["passed"] is True
+    assert control["authoritative_complete"] == 1
+    assert control["results"][0]["acceptance_matrix"]["authority_outcome"]["state"] == "authoritative"
+
+    for access in ("preview", "locked", ""):
+        item.customer_result["access"] = access
+        observed = HARNESS.report([item], {})
+        expected = "preview_only" if access == "preview" else "unverified"
+        authority = observed["results"][0]["acceptance_matrix"]["authority_outcome"]
+        assert authority["state"] == expected
+        assert authority["authority_verified"] is False
+        assert authority["preview_integrity_verified"] is (access == "preview")
+        assert observed["authoritative_complete"] == 0
+        assert observed["passed"] is False
+        assert any("lacks full-access customer read-back" in failure for failure in observed["failures"])
+
+
+def _fully_qualifying_ramp_item(scan_id="scan_accepted"):
+    item = _complete_item(scan_id)
+    item.run.update({
+        "coverage_authority_evidence": {"state": "sufficient"},
+        "classification_integrity": {"state": "verified"},
+        "peak_memory_bytes": 4096,
+        "beta_revision_fingerprint": HARNESS.EXPECTED_RELEASE_FINGERPRINT,
+    })
+    return item
+
+
+def test_signed_full_result_must_also_satisfy_browser_row_identity():
+    # A raw V8 endpoint can report release/authority flags while the browser's
+    # getScanRunWithFixList still refuses internally inconsistent row IDs.
+    # The controls deliberately keep every other acceptance dimension green.
+    clean = _fully_qualifying_ramp_item("scan_row_identity")
+    clean.customer_result["fixItems"] = [{
+        "id": "fix_1", "project_id": "project_1",
+        "scan_run_id": clean.scan_id, "fix_list_id": "fixlist_1",
+    }]
+    assert HARNESS.report([clean], {})["passed"] is True
+
+    for mismatch in (
+        "fixlist_project", "fixlist_scan", "item_project", "item_scan",
+        "item_fixlist", "orphan_item", "non_array_items",
+        "run_project", "wrong_submitted_project",
+    ):
+        item = _fully_qualifying_ramp_item("scan_row_identity")
+        item.customer_result["fixItems"] = [{
+            "id": "fix_1", "project_id": "project_1",
+            "scan_run_id": item.scan_id, "fix_list_id": "fixlist_1",
+        }]
+        if mismatch == "fixlist_project":
+            item.customer_result["fixList"]["project_id"] = "foreign_project"
+        elif mismatch == "fixlist_scan":
+            item.customer_result["fixList"]["scan_run_id"] = "foreign_scan"
+        elif mismatch == "item_project":
+            item.customer_result["fixItems"][0]["project_id"] = "foreign_project"
+        elif mismatch == "item_scan":
+            item.customer_result["fixItems"][0]["scan_run_id"] = "foreign_scan"
+        elif mismatch == "item_fixlist":
+            item.customer_result["fixItems"][0]["fix_list_id"] = "foreign_fixlist"
+        elif mismatch == "orphan_item":
+            item.customer_result["fixList"] = None
+        elif mismatch == "non_array_items":
+            item.customer_result["fixItems"] = {}
+        elif mismatch == "run_project":
+            item.run["project_id"] = ""
+        elif mismatch == "wrong_submitted_project":
+            item.project_id = "different_project"
+
+        observed = HARNESS.report([item], {})
+        assert observed["passed"] is False, mismatch
+        assert any(
+            "customer browser would reject saved result" in error
+            for error in observed["failures"]
+        ), mismatch
+
+
+def test_customer_row_check_preserves_zero_fix_and_signed_limited_results():
+    zero_fix = _fully_qualifying_ramp_item("scan_zero_fixes")
+    assert HARNESS.report([zero_fix], {})["passed"] is True
+    limited = _fully_qualifying_ramp_item("scan_limited_no_fixes")
+    limited.run["status"] = "limited"
+    limited.run["error_code"] = "scan_access_limited"
+    limited.customer_result.update({
+        "authority_verified": False,
+        "result_integrity_verified": True,
+        "fixList": None,
+        "fixItems": [],
+    })
+    assert HARNESS.report([limited], {})["passed"] is True
+
+
+def _rejected_ramp_item(failure_code):
+    item = HARNESS.Submission(
+        email="acceptance@example.com",
+        url="https://example.com",
+        project_id="project_1",
+    )
+    item.http_status = 503
+    item.accepted = False
+    item.failure_code = failure_code
+    return item
+
+
+def test_no_accepted_submissions_cannot_pass_release_acceptance():
+    rejected = _rejected_ramp_item("scan_admission_unavailable")
+    observed = HARNESS.report([rejected], {})
+    assert observed["submitted"] == 1
+    assert observed["accepted"] == 0
+    assert observed["terminal"] == 0
+    assert observed["passed"] is False
+    assert any("no scan was accepted" in failure for failure in observed["failures"])
+    assert any("scan_admission_unavailable" in failure for failure in observed["failures"])
+    assert HARNESS.report([], {})["passed"] is False
+
+
+def test_partially_rejected_ramp_does_not_pass_even_with_one_full_verified_result():
+    winner = _fully_qualifying_ramp_item()
+    assert HARNESS.report([winner], {})["passed"] is True
+    rejected = _rejected_ramp_item("admission_capacity_limited")
+    observed = HARNESS.report([winner, rejected], {})
+    assert observed["authoritative_complete"] == 1
+    assert observed["passed"] is False
+    assert any("admission_capacity_limited" in failure for failure in observed["failures"])
+
+
+def test_expected_busy_double_submit_exception_is_narrow():
+    winner = _fully_qualifying_ramp_item()
+    busy = _rejected_ramp_item("scan_admission_busy")
+    control = HARNESS.report([winner, busy], {}, allow_busy_rejection=True)
+    assert control["passed"] is True
+    assert control["authoritative_complete"] == 1
+
+    # The same busy rejection is unexpected during an ordinary canary.
+    assert HARNESS.report([winner, busy], {})["passed"] is False
+
+    # The double-submit flag must not excuse a different rejection or
+    # turn two denied admissions into a successful release receipt.
+    busy.failure_code = "scan_admission_unavailable"
+    unexpected = HARNESS.report([winner, busy], {}, allow_busy_rejection=True)
+    assert unexpected["passed"] is False
+    assert any("scan_admission_unavailable" in x for x in unexpected["failures"])
+    busy.failure_code = "scan_admission_busy"
+    assert HARNESS.report([busy], {}, allow_busy_rejection=True)["passed"] is False
+
+
+def test_fresh_reopen_downgrade_fails_even_if_terminal_poll_was_full(monkeypatch):
+    item = _fully_qualifying_ramp_item("scan_reopen_preview")
+    assert HARNESS.report([item], {})["passed"] is True  # cached poll baseline
+
+    async def fresh_preview(_client, _token, function, payload):
+        assert function == HARNESS.READ_CUSTOMER_FUNCTION
+        assert payload == {"action": "get", "scan_id": item.scan_id}
+        return 200, {
+            **item.customer_result,
+            "scan_id": item.scan_id,
+            "run": dict(item.run),
+            "access": "preview",
+            "authority_verified": True,
+        }
+
+    monkeypatch.setattr(HARNESS, "invoke", fresh_preview)
+    errors = asyncio.run(HARNESS.reopen_customer_results(
+        object(), {item.email: "fake-token"}, [item],
+    ))
+    assert errors == []
+    assert item.customer_result["access"] == "preview"
+    observed = HARNESS.report([item], {})
+    assert observed["passed"] is False
+    assert any("lacks full-access customer read-back" in x for x in observed["failures"])
+
+
+def test_failed_fresh_reopen_never_reuses_green_terminal_poll(monkeypatch):
+    item = _fully_qualifying_ramp_item("scan_reopen_503")
+    assert HARNESS.report([item], {})["passed"] is True
+
+    async def unavailable(_client, _token, _function, _payload):
+        return 503, {"failure_code": "temporarily_unavailable"}
+
+    monkeypatch.setattr(HARNESS, "invoke", unavailable)
+    errors = asyncio.run(HARNESS.reopen_customer_results(
+        object(), {item.email: "fake-token"}, [item],
+    ))
+    assert errors == [f"{item.scan_id}: fresh customer read-back HTTP 503"]
+    assert item.customer_result == {}
+    assert HARNESS.report([item], {})["passed"] is False
+
+
+def test_fresh_reopen_rejects_foreign_scan_and_regressed_terminal(monkeypatch):
+    for scenario in ("foreign_scan", "regressed_status"):
+        item = _fully_qualifying_ramp_item(f"scan_{scenario}")
+
+        async def wrong_read(_client, _token, _function, _payload):
+            fresh_run = dict(item.run)
+            if scenario == "regressed_status":
+                fresh_run["status"] = "crawling"
+            return 200, {
+                **item.customer_result,
+                "scan_id": "different_scan" if scenario == "foreign_scan" else item.scan_id,
+                "run": fresh_run,
+            }
+
+        monkeypatch.setattr(HARNESS, "invoke", wrong_read)
+        errors = asyncio.run(HARNESS.reopen_customer_results(
+            object(), {item.email: "fake-token"}, [item],
+        ))
+        assert len(errors) == 1
+        assert ("identity mismatch" if scenario == "foreign_scan" else "terminal status changed") in errors[0]
+        assert item.customer_result == {}
+        assert HARNESS.report([item], {})["passed"] is False
+
+
+def test_successful_fresh_reopen_retains_full_and_limited_contracts(monkeypatch):
+    for status in ("complete", "limited"):
+        item = _fully_qualifying_ramp_item(f"scan_reopened_{status}")
+        item.run["status"] = status
+        if status == "limited":
+            item.run["error_code"] = "scan_access_limited"
+            item.customer_result.update({
+                "access": "full", "authority_verified": False,
+                "result_integrity_verified": True, "fixList": None, "fixItems": [],
+            })
+        fresh_body = {**item.customer_result, "run": dict(item.run)}
+
+        async def fresh_read(_client, _token, function, payload):
+            assert function == HARNESS.READ_CUSTOMER_FUNCTION
+            assert payload["scan_id"] == item.scan_id
+            return 200, fresh_body
+
+        monkeypatch.setattr(HARNESS, "invoke", fresh_read)
+        errors = asyncio.run(HARNESS.reopen_customer_results(
+            object(), {item.email: "fake-token"}, [item],
+        ))
+        assert errors == []
+        observed = HARNESS.report([item], {})
+        assert observed["passed"] is True
+        assert observed["authoritative_complete"] == (1 if status == "complete" else 0)
+
+
+def test_main_exit_fails_when_independent_customer_reopen_is_unavailable(tmp_path, monkeypatch, capsys):
+    # Full integration through main_async: the cached terminal result is green,
+    # but the fresh customer GET on a separate client fails closed.
+    async def fake_submit(_client, _token, item):
+        seeded = _fully_qualifying_ramp_item("scan_reopen_integration")
+        item.scan_id = seeded.scan_id
+        item.accepted = True
+        item.http_status = 200
+        item.submitted_at = seeded.submitted_at
+        item.terminal_at = seeded.terminal_at
+        item.run = seeded.run
+        item.customer_result = seeded.customer_result
+        assert HARNESS.report([item], {})["passed"] is True
+
+    async def fake_wait(_client, _tokens, _items, _timeout, *, checkpoint_path=""):
+        return None
+
+    async def unavailable_reopen(_client, _token, function, payload):
+        assert function == HARNESS.READ_CUSTOMER_FUNCTION
+        assert payload == {"action": "get", "scan_id": "scan_reopen_integration"}
+        return 503, {"failure_code": "temporarily_unavailable"}
+
+    monkeypatch.setattr(HARNESS.httpx, "AsyncClient", _DummyAsyncClient)
+    monkeypatch.setattr(HARNESS, "submit", fake_submit)
+    monkeypatch.setattr(HARNESS, "wait_terminal", fake_wait)
+    monkeypatch.setattr(HARNESS, "invoke", unavailable_reopen)
+    monkeypatch.setattr(HARNESS, "log_quality", lambda *_args: {"available": False})
+
+    status = asyncio.run(HARNESS.main_async(_main_args(tmp_path, checkpoint="")))
+    receipt = json.loads(capsys.readouterr().out)
+    assert status == 1
+    assert receipt["passed"] is False
+    assert any("fresh customer read-back HTTP 503" in failure for failure in receipt["failures"])
+    assert receipt["authoritative_complete"] == 0
+
+
+def test_failed_and_cancelled_terminals_never_pass_customer_acceptance():
+    # Negative controls keep all ten dimensions measured and the exact
+    # release matched, so failure must derive from terminal outcome itself.
+    for status in ("failed", "cancelled"):
+        item = _fully_qualifying_ramp_item(f"scan_{status}")
+        item.run["status"] = status
+        item.run["error_code"] = "worker_failed" if status == "failed" else "owner_cancelled"
+        item.customer_result.update({
+            "access": "locked",
+            "authority_verified": False,
+            "fixList": None,
+            "fixItems": [],
+        })
+        observed = HARNESS.report([item], {})
+        assert observed["terminal"] == 1
+        assert observed["authoritative_complete"] == 0
+        assert observed["results"][0]["matrix_gaps"] == []
+        assert observed["results"][0]["matrix_failures"] == []
+        assert observed["passed"] is False
+        assert any(
+            f"unsuccessful terminal status {status}" in failure
+            for failure in observed["failures"]
+        )
+
+
+def test_integrity_verified_limited_terminal_remains_success_eligible():
+    # A correctly limited but integrity-verified customer result is a
+    # legitimate Standard 150 outcome; do not regress that existing contract.
+    item = _fully_qualifying_ramp_item("scan_limited")
+    item.run["status"] = "limited"
+    item.run["error_code"] = "scan_access_limited"
+    item.customer_result.update({
+        "access": "limited",
+        "authority_verified": False,
+        "result_integrity_verified": True,
+        "fixList": None,
+        "fixItems": [],
+    })
+    observed = HARNESS.report([item], {})
+    assert observed["terminal"] == 1
+    assert observed["limited"] == 1
+    assert observed["results"][0]["matrix_gaps"] == []
+    assert observed["passed"] is True
 
 
 def test_matrix_has_ten_independent_dimensions_and_only_real_gaps():
@@ -218,7 +589,7 @@ def test_terminal_poll_durably_checkpoints_the_completed_site(
     checkpoint = tmp_path / "acceptance.json"
 
     async def fake_invoke(_client, _token, function, payload):
-        assert function == "getCustomerScanResult"
+        assert function == HARNESS.READ_CUSTOMER_FUNCTION
         assert payload == {"action": "get", "scan_id": "scan_1"}
         return 200, {
             "scan_id": "scan_1",
@@ -265,7 +636,7 @@ def test_transition_checkpoint_failure_does_not_abort_terminal_reporting(
     item.customer_result = {}
 
     async def fake_invoke(_client, _token, function, payload):
-        assert function == "getCustomerScanResult"
+        assert function == HARNESS.READ_CUSTOMER_FUNCTION
         return 200, {
             "scan_id": payload["scan_id"],
             "run": {
@@ -317,7 +688,7 @@ def test_poll_failure_does_not_cancel_sibling_or_lose_checkpoint(
     attempts = {"scan_retry": 0}
 
     async def fake_invoke(_client, _token, function, payload):
-        assert function == "getCustomerScanResult"
+        assert function == HARNESS.READ_CUSTOMER_FUNCTION
         scan_id = payload["scan_id"]
         if scan_id == "scan_retry":
             attempts[scan_id] += 1
@@ -498,7 +869,7 @@ def _stub_main_dependencies(monkeypatch):
     monkeypatch.setattr(HARNESS, "submit", no_submit)
     monkeypatch.setattr(HARNESS, "wait_terminal", no_wait)
     monkeypatch.setattr(HARNESS, "log_quality", lambda *_args: {"available": False})
-    monkeypatch.setattr(HARNESS, "report", lambda *_args: {
+    monkeypatch.setattr(HARNESS, "report", lambda *_args, **_kwargs: {
         "failures": [],
         "passed": True,
         "results": [],

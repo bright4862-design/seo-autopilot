@@ -570,6 +570,13 @@ test("worker provenance lookup uses the same regional Cloud Build scope as the c
   );
 });
 
+test("worker build proof uses the exact resolved revision digest, never a mutable tag fallback", () => {
+  assert.match(cloudOperator, /verify_worker_build_provenance\.py/);
+  assert.match(cloudOperator, /--revision-json/);
+  assert.doesNotMatch(cloudOperator, /digest="\$\{image##\*@\}"/);
+});
+
+
 /**
  * The coordinator's operator identity token.
  *

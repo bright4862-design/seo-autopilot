@@ -325,49 +325,47 @@ print("\n".join(sorted(routes)))
 # probes cannot answer this: Cloud Run IAM rejects them before routing. The
 # only external proof is the image's build provenance.
 verify_worker_routes() {
-  local revision image digest timeout release_sha verdict=0
-  local want_routes got_routes
+  local revision image timeout release_sha verdict=0
+  local want_routes got_routes revision_json builds_json
   revision="${TARGET_REVISION:-$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
     --region="$GCP_REGION" --project="$GCP_PROJECT" \
     --format='value(status.latestReadyRevisionName)')}"
   [ -n "$revision" ] || { echo "No ready revision found." >&2; exit 2; }
 
-  image=$(gcloud run revisions describe "$revision" \
-    --region="$GCP_REGION" --project="$GCP_PROJECT" \
-    --format='value(spec.containers[0].image)')
+  # A deployment may be specified by a mutable tag, but the *exact revision*
+  # records the resolved immutable digest even for tag-form image references.
+  # Do not attribute a running digest to the first build sharing a tag/name.
+  OPERATOR_TMP="$(mktemp -d)"
+  chmod 700 "$OPERATOR_TMP"
+  revision_json="$OPERATOR_TMP/worker-revision.json"
+  builds_json="$OPERATOR_TMP/cloud-builds.json"
+  gcloud run revisions describe "$revision" \
+    --region="$GCP_REGION" --project="$GCP_PROJECT" --format=json > "$revision_json"
+  image="$(python3 - "$revision_json" <<'PY'
+import json, sys
+revision = json.load(open(sys.argv[1], encoding="utf-8"))
+print(str(((revision.get("spec") or {}).get("containers") or [{}])[0].get("image") or ""))
+PY
+)"
   echo "revision: $revision"
   echo "image:    $image"
 
-  digest="${image##*@}"
-  if [ "$digest" = "$image" ]; then
-    echo "WARNING: revision runs a mutable tag, not an immutable digest."
-    digest=""
-  fi
-
-  # Match the image back to the Cloud Build that produced it. gcloud's --filter
-  # cannot reliably index into results.images, so the builds are pulled as JSON
-  # and matched here: by digest when the revision is digest-pinned, otherwise by
-  # image name.
   echo
-  echo "=== Build provenance ==="
-  release_sha=$(gcloud builds list --project="$GCP_PROJECT" --region="$GCP_REGION" --limit=50 \
-    --format=json 2>/dev/null | python3 -c '
-import json,sys
-builds=json.load(sys.stdin)
-image=sys.argv[1]; digest=sys.argv[2]
-name=image.split("@")[0].split(":")[0]
-for b in builds:
-    imgs=(b.get("results") or {}).get("images") or []
-    names=[i.get("name","") for i in imgs]
-    digs=[i.get("digest","") for i in imgs]
-    hit=(digest and digest in digs) or (not digest and any(n.split("@")[0].split(":")[0]==name for n in names))
-    if hit:
-        sha=(b.get("substitutions") or {}).get("_RELEASE_SHA","")
-        print(sha)
-        sys.stderr.write("build %s  status=%s  created=%s  _RELEASE_SHA=%s\n" % (
-            b.get("id",""), b.get("status",""), b.get("createTime",""), sha or "(unset)"))
-        break
-' "$image" "$digest" || true)
+  echo "=== Build provenance (exact Ready revision + resolved digest) ==="
+  # This bounded recent-build view may not include the original build.
+  # Absence must be INDETERMINATE, never a fallback to image-name matching.
+  if ! gcloud builds list --project="$GCP_PROJECT" --region="$GCP_REGION" --limit=50 \
+    --format=json > "$builds_json"; then
+    echo "INDETERMINATE: unable to retrieve Cloud Build records." >&2
+    return 1
+  fi
+  if ! release_sha="$(python3 "$REPO_ROOT/scripts/verify_worker_build_provenance.py" \
+      --revision-json "$revision_json" --builds-json "$builds_json" \
+      --revision "$revision" --service "$CLOUD_RUN_SERVICE")"; then
+    echo "INDETERMINATE: cannot uniquely bind the exact Ready revision's image digest to a SUCCESS build." >&2
+    release_sha=""
+    verdict=1
+  fi
 
   # The runner has this repository checked out with full history, so whether a
   # SHA declares the durable routes is a fact we can decide here rather than
@@ -375,9 +373,9 @@ for b in builds:
   echo
   echo "=== Route verification ==="
   if [ -z "$release_sha" ]; then
-    echo "INDETERMINATE: no Cloud Build recorded for this image, or _RELEASE_SHA unset."
-    echo "The image predates provenance-tagged builds. Rebuild from"
-    echo "cloudbuild.durable-worker.yaml at a known SHA before promoting."
+    echo "INDETERMINATE: no uniquely authenticated successful build/source for this exact revision digest."
+    echo "The build may be absent from the recent-record window, malformed or ambiguous."
+    echo "Do not infer a source from its mutable tag. Verify immutable provenance before promotion."
     verdict=1
   elif ! git cat-file -e "${release_sha}^{commit}" 2>/dev/null; then
     echo "INDETERMINATE: _RELEASE_SHA $release_sha is not a commit in this repository."

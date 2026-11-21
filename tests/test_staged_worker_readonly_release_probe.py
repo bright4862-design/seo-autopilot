@@ -112,8 +112,9 @@ def test_source_bound_tag_needs_exact_source_revision_and_zero_traffic():
         verify_tagged_zero_traffic(service, REVISION, tag, source_sha=source)
 
 
+@pytest.mark.parametrize("tagged_image", [True, False])
 @pytest.mark.parametrize("has_drain_route", [True, False])
-def test_worker_route_probe_reads_large_source_without_sigpipe(tmp_path, has_drain_route):
+def test_worker_route_probe_reads_large_source_without_sigpipe(tmp_path, has_drain_route, tagged_image):
     source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     source_file = tmp_path / "main.py"
     decorators = '@app.post("/scan-job")\n'
@@ -136,25 +137,42 @@ exec "$REAL_GIT" "$@"
     gcloud.write_text('''#!/bin/bash
 case "$1 $2 $3 ${!#}" in
   "config set project test-project") ;;
-  "run revisions describe --format=value(spec.containers[0].image)") printf '%s\\n' "$PROBE_IMAGE" ;;
+  "run revisions describe --format=json") printf '%s\\n' "$PROBE_REVISION" ;;
   "run revisions describe --format=value(spec.timeoutSeconds)") echo 480 ;;
   "builds list "*) printf '%s\\n' "$PROBE_BUILDS" ;;
   *) exit 99 ;;
 esac
 ''')
     gcloud.chmod(0o755)
-    digest = "sha256:" + "a" * 64
+    digest = "sha256:" + "b" * 64
+    wrong_sha = "a" * 40
+    image = "test.example/worker:" + source_sha if tagged_image else "test.example/worker@" + digest
+    revision = {
+        "metadata": {"name": REVISION, "labels": {"serving.knative.dev/service": "fixlist-standard150-worker"}},
+        "spec": {"containers": [{"image": image}]},
+        "status": {"imageDigest": "test.example/worker@" + digest,
+                   "conditions": [{"type": "Ready", "status": "True"}]},
+    }
+    # The first SUCCESS build shares the image name but NOT the revision's
+    # resolved digest. The prior first-match heuristic would select it on tags.
+    builds = [
+        {"id": "obsolete-build", "status": "SUCCESS",
+         "substitutions": {"_RELEASE_SHA": wrong_sha},
+         "results": {"images": [{"name": "test.example/worker:" + wrong_sha,
+                                 "digest": "sha256:" + "a" * 64}]}},
+        {"id": "correct-build", "status": "SUCCESS",
+         "substitutions": {"_RELEASE_SHA": source_sha},
+         "results": {"images": [{"name": "test.example/worker:" + source_sha,
+                                 "digest": digest}]}},
+    ]
     env = {
         **os.environ,
         "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"],
         "REAL_GIT": shutil.which("git"),
         "PROBE_SOURCE": str(source_file),
         "PROBE_SHA": source_sha,
-        "PROBE_IMAGE": "test.example/worker@" + digest,
-        "PROBE_BUILDS": json.dumps([{
-            "substitutions": {"_RELEASE_SHA": source_sha},
-            "results": {"images": [{"digest": digest}]},
-        }]),
+        "PROBE_REVISION": json.dumps(revision),
+        "PROBE_BUILDS": json.dumps(builds),
         "GCP_PROJECT": "test-project",
         "GCP_REGION": "test-region",
         "CLOUD_RUN_SERVICE": "fixlist-standard150-worker",
@@ -170,6 +188,7 @@ esac
     assert result.returncode == (0 if has_drain_route else 1), result.stdout + result.stderr
     if has_drain_route:
         assert "WORKER ROUTES VERIFIED" in result.stdout
+        assert "built from: " + source_sha in result.stdout
     else:
         assert "does NOT declare both durable routes" in result.stdout
 

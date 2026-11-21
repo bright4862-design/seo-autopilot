@@ -373,9 +373,9 @@ PY
   echo
   echo "=== Route verification ==="
   if [ -z "$release_sha" ]; then
-    echo "INDETERMINATE: no Cloud Build recorded for this image, or _RELEASE_SHA unset."
-    echo "The image predates provenance-tagged builds. Rebuild from"
-    echo "cloudbuild.durable-worker.yaml at a known SHA before promoting."
+    echo "INDETERMINATE: no uniquely authenticated successful build/source for this exact revision digest."
+    echo "The build may be absent from the recent-record window, malformed or ambiguous."
+    echo "Do not infer a source from its mutable tag. Verify immutable provenance before promotion."
     verdict=1
   elif ! git cat-file -e "${release_sha}^{commit}" 2>/dev/null; then
     echo "INDETERMINATE: _RELEASE_SHA $release_sha is not a commit in this repository."

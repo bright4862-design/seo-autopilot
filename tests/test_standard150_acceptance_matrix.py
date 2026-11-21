@@ -869,7 +869,7 @@ def _stub_main_dependencies(monkeypatch):
     monkeypatch.setattr(HARNESS, "submit", no_submit)
     monkeypatch.setattr(HARNESS, "wait_terminal", no_wait)
     monkeypatch.setattr(HARNESS, "log_quality", lambda *_args: {"available": False})
-    monkeypatch.setattr(HARNESS, "report", lambda *_args: {
+    monkeypatch.setattr(HARNESS, "report", lambda *_args, **_kwargs: {
         "failures": [],
         "passed": True,
         "results": [],

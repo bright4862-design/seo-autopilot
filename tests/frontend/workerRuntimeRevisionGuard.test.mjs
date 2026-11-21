@@ -74,9 +74,15 @@ const RECORDED = {
   component_versions: COMPONENTS,
 };
 
-function compare(live, recorded = RECORDED, expectedSha = "") {
-  return withFixtures({ live, recorded }, (paths) =>
-    runPython(COMPARATOR, [paths.live, paths.recorded, expectedSha]),
+function compare(live, recorded = RECORDED, expectedSha = "", expectedRevision = "worker-00054-trs") {
+  // Existing tests predate the executing-revision field; stamp normal fixtures
+  // explicitly, without replacing an intentionally absent/null negative control.
+  const fixture = live && typeof live === "object" && !Array.isArray(live)
+    && !Object.hasOwn(live, "worker_revision")
+    ? { ...live, worker_revision: expectedRevision }
+    : live;
+  return withFixtures({ live: fixture, recorded }, (paths) =>
+    runPython(COMPARATOR, [paths.live, paths.recorded, expectedSha, expectedRevision]),
   );
 }
 
@@ -152,7 +158,7 @@ test("a missing fingerprint is a failure, never a pass by absence", () => {
 test("a non-JSON or non-object body is a failure", () => {
   for (const body of ["<html>403 Forbidden</html>", "", '["5d94e93c54a9efb6"]', '"5d94e93c54a9efb6"']) {
     const result = withFixtures({ live: body, recorded: RECORDED }, (paths) =>
-      runPython(COMPARATOR, [paths.live, paths.recorded, ""]),
+      runPython(COMPARATOR, [paths.live, paths.recorded, "", "worker-00054-trs"]),
     );
     assert.equal(result.status, 1, `${body.slice(0, 20)} must not pass as a revision answer`);
   }
@@ -356,6 +362,7 @@ const LIVE_MATCHING = {
   component_versions: FREEZE.component_versions,
   fingerprint: FREEZE.fingerprint,
   source_sha: PROMOTED_SHA,
+  worker_revision: "worker-00054-trs",
 };
 const serving = (revisionName, extra = {}) => ({
   status: {
@@ -460,6 +467,33 @@ test("end to end: unrelated zero-traffic tag movement does not invalidate the se
   });
   assert.equal(result.status, 0, result.stdout);
   assert.match(result.stdout, /PASS: route attribution remained stable/);
+});
+
+test("end to end: identical release markers and SHA cannot disguise a different executing revision", () => {
+  // An A -> B -> A routing excursion could evade two control-plane snapshots.
+  // The response must independently attest which Cloud Run process answered.
+  const result = runGuard({
+    service: serving("worker-00054-trs"),
+    serviceAfter: serving("worker-00054-trs"),
+    revision: "worker-00054-trs",
+    body: { ...LIVE_MATCHING, worker_revision: "worker-00055-other" },
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /responding worker revision is absent or differs/);
+  assert.doesNotMatch(result.stdout, /PASS: the running worker computes/);
+});
+
+test("end to end: an absent K_REVISION cannot be silently accepted", () => {
+  const { worker_revision: omitted, ...missing } = LIVE_MATCHING;
+  for (const body of [missing, { ...LIVE_MATCHING, worker_revision: "" }]) {
+    const result = runGuard({
+      service: serving("worker-00054-trs"),
+      revision: "worker-00054-trs",
+      body,
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stdout, /responding worker revision is absent or differs/);
+  }
 });
 
 test("end to end: a worker serving a different identity fails and is diagnosed", () => {

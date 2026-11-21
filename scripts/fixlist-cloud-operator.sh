@@ -601,11 +601,11 @@ PY
       ;;
   esac
 
-  python3 - "$response" "$recorded" "$expected_sha" <<'PY' || compare_status=$?
+  python3 - "$response" "$recorded" "$expected_sha" "$revision" <<'PY' || compare_status=$?
 # runtime-revision-comparator
 import json, sys
 
-response_path, recorded_path, expected_sha = sys.argv[1:4]
+response_path, recorded_path, expected_sha, expected_revision = sys.argv[1:5]
 try:
     live = json.load(open(response_path, encoding="utf-8"))
 except Exception:
@@ -619,9 +619,12 @@ recorded = json.load(open(recorded_path, encoding="utf-8"))
 live_fingerprint = str(live.get("fingerprint") or "")
 recorded_fingerprint = str(recorded.get("fingerprint") or "")
 live_sha = str(live.get("source_sha") or "")
+live_worker_revision = str(live.get("worker_revision") or "")
 print("runtime fingerprint:  %s" % (live_fingerprint or "(absent)"))
 print("recorded fingerprint: %s" % (recorded_fingerprint or "(absent)"))
 print("runtime source_sha:   %s" % (live_sha or "(unset)"))
+print("runtime worker revision: %s" % (live_worker_revision or "(absent)"))
+print("expected worker revision: %s" % (expected_revision or "(absent)"))
 
 failed = False
 live_components = live.get("component_versions")
@@ -676,6 +679,14 @@ elif expected_sha and live_sha != expected_sha:
     failed = True
     print("FAIL: the container says it was built from %s, but the release being" % live_sha)
     print("promoted is %s." % expected_sha)
+
+# The revision name comes from Cloud Run's own K_REVISION environment in
+# the process answering /revision, not from the caller or the source-SHA stamp.
+# Comparing it with the control-plane-selected revision also catches an
+# A -> B -> A routing switch hidden between two identical service snapshots.
+if not expected_revision or live_worker_revision != expected_revision:
+    failed = True
+    print("FAIL: the responding worker revision is absent or differs from the Cloud Run revision selected for this probe.")
 
 raise SystemExit(1 if failed else 0)
 PY

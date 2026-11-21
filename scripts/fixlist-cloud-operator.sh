@@ -354,8 +354,8 @@ PY
   echo "=== Build provenance (exact Ready revision + resolved digest) ==="
   # This bounded recent-build view may not include the original build.
   # Absence must be INDETERMINATE, never a fallback to image-name matching.
-  if ! gcloud builds list --project="$GCP_PROJECT" --region="$GCP_REGION" \
-    --limit=50 --format=json > "$builds_json"; then
+  if ! gcloud builds list --project="$GCP_PROJECT" --region="$GCP_REGION" --limit=50 \
+    --format=json > "$builds_json"; then
     echo "INDETERMINATE: unable to retrieve Cloud Build records." >&2
     return 1
   fi

@@ -8,6 +8,16 @@ set -euo pipefail
 : "${GCP_REGION:?GCP_REGION is required}"
 : "${CLOUD_RUN_SERVICE:?CLOUD_RUN_SERVICE is required}"
 
+# This tool certifies only the production Standard 150 namespace. Reading a
+# similarly named revision from another project/region/service must not be
+# confused with evidence for this customer path.
+if [[ "$GCP_PROJECT" != "seo-autopilot-501517" ||
+      "$GCP_REGION" != "europe-west1" ||
+      "$CLOUD_RUN_SERVICE" != "fixlist-standard150-worker" ]]; then
+  echo "ERROR: production scope mismatch; expected seo-autopilot-501517/europe-west1/fixlist-standard150-worker" >&2
+  exit 2
+fi
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GUARD="$REPO_ROOT/scripts/select-serving-worker-signing-ref.py"
 test -f "$GUARD"
@@ -45,7 +55,8 @@ test -n "$revision"
 observe
 python3 "$GUARD" verify "$TMP/service.json" "$TMP/revision.json" "$TMP/ref.txt" > /dev/null
 
-printf 'KEYLESS_METADATA_PREFLIGHT_OK revision=%s\n' "$revision"
+printf 'KEYLESS_METADATA_PREFLIGHT_OK project=%s region=%s service=%s revision=%s\n' \
+  "$GCP_PROJECT" "$GCP_REGION" "$CLOUD_RUN_SERVICE" "$revision"
 echo "This confirms two agreeing metadata observations only."
 echo "It does NOT prove the deployed /revision payload, signing-key bytes,"
 echo "historical HMAC read-back, Base44 package identity, or release acceptance."

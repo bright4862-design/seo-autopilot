@@ -161,6 +161,51 @@ def test_expected_busy_double_submit_exception_is_narrow():
     assert HARNESS.report([busy], {}, allow_busy_rejection=True)["passed"] is False
 
 
+def test_failed_and_cancelled_terminals_never_pass_customer_acceptance():
+    # Negative controls keep all ten dimensions measured and the exact
+    # release matched, so failure must derive from terminal outcome itself.
+    for status in ("failed", "cancelled"):
+        item = _fully_qualifying_ramp_item(f"scan_{status}")
+        item.run["status"] = status
+        item.run["error_code"] = "worker_failed" if status == "failed" else "owner_cancelled"
+        item.customer_result.update({
+            "access": "locked",
+            "authority_verified": False,
+            "fixList": None,
+            "fixItems": [],
+        })
+        observed = HARNESS.report([item], {})
+        assert observed["terminal"] == 1
+        assert observed["authoritative_complete"] == 0
+        assert observed["results"][0]["matrix_gaps"] == []
+        assert observed["results"][0]["matrix_failures"] == []
+        assert observed["passed"] is False
+        assert any(
+            f"unsuccessful terminal status {status}" in failure
+            for failure in observed["failures"]
+        )
+
+
+def test_integrity_verified_limited_terminal_remains_success_eligible():
+    # A correctly limited but integrity-verified customer result is a
+    # legitimate Standard 150 outcome; do not regress that existing contract.
+    item = _fully_qualifying_ramp_item("scan_limited")
+    item.run["status"] = "limited"
+    item.run["error_code"] = "scan_access_limited"
+    item.customer_result.update({
+        "access": "limited",
+        "authority_verified": False,
+        "result_integrity_verified": True,
+        "fixList": None,
+        "fixItems": [],
+    })
+    observed = HARNESS.report([item], {})
+    assert observed["terminal"] == 1
+    assert observed["limited"] == 1
+    assert observed["results"][0]["matrix_gaps"] == []
+    assert observed["passed"] is True
+
+
 def test_matrix_has_ten_independent_dimensions_and_only_real_gaps():
     item = _complete_item()
     matrix = build_acceptance_matrix(HARNESS._matrix_observation(item))

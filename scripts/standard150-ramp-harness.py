@@ -377,6 +377,10 @@ def report(
         elif status == "limited":
             if result.get("result_integrity_verified") is not True:
                 failures.append(f"{item.scan_id}: limited result is not result_integrity_verified")
+        else:
+            # Terminal is not synonymous with successful: failed/cancelled are
+            # auditable outcomes, never evidence of an accepted customer result.
+            failures.append(f"{item.scan_id}: unsuccessful terminal status {status}")
     bad_codes = {str(i.run.get("error_code") or "") for i in terminal}
     for code in {"worker_terminal_drain_timeout", "orphaned_no_terminal_state"} & bad_codes:
         failures.append(f"lifecycle failure observed: {code}")

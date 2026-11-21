@@ -146,3 +146,39 @@ def test_duplicate_ready_conditions_do_not_prove_readiness():
     rev["status"]["conditions"].append({"type": "Ready", "status": "False"})
     with pytest.raises(module.ProvenanceUnavailable, match="revision_not_ready"):
         check(rev=rev)
+
+
+def test_matching_build_cannot_override_contradictory_repo_provenance():
+    matched = build(SHA_B, DIG_B)
+    matched["sourceProvenance"] = {"resolvedRepoSource": {"commitSha": SHA_A}}
+    with pytest.raises(module.ProvenanceUnavailable,
+                       match="matching_build_repo_commit_conflicts_with_release_label"):
+        check(builds=[matched])
+
+
+def test_archive_storage_provenance_without_repo_sha_is_accepted():
+    # The actual gcloud builds submit workflow uploads a local source archive;
+    # resolvedStorageSource records its GCS object/generation, not a Git commit.
+    matched = build(SHA_B, DIG_B)
+    matched["sourceProvenance"] = {
+        "resolvedStorageSource": {
+            "bucket": "synthetic-build-source",
+            "object": "source/archive.tgz",
+            "generation": "12",
+        }
+    }
+    assert check(builds=[matched])[0] == SHA_B
+
+
+def test_matching_optional_repo_sha_does_not_block_legitimate_source():
+    matched = build(SHA_B, DIG_B)
+    matched["sourceProvenance"] = {"resolvedRepoSource": {"commitSha": SHA_B}}
+    assert check(builds=[matched])[0] == SHA_B
+
+
+@pytest.mark.parametrize("bad_provenance", ["not-json-object", {"resolvedRepoSource": "invalid"}])
+def test_malformed_reported_provenance_is_indeterminate(bad_provenance):
+    matched = build(SHA_B, DIG_B)
+    matched["sourceProvenance"] = bad_provenance
+    with pytest.raises(module.ProvenanceUnavailable, match="provenance_malformed|repo_source_malformed"):
+        check(builds=[matched])

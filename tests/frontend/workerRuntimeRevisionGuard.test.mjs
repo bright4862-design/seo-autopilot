@@ -273,20 +273,31 @@ test("an untagged revision that does not hold all traffic yields no probe URL", 
 // Running the real operation end to end against stubbed gcloud/curl is the only
 // way to prove the refusal paths refuse. Asserting on their prose would pass a
 // guard that printed INDETERMINATE and then fell through to PASS.
-function runGuard({ service, revision = "", body, code = "200", token = "stub-token", audience = "", probeUrl = "", sourceSha = "" }) {
+function runGuard({ service, serviceAfter = service, revision = "", body, code = "200", token = "stub-token", audience = "", probeUrl = "", sourceSha = "" }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-revision-e2e-"));
   const bin = path.join(dir, "bin");
   fs.mkdirSync(bin);
   const servicePath = path.join(dir, "service.json");
+  const afterServicePath = path.join(dir, "service-after.json");
+  const describeCountPath = path.join(dir, "described-once");
   const bodyPath = path.join(dir, "revision.json");
   const curlLog = path.join(dir, "curl.log");
   fs.writeFileSync(servicePath, JSON.stringify(service));
+  fs.writeFileSync(afterServicePath, JSON.stringify(serviceAfter));
   fs.writeFileSync(bodyPath, typeof body === "string" ? body : JSON.stringify(body));
   fs.writeFileSync(
     path.join(bin, "gcloud"),
     `#!/usr/bin/env bash
 if [ "$1 $2" = "config set" ]; then exit 0; fi
-if [ "$1 $2 $3" = "run services describe" ]; then cat "${servicePath}"; exit 0; fi
+if [ "$1 $2 $3" = "run services describe" ]; then
+  if [ -f "${describeCountPath}" ]; then
+    cat "${afterServicePath}"
+  else
+    touch "${describeCountPath}"
+    cat "${servicePath}"
+  fi
+  exit 0
+fi
 echo "unexpected gcloud: $*" >&2; exit 1
 `,
     { mode: 0o755 },
@@ -359,6 +370,76 @@ test("end to end: a worker serving the recorded identity passes", () => {
   assert.match(result.stdout, /PASS: the running worker computes/);
   assert.match(result.curl, new RegExp(`${SERVICE_URL}/revision`));
   assert.match(result.curl, /authorization: Bearer stub-token/);
+});
+
+
+test("end to end: a mid-probe serving traffic switch cannot inherit a green identity", () => {
+  // Before: the service URL identifies A. After: the same URL identifies B.
+  // A correct-looking /revision body must not be attributed to A after routing moved.
+  const result = runGuard({
+    service: serving("worker-00054-trs"),
+    serviceAfter: serving("worker-00055-new"),
+    revision: "worker-00054-trs",
+    body: LIVE_MATCHING,
+  });
+  assert.notEqual(result.status, 0, "unstable serving traffic must fail closed");
+  assert.match(result.stdout, /INDETERMINATE: Cloud Run routing/);
+  assert.doesNotMatch(result.stdout, /PASS: the running worker computes/);
+});
+
+test("end to end: a candidate tag reassignment during probing fails closed", () => {
+  const initial = {
+    status: {
+      url: SERVICE_URL,
+      traffic: [
+        { revisionName: "worker-00053-serving", percent: 100 },
+        { revisionName: "worker-00054-trs", percent: 0, tag: "candidate", url: TAG_URL },
+      ],
+    },
+  };
+  const retargeted = {
+    status: {
+      url: SERVICE_URL,
+      traffic: [
+        { revisionName: "worker-00053-serving", percent: 100 },
+        { revisionName: "worker-00054-trs", percent: 0 },
+        { revisionName: "worker-00055-other", percent: 0, tag: "candidate", url: TAG_URL },
+      ],
+    },
+  };
+  const result = runGuard({
+    service: initial, serviceAfter: retargeted,
+    revision: "worker-00054-trs", probeUrl: TAG_URL, body: LIVE_MATCHING,
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /INDETERMINATE: Cloud Run routing/);
+  assert.doesNotMatch(result.stdout, /PASS: the running worker computes/);
+});
+
+test("end to end: unrelated zero-traffic tag movement does not invalidate the serving binding", () => {
+  const initial = {
+    status: {
+      url: SERVICE_URL,
+      traffic: [
+        { revisionName: "worker-00054-trs", percent: 100 },
+        { revisionName: "worker-00055-other", percent: 0, tag: "candidate", url: TAG_URL },
+      ],
+    },
+  };
+  const changedOther = {
+    status: {
+      url: SERVICE_URL,
+      traffic: [
+        { revisionName: "worker-00054-trs", percent: 100 },
+        { revisionName: "worker-00056-another", percent: 0, tag: "candidate", url: TAG_URL },
+      ],
+    },
+  };
+  const result = runGuard({
+    service: initial, serviceAfter: changedOther, revision: "worker-00054-trs", body: LIVE_MATCHING,
+  });
+  assert.equal(result.status, 0, result.stdout);
+  assert.match(result.stdout, /PASS: route attribution remained stable/);
 });
 
 test("end to end: a worker serving a different identity fails and is diagnosed", () => {

@@ -147,3 +147,20 @@ def test_checkpoint_and_final_report_agree_on_verdict_blockers():
     checkpoint = HARNESS.checkpoint_payload([item])
     assert "complete_coverage_not_sufficient" in final["results"][0]["matrix_failures"]
     assert "complete_coverage_not_sufficient" in checkpoint["sites"][0]["matrix_failures"]
+
+
+def test_presence_only_baseline_would_not_reject_measured_negative_verdicts():
+    # Hold the legacy gap predicate and release-identity predicate constant.
+    # Each fully measured but contradictory report previously looked green.
+    for change in ("coverage", "classification", "quality"):
+        item = _item()
+        if change == "coverage":
+            item.run["coverage_authority_evidence"]["state"] = "inventory_unproven"
+        elif change == "classification":
+            item.run["classification_integrity"]["state"] = "inconclusive_insufficient_evidence"
+        else:
+            item.run["evidence_quality_blocking"] = True
+        matrix = HARNESS.build_acceptance_matrix(HARNESS._matrix_observation(item))
+        assert _matrix_contract_gaps(matrix) == [], change
+        assert HARNESS.exact_release_matrix_failures(matrix) == [], change
+        assert complete_verdict_failures(matrix), change

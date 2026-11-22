@@ -74,7 +74,36 @@ def verify_active_v9_packages(root: Path, accepted_sha: str, source_sha: str, de
         raise PromotionRecordError("active_v9_accepted_packages_or_history_unverified") from exc
 
 
-def verify_promotion_record(root: Path, source_sha: str, base44_v9: str | None = None) -> str:
+WORKER_IMAGE_SOURCE_PATHS = (
+    # Exactly the Docker image build context and worker build configuration.
+    # The accepted release commit may precede its report/manifest commit, but
+    # descendant runtime changes must require fresh acceptance.
+    "scanner-api/app",
+    "scanner-api/Dockerfile",
+    "scanner-api/requirements.txt",
+    "cloudbuild.durable-worker.yaml",
+    "cloudbuild.durable-worker-static-egress-canary.yaml",
+    "scripts/build-worker-candidate.sh",
+)
+
+
+def verify_accepted_worker_image_source(root: Path, accepted_sha: str, source_sha: str) -> None:
+    try:
+        comparison = subprocess.run(
+            ["git", "-C", str(root), "diff", "--no-ext-diff", "--quiet",
+             accepted_sha, source_sha, "--", *WORKER_IMAGE_SOURCE_PATHS],
+            check=False, capture_output=True, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PromotionRecordError("accepted_worker_source_unverified") from exc
+    if comparison.returncode == 1:
+        raise PromotionRecordError("worker_source_differs_from_accepted_commit")
+    if comparison.returncode != 0:
+        raise PromotionRecordError("accepted_worker_source_unverified")
+
+
+def verify_promotion_record(root: Path, source_sha: str, base44_v9: str | None = None,
+                            worker_promotion: bool = False) -> str:
     """Check frozen metadata and ancestry, without trusting runtime claims."""
     if not SHA40.fullmatch(source_sha):
         raise PromotionRecordError("source_sha_invalid")
@@ -127,6 +156,8 @@ def verify_promotion_record(root: Path, source_sha: str, base44_v9: str | None =
         raise PromotionRecordError("release_fingerprint_inconsistent")
     if base44_v9:
         verify_active_v9_packages(root, accepted_sha, source_sha, base44_v9)
+    if worker_promotion:
+        verify_accepted_worker_image_source(root, accepted_sha, source_sha)
     return fingerprint
 
 
@@ -135,9 +166,12 @@ def main() -> int:
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--repo-root", type=Path, default=ROOT)
     parser.add_argument("--base44-v9", choices=("scanner-functions", "release-functions", "site-and-functions", "recover-functions"))
+    parser.add_argument("--worker-promotion", action="store_true",
+                        help="Require worker image and build inputs unchanged since the accepted commit")
     args = parser.parse_args()
     try:
-        fingerprint = verify_promotion_record(args.repo_root, args.source_sha, args.base44_v9)
+        fingerprint = verify_promotion_record(args.repo_root, args.source_sha, args.base44_v9,
+                                              worker_promotion=args.worker_promotion)
     except (PromotionRecordError, UnicodeError, OSError) as exc:
         print(f"PROMOTION_RECORD_BLOCKED: {exc}", file=sys.stderr)
         return 2

@@ -306,6 +306,64 @@ def fresh_canary_queue_time_failures(
     return failures
 
 
+
+OWNER_DEBUG_FUNCTION = "ownerScanDebugControl"
+
+
+def owner_release_receipt_failure(
+    item: Submission, http_status: int, body: dict[str, Any],
+) -> str:
+    """Validate the owner-only persisted request link and exact coordinator lease.
+
+    This read-only receipt augments fresh V8 customer reopening. It does not
+    attest the deployed Base44 package or replace signed-result verification.
+    """
+    if http_status != 200 or body.get("success") is not True or body.get("action") != "debug":
+        return "owner debug action unavailable or unsuccessful"
+    scan = body.get("scan") if isinstance(body.get("scan"), dict) else {}
+    admission = body.get("admission") if isinstance(body.get("admission"), dict) else {}
+    terminal = str(item.run.get("status") or "").lower()
+    if scan.get("id") != item.scan_id or scan.get("project_id") != item.project_id:
+        return "owner debug ScanRun identity does not match customer reopening"
+    if terminal not in {"complete", "limited"} or str(scan.get("status") or "").lower() != terminal:
+        return "owner debug terminal status differs from customer reopening"
+    if scan.get("admission_release_state") != "released":
+        return "owner debug ScanRun is not released"
+    if scan.get("admission_release_coordinator_request_id") != item.request_id:
+        return "owner debug persisted coordinator request does not match fresh submission"
+    # The coordinator /status view is owner-scoped, not a historical per-scan
+    # receipt: require its current identity to match as well as a closed lease.
+    # A subsequent same-owner admission therefore fails closed rather than
+    # being mistaken for this canary's release.
+    if admission.get("ok") is not True or admission.get("lease_active") is not False:
+        return "owner coordinator lease is not verified closed"
+    if (
+        admission.get("state") != "released"
+        or admission.get("scan_id") != item.scan_id
+        or admission.get("request_id") != item.request_id
+        or str(admission.get("terminal_status") or "").lower() != terminal
+    ):
+        return "owner coordinator status no longer identifies this released canary"
+    return ""
+
+
+async def verify_owner_release_receipt(
+    client: httpx.AsyncClient, token: str, item: Submission,
+) -> list[str]:
+    """Use the owner-only debug action; never invoke its mutating kill action."""
+    if not item.accepted or not item.scan_id or str(item.run.get("status") or "").lower() not in {"complete", "limited"}:
+        return ["owner release receipt requires a freshly accepted successful terminal"]
+    try:
+        status, body = await invoke(
+            client, token, OWNER_DEBUG_FUNCTION,
+            {"action": "debug", "scan_id": item.scan_id},
+        )
+    except Exception as exc:
+        return [f"owner release debug read failed: {type(exc).__name__}"]
+    failure = owner_release_receipt_failure(item, status, body)
+    return [f"{item.scan_id}: {failure}"] if failure else []
+
+
 def log_quality(scan_ids: list[str], since: datetime, project: str | None) -> dict[str, Any]:
     if not project or not scan_ids:
         return {"available": False, "reason": "gcp project or scan ids not supplied"}
@@ -584,6 +642,9 @@ async def main_async(args: argparse.Namespace) -> int:
             raise SystemExit(f"missing token for {item.email}")
     if args.double_submit:
         items[1].request_id = f"scanreq_ramp_{uuid.uuid4()}"
+    owner_release_required = bool(getattr(args, "verify_owner_release", False))
+    if owner_release_required and (len(items) != 1 or args.double_submit):
+        raise SystemExit("--verify-owner-release requires exactly one owner canary, not a load/double-submit run")
 
     started = datetime.now(timezone.utc) - timedelta(seconds=15)
     async with httpx.AsyncClient() as client:
@@ -608,6 +669,15 @@ async def main_async(args: argparse.Namespace) -> int:
     async with httpx.AsyncClient() as reopen_client:
         reopen_failures = await reopen_customer_results(reopen_client, tokens, items)
 
+    owner_release_failures: list[str] = []
+    if owner_release_required:
+        # Only the account that owns the ScanRun AND has the owner/admin role
+        # can use this read-only route; an ordinary customer token fails closed.
+        async with httpx.AsyncClient() as owner_debug_client:
+            owner_release_failures = await verify_owner_release_receipt(
+                owner_debug_client, tokens[items[0].email], items[0],
+            )
+
     logs = log_quality([i.scan_id for i in items if i.scan_id], started, args.gcp_project)
     result = report(
         items, logs,
@@ -617,6 +687,11 @@ async def main_async(args: argparse.Namespace) -> int:
     )
     result["failures"].extend(reopen_failures)
     result["failures"].extend(fresh_canary_queue_time_failures(items, window_start=submission_window_start))
+    result["failures"].extend(owner_release_failures)
+    result["owner_release_receipt"] = {
+        "requested": owner_release_required,
+        "verified": owner_release_required and not owner_release_failures,
+    }
     if args.checkpoint:
         try:
             write_checkpoint(args.checkpoint, items)
@@ -640,6 +715,10 @@ def main() -> int:
     parser.add_argument("--tokens", required=True, help='JSON object mapping email to bearer token')
     parser.add_argument("--count", type=int, default=1)
     parser.add_argument("--double-submit", action="store_true")
+    parser.add_argument(
+        "--verify-owner-release", action="store_true",
+        help="Require an owner-admin read-only debug receipt for exactly one successful canary; never calls kill.",
+    )
     parser.add_argument("--timeout", type=int, default=2400)
     parser.add_argument("--gcp-project", default="")
     parser.add_argument(

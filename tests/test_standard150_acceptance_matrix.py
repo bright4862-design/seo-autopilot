@@ -253,6 +253,36 @@ def test_signed_full_result_must_also_satisfy_browser_row_identity():
         ), mismatch
 
 
+def test_reopened_fixlist_pointer_agrees_with_scanrun_on_full_customer_result():
+    # Baseline: the browser's row-link predicate passes all of these synthetic
+    # cases because it does not compare run.fix_list_id with fixList.id.
+    # Release acceptance must be stronger than a successful browser render.
+    healthy = _fully_qualifying_ramp_item("scan_list_pointer")
+    assert HARNESS.customer_browser_identity_failure(healthy) == ""
+    assert HARNESS.report([healthy], {})["passed"] is True
+
+    for stale_pointer in ("fixlist_old", "", None):
+        item = _fully_qualifying_ramp_item("scan_list_pointer")
+        item.run["fix_list_id"] = stale_pointer
+        assert HARNESS.customer_browser_identity_failure(item) == ""
+        observed = HARNESS.report([item], {})
+        assert observed["passed"] is False, stale_pointer
+        assert any(
+            "ScanRun fix_list_id disagrees with reopened FixList" in failure
+            for failure in observed["failures"]
+        ), stale_pointer
+
+    # A genuinely signed limited result may contain a persisted FixList too.
+    limited = _fully_qualifying_ramp_item("scan_limited_list_pointer")
+    limited.run["status"] = "limited"
+    limited.run["error_code"] = "scan_access_limited"
+    limited.run["fix_list_id"] = "fixlist_old"
+    limited.customer_result["authority_verified"] = False
+    limited.customer_result["result_integrity_verified"] = True
+    assert HARNESS.customer_browser_identity_failure(limited) == ""
+    assert HARNESS.report([limited], {})["passed"] is False
+
+
 def test_customer_row_check_preserves_zero_fix_and_signed_limited_results():
     zero_fix = _fully_qualifying_ramp_item("scan_zero_fixes")
     assert HARNESS.report([zero_fix], {})["passed"] is True

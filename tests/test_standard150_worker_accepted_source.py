@@ -37,8 +37,12 @@ def accepted_history(tmp_path: Path):
 
     git("init", "-q")
     write("scanner-api/app/main.py", "print('reviewed worker')\n")
+    write("Dockerfile", "FROM python:3.12-slim\n")
     write("scanner-api/Dockerfile", "FROM python:3.12-slim\n")
     write("scanner-api/requirements.txt", "fastapi==0.115.6\n")
+    write("data/cross-runtime-release-components.json", "{}\n")
+    write("scripts/staged_candidate_cloudbuild.py", "print('source verified')\n")
+    write("scripts/verify-fixlist-static-egress-canary.sh", "#!/bin/bash\n")
     write("cloudbuild.durable-worker.yaml", "steps: []\n")
     write("cloudbuild.durable-worker-static-egress-canary.yaml", "steps: []\n")
     write("scripts/build-worker-candidate.sh", "#!/bin/bash\n")
@@ -72,8 +76,12 @@ def test_a_new_document_after_acceptance_does_not_require_worker_refreeze(accept
 
 @pytest.mark.parametrize("changed_path", [
     "scanner-api/app/main.py",
+    "Dockerfile",
     "scanner-api/Dockerfile",
     "scanner-api/requirements.txt",
+    "data/cross-runtime-release-components.json",
+    "scripts/staged_candidate_cloudbuild.py",
+    "scripts/verify-fixlist-static-egress-canary.sh",
     "cloudbuild.durable-worker.yaml",
     "cloudbuild.durable-worker-static-egress-canary.yaml",
     "scripts/build-worker-candidate.sh",

@@ -268,6 +268,44 @@ async def reopen_customer_results(
     return failures
 
 
+def fresh_canary_queue_time_failures(
+    items: list[Submission], *, window_start: datetime, clock_skew_seconds: int = 120,
+) -> list[str]:
+    """Corroborate new admission from the fresh customer's queued_at field.
+
+    This is temporal corroboration, NOT signed request_id binding or proof of a
+    freshly authenticated browser. Keep the separate worker/Base44 receipts.
+    """
+    if window_start.tzinfo is None:
+        raise ValueError("submission window must include a timezone")
+    earliest = window_start.astimezone(timezone.utc) - timedelta(seconds=clock_skew_seconds)
+    latest = datetime.now(timezone.utc) + timedelta(seconds=clock_skew_seconds)
+    failures: list[str] = []
+    for item in items:
+        if not item.accepted or not item.scan_id:
+            continue
+        if str(item.run.get("status") or "").lower() not in {"complete", "limited"}:
+            continue
+        raw = item.run.get("queued_at")
+        if not isinstance(raw, str) or not raw.strip():
+            failures.append(f"{item.scan_id}: fresh canary queue time missing")
+            continue
+        try:
+            queued_at = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+        except ValueError:
+            failures.append(f"{item.scan_id}: fresh canary queue time invalid")
+            continue
+        if queued_at.tzinfo is None:
+            failures.append(f"{item.scan_id}: fresh canary queue time missing timezone")
+            continue
+        queued_utc = queued_at.astimezone(timezone.utc)
+        if queued_utc < earliest:
+            failures.append(f"{item.scan_id}: fresh canary queue time predates submission window")
+        elif queued_utc > latest:
+            failures.append(f"{item.scan_id}: fresh canary queue time implausibly in future")
+    return failures
+
+
 def log_quality(scan_ids: list[str], since: datetime, project: str | None) -> dict[str, Any]:
     if not project or not scan_ids:
         return {"available": False, "reason": "gcp project or scan ids not supplied"}
@@ -552,6 +590,7 @@ async def main_async(args: argparse.Namespace) -> int:
         before = set()
         if args.double_submit:
             before = {str(r.get("id") or r.get("scan_id") or "") for r in await list_runs(client, tokens[items[0].email], items[0].project_id)}
+        submission_window_start = datetime.now(timezone.utc)
         await asyncio.gather(*(submit(client, tokens[i.email], i) for i in items))
         await wait_terminal(
             client,
@@ -577,6 +616,7 @@ async def main_async(args: argparse.Namespace) -> int:
         allow_busy_rejection=args.double_submit,
     )
     result["failures"].extend(reopen_failures)
+    result["failures"].extend(fresh_canary_queue_time_failures(items, window_start=submission_window_start))
     if args.checkpoint:
         try:
             write_checkpoint(args.checkpoint, items)

@@ -139,5 +139,14 @@ if (( SITE_STATUS != 0 )); then
 fi
 EXPECTED_SOURCE_SHA="$SOURCE_SHA" bash "$REPO_ROOT/scripts/verify-base44-site.sh"
 
+# Report verified and unverified packages from named membership, never from a
+# positional slice (which could silently mislabel future release functions).
+BUILD_VERIFIED=("${VERIFIED_FUNCTIONS[@]}" ownerScanDebugControl)
+BUILD_UNVERIFIED=()
+for name in "${UNVERIFIED_FUNCTIONS[@]}"; do
+  if [[ "$name" != "ownerScanDebugControl" ]]; then
+    BUILD_UNVERIFIED+=("$name")
+  fi
+done
 printf 'BASE44_SITE_AND_BACKEND_DEPLOYED\nsource_sha=%s\nbuild_verified=%s\nbuild_unverified=%s\n' \
-  "$SOURCE_SHA" "${VERIFIED_FUNCTIONS[*]} ownerScanDebugControl" "${UNVERIFIED_FUNCTIONS[*]:0:2}"
+  "$SOURCE_SHA" "${BUILD_VERIFIED[*]}" "${BUILD_UNVERIFIED[*]}"

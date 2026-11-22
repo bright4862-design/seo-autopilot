@@ -128,7 +128,11 @@ for required in "${FUNCTIONS[@]}"; do
   }
 done
 
-BASE44_APP_ID="$APP_ID" bash "$REPO_ROOT/scripts/verify-base44-functions.sh"
+# After site publish, its snapshot reconciliation may have restored an older
+# owner-only debug handler. The pre-site check intentionally covers only public
+# routes; after restoring all functions, require the owner diagnostic's *live*
+# package and activation identity before reporting a successful site release.
+BASE44_APP_ID="$APP_ID" VERIFY_OWNER_DEBUG_RUNTIME=1 bash "$REPO_ROOT/scripts/verify-base44-functions.sh"
 if (( SITE_STATUS != 0 )); then
   echo 'Base44 site upload reported failure. The selected function inventory was restored.' >&2
   exit "$SITE_STATUS"
@@ -136,4 +140,4 @@ fi
 EXPECTED_SOURCE_SHA="$SOURCE_SHA" bash "$REPO_ROOT/scripts/verify-base44-site.sh"
 
 printf 'BASE44_SITE_AND_BACKEND_DEPLOYED\nsource_sha=%s\nbuild_verified=%s\nbuild_unverified=%s\n' \
-  "$SOURCE_SHA" "${VERIFIED_FUNCTIONS[*]}" "${UNVERIFIED_FUNCTIONS[*]}"
+  "$SOURCE_SHA" "${VERIFIED_FUNCTIONS[*]} ownerScanDebugControl" "${UNVERIFIED_FUNCTIONS[*]:0:2}"

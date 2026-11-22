@@ -53,7 +53,7 @@ test("Cloud operator exposes guarded staging and rollback; promotion requires ow
   }
   const choices = cloud.split("        options:\n", 2)[1]?.split("      revision:", 1)[0];
   assert.ok(choices, "workflow_dispatch operation choices must exist");
-  assert.doesNotMatch(choices, /- promote-worker\\b/, "manual dispatch must not offer promotion");
+  assert.doesNotMatch(choices, /- promote-worker/, "manual dispatch must not offer promotion");
   assert.match(cloud, /Refusing direct promotion: use the guarded owner-comment release path/);
   assert.match(cloud, /- name: Verify candidate runtime release identity before promotion/);
   assert.match(cloud, /export OPERATION=promote-worker/);

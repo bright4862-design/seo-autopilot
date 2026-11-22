@@ -253,6 +253,41 @@ def build_acceptance_matrix(observation: dict[str, Any]) -> dict[str, dict[str, 
     }
 
 
+def complete_verdict_failures(matrix: dict[str, Any]) -> list[str]:
+    """Reject contradictory measured verdicts on a claimed complete result.
+
+    Availability alone does not establish sufficient coverage or trustworthy
+    classification. Limited results may legitimately carry those negative
+    verdicts and must retain their separate integrity-only acceptance path.
+    Missing dimensions remain gaps in _matrix_contract_gaps, not failures here.
+    """
+    if not isinstance(matrix, dict):
+        return []
+    infrastructure = matrix.get("infrastructure_outcome")
+    if not isinstance(infrastructure, dict) or infrastructure.get("terminal_status") != "complete":
+        return []
+
+    failures: list[str] = []
+    coverage = matrix.get("coverage_sufficiency")
+    if (isinstance(coverage, dict) and coverage.get("available") is True
+            and coverage.get("state") != "sufficient"):
+        failures.append("complete_coverage_not_sufficient")
+
+    classification = matrix.get("classification_verdict")
+    if (isinstance(classification, dict) and classification.get("available") is True
+            and classification.get("state") == "inconclusive_insufficient_evidence"):
+        failures.append("complete_classification_inconclusive")
+
+    quality = matrix.get("evidence_quality_verdict")
+    if (isinstance(quality, dict) and quality.get("available") is True
+            and (quality.get("blocking") is True
+                 or quality.get("state") in {
+                     "no_usable_html", "insufficient_discovery", "access_limited",
+                 })):
+        failures.append("complete_evidence_quality_blocked")
+    return failures
+
+
 def _matrix_contract_gaps(matrix: dict[str, Any]) -> list[str]:
     gaps: list[str] = []
     for name in REQUIRED_MATRIX_DIMENSIONS:

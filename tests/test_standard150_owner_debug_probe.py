@@ -43,10 +43,10 @@ body=''; url=''
 while (( $# )); do
   if [[ "$1" == '-o' ]]; then body="$2"; shift 2; else url="$1"; shift; fi
 done
-name="\${url##*/}"
+name="${url##*/}"
 printf '%s\\n' "$name" >> "$TEST_CALLS"
 build='""" + 'a' * 64 + """'
-if [[ "$name" == "\${TEST_STALE:-}" ]]; then build='""" + 'b' * 64 + """'; fi
+if [[ "$name" == "${TEST_STALE:-}" ]]; then build='""" + 'b' * 64 + """'; fi
 printf '{"build_id":"%s","runtime_activation_id":"%s-test"}\\n' "$build" "$name" > "$body"
 printf 405
 """)

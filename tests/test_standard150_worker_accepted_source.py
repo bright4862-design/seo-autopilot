@@ -46,6 +46,10 @@ def accepted_history(tmp_path: Path):
     write("cloudbuild.durable-worker.yaml", "steps: []\n")
     write("cloudbuild.durable-worker-static-egress-canary.yaml", "steps: []\n")
     write("scripts/build-worker-candidate.sh", "#!/bin/bash\n")
+    write("scripts/assert_standard150_promotion_record.py", "# immutable release gate\n")
+    write("scripts/fixlist-cloud-operator.sh", 'python3 assert_standard150_promotion_record.py --worker-promotion\n')
+    write("scripts/lib/release-source-guard.sh", "# exact main is required\n")
+    write(".github/workflows/fixlist-cloud-operator.yml", "name: trusted worker operator\n")
     accepted = commit()
     components = {"scanner_version": "fixture_v1"}
     fingerprint = hashlib.sha256(
@@ -85,6 +89,10 @@ def test_a_new_document_after_acceptance_does_not_require_worker_refreeze(accept
     "cloudbuild.durable-worker.yaml",
     "cloudbuild.durable-worker-static-egress-canary.yaml",
     "scripts/build-worker-candidate.sh",
+    "scripts/assert_standard150_promotion_record.py",
+    "scripts/fixlist-cloud-operator.sh",
+    "scripts/lib/release-source-guard.sh",
+    ".github/workflows/fixlist-cloud-operator.yml",
 ])
 def test_post_acceptance_worker_change_cannot_reuse_old_acceptance(
     accepted_history, changed_path
@@ -118,3 +126,15 @@ def test_accepted_record_validation_remains_required_before_worker_diff(accepted
     candidate = commit()
     with pytest.raises(PromotionRecordError, match="release_not_accepted_candidate"):
         verify_promotion_record(root, candidate, worker_promotion=True)
+
+
+def test_dropping_the_worker_promotion_flag_cannot_reuse_old_acceptance(accepted_history):
+    root, write, commit, _, fingerprint = accepted_history
+    # The operator invokes this script, so an edit removing its new flag would
+    # silently restore the metadata-only behavior of the previous launcher.
+    write("scripts/fixlist-cloud-operator.sh",
+          "python3 assert_standard150_promotion_record.py --source-sha ${SOURCE_SHA}\\n")
+    changed = commit()
+    assert verify_promotion_record(root, changed) == fingerprint  # previous baseline
+    with pytest.raises(PromotionRecordError, match="worker_source_differs_from_accepted_commit"):
+        verify_promotion_record(root, changed, worker_promotion=True)

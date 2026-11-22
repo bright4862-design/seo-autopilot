@@ -4,6 +4,7 @@ import asyncio
 import importlib.util
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1050,3 +1051,78 @@ def test_final_aggregate_fails_on_stale_exact_release_even_when_marker_is_presen
         and "failed required evidence" in failure
         for failure in result["failures"]
     )
+
+
+def _freshness_item(at: str | None, *, status: str = "complete", accepted: bool = True):
+    item = HARNESS.Submission(
+        email="owner@example.com", url="https://example.com", project_id="project_1",
+        request_id="scanreq_ramp_freshness",
+    )
+    item.scan_id = "scan_temporal"
+    item.accepted = accepted
+    item.run = {"status": status, **({"queued_at": at} if at is not None else {})}
+    return item
+
+
+def test_fresh_canary_queue_time_positive_controls_and_small_clock_skew():
+    start = datetime.now(timezone.utc).replace(microsecond=0)
+    for at, status in (
+        (start.isoformat(), "complete"),
+        ((start - timedelta(seconds=120)).isoformat(), "limited"),
+        (start.astimezone(timezone(timedelta(hours=5, minutes=30))).isoformat(), "complete"),
+    ):
+        item = _freshness_item(at, status=status)
+        assert HARNESS.fresh_canary_queue_time_failures([item], window_start=start) == []
+
+
+def test_fresh_canary_queue_time_rejects_stale_missing_and_unparseable_evidence():
+    start = datetime.now(timezone.utc).replace(microsecond=0)
+    cases = (
+        ((start - timedelta(hours=1)).isoformat(), "predates"),
+        ((start - timedelta(seconds=121)).isoformat(), "predates"),
+        (None, "missing"),
+        ("not-a-timestamp", "invalid"),
+        (start.replace(tzinfo=None).isoformat(), "missing timezone"),
+        ((start + timedelta(hours=1)).isoformat(), "future"),
+    )
+    for at, reason in cases:
+        failures = HARNESS.fresh_canary_queue_time_failures(
+            [_freshness_item(at)], window_start=start,
+        )
+        assert len(failures) == 1, (at, failures)
+        assert reason in failures[0], (at, reason, failures)
+
+
+def test_temporal_canary_guard_ignores_rejected_or_inflight_scan_rows():
+    start = datetime.now(timezone.utc)
+    stale = (start - timedelta(hours=1)).isoformat()
+    assert HARNESS.fresh_canary_queue_time_failures([
+        _freshness_item(stale, accepted=False),
+        _freshness_item(stale, status="crawling"),
+    ], window_start=start) == []
+
+
+def test_main_cli_rejects_historical_signed_row_even_with_green_report(
+    tmp_path, monkeypatch, capsys,
+):
+    _stub_main_dependencies(monkeypatch)
+
+    async def old_result(_client, _token, item):
+        item.accepted = True
+        item.scan_id = "scan_historical_receipt"
+        item.run = {
+            "id": item.scan_id,
+            "status": "complete",
+            "queued_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+        }
+
+    async def no_reopen(_client, _tokens, _items):
+        return []
+
+    monkeypatch.setattr(HARNESS, "submit", old_result)
+    monkeypatch.setattr(HARNESS, "reopen_customer_results", no_reopen)
+    status = asyncio.run(HARNESS.main_async(_main_args(tmp_path, checkpoint="")))
+    result = json.loads(capsys.readouterr().out)
+    assert status == 1
+    assert result["passed"] is False
+    assert any("predates submission window" in x for x in result["failures"])

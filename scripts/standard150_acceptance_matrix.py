@@ -272,6 +272,7 @@ def complete_verdict_failures(matrix: dict[str, Any]) -> list[str]:
         failures.append("complete_evidence_quality_blocked")
     return failures
 
+
 def _matrix_contract_gaps(matrix: dict[str, Any]) -> list[str]:
     gaps: list[str] = []
     for name in REQUIRED_MATRIX_DIMENSIONS:

@@ -1126,3 +1126,117 @@ def test_main_cli_rejects_historical_signed_row_even_with_green_report(
     assert status == 1
     assert result["passed"] is False
     assert any("predates submission window" in x for x in result["failures"])
+
+
+def _owner_release_response(item):
+    status = str(item.run.get("status") or "").lower()
+    return {
+        "success": True,
+        "action": "debug",
+        "scan": {
+            "id": item.scan_id,
+            "project_id": item.project_id,
+            "status": status,
+            "admission_release_state": "released",
+            "admission_release_coordinator_request_id": item.request_id,
+        },
+        "admission": {
+            "ok": True,
+            "lease_active": False,
+            "state": "released",
+            "scan_id": item.scan_id,
+            "request_id": item.request_id,
+            "terminal_status": status,
+        },
+    }
+
+
+def test_owner_release_receipt_accepts_exact_complete_and_limited():
+    for status in ("complete", "limited"):
+        item = _complete_item(f"scan_owner_{status}")
+        item.run["status"] = status
+        assert HARNESS.owner_release_receipt_failure(
+            item, 200, _owner_release_response(item),
+        ) == ""
+
+
+def test_owner_release_receipt_rejects_wrong_or_unreleased_evidence():
+    item = _complete_item("scan_owner_falsifier")
+    baseline = _owner_release_response(item)
+    checks = (
+        ("scan", "id", "scan_old"),
+        ("scan", "project_id", "project_other"),
+        ("scan", "status", "failed"),
+        ("scan", "admission_release_state", "pending"),
+        ("scan", "admission_release_coordinator_request_id", "scanreq_old"),
+        ("admission", "ok", False),
+        ("admission", "lease_active", True),
+        ("admission", "lease_active", None),
+        ("admission", "state", "bound"),
+        ("admission", "scan_id", "scan_old"),
+        ("admission", "request_id", "scanreq_old"),
+        ("admission", "terminal_status", "failed"),
+    )
+    for area, field, wrong in checks:
+        receipt = json.loads(json.dumps(baseline))
+        receipt[area][field] = wrong
+        assert HARNESS.owner_release_receipt_failure(item, 200, receipt), (area, field)
+    for status, changes in (
+        (503, {}),
+        (200, {"success": False}),
+        (200, {"action": "kill"}),
+    ):
+        receipt = {**baseline, **changes}
+        assert HARNESS.owner_release_receipt_failure(item, status, receipt)
+
+
+def test_short_window_historical_result_needs_owner_request_binding():
+    start = datetime.now(timezone.utc)
+    item = _complete_item("scan_recent_but_old")
+    item.run["queued_at"] = (start - timedelta(seconds=30)).isoformat()
+    # Timestamp-only baseline cannot distinguish an old row within skew.
+    assert HARNESS.fresh_canary_queue_time_failures([item], window_start=start) == []
+    receipt = _owner_release_response(item)
+    receipt["scan"]["admission_release_coordinator_request_id"] = "scanreq_previous"
+    assert "does not match fresh submission" in HARNESS.owner_release_receipt_failure(
+        item, 200, receipt,
+    )
+
+
+def test_owner_receipt_uses_only_read_only_debug_action(monkeypatch):
+    item = _complete_item("scan_exact_owner")
+    calls = []
+
+    async def fake_invoke(_client, _token, function, payload):
+        calls.append((function, payload))
+        return 200, _owner_release_response(item)
+
+    monkeypatch.setattr(HARNESS, "invoke", fake_invoke)
+    assert asyncio.run(HARNESS.verify_owner_release_receipt(
+        None, "synthetic-owner-token", item,
+    )) == []
+    assert calls == [("ownerScanDebugControl", {"action": "debug", "scan_id": item.scan_id})]
+
+
+def test_owner_receipt_opt_in_fails_closed_without_valid_terminal(tmp_path, monkeypatch, capsys):
+    _stub_main_dependencies(monkeypatch)
+    args = _main_args(tmp_path, checkpoint="")
+    args.verify_owner_release = True
+    code = asyncio.run(HARNESS.main_async(args))
+    result = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert result["passed"] is False
+    assert result["owner_release_receipt"] == {"requested": True, "verified": False}
+    assert any("owner release receipt requires" in x for x in result["failures"])
+
+
+def test_owner_receipt_opt_in_rejects_double_submission_before_network(tmp_path):
+    args = _main_args(tmp_path, checkpoint="")
+    args.verify_owner_release = True
+    args.double_submit = True
+    try:
+        asyncio.run(HARNESS.main_async(args))
+    except SystemExit as error:
+        assert "requires exactly one owner canary" in str(error)
+    else:
+        raise AssertionError("owner receipt mode must reject double-submit")

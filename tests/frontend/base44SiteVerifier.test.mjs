@@ -196,6 +196,7 @@ test("both release paths still rely on the verifier's canonical defaults", () =>
   assert.ok(preflight.includes("BASE44_FUNCTION_ORIGIN=https://base44.app"));
   assert.ok(preflight.includes(routesVerify), "the executing V8 functions must also be verified");
   assert.ok(preflight.indexOf(siteVerify) < preflight.indexOf(routesVerify), "verify sites before functions");
+  assert.doesNotMatch(preflight, /\|\|\s*true/, "preflight failures must not be masked");
   assert.ok(operator.indexOf(preflightName) < operator.indexOf("      - name: Promote exact candidate with automatic rollback"));
   for (const source of [publish, operator]) {
     assert.doesNotMatch(source, /BASE44_URL|rich-rank-pilot-flow/, "a caller override would bring the stale-alias failure back");

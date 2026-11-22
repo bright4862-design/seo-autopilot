@@ -573,6 +573,23 @@ def report(
                 failures.append(
                     f"{item.scan_id}: customer browser would reject saved result: {identity_error}"
                 )
+            # Browser row checks protect project/scan/item relationships, but
+            # they do not compare the ScanRun's own persisted FixList pointer.
+            # Release acceptance must also reject a saved bundle whose two
+            # independently projected list IDs disagree. A limited result
+            # without a FixList retains its existing integrity-only path.
+            reopened_list = result.get("fixList")
+            if isinstance(reopened_list, dict):
+                persisted_list_id = str(item.run.get("fix_list_id") or "").strip()
+                reopened_list_id = str(reopened_list.get("id") or "").strip()
+                if (
+                    not persisted_list_id
+                    or not reopened_list_id
+                    or persisted_list_id != reopened_list_id
+                ):
+                    failures.append(
+                        f"{item.scan_id}: ScanRun fix_list_id disagrees with reopened FixList"
+                    )
         if summary["matrix_gaps"]:
             failures.append(
                 f"{item.scan_id}: acceptance matrix missing required evidence: "

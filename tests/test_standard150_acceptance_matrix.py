@@ -68,6 +68,65 @@ def test_ramp_routes_fail_closed_on_legacy_staged_or_unreviewed_mapping(tmp_path
 
 
 
+
+def test_fresh_canary_submit_accepts_exact_v8_admission_receipt(monkeypatch):
+    item = HARNESS.Submission(
+        email="owner@example.com", url="https://example.com", project_id="project_1",
+        request_id="scanreq_ramp_fresh",
+    )
+    async def valid_invoke(_client, _token, function, payload):
+        assert function == "startStandardScanJobV8"
+        assert payload["request_id"] == item.request_id
+        assert payload["idempotency_key"] == item.request_id
+        assert "scan_id" not in payload
+        return 200, {
+            "accepted": True, "request_id": item.request_id,
+            "idempotency_key": item.request_id, "status": "queued",
+            "replayed": False, "scan_id": "scan_new",
+        }
+
+    monkeypatch.setattr(HARNESS, "invoke", valid_invoke)
+    asyncio.run(HARNESS.submit(None, "synthetic-token", item))
+    assert item.accepted is True
+    assert item.scan_id == "scan_new"
+    assert item.failure_code == ""
+
+
+def test_fresh_canary_submit_rejects_stale_or_ambiguous_admission_receipts(monkeypatch):
+    # Source baseline before this guard: every variant has accepted=True and
+    # would have entered terminal polling, including an old signed result.
+    base = {
+        "accepted": True, "request_id": "scanreq_ramp_fresh",
+        "idempotency_key": "scanreq_ramp_fresh",
+        "status": "queued", "replayed": False, "scan_id": "scan_previous",
+    }
+    cases = [
+        ({"request_id": "scanreq_old"}, 200),
+        ({"idempotency_key": "scanreq_old"}, 200),
+        ({"request_id": ""}, 200),
+        ({"idempotency_key": ""}, 200),
+        ({"replayed": True}, 200),
+        ({"status": "complete"}, 200),
+        ({"status": "limited"}, 200),
+        ({"status": ""}, 200),
+        ({}, 503),
+    ]
+    for changes, response_code in cases:
+        item = HARNESS.Submission(
+            email="owner@example.com", url="https://example.com",
+            project_id="project_1", request_id="scanreq_ramp_fresh",
+        )
+        async def fake_invoke(_client, _token, _function, _payload):
+            return response_code, {**base, **changes}
+
+        monkeypatch.setattr(HARNESS, "invoke", fake_invoke)
+        asyncio.run(HARNESS.submit(None, "synthetic-token", item))
+        assert item.accepted is False, (changes, response_code)
+        assert item.failure_code == "canary_admission_receipt_invalid"
+        assert HARNESS.report([item], {})["passed"] is False
+
+
+
 def _complete_item(scan_id: str = "scan_complete"):
     item = HARNESS.Submission(
         email="acceptance@example.com",

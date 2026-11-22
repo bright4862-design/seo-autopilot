@@ -29,6 +29,7 @@ import httpx
 from standard150_acceptance_matrix import (
     _matrix_contract_gaps,
     build_acceptance_matrix as _base_build_acceptance_matrix,
+    complete_verdict_failures,
 )
 from standard150_exact_release import (
     exact_release_dimension,
@@ -226,7 +227,7 @@ def _result_summary(item: Submission) -> dict[str, Any]:
     fix_list = result.get("fixList") if isinstance(result.get("fixList"), dict) else {}
     fix_items = result.get("fixItems") if isinstance(result.get("fixItems"), list) else []
     matrix = build_acceptance_matrix(_matrix_observation(item))
-    matrix_failures = exact_release_matrix_failures(matrix)
+    matrix_failures = exact_release_matrix_failures(matrix) + complete_verdict_failures(matrix)
     return {
         "scan_id": item.scan_id,
         "status": str(item.run.get("status") or ""),
@@ -271,7 +272,7 @@ def _checkpoint_summary(item: Submission) -> dict[str, Any]:
         "error_code": str(item.run.get("error_code") or item.failure_code or ""),
         "acceptance_matrix": matrix,
         "matrix_gaps": _matrix_contract_gaps(matrix),
-        "matrix_failures": exact_release_matrix_failures(matrix),
+        "matrix_failures": exact_release_matrix_failures(matrix) + complete_verdict_failures(matrix),
     }
 
 

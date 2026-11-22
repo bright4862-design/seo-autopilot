@@ -148,8 +148,21 @@ async def submit(client: httpx.AsyncClient, token: str, item: Submission) -> Non
         "scan_mode": "standard_150",
     })
     item.http_status = status
-    item.accepted = body.get("accepted") is True
+    # A new owner canary must start a NEW request. A stale/replayed ScanRun
+    # with an otherwise valid signed customer result is not admission proof.
+    response_status = str(body.get("status") or "").lower()
+    item.accepted = (
+        200 <= status < 300
+        and body.get("accepted") is True
+        and str(body.get("request_id") or "") == item.request_id
+        and str(body.get("idempotency_key") or "") == item.request_id
+        and body.get("replayed") is not True
+        and bool(response_status)
+        and response_status not in TERMINAL
+    )
     item.failure_code = str(body.get("failure_code") or "")
+    if body.get("accepted") is True and not item.accepted and not item.failure_code:
+        item.failure_code = "canary_admission_receipt_invalid"
     item.scan_id = str(body.get("scan_id") or body.get("scan_run_id") or "")
     if item.scan_id:
         # Exact ids are captured immediately. Never depend on list_all/list

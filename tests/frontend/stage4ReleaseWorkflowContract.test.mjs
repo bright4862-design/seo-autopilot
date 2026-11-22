@@ -38,10 +38,9 @@ test("release package manifest declares all six scanner roles at one versioned r
   assert.equal(generations.size, 1, "all six scanner release functions must use the same route generation");
 });
 
-test("Cloud operator exposes guarded stage, promote, rollback and acceptance-only operations", () => {
+test("Cloud operator exposes guarded staging and rollback; promotion requires owner-comment path", () => {
   for (const operation of [
     "build-worker-candidate",
-    "promote-worker",
     "rollback-worker",
     "barrier-status",
     "verify-zero-admission-obligations",
@@ -52,6 +51,13 @@ test("Cloud operator exposes guarded stage, promote, rollback and acceptance-onl
   ]) {
     assert.match(cloud, new RegExp(`- ${operation.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
   }
+  const choices = cloud.split("        options:\n", 2)[1]?.split("      revision:", 1)[0];
+  assert.ok(choices, "workflow_dispatch operation choices must exist");
+  assert.doesNotMatch(choices, /- promote-worker\\b/, "manual dispatch must not offer promotion");
+  assert.match(cloud, /Refusing direct promotion: use the guarded owner-comment release path/);
+  assert.match(cloud, /- name: Verify candidate runtime release identity before promotion/);
+  assert.match(cloud, /export OPERATION=promote-worker/);
+  assert.match(cloud, /if ! OPERATION=verify-worker-runtime-revision/);
   assert.match(cloud, /acceptance_total_claim_budget/);
   assert.match(cloud, /acceptance_per_owner_claim_budget/);
   assert.match(cloud, /test "\$\{\{ github\.ref \}\}" = "refs\/heads\/main"/);

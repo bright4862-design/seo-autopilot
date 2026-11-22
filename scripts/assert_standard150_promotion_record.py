@@ -79,8 +79,12 @@ WORKER_IMAGE_SOURCE_PATHS = (
     # The accepted release commit may precede its report/manifest commit, but
     # descendant runtime changes must require fresh acceptance.
     "scanner-api/app",
+    "Dockerfile",  # Actual Dockerfile copied by the Cloud Build verified context.
     "scanner-api/Dockerfile",
     "scanner-api/requirements.txt",
+    "data/cross-runtime-release-components.json",
+    "scripts/staged_candidate_cloudbuild.py",
+    "scripts/verify-fixlist-static-egress-canary.sh",
     "cloudbuild.durable-worker.yaml",
     "cloudbuild.durable-worker-static-egress-canary.yaml",
     "scripts/build-worker-candidate.sh",

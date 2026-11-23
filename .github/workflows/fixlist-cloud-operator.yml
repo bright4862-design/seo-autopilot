@@ -31,7 +31,6 @@ on:
           - staged-queue-activate
           - staged-queue-drain-pause
           - staged-queue-recover
-          - promote-worker
           - rollback-worker
           - barrier-status
           - verify-zero-admission-obligations
@@ -444,7 +443,15 @@ jobs:
           FIXLIST_OPERATOR_ID_TOKEN: ${{ steps.operator-id-token.outputs.id_token }}
           FIXLIST_OPERATOR_TOKEN_AUDIENCE: ${{ env.ADMISSION_OPERATOR_AUDIENCE }}
         shell: bash
-        run: bash ./scripts/fixlist-cloud-operator.sh
+        run: |
+          set -euo pipefail
+          # This direct dispatch cannot prove the owner-comment candidate
+          # attestation and post-promotion rollback boundary. Fail closed.
+          if [[ "$OPERATION" == "promote-worker" ]]; then
+            echo "Refusing direct promotion: use the guarded owner-comment release path." >&2
+            exit 2
+          fi
+          bash ./scripts/fixlist-cloud-operator.sh
 
       - name: Build isolated Standard 150 worker candidate
         if: inputs.operation == 'build-worker-candidate'
@@ -1353,13 +1360,49 @@ jobs:
           candidate_percent = sum(int(item.get('percent') or 0) for item in traffic if item.get('revisionName') == name)
           if candidate_percent != 0:
               raise SystemExit(f'Candidate already receives {candidate_percent}% traffic')
-          live = [(int(item.get('percent') or 0), item.get('revisionName', '')) for item in traffic if int(item.get('percent') or 0) > 0 and item.get('revisionName')]
-          if not live:
-              raise SystemExit('No current live revision found for rollback')
-          live.sort(reverse=True)
+          # A single-revision rollback preserves the prior traffic topology
+          # only when one named revision owns exactly 100%. Never silently turn
+          # an existing traffic split or ambiguous status into 100% on one leg.
+          observed_traffic = [(int(item.get('percent') or 0), item.get('revisionName', '')) for item in traffic]
+          live = [(percent, revision) for percent, revision in observed_traffic if percent > 0]
+          if (len(live) != 1 or live[0][0] != 100 or not live[0][1]
+                  or any(percent < 0 or percent > 100 for percent, _ in observed_traffic)):
+              raise SystemExit('Rollback preflight requires one named revision at exactly 100% traffic')
           rollback = live[0][1]
           if rollback == name:
               raise SystemExit('Rollback revision unexpectedly equals candidate')
+          # A 100%-serving status does not prove the desired route has converged.
+          # While a prior traffic edit is reconciling, its observed traffic may
+          # still point at the old revision. A fixed-revision rollback can also
+          # silently destroy a latestRevision auto-follow policy.
+          metadata = service.get('metadata') or {}
+          state = service.get('status') or {}
+          try:
+              generation = int(metadata.get('generation'))
+              observed = int(state.get('observedGeneration'))
+          except (ValueError, TypeError):
+              raise SystemExit('Rollback preflight requires reconciled Ready Cloud Run service')
+          ready = next((c for c in (state.get('conditions') or [])
+                        if c.get('type') == 'Ready'), {})
+          if (generation <= 0 or observed != generation
+                  or str(ready.get('status') or '').lower() != 'true'):
+              raise SystemExit('Rollback preflight requires reconciled Ready Cloud Run service')
+          desired = (service.get('spec') or {}).get('traffic')
+          if not isinstance(desired, list) or not desired:
+              raise SystemExit('Rollback preflight requires exact pinned desired traffic')
+          desired_live = []
+          for item in desired:
+              if (not isinstance(item, dict) or item.get('latestRevision')
+                      or item.get('configurationName')):
+                  raise SystemExit('Rollback preflight requires exact pinned desired traffic')
+              percent = item.get('percent', 0)
+              if type(percent) is not int or percent < 0 or percent > 100:
+                  raise SystemExit('Rollback preflight requires exact pinned desired traffic')
+              if percent:
+                  desired_live.append((percent, item.get('revisionName')))
+          if (desired_live != [(100, rollback)]
+                  or any(item.get('latestRevision') for item in traffic)):
+              raise SystemExit('Rollback preflight requires exact pinned desired traffic')
           print(name)
           print(rollback)
           PY
@@ -1434,11 +1477,20 @@ jobs:
         shell: bash
         run: bash ./scripts/fixlist-cloud-operator.sh
 
-      - name: Verify matching Base44 product release is public
+      - name: Verify matching Base44 site and executing scanner/customer routes
         env:
           EXPECTED_SOURCE_SHA: ${{ steps.command.outputs.product_sha }}
         shell: bash
-        run: bash ./scripts/verify-base44-site.sh
+        run: |
+          set -euo pipefail
+          # A matching site bundle SHA is necessary, not evidence that the
+          # executing Base44 persistence and customer-reader packages match.
+          bash ./scripts/verify-base44-site.sh
+          BASE44_APP_ID=6a498732ec779dfaaeab0e53 \
+            BASE44_FUNCTION_ORIGIN=https://base44.app \
+            VERIFY_OWNER_DEBUG_RUNTIME=1 \
+            bash ./scripts/verify-base44-functions.sh
+          echo 'BASE44_PREPROMOTION_RUNTIME_ROUTES_VERIFIED'
 
       - name: Resolve the worker's canonical service URL
         id: worker-url
@@ -1473,27 +1525,80 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # set -e exits on unguarded post-promotion read failures.
+          # Restore traffic for those failures too, not only explicit checks.
+          rollback_attempted=0
+          promotion_started=0
           rollback() {
+            rollback_attempted=1
+            echo "Checking rollback ownership for $ROLLBACK_REVISION" >&2
+            # A failed/rejected promotion may never have moved traffic. An
+            # independent operator might also have intervened. Do not overwrite
+            # a foreign serving revision as if our attempt owned that change.
+            local before_json="$RUNNER_TEMP/fixlist-standard150-before-rollback.json"
+            local ownership
+            if ! gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > "$before_json"; then
+              echo "ROLLBACK_UNVERIFIED: current traffic ownership unavailable; refusing blind update" >&2
+              return 1
+            fi
+            if ! ownership="$(python3 scripts/assert_standard150_rollback_ownership.py --service-json "$before_json" --candidate "$REVISION" --prior "$ROLLBACK_REVISION" 2>&1)"; then
+              echo "$ownership" >&2
+              echo "ROLLBACK_UNVERIFIED: ownership conflict; refusing to overwrite other traffic" >&2
+              return 1
+            fi
+            if [[ "$ownership" == "ALREADY_RESTORED" ]]; then
+              echo "ROLLBACK_ALREADY_RESTORED revision=$ROLLBACK_REVISION" >&2
+              return 0
+            fi
+            if [[ "$ownership" != "ALLOW_RESTORE" ]]; then
+              echo "ROLLBACK_UNVERIFIED: unknown traffic ownership verdict" >&2
+              return 1
+            fi
+            # Best effort, not an atomic CAS: a concurrent change can still
+            # occur after this read and before update-traffic.
             echo "Rolling worker traffic back to $ROLLBACK_REVISION" >&2
-            gcloud run services update-traffic "$CLOUD_RUN_SERVICE" --region="$GCP_REGION" --project="$GCP_PROJECT" --to-revisions="$ROLLBACK_REVISION=100" >/dev/null
+            if ! gcloud run services update-traffic "$CLOUD_RUN_SERVICE" --region="$GCP_REGION" --project="$GCP_PROJECT" --to-revisions="$ROLLBACK_REVISION=100" >/dev/null; then
+              echo "ROLLBACK_UNVERIFIED: traffic update command failed" >&2
+              return 1
+            fi
+            # A zero-exit update command is not proof that the desired revision
+            # has converged into the Ready, actually serving traffic topology.
+            local readback_json="$RUNNER_TEMP/fixlist-standard150-rollback-readback.json"
+            if ! gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > "$readback_json"; then
+              echo "ROLLBACK_UNVERIFIED: cannot read worker traffic state" >&2
+              return 1
+            fi
+            if ! python3 scripts/assert_standard150_rollback_readback.py --expected-revision "$ROLLBACK_REVISION" --service-json "$readback_json"; then
+              echo "ROLLBACK_UNVERIFIED: traffic restore was not independently confirmed" >&2
+              return 1
+            fi
           }
+          rollback_on_unhandled_exit() {
+            local result=$?
+            trap - EXIT
+            if (( result != 0 && promotion_started == 1 && rollback_attempted == 0 )); then
+              echo "Unhandled promotion/post-check failure; attempting traffic restore." >&2
+              if ! rollback; then
+                echo "ROLLBACK_UNVERIFIED: traffic restore failed; inspect serving revision before further action." >&2
+              fi
+            fi
+            exit "$result"
+          }
+          trap rollback_on_unhandled_exit EXIT
           export OPERATION=promote-worker TARGET_REVISION="$REVISION" CONFIRM="$REVISION"
+          promotion_started=1
           if ! bash ./scripts/fixlist-cloud-operator.sh; then
             rollback || true
             exit 1
           fi
 
           gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > /tmp/service-after.json
-          if ! python3 - "$REVISION" /tmp/service-after.json <<'PY'
-          import json, sys
-          revision, path = sys.argv[1:]
-          service = json.load(open(path))
-          traffic = service.get('status', {}).get('traffic', []) or []
-          percent = sum(int(item.get('percent') or 0) for item in traffic if item.get('revisionName') == revision)
-          if percent != 100:
-              raise SystemExit(f'Expected 100% traffic on {revision}, got {percent}%')
-          PY
-          then
+          # An observed 100% counter is insufficient: desired traffic, Ready
+          # and reconciled service generation must also match the promoted revision.
+          if ! python3 scripts/assert_standard150_rollback_readback.py \
+              --expected-revision "$REVISION" \
+              --service-json /tmp/service-after.json \
+              --context promotion; then
             rollback
             exit 1
           fi
@@ -1525,6 +1630,7 @@ jobs:
           fi
           echo "queue_state_unchanged=$queue_state_after"
           echo "promoted_revision=$REVISION"
+          promotion_started=0
 
       - name: Publish exact promotion status
         if: always()

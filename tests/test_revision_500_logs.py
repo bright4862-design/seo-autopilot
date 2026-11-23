@@ -123,3 +123,33 @@ def test_cli_refuses_bad_json_without_echo():
     assert result.returncode == 2
     assert result.stderr.strip() == "LOG_DIAGNOSTIC_INPUT_REJECTED"
     assert "customer-secret" not in result.stderr
+
+def test_info_system_logs_are_not_silently_dropped():
+    """Cloud Run instance-start INFO records can lack request trace."""
+    system = error(trace="")
+    system["severity"] = "INFO"
+    system["logName"] = "projects/test/logs/run.googleapis.com%2Fvarlog%2Fsystem"
+    system["textPayload"] = "Starting new instance. Sensitive: never-print"
+    out = run([row(), system])
+    assert out["request_500_count"] == 1
+    assert out["system_log_count"] == 1
+    assert out["system_error_log_count"] == 0
+    assert "never-print" not in json.dumps(out)
+    assert 'logName:"run.googleapis.com%2Fvarlog%2Fsystem"' in mod.__doc__
+
+
+def test_untraced_stderr_is_distinguished_from_absent_error_logs():
+    out = run([row(), error(trace="")])
+    assert out["error_correlated_500_count"] == 0
+    assert out["untraced_nonrequest_error_count"] == 1
+    assert "uncorrelated" in out["interpretation"]
+
+
+def test_system_error_count_does_not_claim_request_causation():
+    system = error(trace="", severity="ERROR")
+    system["logName"] = "projects/test/logs/run.googleapis.com%2Fvarlog%2Fsystem"
+    out = run([row(trace="different-trace"), system])
+    assert out["system_log_count"] == 1
+    assert out["system_error_log_count"] == 1
+    assert out["error_correlated_500_count"] == 0
+    assert out["untraced_nonrequest_error_count"] == 1

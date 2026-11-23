@@ -74,8 +74,24 @@ def validate_task(task, worker_url, invoker_sa, token_audience=None):
 
 
 def describe(command):
-    completed = subprocess.run(["gcloud", *command, "--format=json"], check=True,
-                               capture_output=True, text=True)
+    try:
+        completed = subprocess.run(["gcloud", *command, "--format=json"], check=True,
+                                   capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        # gcloud stderr is needed for diagnosis but can contain sensitive data.
+        # Report only the recognized failure class and a fixed operation name,
+        # never raw stderr, full arguments, or a guessed resource state.
+        stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+        if "PERMISSION_DENIED" in stderr:
+            failure_kind = "ACCESS_DENIED_OR_HIDDEN"
+        elif "NOT_FOUND" in stderr:
+            failure_kind = "NOT_FOUND_OR_INACCESSIBLE"
+        else:
+            failure_kind = "UNCLASSIFIED_GCLOUD_FAILURE"
+        operation = " ".join(command[:3])
+        raise VerificationError(
+            f"{operation}: {failure_kind}; staged resource and IAM state UNVERIFIED"
+        ) from None
     return json.loads(completed.stdout)
 
 

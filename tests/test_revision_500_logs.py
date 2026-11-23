@@ -204,3 +204,25 @@ def test_cli_exits_nonzero_with_sanitized_evidence_when_limit_reached():
     assert result.returncode == 3
     assert json.loads(result.stdout)["status"] == "INDETERMINATE_QUERY_AT_LIMIT"
     assert "PRIVATE_SECRET" not in (result.stdout + result.stderr)
+
+
+def test_reused_insert_id_on_distinct_timestamps_does_not_hide_a_500():
+    """Cloud Logging insertId alone is not a global event identity."""
+    first = row(status=200, ident="reused-id", timestamp="2026-11-23T12:07:12Z")
+    second = row(status=500, ident="reused-id", timestamp="2026-11-23T12:09:12Z")
+    out = run([first, second])
+    assert out["request_200_count"] == 1
+    assert out["request_500_count"] == 1
+    assert [r["http_status"] for r in out["requests"]] == [200, 500]
+
+
+def test_exact_timestamp_and_insert_id_are_still_deduplicated():
+    """Repeated reads of one Cloud Logging entry stay one observation."""
+    duplicate = row(ident="same-event", timestamp="2026-11-23T12:07:12.123456Z")
+    out = run([duplicate, dict(duplicate)])
+    assert out["request_500_count"] == 1
+
+
+def test_distinct_insert_ids_at_same_timestamp_are_distinct():
+    out = run([row(ident="first"), row(ident="second")])
+    assert out["request_500_count"] == 2

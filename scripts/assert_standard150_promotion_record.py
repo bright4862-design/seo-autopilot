@@ -92,6 +92,7 @@ WORKER_IMAGE_SOURCE_PATHS = (
     # Post-acceptance edits to the promotion command, its own predicate, the
     # exact-main guard or its Actions launcher must not reuse old acceptance.
     "scripts/assert_standard150_promotion_record.py",
+    "scripts/assert_standard150_rollback_readback.py",
     "scripts/fixlist-cloud-operator.sh",
     "scripts/lib/release-source-guard.sh",
     ".github/workflows/fixlist-cloud-operator.yml",

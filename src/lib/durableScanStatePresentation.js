@@ -68,7 +68,7 @@ const TOO_FEW_PAGES_REASONS = new Set([
 // Historical rows carry no structured code at all, only free text a human wrote
 // into status_detail or error_code. These patterns exist for those rows and are
 // consulted last; nothing matched here is ever displayed, only classified.
-const SAVE_FAILED_TEXT = /persist|save.?fail|authority.?write|result.?write/;
+const SAVE_FAILED_TEXT = /persist|save.?fail|authority.?write|result.?write|results? could not be saved/;
 const WORKER_STALLED_TEXT = /heartbeat|stalled|orphaned|vanished|no_terminal|progress stopped/;
 const ACCESS_LIMITED_TEXT = /429|rate.?limit|challenge|bot.?protection|access.?limit|scanner.?blocked/;
 const DEADLINE_TEXT = /deadline|timed?.?out|time limit/;
@@ -210,8 +210,8 @@ const COPY = {
   save_failed: {
     title: "The result could not be saved",
     detail: "Crawling finished, but FixList could not store the verified result, so nothing was published. Anything a browser tab showed mid-run was partial and was never saved.",
-    nextStep: "Run the scan again. If saving fails a second time, send support the scan reference below.",
-    retryAdvice: "This is a FixList-side fault rather than something about your site, so a new scan is worth trying now.",
+    nextStep: "Keep the scan reference below and contact FixList support before trying again.",
+    retryAdvice: "This is a FixList-side saving problem, not an issue with your website. Another scan may fail the same way until the saving problem is resolved.",
   },
   worker_stalled: {
     title: "The scan stopped making progress",

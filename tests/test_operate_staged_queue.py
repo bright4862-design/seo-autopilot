@@ -825,6 +825,33 @@ def test_status_is_read_only_and_verifies_an_existing_task(operator):
     assert "STAGED_QUEUE_STATE state=RUNNING tasks=1" in result.stdout
 
 
+
+@pytest.mark.parametrize("revision,intake_enabled,expected", [
+    ("", False, "candidate=not_requested infrastructure=not_checked gcp_intake=disabled"),
+    (CANDIDATE, False, "candidate=configuration_only infrastructure=verified gcp_intake=disabled"),
+    ("", True, "candidate=not_requested infrastructure=not_checked gcp_intake=not_verified"),
+])
+def test_status_scope_distinguishes_diagnostics_from_release_authorization(
+    operator, revision, intake_enabled, expected
+):
+    sha, write_state, run = operator
+    if intake_enabled:
+        write_state()  # staged intake is enabled on the tagged candidate
+    else:
+        write_state(candidate={"SCAN_PIPELINE_MODE": "monolith", "SCAN_STAGED_OWNER_IDS": ""})
+    result, calls, _ = run("status", STAGED_REVISION=revision)
+    assert result.returncode == 0, result.stderr
+    scopes = [line for line in result.stdout.splitlines() if line.startswith("STAGED_QUEUE_STATUS_SCOPE ")]
+    assert len(scopes) == 1
+    assert expected in scopes[0]
+    assert "worker_runtime=not_checked base44_intake=not_checked release_authorization=not_evaluated" in scopes[0]
+    assert bool([call for call in calls if call[0] == "verify"]) is bool(revision)
+    assert mutations(calls) == []
+    assert not any(call[0] in ("runtime", "barrier") for call in calls)
+    if intake_enabled:
+        assert "STAGED_INTAKE_ENABLED" in result.stdout
+
+
 def test_fixed_resources_and_exact_source_are_enforced(operator):
     sha, write_state, run = operator
     write_state()

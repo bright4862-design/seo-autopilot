@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed unless Cloud Run independently shows the rollback revision at 100%.
+"""Fail closed unless Cloud Run independently shows an exact revision at 100%.
 
 Read-only post-mutation assertion. This is NOT Standard 150 product acceptance,
 a customer canary, or protection against subsequent concurrent traffic edits.
@@ -62,13 +62,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected-revision", required=True)
     parser.add_argument("--service-json", type=Path, required=True)
+    parser.add_argument("--context", choices=("rollback", "promotion"), default="rollback")
     args = parser.parse_args()
+    label = "PROMOTION" if args.context == "promotion" else "ROLLBACK"
     try:
         service = json.loads(args.service_json.read_text(encoding="utf-8"))
         check_readback(service, args.expected_revision)
     except (ValueError, OSError, TypeError) as exc:
-        parser.exit(2, f"ROLLBACK_UNVERIFIED: {exc}\n")
-    print(f"ROLLBACK_TRAFFIC_READBACK_OK revision={args.expected_revision}")
+        parser.exit(2, f"{label}_TRAFFIC_UNVERIFIED: {exc}\n" if label == "PROMOTION" else f"ROLLBACK_UNVERIFIED: {exc}\n")
+    print(f"{label}_TRAFFIC_READBACK_OK revision={args.expected_revision}")
     return 0
 
 

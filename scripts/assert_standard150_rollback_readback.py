@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Fail closed unless Cloud Run independently shows the rollback revision at 100%.
+"""Fail closed unless Cloud Run independently confirms a revision serves 100%.
 
-Read-only post-mutation assertion. This is NOT Standard 150 product acceptance,
+Read-only post-mutation assertion for promotion or rollback. This is NOT product acceptance,
 a customer canary, or protection against subsequent concurrent traffic edits.
 """
 from __future__ import annotations
@@ -47,7 +47,7 @@ def check_readback(service: object, expected: str) -> None:
     generation = _generation(metadata.get("generation"))
     observed = _generation(status.get("observedGeneration"))
     if generation != observed:
-        raise ValueError("rollback not reconciled: observed generation differs")
+        raise ValueError("traffic not reconciled: observed generation differs")
     conditions = status.get("conditions")
     if not isinstance(conditions, list) or not any(
         isinstance(c, dict) and c.get("type") == "Ready" and c.get("status") == "True"
@@ -62,13 +62,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected-revision", required=True)
     parser.add_argument("--service-json", type=Path, required=True)
+    parser.add_argument("--context", choices=("rollback", "promotion"), default="rollback")
     args = parser.parse_args()
     try:
         service = json.loads(args.service_json.read_text(encoding="utf-8"))
         check_readback(service, args.expected_revision)
     except (ValueError, OSError, TypeError) as exc:
-        parser.exit(2, f"ROLLBACK_UNVERIFIED: {exc}\n")
-    print(f"ROLLBACK_TRAFFIC_READBACK_OK revision={args.expected_revision}")
+        marker = "PROMOTION_UNVERIFIED" if args.context == "promotion" else "ROLLBACK_UNVERIFIED"
+        parser.exit(2, f"{marker}: {exc}\n")
+    marker = "PROMOTION_TRAFFIC_READBACK_OK" if args.context == "promotion" else "ROLLBACK_TRAFFIC_READBACK_OK"
+    print(f"{marker} revision={args.expected_revision}")
     return 0
 
 

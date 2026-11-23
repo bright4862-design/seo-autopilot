@@ -4,6 +4,7 @@ Execute the actual GitHub Actions Bash body with PATH-local fake cloud tools.
 Never invoke GCP, Base44, a customer scan or real credentials.
 """
 import os
+import shutil
 import subprocess
 import textwrap
 from pathlib import Path
@@ -42,14 +43,29 @@ failure = os.environ.get("FAIL_STAGE", "")
 with Path(os.environ["CALL_LOG"]).open("a") as out:
     if a[:3] == ["run", "services", "update-traffic"]:
         out.write("rollback\\n")
+        Path(os.environ["ROLLBACK_MARKER"]).write_text("yes")
         sys.exit(13 if os.environ.get("FAIL_ROLLBACK") == "1" else 0)
     if a[:3] == ["run", "services", "describe"]:
         if "--format=json" in a:
             out.write("service-json\\n")
             if failure == "service-json": sys.exit(9)
-            print(json.dumps({"status": {"traffic": [
-                {"revisionName": os.environ["REVISION"],
-                 "percent": 99 if failure == "wrong-traffic" else 100}]}}))
+            rolled_back = Path(os.environ["ROLLBACK_MARKER"]).exists()
+            current = os.environ["ROLLBACK_REVISION"] if rolled_back else os.environ["REVISION"]
+            observed = [{"revisionName": current,
+                         "percent": 99 if failure == "wrong-traffic" and not rolled_back else 100}]
+            desired = [{"revisionName":
+                        os.environ["ROLLBACK_REVISION"] if failure == "desired-stale" and not rolled_back else current,
+                        "percent": 100}]
+            generation = 8
+            observed_generation = 7 if failure == "reconciling" and not rolled_back else 8
+            ready = "False" if failure == "not-ready" and not rolled_back else "True"
+            print(json.dumps({
+                "metadata": {"generation": generation},
+                "spec": {"traffic": desired},
+                "status": {"observedGeneration": observed_generation,
+                           "conditions": [{"type": "Ready", "status": ready}],
+                           "traffic": observed},
+            }))
             sys.exit(0)
         out.write("service-url\\n")
         if failure == "service-url": sys.exit(9)
@@ -86,6 +102,9 @@ fi
         encoding="utf-8",
     )
     operator.chmod(0o755)
+    # Exercise the actual shared readback predicate from the workflow body.
+    shutil.copy2(ROOT / "scripts/assert_standard150_rollback_readback.py",
+                 scriptdir / "assert_standard150_rollback_readback.py")
 
     env = {
         **os.environ,
@@ -101,6 +120,8 @@ fi
         "FAIL_STAGE": failure,
         "FAIL_ROLLBACK": "1" if fail_rollback else "0",
         "CALL_LOG": str(log),
+        "ROLLBACK_MARKER": str(tmp_path / "rollback-marker"),
+        "RUNNER_TEMP": str(tmp_path),
     }
     result = subprocess.run(
         ["bash", "-c", promotion_step()],
@@ -120,6 +141,7 @@ def test_baseline_promotes_without_rollback(tmp_path):
     assert calls.count("promote-worker") == 1
     assert calls.count("verify-worker-runtime-revision") == 1
     assert "rollback" not in calls
+    assert "PROMOTION_TRAFFIC_READBACK_OK revision=worker-00125-test" in result.stdout
     assert "promoted_revision=worker-00125-test" in result.stdout
 
 
@@ -157,3 +179,17 @@ def test_exit_guard_armed_before_promotion_and_disarmed_after_final_check():
         "bash ./scripts/fixlist-cloud-operator.sh"
     )
     assert body.rindex("promotion_started=0") > body.index("queue_state_after=")
+
+
+@pytest.mark.parametrize("failure", ["desired-stale", "reconciling", "not-ready"])
+def test_observed_candidate_100_without_converged_service_rolls_back(tmp_path, failure):
+    # These synthetic states fooled the previous status.traffic-only check.
+    # A wrong desired route, stale generation or non-Ready service must not
+    # make it as far as the authenticated runtime probe or success signal.
+    result, calls = simulate(tmp_path, failure)
+    assert result.returncode != 0
+    assert "POST_PROMOTION_TRAFFIC_UNVERIFIED" in result.stderr
+    assert calls.count("promote-worker") == 1
+    assert calls.count("rollback") == 1
+    assert "verify-worker-runtime-revision" not in calls
+    assert "promoted_revision=" not in result.stdout

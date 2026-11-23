@@ -273,20 +273,26 @@ test("an untagged revision that does not hold all traffic yields no probe URL", 
 // Running the real operation end to end against stubbed gcloud/curl is the only
 // way to prove the refusal paths refuse. Asserting on their prose would pass a
 // guard that printed INDETERMINATE and then fell through to PASS.
-function runGuard({ service, revision = "", body, code = "200", token = "stub-token", audience = "", probeUrl = "", sourceSha = "" }) {
+function runGuard({ service, afterService, revision = "", body, code = "200", token = "stub-token", audience = "", probeUrl = "", sourceSha = "" }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-revision-e2e-"));
   const bin = path.join(dir, "bin");
   fs.mkdirSync(bin);
   const servicePath = path.join(dir, "service.json");
+  const afterServicePath = path.join(dir, "service-after.json");
+  const seenServicePath = path.join(dir, "service-read");
   const bodyPath = path.join(dir, "revision.json");
   const curlLog = path.join(dir, "curl.log");
   fs.writeFileSync(servicePath, JSON.stringify(service));
+  fs.writeFileSync(afterServicePath, JSON.stringify(afterService ?? service));
   fs.writeFileSync(bodyPath, typeof body === "string" ? body : JSON.stringify(body));
   fs.writeFileSync(
     path.join(bin, "gcloud"),
     `#!/usr/bin/env bash
 if [ "$1 $2" = "config set" ]; then exit 0; fi
-if [ "$1 $2 $3" = "run services describe" ]; then cat "${servicePath}"; exit 0; fi
+if [ "$1 $2 $3" = "run services describe" ]; then
+  if [ -e "${seenServicePath}" ]; then cat "${afterServicePath}"; else touch "${seenServicePath}"; cat "${servicePath}"; fi
+  exit 0
+fi
 echo "unexpected gcloud: $*" >&2; exit 1
 `,
     { mode: 0o755 },
@@ -519,26 +525,45 @@ test("end to end: the promotion path probes the URL its token was minted for", (
   assert.equal(mismatched.curl, "", "it must not probe with a token the URL will reject");
 });
 
-test("end to end: with no revision named, the one serving all traffic is the subject", () => {
-  const result = runGuard({ service: serving("worker-00054-trs"), body: LIVE_MATCHING });
-  assert.equal(result.status, 0, result.stdout);
-  assert.match(result.stdout, /revision under test: worker-00054-trs/);
-
-  const none = {
+test("end to end: unnamed serving revision requires reconciled Cloud Run traffic", () => {
+  const reconciled = {
+    metadata: { name: "fixlist-standard150-worker", generation: 77 },
+    spec: { traffic: [{ revisionName: "worker-00054-trs", percent: 100 }] },
     status: {
       url: SERVICE_URL,
-      traffic: [
-        { revisionName: "worker-00053-abc", percent: 50 },
-        { revisionName: "worker-00054-trs", percent: 50 },
-      ],
+      observedGeneration: 77,
+      conditions: [{ type: "Ready", status: "True" }],
+      traffic: [{ revisionName: "worker-00054-trs", percent: 100 }],
     },
   };
-  const ambiguous = runGuard({ service: none, body: LIVE_MATCHING });
+  const result = runGuard({ service: reconciled, body: LIVE_MATCHING });
+  assert.equal(result.status, 0, result.stdout);
+  assert.match(result.stdout, /revision under test: worker-00054-trs/);
+  assert.match(result.stdout, /PASS: the running worker computes/);
+
+  const moving = structuredClone(reconciled);
+  moving.metadata.generation = 78;
+  moving.spec.traffic = [{ revisionName: "worker-00055-new", percent: 100 }];
+  const contradicted = runGuard({ service: moving, body: LIVE_MATCHING });
+  assert.notEqual(contradicted.status, 0, "observed old=100 while desired new=100 is not a release receipt");
+  assert.equal(contradicted.curl, "", "never spend the worker token while traffic is reconciling");
+  assert.doesNotMatch(contradicted.stdout, /PASS:/);
+  assert.doesNotMatch(contradicted.stdout, /revision under test:/);
+
+  const changedDuringProbe = runGuard({ service: reconciled, afterService: moving, body: LIVE_MATCHING });
+  assert.notEqual(changedDuringProbe.status, 0, "a correct /revision body cannot rescue traffic that moved during the probe");
+  assert.match(changedDuringProbe.curl, /\/revision/, "it must exercise a genuine post-probe refusal");
+  assert.doesNotMatch(changedDuringProbe.stdout, /PASS:/, "post-probe traffic drift must never print PASS");
+
+  const split = structuredClone(reconciled);
+  split.status.traffic = [
+    { revisionName: "worker-00053-abc", percent: 50 },
+    { revisionName: "worker-00054-trs", percent: 50 },
+  ];
+  const ambiguous = runGuard({ service: split, body: LIVE_MATCHING });
   assert.notEqual(ambiguous.status, 0, "a split with no single serving revision has no subject");
+  assert.equal(ambiguous.curl, "", "must refuse before the authenticated probe");
   assert.doesNotMatch(ambiguous.stdout, /PASS:/);
-  // It must say there is no subject, not invent one and then send the operator
-  // off to tag a revision that does not exist.
-  assert.match(ambiguous.stdout, /none serves 100% of traffic/);
   assert.doesNotMatch(ambiguous.stdout, /revision under test:/);
 });
 

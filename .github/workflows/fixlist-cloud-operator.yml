@@ -1568,16 +1568,15 @@ jobs:
           fi
 
           gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > /tmp/service-after.json
-          if ! python3 - "$REVISION" /tmp/service-after.json <<'PY'
-          import json, sys
-          revision, path = sys.argv[1:]
-          service = json.load(open(path))
-          traffic = service.get('status', {}).get('traffic', []) or []
-          percent = sum(int(item.get('percent') or 0) for item in traffic if item.get('revisionName') == revision)
-          if percent != 100:
-              raise SystemExit(f'Expected 100% traffic on {revision}, got {percent}%')
-          PY
-          then
+          # Observed 100% traffic alone can be stale while desired traffic
+          # points elsewhere or the service is reconciling. Require a Ready,
+          # generation-converged, pinned 100% desired+observed route before
+          # trusting the following canonical-URL runtime identity probe.
+          if ! python3 scripts/assert_standard150_rollback_readback.py \
+              --context promotion \
+              --expected-revision "$REVISION" \
+              --service-json /tmp/service-after.json; then
+            echo "POST_PROMOTION_TRAFFIC_UNVERIFIED: desired/observed serving route did not converge." >&2
             rollback
             exit 1
           fi

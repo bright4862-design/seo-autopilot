@@ -629,10 +629,15 @@ test("promotion rolls back when the promoted revision computes the wrong identit
   assert.match(call, /rollback/, "a wrong identity must roll traffic back");
   assert.match(call, /exit 1/);
   assert.doesNotMatch(call, /\|\| true|continue-on-error/, "the guard must not be advisory");
+  // Post-promotion checks must share the strict traffic readback predicate
+  // already used for rollback, not merely count status.traffic percentages.
+  assert.match(promote, /assert_standard150_rollback_readback\\.py/);
+  assert.match(promote, /--expected-revision "\\$REVISION"/);
+  assert.match(promote, /--context promotion/);
   // It has to run after traffic actually moves, or it reads the old revision.
   assert.ok(
-    promote.indexOf("Expected 100% traffic on") < promote.indexOf("OPERATION=verify-worker-runtime-revision"),
-    "the runtime check must follow the traffic assertion",
+    promote.indexOf("--context promotion") < promote.indexOf("OPERATION=verify-worker-runtime-revision"),
+    "the runtime check must follow the converged desired/observed traffic assertion",
   );
 });
 

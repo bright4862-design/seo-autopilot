@@ -13,7 +13,8 @@ resource.type="cloud_run_revision" AND \
 resource.labels.service_name="fixlist-standard150-worker" AND \
 resource.labels.revision_name="fixlist-standard150-worker-00097-lvl" AND \
 timestamp>="2026-11-23T12:06:50Z" AND timestamp<="2026-11-23T12:09:35Z" AND \
-(logName:"run.googleapis.com%2Frequests" OR severity>=ERROR)' \
+(logName:"run.googleapis.com%2Frequests" OR \
+ logName:"run.googleapis.com%2Fvarlog%2Fsystem" OR severity>=ERROR)' \
     --project="$PROJECT" --limit=500 --format=json | \
     python scripts/summarize_revision_500_logs.py \
       --service fixlist-standard150-worker \
@@ -34,6 +35,7 @@ from urllib.parse import urlsplit
 
 MAX_ENTRIES = 1000
 ERROR_LEVELS = {"ERROR", "CRITICAL", "ALERT", "EMERGENCY"}
+SYSTEM_LOG_SUFFIX = "/logs/run.googleapis.com%2Fvarlog%2Fsystem"
 
 
 def as_utc(value: str) -> datetime:
@@ -71,6 +73,16 @@ def summarize(entries: list[dict], *, service: str, revision: str, since: str, u
         if not start <= when <= end:
             continue
         eligible.append((when, entry))
+
+    # Cloud Run system logs can be INFO without a request trace (e.g.,
+    # instance starts). Keep counts only, never text or causal attribution.
+    system_logs = [entry for _, entry in eligible
+                   if (entry.get("logName") or "").endswith(SYSTEM_LOG_SUFFIX)]
+    untraced_nonrequest_errors = sum(
+        entry.get("severity") in ERROR_LEVELS
+        and "run.googleapis.com%2Frequests" not in (entry.get("logName") or "")
+        and not entry.get("trace") for _, entry in eligible
+    )
 
     # Only exact trace matches are counted; never print trace IDs. A correlated
     # error may originate anywhere in a request's execution path.
@@ -117,12 +129,18 @@ def summarize(entries: list[dict], *, service: str, revision: str, since: str, u
         "revision": revision,
         "request_500_count": failures,
         "request_200_count": len(requests) - failures,
+        "system_log_count": len(system_logs),
+        "system_error_log_count": sum(
+            entry.get("severity") in ERROR_LEVELS for entry in system_logs),
+        "untraced_nonrequest_error_count": untraced_nonrequest_errors,
         "error_correlated_500_count": sum(
             row["http_status"] == 500 and row["correlated_error_log"] for row in requests),
         "requests": requests,
         "interpretation": (
             "Correlated error logs are clues, not attribution; missing matches "
-            "do not establish a platform cause. Missing requests do not establish health."
+            "do not establish a platform cause. System or untraced error logs "
+            "are uncorrelated context, not proof of failed startup. "
+            "Missing requests do not establish health."
         ),
     }
 

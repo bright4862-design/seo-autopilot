@@ -78,41 +78,66 @@ def rollback_function():
     return textwrap.dedent(text[text.index(start):text.index(end)])
 
 
-@pytest.mark.parametrize("kind,expected_ok", [
-    ("baseline", True), ("update-failed", False),
-    ("describe-failed", False), ("wrong-revision", False),
-    ("reconciling", False),
+@pytest.mark.parametrize("kind,expected_ok,marker,updates", [
+    ("baseline", True, "ROLLBACK_TRAFFIC_READBACK_OK", 1),
+    ("already-restored", True, "ROLLBACK_ALREADY_RESTORED", 0),
+    ("update-failed", False, "ROLLBACK_UNVERIFIED", 1),
+    ("describe-failed", False, "ROLLBACK_UNVERIFIED", 0),
+    ("wrong-revision", False, "ROLLBACK_UNVERIFIED", 0),
+    ("reconciling", False, "ROLLBACK_UNVERIFIED", 1),
 ])
-def test_actual_workflow_rollback_function(tmp_path, kind, expected_ok):
-    f = tmp_path / "fixture.json"
-    fixture = state()
-    if kind == "wrong-revision":
-        fixture["status"]["traffic"] = [{"revisionName": OTHER, "percent": 100}]
-    if kind == "reconciling":
-        fixture["status"]["observedGeneration"] = 2
-    f.write_text(json.dumps(fixture))
+def test_actual_workflow_rollback_function(tmp_path, kind, expected_ok, marker, updates):
+    # Two separate inert snapshots: a candidate initially owns 100%, then a
+    # successful fake update restores the prior revision. The new ownership
+    # guard must not be bypassed just to satisfy the old rollback test.
+    candidate = [{"revisionName": OTHER, "percent": 100}]
+    before = state(desired=candidate, observed=candidate)
+    if kind == "already-restored":
+        before = state()
+    elif kind == "wrong-revision":
+        foreign = [{"revisionName": "fixlist-standard150-worker-00102-foreign", "percent": 100}]
+        before = state(desired=foreign, observed=foreign)
+    after = state(seen=2 if kind == "reconciling" else 3)
+    before_path = tmp_path / "before.json"
+    after_path = tmp_path / "after.json"
+    before_path.write_text(json.dumps(before))
+    after_path.write_text(json.dumps(after))
+
     bindir = tmp_path / "bin"
     bindir.mkdir()
     stub = bindir / "gcloud"
     stub.write_text("""#!/usr/bin/env python3
 import os,sys
-args=' '.join(sys.argv[1:])
-if 'update-traffic' in args and os.getenv('FAIL_KIND')=='update-failed': sys.exit(19)
-if 'services describe' in args and os.getenv('FAIL_KIND')=='describe-failed': sys.exit(23)
-if 'services describe' in args:
-    print(open(os.environ['SERVICE_FIXTURE']).read())
+from pathlib import Path
+args = ' '.join(sys.argv[1:])
+marker = Path(os.environ['UPDATE_MARKER'])
+if 'update-traffic' in args:
+    with Path(os.environ['CALL_LOG']).open('a') as log:
+        log.write('update\\n')
+    if os.getenv('FAIL_KIND') == 'update-failed': sys.exit(19)
+    marker.write_text('updated')
     sys.exit(0)
-if 'update-traffic' in args: sys.exit(0)
+if 'services describe' in args:
+    if os.getenv('FAIL_KIND') == 'describe-failed': sys.exit(23)
+    snapshot = 'SERVICE_FIXTURE_AFTER' if marker.exists() else 'SERVICE_FIXTURE_BEFORE'
+    print(Path(os.environ[snapshot]).read_text())
+    sys.exit(0)
 sys.exit(99)
 """)
     stub.chmod(0o755)
+    calls = tmp_path / "calls.txt"
     env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}",
-               FAIL_KIND=kind, SERVICE_FIXTURE=str(f),
-               RUNNER_TEMP=str(tmp_path), ROLLBACK_REVISION=PRIOR,
+               FAIL_KIND=kind,
+               SERVICE_FIXTURE_BEFORE=str(before_path),
+               SERVICE_FIXTURE_AFTER=str(after_path),
+               UPDATE_MARKER=str(tmp_path / "updated"),
+               CALL_LOG=str(calls),
+               RUNNER_TEMP=str(tmp_path), REVISION=OTHER, ROLLBACK_REVISION=PRIOR,
                CLOUD_RUN_SERVICE="fixture", GCP_PROJECT="fixture", GCP_REGION="fixture")
     proc = subprocess.run(["bash", "-c", "set -euo pipefail\nrollback_attempted=0\n" +
                            rollback_function() + "\nrollback\n"],
                           cwd=ROOT, env=env, capture_output=True, text=True, timeout=8)
     assert (proc.returncode == 0) == expected_ok, proc.stderr
-    assert ("ROLLBACK_TRAFFIC_READBACK_OK" in proc.stdout) == expected_ok
+    assert marker in (proc.stdout + proc.stderr), (proc.stdout, proc.stderr)
+    assert (calls.read_text().splitlines().count("update") if calls.exists() else 0) == updates
     assert ("ROLLBACK_UNVERIFIED" in proc.stderr) == (not expected_ok)

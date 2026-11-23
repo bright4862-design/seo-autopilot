@@ -93,6 +93,7 @@ WORKER_IMAGE_SOURCE_PATHS = (
     # exact-main guard or its Actions launcher must not reuse old acceptance.
     "scripts/assert_standard150_promotion_record.py",
     "scripts/assert_standard150_rollback_readback.py",
+    "scripts/assert_standard150_rollback_ownership.py",
     "scripts/fixlist-cloud-operator.sh",
     "scripts/lib/release-source-guard.sh",
     ".github/workflows/fixlist-cloud-operator.yml",

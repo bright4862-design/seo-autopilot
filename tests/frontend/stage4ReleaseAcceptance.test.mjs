@@ -146,6 +146,23 @@ test("deployed route generation must match the source release manifest", () => {
   assert.ok(result.failures.some((value) => value.includes("route generation")));
 });
 
+test("only the published Getfixlist Base44 host can satisfy Stage-4 site evidence", () => {
+  const exact = validRecord();
+  assert.equal(evaluateStage4ReleaseAcceptance(exact).pass, true);
+
+  for (const impostor of [
+    "other-app.base44.app",
+    "preview.getfixlist.base44.app",
+    "getfixlist.base44.app.example.com",
+  ]) {
+    const record = validRecord();
+    record.deployment.site.hosts_verified = ["getfixlist.com", impostor];
+    const result = evaluateStage4ReleaseAcceptance(record);
+    assert.equal(result.status, "failed", impostor);
+    assert.ok(result.failures.some((failure) => failure.includes("Base44-hosted source identity")), impostor);
+  }
+});
+
 test("site, CI, function and worker source must all match the exact merged SHA", () => {
   const record = validRecord();
   record.ci.sha = "d".repeat(40);

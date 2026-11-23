@@ -19,9 +19,12 @@ timestamp>="2026-11-23T12:06:50Z" AND timestamp<="2026-11-23T12:09:35Z" AND \
     python scripts/summarize_revision_500_logs.py \
       --service fixlist-standard150-worker \
       --revision fixlist-standard150-worker-00097-lvl \
-      --since 2026-11-23T12:06:50Z --until 2026-11-23T12:09:35Z
+      --since 2026-11-23T12:06:50Z --until 2026-11-23T12:09:35Z \
+      --query-limit 500
 
 Use "set -o pipefail" so a denied logging read does not look like zero rows.
+A query that reaches --limit is not complete evidence: this tool emits only
+redacted metadata and exits 3 until a narrower time window is queried.
 A trace-correlated error is NOT proof the application caused the HTTP 500;
 platform and request metadata must be reviewed privately before attributing.
 """
@@ -47,9 +50,13 @@ def as_utc(value: str) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
-def summarize(entries: list[dict], *, service: str, revision: str, since: str, until: str) -> dict:
+def summarize(entries: list[dict], *, service: str, revision: str, since: str, until: str,
+              query_limit: int = 500) -> dict:
     if type(entries) is not list or len(entries) > MAX_ENTRIES:
         raise ValueError("expected an array with at most 1000 log entries")
+    if type(query_limit) is not int or not 1 <= query_limit <= MAX_ENTRIES:
+        raise ValueError("query limit must be an integer in 1..1000")
+    query_at_limit = len(entries) >= query_limit
     start, end = as_utc(since), as_utc(until)
     if end <= start or (end - start).total_seconds() > 1800:
         raise ValueError("require positive interval of at most 30 minutes")
@@ -125,7 +132,11 @@ def summarize(entries: list[dict], *, service: str, revision: str, since: str, u
     requests.sort(key=lambda row: (row["time_utc"], row["http_status"]))
     failures = sum(row["http_status"] == 500 for row in requests)
     return {
-        "status": "METADATA_ONLY_DIAGNOSTIC_NOT_CAUSE_PROOF",
+        "status": ("INDETERMINATE_QUERY_AT_LIMIT" if query_at_limit
+                   else "METADATA_ONLY_DIAGNOSTIC_NOT_CAUSE_PROOF"),
+        "query_at_limit": query_at_limit,
+        "query_entry_count": len(entries),
+        "query_limit": query_limit,
         "revision": revision,
         "request_500_count": failures,
         "request_200_count": len(requests) - failures,
@@ -140,7 +151,9 @@ def summarize(entries: list[dict], *, service: str, revision: str, since: str, u
             "Correlated error logs are clues, not attribution; missing matches "
             "do not establish a platform cause. System or untraced error logs "
             "are uncorrelated context, not proof of failed startup. "
-            "Missing requests do not establish health."
+            "Missing requests do not establish health. A result at or above "
+            "the query limit can omit earlier request and startup logs; "
+            "even a result below that limit does not prove logging completeness."
         ),
     }
 
@@ -151,20 +164,22 @@ def main() -> int:
     parser.add_argument("--revision", required=True)
     parser.add_argument("--since", required=True)
     parser.add_argument("--until", required=True)
+    parser.add_argument("--query-limit", type=int, default=500,
+                        help="Match the gcloud logging read --limit value (default 500)")
     args = parser.parse_args()
     try:
         raw = sys.stdin.read(4_000_001)
         if len(raw) > 4_000_000:
             raise ValueError("input exceeds 4 MB")
         result = summarize(json.loads(raw), service=args.service, revision=args.revision,
-                           since=args.since, until=args.until)
+                           since=args.since, until=args.until, query_limit=args.query_limit)
     except (json.JSONDecodeError, ValueError, TypeError):
         # Never print supplied data or exception messages: they may contain
         # raw log payloads or customer secrets.
         print("LOG_DIAGNOSTIC_INPUT_REJECTED", file=sys.stderr)
         return 2
     print(json.dumps(result, sort_keys=True))
-    return 0
+    return 3 if result["query_at_limit"] else 0
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@
 Do not dispatch any cloud operation here; these are regression assertions on code.
 """
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -26,9 +27,12 @@ def test_direct_promotion_refused_and_serving_route_bound():
 
 def test_promotion_retains_owner_pinning_and_drain_gate():
     workflow = (ROOT / ".github/workflows/fixlist-cloud-operator.yml").read_text()
-    owner = workflow.split("  promote-staged-worker-on-owner-comment:\n", 1)[1].split(
-        "\n  ", 1
-    )[0]
+    owner = workflow.split("  promote-staged-worker-on-owner-comment:\n", 1)[1]
+    # Only a two-space YAML job key ends this job; fields such as "    if: >-"
+    # are indented and must not truncate the owner-step contract check.
+    next_job = re.search(r"(?m)^  [A-Za-z0-9_-]+:\\s*$", owner)
+    if next_job:
+        owner = owner[:next_job.start()]
     assert 'approved_revision="${approval[2]}"' in owner
     assert 'approved_image_digest="${approval[3]}"' in owner
     assert 'approved_barrier_generation="${approval[4]}"' in owner

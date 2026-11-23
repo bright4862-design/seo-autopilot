@@ -153,3 +153,54 @@ def test_system_error_count_does_not_claim_request_causation():
     assert out["system_error_log_count"] == 1
     assert out["error_correlated_500_count"] == 0
     assert out["untraced_nonrequest_error_count"] == 1
+
+
+def test_limit_saturation_fail_closed_without_exposing_log_payloads():
+    # gcloud defaults to descending order. A 500-row limit can hide the old
+    # failure even though it exists in the full 501-row matching set.
+    filler = []
+    for i in range(500):
+        x = error(trace="", severity="INFO")
+        x["logName"] = "projects/test/logs/run.googleapis.com%2Fvarlog%2Fsystem"
+        x["timestamp"] = "2026-11-23T12:08:00Z"
+        x["insertId"] = f"filler-{i}"
+        x["textPayload"] = "SECRET_PII_NEVER_LOG"
+        filler.append(x)
+    older_failure = row(timestamp="2026-11-23T12:07:12Z", ident="older-failure")
+    assert run(filler)["request_500_count"] == 0  # no request in first page
+    saturated = run(filler)
+    assert saturated["query_at_limit"] is True
+    assert saturated["status"] == "INDETERMINATE_QUERY_AT_LIMIT"
+    assert saturated["query_entry_count"] == 500
+    assert "SECRET_PII_NEVER_LOG" not in json.dumps(saturated)
+    assert run(filler + [older_failure])["request_500_count"] == 1
+
+
+def test_limit_below_threshold_preserves_status_and_known_request():
+    observed = run([row(), error(trace="")])
+    assert observed["status"] == "METADATA_ONLY_DIAGNOSTIC_NOT_CAUSE_PROOF"
+    assert observed["query_at_limit"] is False
+    assert observed["query_entry_count"] == 2
+    assert observed["query_limit"] == 500
+
+
+def test_custom_limit_controls_saturation_and_is_strict():
+    assert mod.summarize([row()], service=SERVICE, revision=REVISION,
+                         since=T0, until=T1, query_limit=1)["query_at_limit"]
+    with pytest.raises(ValueError, match="query limit"):
+        mod.summarize([row()], service=SERVICE, revision=REVISION,
+                      since=T0, until=T1, query_limit=True)
+    with pytest.raises(ValueError, match="query limit"):
+        mod.summarize([row()], service=SERVICE, revision=REVISION,
+                      since=T0, until=T1, query_limit=1001)
+
+
+def test_cli_exits_nonzero_with_sanitized_evidence_when_limit_reached():
+    fixture = row()
+    fixture["jsonPayload"]["token"] = "PRIVATE_SECRET"
+    result = subprocess.run([sys.executable, str(SCRIPT), "--service", SERVICE, "--revision", REVISION,
+                             "--since", T0, "--until", T1, "--query-limit", "1"],
+                            input=json.dumps([fixture]), text=True, capture_output=True)
+    assert result.returncode == 3
+    assert json.loads(result.stdout)["status"] == "INDETERMINATE_QUERY_AT_LIMIT"
+    assert "PRIVATE_SECRET" not in (result.stdout + result.stderr)

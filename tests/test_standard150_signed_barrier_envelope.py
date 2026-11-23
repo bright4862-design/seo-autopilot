@@ -21,7 +21,7 @@ LABEL = "fixlist-admission-drain-snapshot-v1"
 def embedded_response_parser():
     source = OPERATOR.read_text(encoding="utf-8")
     match = re.search(
-        r"mapfile -t _barrier_values < <\\(python3 -[\\s\\S]*?<<'PY'\\n([\\s\\S]*?)\\nPY",
+        r"mapfile -t _barrier_values < <\(python3 -[\s\S]*?<<'PY'\n([\s\S]*?)\nPY",
         source,
     )
     assert match, "Expected to run the real response-verifier Python here-doc"

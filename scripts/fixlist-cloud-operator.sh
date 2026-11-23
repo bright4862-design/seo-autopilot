@@ -1080,6 +1080,15 @@ if not re.fullmatch(r"[0-9a-f]{64}", proof):
     raise SystemExit("Invalid drain snapshot proof")
 if not hmac.compare_digest(proof, expected_proof):
     raise SystemExit("Drain snapshot signature mismatch")
+# The response envelope is transport data, not part of the signed snapshot.
+# Never accept its barrier mode/generation as evidence for a different,
+# otherwise authentic HMAC drain snapshot (incident #378).
+signed_barrier = snapshot.get("barrier")
+if (not isinstance(signed_barrier, dict)
+        or signed_barrier.get("mode") != mode
+        or type(signed_barrier.get("generation")) is not int
+        or signed_barrier["generation"] != generation):
+    raise SystemExit("Barrier envelope disagrees with signed drain snapshot")
 if any(not isinstance(item, int) or item < 0 for item in (total, live, active, expired, bound)):
     raise SystemExit("Invalid drain counts")
 print(mode)

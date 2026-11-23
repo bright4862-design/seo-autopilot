@@ -213,7 +213,7 @@ def test_owner_command_requires_exact_revision_and_digest():
     assert 'approved_barrier_generation="${approval[4]}"' in command
     assert 'echo "barrier_generation=$approved_barrier_generation" >> "$GITHUB_OUTPUT"' in command
     assert 'echo "approved_revision=$approved_revision" >> "$GITHUB_OUTPUT"' in command
-    assert "owner approval requires a canonical revision and immutable image digest" in command
+    assert "owner approval requires canonical revision, immutable image digest and exact closed-barrier generation" in command
     selection = workflow.split(
         "      - name: Discover exact zero-traffic candidate and rollback revision", 1
     )[1].split("      - name: Verify candidate build provenance and durable worker routes", 1)[0]

@@ -226,7 +226,7 @@ def owner_command_bash() -> str:
     step = source.split(
         "      - name: Validate exact owner command and resolve product SHA", 1
     )[1].split("      - name: Authenticate to Google Cloud", 1)[0]
-    return textwrap.dedent(step.split("        run: |\\n", 1)[1])
+    return textwrap.dedent(step.split("        run: |\n", 1)[1])
 
 
 @pytest.mark.parametrize("mutate", [
@@ -252,7 +252,7 @@ def run_owner_command(tmp_path: Path, comment: str):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_git = fake_bin / "git"
-    fake_git.write_text(f"#!/bin/sh\\nprintf '%s\\\\n' '{SOURCE_SHA}'\\n", encoding="utf-8")
+    fake_git.write_text(f"#!/bin/sh\nprintf '%s\\n' '{SOURCE_SHA}'\n", encoding="utf-8")
     fake_git.chmod(0o755)
     output = tmp_path / "workflow-output"
     output.write_text("", encoding="utf-8")

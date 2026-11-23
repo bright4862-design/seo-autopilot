@@ -1295,18 +1295,20 @@ jobs:
           # The owner selects the exact revision and image digest from the
           # completed staging record; a matching source SHA alone is ambiguous.
           read -r -a approval <<< "$COMMENT_BODY"
-          if [ "${#approval[@]}" -ne 4 ]; then
-            echo "Refusing: expected /promote-staged-worker <sha> <revision> <sha256:digest>." >&2
+          if [ "${#approval[@]}" -ne 5 ]; then
+            echo "Refusing: expected /promote-staged-worker <sha> <revision> <sha256:digest> <closed-barrier-generation>." >&2
             exit 2
           fi
           approved_revision="${approval[2]}"
           approved_image_digest="${approval[3]}"
+          approved_barrier_generation="${approval[4]}"
           if [[ ! "$approved_revision" =~ ^fixlist-standard150-worker-[0-9]{5}-[a-z0-9]{3}$ ||
-                ! "$approved_image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "Refusing: owner approval requires a canonical revision and immutable image digest." >&2
+                ! "$approved_image_digest" =~ ^sha256:[0-9a-f]{64}$ ||
+                ! "$approved_barrier_generation" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Refusing: owner approval requires canonical revision, immutable image digest and exact closed-barrier generation." >&2
             exit 2
           fi
-          expected="/promote-staged-worker $source_sha $approved_revision $approved_image_digest"
+          expected="/promote-staged-worker $source_sha $approved_revision $approved_image_digest $approved_barrier_generation"
           if [ "$COMMENT_BODY" != "$expected" ]; then
             echo "Refusing: comment must equal '$expected'." >&2
             exit 2
@@ -1322,6 +1324,7 @@ jobs:
           echo "product_sha=$product_sha" >> "$GITHUB_OUTPUT"
           echo "approved_revision=$approved_revision" >> "$GITHUB_OUTPUT"
           echo "approved_image_digest=$approved_image_digest" >> "$GITHUB_OUTPUT"
+          echo "barrier_generation=$approved_barrier_generation" >> "$GITHUB_OUTPUT"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
@@ -1531,6 +1534,54 @@ jobs:
           id_token_audience: ${{ steps.worker-url.outputs.url }}
           id_token_include_email: true
           create_credentials_file: false
+
+      # Incident #378: serving a new worker while claims are still open or
+      # durable work remains in flight can strand signed persistence across a
+      # release boundary. An unchanged queue state does not prove a closed
+      # global admission barrier. Use the existing signed coordinator snapshot
+      # and owner-approved generation; never pause or resume queues here.
+      - name: Authenticate read-only admission barrier preflight
+        id: promotion-admission-token
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ env.ADMISSION_OPERATOR_AUDIENCE }}
+          id_token_include_email: true
+
+      - name: Verify signed closed and drained barrier before promotion
+        env:
+          OPERATION: verify-zero-admission-obligations
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+          BARRIER_EXPECTED_GENERATION: ${{ steps.command.outputs.barrier_generation }}
+          BARRIER_EXPECTED_PRIOR_MODE: closed
+          CONFIRM: VERIFY-ZERO-ADMISSION:${{ steps.command.outputs.source_sha }}:${{ steps.command.outputs.barrier_generation }}
+          CHANGE_TICKET: incident-378
+          CUTOVER_REASON: Standard 150 worker owner-promotion preflight
+          GCP_OPERATOR_SERVICE_ACCOUNT: ${{ env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT }}
+          FIXLIST_OPERATOR_ID_TOKEN: ${{ steps.promotion-admission-token.outputs.id_token }}
+          FIXLIST_OPERATOR_TOKEN_AUDIENCE: ${{ env.ADMISSION_OPERATOR_AUDIENCE }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The verifier checks coordinator HMAC, barrier mode, drain counters
+          # and the snapshot. Require the returned generation to equal the
+          # owner's exact generation, not merely an arbitrary valid snapshot.
+          verdict="$(bash ./scripts/fixlist-cloud-operator.sh)"
+          printf '%s\n' "$verdict"
+          printf '%s\n' "$verdict" | grep -Eq "^ADMISSION_ZERO_OBLIGATIONS_VERIFIED generation=${BARRIER_EXPECTED_GENERATION} snapshot=[A-Za-z0-9._:-]+ expired_diagnostic=[0-9]+$" || {
+            echo 'Refusing promotion: signed drained barrier generation disagrees with owner approval.' >&2
+            exit 2
+          }
+
+      - name: Restore keyless worker operator credentials for promotion
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
 
       - name: Promote exact candidate with automatic rollback on failed post-check
         id: promote

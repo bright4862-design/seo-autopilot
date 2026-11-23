@@ -210,8 +210,10 @@ def test_owner_command_requires_exact_revision_and_digest():
     )[1].split("      - name: Authenticate to Google Cloud", 1)[0]
     assert 'approved_revision="${approval[2]}"' in command
     assert 'approved_image_digest="${approval[3]}"' in command
+    assert 'approved_barrier_generation="${approval[4]}"' in command
+    assert 'echo "barrier_generation=$approved_barrier_generation" >> "$GITHUB_OUTPUT"' in command
     assert 'echo "approved_revision=$approved_revision" >> "$GITHUB_OUTPUT"' in command
-    assert "owner approval requires a canonical revision and immutable image digest" in command
+    assert "owner approval requires canonical revision, immutable image digest and exact closed-barrier generation" in command
     selection = workflow.split(
         "      - name: Discover exact zero-traffic candidate and rollback revision", 1
     )[1].split("      - name: Verify candidate build provenance and durable worker routes", 1)[0]
@@ -235,6 +237,9 @@ def owner_command_bash() -> str:
     lambda cmd: cmd.replace(CANDIDATE, "worker-another"),
     lambda cmd: cmd.replace(SOURCE_SHA, "b" * 40),
     lambda cmd: cmd + "  ",
+    lambda cmd: cmd.replace(" 7", " 0"),
+    lambda cmd: cmd.replace(" 7", " x"),
+    lambda cmd: cmd.replace(" 7", " 8 7"),
 ])
 def test_real_owner_command_rejects_missing_or_ambiguous_digest_before_cloud(tmp_path, mutate):
     result, output = run_owner_command(tmp_path, mutate(owner_approval()))
@@ -243,7 +248,7 @@ def test_real_owner_command_rejects_missing_or_ambiguous_digest_before_cloud(tmp
 
 
 def owner_approval() -> str:
-    return f"/promote-staged-worker {SOURCE_SHA} {CANDIDATE} {DIGEST}"
+    return f"/promote-staged-worker {SOURCE_SHA} {CANDIDATE} {DIGEST} 7"
 
 
 def run_owner_command(tmp_path: Path, comment: str):
@@ -271,3 +276,57 @@ def test_real_owner_command_accepts_only_exact_reviewed_revision_and_digest(tmp_
     assert "source_sha=" + SOURCE_SHA in output
     assert "approved_revision=" + CANDIDATE in output
     assert "approved_image_digest=" + DIGEST in output
+    assert "barrier_generation=7" in output
+
+
+def signed_barrier_preflight_bash() -> str:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    name = "      - name: Verify signed closed and drained barrier before promotion"
+    nxt = "      - name: Restore keyless worker operator credentials for promotion"
+    assert workflow.count(name) == 1 and workflow.count(nxt) == 1
+    step = workflow.split(name, 1)[1].split(nxt, 1)[0]
+    return textwrap.dedent(step.split("        run: |\n", 1)[1])
+
+
+def test_closed_drained_barrier_preflight_is_before_first_traffic_promotion():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    begin = workflow.index("  promote-staged-worker-on-owner-comment:")
+    end = workflow.index("  readonly-diagnostic:", begin)
+    section = workflow[begin:end]
+    assert section.index("Verify matching Base44 site and executing scanner/customer routes") < (
+        section.index("Verify signed closed and drained barrier before promotion"))
+    assert section.index("Verify signed closed and drained barrier before promotion") < (
+        section.index("Promote exact candidate with automatic rollback on failed post-check"))
+    assert "OPERATION: verify-zero-admission-obligations" in section
+    assert "GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT" in section
+    assert "BARRIER_EXPECTED_GENERATION: ${{ steps.command.outputs.barrier_generation }}" in section
+    assert "Restore keyless worker operator credentials for promotion" in section
+
+
+@pytest.mark.parametrize("verdict,rc,allowed", [
+    ("ADMISSION_ZERO_OBLIGATIONS_VERIFIED generation=7 snapshot=signed-abc expired_diagnostic=0", 0, True),
+    ("ADMISSION_ZERO_OBLIGATIONS_VERIFIED generation=8 snapshot=signed-abc expired_diagnostic=0", 0, False),
+    ("ADMISSION_BARRIER_STATUS mode=open generation=7", 0, False),
+    ("ADMISSION_ZERO_OBLIGATIONS_VERIFIED generation=7 snapshot=signed-abc expired_diagnostic=0", 7, False),
+    ("", 0, False),
+])
+def test_real_promotion_barrier_bash_fails_closed(tmp_path, verdict, rc, allowed):
+    # Hermetic gate rehearsal: the existing coordinator verifier authenticates
+    # HMAC/counters; this tests only how the promotion step consumes its verdict.
+    import os
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_bash = fake_bin / "bash"
+    fake_bash.write_text(
+        "#!/bin/sh\nprintf '%s\\n' \"$FAKE_BARRIER_VERDICT\"\nexit \"$FAKE_BARRIER_RC\"\n",
+        encoding="utf-8",
+    )
+    fake_bash.chmod(0o755)
+    env = {**os.environ,
+           "PATH": str(fake_bin) + os.pathsep + os.environ["PATH"],
+           "FAKE_BARRIER_VERDICT": verdict, "FAKE_BARRIER_RC": str(rc),
+           "BARRIER_EXPECTED_GENERATION": "7"}
+    proc = subprocess.run(["/bin/bash", "-c", signed_barrier_preflight_bash()],
+                          env=env, capture_output=True, text=True, timeout=5)
+    assert (proc.returncode == 0) is allowed, (proc.stdout, proc.stderr)

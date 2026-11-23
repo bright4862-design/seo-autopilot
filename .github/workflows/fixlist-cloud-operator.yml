@@ -1531,6 +1531,31 @@ jobs:
           promotion_started=0
           rollback() {
             rollback_attempted=1
+            echo "Checking rollback ownership for $ROLLBACK_REVISION" >&2
+            # A failed/rejected promotion may never have moved traffic. An
+            # independent operator might also have intervened. Do not overwrite
+            # a foreign serving revision as if our attempt owned that change.
+            local before_json="$RUNNER_TEMP/fixlist-standard150-before-rollback.json"
+            local ownership
+            if ! gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > "$before_json"; then
+              echo "ROLLBACK_UNVERIFIED: current traffic ownership unavailable; refusing blind update" >&2
+              return 1
+            fi
+            if ! ownership="$(python3 scripts/assert_standard150_rollback_ownership.py --service-json "$before_json" --candidate "$REVISION" --prior "$ROLLBACK_REVISION" 2>&1)"; then
+              echo "$ownership" >&2
+              echo "ROLLBACK_UNVERIFIED: ownership conflict; refusing to overwrite other traffic" >&2
+              return 1
+            fi
+            if [[ "$ownership" == "ALREADY_RESTORED" ]]; then
+              echo "ROLLBACK_ALREADY_RESTORED revision=$ROLLBACK_REVISION" >&2
+              return 0
+            fi
+            if [[ "$ownership" != "ALLOW_RESTORE" ]]; then
+              echo "ROLLBACK_UNVERIFIED: unknown traffic ownership verdict" >&2
+              return 1
+            fi
+            # Best effort, not an atomic CAS: a concurrent change can still
+            # occur after this read and before update-traffic.
             echo "Rolling worker traffic back to $ROLLBACK_REVISION" >&2
             if ! gcloud run services update-traffic "$CLOUD_RUN_SERVICE" --region="$GCP_REGION" --project="$GCP_PROJECT" --to-revisions="$ROLLBACK_REVISION=100" >/dev/null; then
               echo "ROLLBACK_UNVERIFIED: traffic update command failed" >&2

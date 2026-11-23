@@ -8,12 +8,11 @@ logs to tickets. Every printed field is an allowlisted derivative.
 
 Example read-only operator query (requires existing Cloud Logging viewer access):
 
-  gcloud logging read '\
-resource.type="cloud_run_revision" AND \
-resource.labels.service_name="fixlist-standard150-worker" AND \
-resource.labels.revision_name="fixlist-standard150-worker-00097-lvl" AND \
-timestamp>="2026-11-23T12:06:50Z" AND timestamp<="2026-11-23T12:09:35Z" AND \
-(logName:"run.googleapis.com%2Frequests" OR \
+  gcloud logging read 'resource.type="cloud_run_revision" AND
+resource.labels.service_name="fixlist-standard150-worker" AND
+resource.labels.revision_name="fixlist-standard150-worker-00097-lvl" AND
+timestamp>="2026-11-23T12:06:50Z" AND timestamp<="2026-11-23T12:09:35Z" AND
+(logName:"run.googleapis.com%2Frequests" OR
  logName:"run.googleapis.com%2Fvarlog%2Fsystem" OR severity>=ERROR)' \
     --project="$PROJECT" --limit=500 --format=json | \
     python scripts/summarize_revision_500_logs.py \

@@ -510,7 +510,7 @@ test("post-deploy verification fails closed without a fresh Base44 package pull"
   assert.doesNotMatch(verify, /no read-only CLI check exists/);
 });
 
-function runPostDeployVerifier(policyMode) {
+function runPostDeployVerifier(policyMode, invokerIamDisabled = "false") {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "durable-release-verify-"));
   const gcloudPath = path.join(tempDir, "gcloud");
   const describePath = path.join(tempDir, "describe.json");
@@ -528,6 +528,7 @@ function runPostDeployVerifier(policyMode) {
   const runtimeSa = "runtime@test.iam.gserviceaccount.com";
   const invokerSa = "invoker@test.iam.gserviceaccount.com";
   const describe = {
+    metadata: { annotations: { "run.googleapis.com/invoker-iam-disabled": invokerIamDisabled } },
     status: { latestReadyRevisionName: "worker-00001", url: "" },
     spec: { template: { spec: {
       serviceAccountName: runtimeSa,
@@ -625,6 +626,13 @@ test("post-deploy verifier requires the exact private invoker binding", () => {
   assert.equal(valid.status, 0, valid.output);
   assert.match(valid.output, /exact invoker holds roles\/run\.invoker/);
   assert.match(valid.output, /POST-DEPLOY VERIFICATION PASSED/);
+});
+
+test("post-deploy privacy check rejects disabled invoker IAM despite a private-looking policy", () => {
+  const publicBypass = runPostDeployVerifier("valid", "true");
+  assert.equal(publicBypass.status, 1, publicBypass.output);
+  assert.match(publicBypass.output, /Cloud Run invoker IAM check is disabled/);
+  assert.match(publicBypass.output, /POST-DEPLOY VERIFICATION FAILED/);
 });
 
 test("the release path never publishes signing-key material or fingerprints", () => {

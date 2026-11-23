@@ -37,6 +37,10 @@ def simulate(tmp_path: Path, failure: str = "", fail_rollback: bool = False):
         (ROOT / "scripts/assert_standard150_rollback_readback.py").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
+    (scriptdir / "assert_standard150_rollback_ownership.py").write_text(
+        (ROOT / "scripts/assert_standard150_rollback_ownership.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     log = tmp_path / "calls.txt"
 
     gcloud = fakebin / "gcloud"
@@ -58,9 +62,13 @@ with Path(os.environ["CALL_LOG"]).open("a") as out:
             # or to the prior revision after a rollback command. Return both
             # desired and observed routing, Ready and generation identity.
             rollback = "rollback" in Path(os.environ["CALL_LOG"]).read_text().splitlines()
-            revision = os.environ["ROLLBACK_REVISION"] if rollback else os.environ["REVISION"]
+            revision = os.environ["ROLLBACK_REVISION"] if rollback or failure == "operator-promote" else os.environ["REVISION"]
+            if failure == "intervening-traffic" and not rollback:
+                revision = "worker-00999-foreign"
             percent = 99 if failure == "wrong-traffic" and not rollback else 100
             traffic = [{"revisionName": revision, "percent": percent}]
+            if failure == "wrong-traffic" and not rollback:
+                traffic.append({"revisionName": os.environ["ROLLBACK_REVISION"], "percent": 1})
             print(json.dumps({
                 "metadata": {"generation": 7},
                 "spec": {"traffic": [{"revisionName": revision, "percent": 100}]},
@@ -142,7 +150,7 @@ def test_baseline_promotes_without_rollback(tmp_path):
     assert "promoted_revision=worker-00125-test" in result.stdout
 
 
-@pytest.mark.parametrize("failure", ["service-json", "service-url", "queue-read"])
+@pytest.mark.parametrize("failure", ["service-url", "queue-read"])
 def test_unhandled_postcheck_failures_attempt_rollback_once(tmp_path, failure):
     result, calls = simulate(tmp_path, failure)
     assert result.returncode != 0
@@ -152,12 +160,35 @@ def test_unhandled_postcheck_failures_attempt_rollback_once(tmp_path, failure):
     assert "promoted_revision=" not in result.stdout
 
 
-@pytest.mark.parametrize("failure", ["operator-promote", "wrong-traffic", "runtime"])
+@pytest.mark.parametrize("failure", ["wrong-traffic", "runtime"])
 def test_existing_explicit_failure_paths_still_rollback_once(tmp_path, failure):
     result, calls = simulate(tmp_path, failure)
     assert result.returncode != 0
     assert calls.count("rollback") == 1
     assert "promoted_revision=" not in result.stdout
+
+
+def test_rejected_promotion_does_not_overwrite_untouched_prior(tmp_path):
+    result, calls = simulate(tmp_path, "operator-promote")
+    assert result.returncode != 0
+    assert "rollback" not in calls
+    assert "ROLLBACK_ALREADY_RESTORED" in result.stderr
+
+
+def test_intervening_operator_change_is_not_overwritten(tmp_path):
+    result, calls = simulate(tmp_path, "intervening-traffic")
+    assert result.returncode != 0
+    assert "rollback" not in calls
+    assert "ROLLBACK_CONFLICT" in result.stderr
+    assert "ROLLBACK_UNVERIFIED" in result.stderr
+    assert "promoted_revision=" not in result.stdout
+
+
+def test_missing_service_state_must_not_trigger_blind_rollback(tmp_path):
+    result, calls = simulate(tmp_path, "service-json")
+    assert result.returncode != 0
+    assert "rollback" not in calls
+    assert "ROLLBACK_UNVERIFIED" in result.stderr
 
 
 def test_failed_restore_is_unverified_not_success(tmp_path):

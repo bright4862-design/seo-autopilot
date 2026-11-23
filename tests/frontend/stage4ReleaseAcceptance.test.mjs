@@ -138,6 +138,35 @@ test("all six scanner runtime identities are explicit release gates", () => {
   assert.ok(result.failures.some((value) => value.includes("missing runtime identity")));
 });
 
+test("duplicate runtime evidence cannot overwrite a contradictory function identity", () => {
+  const record = validRecord();
+  const first = record.deployment.functions[0];
+  // The original Map-based lookup kept the later valid entry, concealing the
+  // earlier false attestation for the same deployed function name.
+  record.deployment.functions.unshift({
+    ...first,
+    verified: false,
+    source_sha: "d".repeat(40),
+    runtime_build_id: "stale-build",
+  });
+  const result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.status, "failed");
+  assert.ok(result.failures.some((message) =>
+    message.includes("duplicate or unnamed scanner runtime identity")));
+});
+
+test("unnamed extra runtime evidence is not silently ignored", () => {
+  const record = validRecord();
+  record.deployment.functions.push({
+    ...record.deployment.functions[0],
+    name: "",
+  });
+  const result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.pass, false);
+  assert.ok(result.failures.some((message) =>
+    message.includes("duplicate or unnamed scanner runtime identity")));
+});
+
 test("deployed route generation must match the source release manifest", () => {
   const record = validRecord();
   record.deployment.route_generation = "V999";

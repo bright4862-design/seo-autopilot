@@ -94,6 +94,11 @@ export function evaluateStage4ReleaseAcceptance(record) {
   add(failures, hosts.some((host) => host.endsWith(".base44.app")), "Base44-hosted source identity not verified");
 
   const functions = Array.isArray(record.deployment?.functions) ? record.deployment.functions : [];
+  const runtimeNames = functions.map((fn) => clean(fn?.name));
+  // A Map keeps the last copy of a duplicate name. Without this check, a
+  // later "verified" entry can conceal an earlier, contradictory runtime.
+  add(failures, runtimeNames.every(Boolean) && new Set(runtimeNames).size === runtimeNames.length,
+    "duplicate or unnamed scanner runtime identity");
   const byName = new Map(functions.map((fn) => [clean(fn?.name), fn]));
   for (const name of EXPECTED_SCANNER_FUNCTIONS) {
     const fn = byName.get(name);

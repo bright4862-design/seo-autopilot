@@ -20,14 +20,18 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/fixlist-cloud-operator.yml"
 SOURCE_SHA = "a" * 40
-CANDIDATE = "worker-00125-candidate"
+CANDIDATE = "fixlist-standard150-worker-00125-abc"
 PRIOR = "worker-00100-prior"
+DIGEST = "sha256:" + "1" * 64
+IMAGE_REF = "europe-west1-docker.pkg.dev/example/worker@"+ DIGEST
+
 
 
 def discovery_python() -> str:
     source = WORKFLOW.read_text(encoding="utf-8")
     begin = (
         '          readarray -t resolved < <(python3 - "$SOURCE_SHA" '
+        '"$APPROVED_REVISION" "$APPROVED_IMAGE_DIGEST" '
         "/tmp/revisions.json /tmp/service-before.json <<'PY'\n"
     )
     end = "\n          PY\n"
@@ -38,7 +42,8 @@ def discovery_python() -> str:
 
 
 def resolve(tmp_path: Path, traffic: list[dict], *, desired=None,
-            generation=7, observed=7, ready="True"):
+            generation=7, observed=7, ready="True", approved_revision=CANDIDATE,
+            approved_digest=DIGEST, revision_digest=IMAGE_REF, extra_revisions=None):
     if desired is None:
         desired = [{"revisionName": PRIOR, "percent": 100}]
     revisions = [{
@@ -50,8 +55,11 @@ def resolve(tmp_path: Path, traffic: list[dict], *, desired=None,
             "containerConcurrency": 1,
             "timeoutSeconds": 480,
         },
-        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+        "status": {"conditions": [{"type": "Ready", "status": "True"}],
+                   "imageDigest": revision_digest},
     }]
+    if extra_revisions:
+        revisions.extend(extra_revisions)
     revisions_path = tmp_path / "revisions.json"
     service_path = tmp_path / "service.json"
     revisions_path.write_text(json.dumps(revisions), encoding="utf-8")
@@ -67,7 +75,7 @@ def resolve(tmp_path: Path, traffic: list[dict], *, desired=None,
     service_path.write_text(json.dumps(service), encoding="utf-8")
     return subprocess.run(
         [sys.executable, "-c", discovery_python(), SOURCE_SHA,
-         str(revisions_path), str(service_path)],
+         approved_revision, approved_digest, str(revisions_path), str(service_path)],
         capture_output=True, text=True, check=False, timeout=8,
     )
 
@@ -161,3 +169,53 @@ def test_preflight_checks_desired_and_generation_before_first_tag():
     tag = workflow.index("      - name: Tag the exact zero-traffic candidate")
     assert workflow.index("Rollback preflight requires reconciled Ready Cloud Run service") < tag
     assert workflow.index("Rollback preflight requires exact pinned desired traffic") < tag
+
+
+def test_approved_digest_selects_reviewed_revision_not_newest_matching_sha(tmp_path):
+    # Regression: SHA-only timestamp selection silently picked this newer image.
+    newer = {
+        "metadata": {"name": "fixlist-standard150-worker-00126-def",
+                     "creationTimestamp": "2026-11-23T04:30:00Z"},
+        "spec": {"containers": [{"env": [
+            {"name": "FIXLIST_WORKER_SOURCE_SHA", "value": SOURCE_SHA}]}],
+                 "containerConcurrency": 1, "timeoutSeconds": 480},
+        "status": {"conditions": [{"type": "Ready", "status": "True"}],
+                   "imageDigest": "europe-west1-docker.pkg.dev/example/worker@sha256:" + "2" * 64},
+    }
+    result = resolve(tmp_path, [{"revisionName": PRIOR, "percent": 100}],
+                     extra_revisions=[newer])
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().splitlines() == [CANDIDATE, PRIOR]
+
+
+@pytest.mark.parametrize("changes,diagnostic", [
+    ({"approved_digest": "sha256:" + "2" * 64}, "image digest differs"),
+    ({"revision_digest": "europe-west1-docker.pkg.dev/example/worker:latest"},
+     "image digest differs"),
+    ({"revision_digest": ""}, "image digest differs"),
+    ({"approved_revision": "fixlist-standard150-worker-99999-zzz"},
+     "Exactly one owner-approved worker revision"),
+])
+def test_digest_or_approved_revision_mismatch_fails_before_tag(tmp_path, changes, diagnostic):
+    result = resolve(tmp_path, [{"revisionName": PRIOR, "percent": 100}], **changes)
+    assert result.returncode != 0
+    assert diagnostic in result.stderr
+    assert result.stdout.strip() == ""
+
+
+def test_owner_command_requires_exact_revision_and_digest():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    command = workflow.split(
+        "      - name: Validate exact owner command and resolve product SHA", 1
+    )[1].split("      - name: Authenticate to Google Cloud", 1)[0]
+    assert 'approved_revision="${approval[2]}"' in command
+    assert 'approved_image_digest="${approval[3]}"' in command
+    assert 'echo "approved_revision=$approved_revision" >> "$GITHUB_OUTPUT"' in command
+    assert "owner approval requires a canonical revision and immutable image digest" in command
+    selection = workflow.split(
+        "      - name: Discover exact zero-traffic candidate and rollback revision", 1
+    )[1].split("      - name: Verify candidate build provenance and durable worker routes", 1)[0]
+    assert 'APPROVED_REVISION: ${{ steps.command.outputs.approved_revision }}' in selection
+    assert 'APPROVED_IMAGE_DIGEST: ${{ steps.command.outputs.approved_image_digest }}' in selection
+    assert "Candidate image digest differs from owner-approved staged build" in selection
+    assert "matches.sort" not in selection

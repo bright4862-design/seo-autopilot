@@ -116,10 +116,13 @@ def summarize(entries: list[dict], *, service: str, revision: str, since: str, u
             continue
         if status not in (200, 500):
             continue
-        # Duplicate log reads must not count the same entry twice. Without a
-        # trustworthy insertId, retain distinct entries as separate evidence.
-        key = entry.get("insertId")
-        if isinstance(key, str) and key:
+        # Cloud Logging considers insertId duplicates only at the same exact
+        # timestamp within a project. This operator query is project-scoped.
+        # Reusing an insertId at another timestamp must not erase a request.
+        # Keep the original timestamp precision, not the redacted seconds.
+        insert_id = entry.get("insertId")
+        if isinstance(insert_id, str) and insert_id:
+            key = (entry.get("timestamp"), insert_id)
             if key in seen:
                 continue
             seen.add(key)

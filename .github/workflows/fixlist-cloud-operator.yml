@@ -1452,6 +1452,7 @@ jobs:
           bash ./scripts/verify-base44-site.sh
           BASE44_APP_ID=6a498732ec779dfaaeab0e53 \
             BASE44_FUNCTION_ORIGIN=https://base44.app \
+            VERIFY_OWNER_DEBUG_RUNTIME=1 \
             bash ./scripts/verify-base44-functions.sh
           echo 'BASE44_PREPROMOTION_RUNTIME_ROUTES_VERIFIED'
 

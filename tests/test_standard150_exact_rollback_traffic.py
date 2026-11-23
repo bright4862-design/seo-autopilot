@@ -219,3 +219,55 @@ def test_owner_command_requires_exact_revision_and_digest():
     assert 'APPROVED_IMAGE_DIGEST: ${{ steps.command.outputs.approved_image_digest }}' in selection
     assert "Candidate image digest differs from owner-approved staged build" in selection
     assert "matches.sort" not in selection
+
+
+def owner_command_bash() -> str:
+    source = WORKFLOW.read_text(encoding="utf-8")
+    step = source.split(
+        "      - name: Validate exact owner command and resolve product SHA", 1
+    )[1].split("      - name: Authenticate to Google Cloud", 1)[0]
+    return textwrap.dedent(step.split("        run: |\\n", 1)[1])
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda cmd: cmd.rsplit(" ", 1)[0],
+    lambda cmd: cmd.replace(DIGEST, "sha256:" + "x" * 64),
+    lambda cmd: cmd.replace(CANDIDATE, "worker-another"),
+    lambda cmd: cmd.replace(SOURCE_SHA, "b" * 40),
+    lambda cmd: cmd + "  ",
+])
+def test_real_owner_command_rejects_missing_or_ambiguous_digest_before_cloud(tmp_path, mutate):
+    result, output = run_owner_command(tmp_path, mutate(owner_approval()))
+    assert result.returncode != 0
+    assert output == ""
+
+
+def owner_approval() -> str:
+    return f"/promote-staged-worker {SOURCE_SHA} {CANDIDATE} {DIGEST}"
+
+
+def run_owner_command(tmp_path: Path, comment: str):
+    import os
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_git = fake_bin / "git"
+    fake_git.write_text(f"#!/bin/sh\\nprintf '%s\\\\n' '{SOURCE_SHA}'\\n", encoding="utf-8")
+    fake_git.chmod(0o755)
+    output = tmp_path / "workflow-output"
+    output.write_text("", encoding="utf-8")
+    env = {**os.environ, "PATH": str(fake_bin) + os.pathsep + os.environ["PATH"],
+           "COMMENT_BODY": comment, "COMMENT_USER": "bright4862-design",
+           "GITHUB_REF": "refs/heads/main", "GITHUB_SHA": SOURCE_SHA,
+           "GITHUB_OUTPUT": str(output)}
+    result = subprocess.run(["bash", "-c", owner_command_bash()], env=env,
+                            capture_output=True, text=True, timeout=5)
+    return result, output.read_text(encoding="utf-8")
+
+
+def test_real_owner_command_accepts_only_exact_reviewed_revision_and_digest(tmp_path):
+    result, output = run_owner_command(tmp_path, owner_approval())
+    assert result.returncode == 0, result.stderr
+    assert "source_sha=" + SOURCE_SHA in output
+    assert "approved_revision=" + CANDIDATE in output
+    assert "approved_image_digest=" + DIGEST in output

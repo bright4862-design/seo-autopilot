@@ -81,11 +81,11 @@ def test_owner_diagnostic_is_required_before_traffic(tmp_path):
     fake_script(scripts / "verify-base44-site.sh", "site")
     function_script = scripts / "verify-base44-functions.sh"
     function_script.write_text(
-        "#!/usr/bin/env bash\\n"
-        "set -euo pipefail\\n"
-        'printf "%s\\n" "${VERIFY_OWNER_DEBUG_RUNTIME:-missing}" > "$FIXTURE_FLAG"\\n'
-        '[[ "${VERIFY_OWNER_DEBUG_RUNTIME:-}" == "1" ]]\\n'
-        'printf "%s\\n" "functions" >> "$FIXTURE_CALLS"\\n',
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'printf "%s\n" "${VERIFY_OWNER_DEBUG_RUNTIME:-missing}" > "$FIXTURE_FLAG"\n'
+        '[[ "${VERIFY_OWNER_DEBUG_RUNTIME:-}" == "1" ]]\n'
+        'printf "%s\n" "functions" >> "$FIXTURE_CALLS"\n',
         encoding="utf-8",
     )
     function_script.chmod(0o755)

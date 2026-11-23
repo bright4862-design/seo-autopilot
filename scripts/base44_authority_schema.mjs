@@ -276,12 +276,18 @@ export function stripAnsi(text) {
   return String(text || "").replace(/\u001b\[[0-9;]*m/g, "");
 }
 
+// The pinned Base44 CLI prints one item per line. Checking arbitrary words in
+// all CLI output can mistake errors or advisory text for deployed inventory.
+// Preserve only complete, unadorned item lines (allowing whitespace and ANSI).
+function inventoryLines(text) {
+  return new Set(stripAnsi(text).split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
+}
+
 export function functionInventoryProblems(text) {
-  const clean = stripAnsi(text);
+  const names = inventoryLines(text);
   const problems = [];
   for (const name of SCANNER_FUNCTIONS) {
-    const pattern = new RegExp(`(^|[^A-Za-z0-9_])${name}([^A-Za-z0-9_]|$)`);
-    if (!pattern.test(clean)) problems.push(`${name}: missing from Base44 function inventory`);
+    if (!names.has(name)) problems.push(`${name}: missing from Base44 function inventory`);
   }
   return problems;
 }
@@ -291,7 +297,7 @@ export function signingSecretPresence(text) {
   if (/SCAN_EVIDENCE_SIGNING_KEY\s*=/.test(clean)) {
     return { present: false, problem: "secret list included a signing-key value" };
   }
-  const present = /(^|[^A-Za-z0-9_])SCAN_EVIDENCE_SIGNING_KEY([^A-Za-z0-9_]|$)/.test(clean);
+  const present = inventoryLines(clean).has("SCAN_EVIDENCE_SIGNING_KEY");
   return {
     present,
     problem: present ? "" : "SCAN_EVIDENCE_SIGNING_KEY is absent from the Base44 secret name list",

@@ -1292,7 +1292,21 @@ jobs:
           set -euo pipefail
           test "$COMMENT_USER" = "bright4862-design"
           source_sha="$(git rev-parse HEAD)"
-          expected="/promote-staged-worker $source_sha"
+          # The owner selects the exact revision and image digest from the
+          # completed staging record; a matching source SHA alone is ambiguous.
+          read -r -a approval <<< "$COMMENT_BODY"
+          if [ "${#approval[@]}" -ne 4 ]; then
+            echo "Refusing: expected /promote-staged-worker <sha> <revision> <sha256:digest>." >&2
+            exit 2
+          fi
+          approved_revision="${approval[2]}"
+          approved_image_digest="${approval[3]}"
+          if [[ ! "$approved_revision" =~ ^fixlist-standard150-worker-[0-9]{5}-[a-z0-9]{3}$ ||
+                ! "$approved_image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Refusing: owner approval requires a canonical revision and immutable image digest." >&2
+            exit 2
+          fi
+          expected="/promote-staged-worker $source_sha $approved_revision $approved_image_digest"
           if [ "$COMMENT_BODY" != "$expected" ]; then
             echo "Refusing: comment must equal '$expected'." >&2
             exit 2
@@ -1306,6 +1320,8 @@ jobs:
           test -n "$product_sha"
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
           echo "product_sha=$product_sha" >> "$GITHUB_OUTPUT"
+          echo "approved_revision=$approved_revision" >> "$GITHUB_OUTPUT"
+          echo "approved_image_digest=$approved_image_digest" >> "$GITHUB_OUTPUT"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
@@ -1323,31 +1339,34 @@ jobs:
         id: candidate
         env:
           SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+          APPROVED_REVISION: ${{ steps.command.outputs.approved_revision }}
+          APPROVED_IMAGE_DIGEST: ${{ steps.command.outputs.approved_image_digest }}
         shell: bash
         run: |
           set -euo pipefail
           gcloud run revisions list --service="$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > /tmp/revisions.json
           gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > /tmp/service-before.json
-          readarray -t resolved < <(python3 - "$SOURCE_SHA" /tmp/revisions.json /tmp/service-before.json <<'PY'
+          readarray -t resolved < <(python3 - "$SOURCE_SHA" "$APPROVED_REVISION" "$APPROVED_IMAGE_DIGEST" /tmp/revisions.json /tmp/service-before.json <<'PY'
           import json, sys
-          source_sha, revisions_path, service_path = sys.argv[1:]
+          source_sha, approved_revision, approved_digest, revisions_path, service_path = sys.argv[1:]
           revisions = json.load(open(revisions_path))
           service = json.load(open(service_path))
-          matches = []
-          for rev in revisions:
-              spec = rev.get('spec', {})
-              container = (spec.get('containers') or [{}])[0]
-              env = {item.get('name'): item.get('value', '') for item in container.get('env', [])}
-              if env.get('FIXLIST_WORKER_SOURCE_SHA') != source_sha:
-                  continue
-              ready = next((c for c in rev.get('status', {}).get('conditions', []) if c.get('type') == 'Ready'), {})
-              if str(ready.get('status') or '').lower() != 'true':
-                  continue
-              matches.append((rev.get('metadata', {}).get('creationTimestamp', ''), rev))
-          if not matches:
-              raise SystemExit('No Ready worker revision matches exact source SHA')
-          matches.sort(key=lambda pair: pair[0])
-          candidate = matches[-1][1]
+          approved = [rev for rev in revisions if rev.get('metadata', {}).get('name') == approved_revision]
+          if len(approved) != 1:
+              raise SystemExit('Exactly one owner-approved worker revision must exist')
+          candidate = approved[0]
+          spec = candidate.get('spec', {})
+          container = (spec.get('containers') or [{}])[0]
+          env = {item.get('name'): item.get('value', '') for item in container.get('env', [])}
+          if env.get('FIXLIST_WORKER_SOURCE_SHA') != source_sha:
+              raise SystemExit('Owner-approved candidate source SHA does not match exact main')
+          ready = next((c for c in candidate.get('status', {}).get('conditions', []) if c.get('type') == 'Ready'), {})
+          if str(ready.get('status') or '').lower() != 'true':
+              raise SystemExit('Owner-approved candidate is not Ready')
+          resolved_image = candidate.get('status', {}).get('imageDigest')
+          if (not isinstance(resolved_image, str) or '@' not in resolved_image
+                  or resolved_image.rsplit('@', 1)[1] != approved_digest):
+              raise SystemExit('Candidate image digest differs from owner-approved staged build')
           name = candidate.get('metadata', {}).get('name', '')
           spec = candidate.get('spec', {})
           if not name:

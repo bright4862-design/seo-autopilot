@@ -47,6 +47,7 @@ def accepted_history(tmp_path: Path):
     write("cloudbuild.durable-worker-static-egress-canary.yaml", "steps: []\n")
     write("scripts/build-worker-candidate.sh", "#!/bin/bash\n")
     write("scripts/assert_standard150_promotion_record.py", "# immutable release gate\n")
+    write("scripts/assert_standard150_rollback_readback.py", "# immutable traffic assertion\n")
     write("scripts/fixlist-cloud-operator.sh", 'python3 assert_standard150_promotion_record.py --worker-promotion\n')
     write("scripts/lib/release-source-guard.sh", "# exact main is required\n")
     write(".github/workflows/fixlist-cloud-operator.yml", "name: trusted worker operator\n")
@@ -90,6 +91,7 @@ def test_a_new_document_after_acceptance_does_not_require_worker_refreeze(accept
     "cloudbuild.durable-worker-static-egress-canary.yaml",
     "scripts/build-worker-candidate.sh",
     "scripts/assert_standard150_promotion_record.py",
+    "scripts/assert_standard150_rollback_readback.py",
     "scripts/fixlist-cloud-operator.sh",
     "scripts/lib/release-source-guard.sh",
     ".github/workflows/fixlist-cloud-operator.yml",

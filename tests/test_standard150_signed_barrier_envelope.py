@@ -85,6 +85,7 @@ def test_matching_synthetically_signed_barrier_envelope_passes(tmp_path):
 
 @pytest.mark.parametrize("case", [
     {"signed_mode": "open", "reported_mode": "closed"},
+    {"signed_mode": "closed", "reported_mode": "open"},
     {"signed_mode": "acceptance_only", "reported_mode": "closed"},
     {"signed_generation": 6, "reported_generation": 7},
     {"signed_generation": 8, "reported_generation": 7},

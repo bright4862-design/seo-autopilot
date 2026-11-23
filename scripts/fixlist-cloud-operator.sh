@@ -148,10 +148,18 @@ describe_or_explain() {
     rm -f "$err_file"
     return 0
   fi
-  if grep -q 'PERMISSION_DENIED' "$err_file"; then
+  # A failed read is not evidence that a resource is absent. In particular,
+  # billing-disabled, API-unavailable, and transport failures must not look
+  # like permission to create a replacement queue or coordinator.
+  # Emit only a bounded reason class; never echo stderr or credential material.
+  if grep -Eiq 'BILLING_DISABLED|billing.{0,80}(has been disabled|is disabled|disabled for)' "$err_file"; then
+    echo "billing_disabled=$label"
+  elif grep -q 'PERMISSION_DENIED' "$err_file"; then
     echo "read_denied=$label"
-  else
+  elif grep -Eq 'NOT_FOUND|404:|does not exist|Cannot find (service|queue|job)' "$err_file"; then
     echo "not_deployed=$label"
+  else
+    echo "read_unverified=$label"
   fi
   rm -f "$err_file"
 }

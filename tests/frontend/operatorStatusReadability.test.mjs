@@ -50,6 +50,33 @@ test("a genuinely absent resource is still reported as not deployed", () => {
   assert.equal(absent, "not_deployed=fixlist-standard150-drain");
 });
 
+test("billing disabled cannot masquerade as a missing cloud resource", () => {
+  for (const stderr of [
+    "ERROR: (gcloud.tasks.queues.describe) PERMISSION_DENIED: BILLING_DISABLED",
+    "ERROR: billing has been disabled for this project",
+    "ERROR: The billing account is disabled",
+  ]) {
+    assert.equal(
+      describeOrExplain({ exitCode: 1, stderr }),
+      "billing_disabled=fixlist-standard150-drain",
+    );
+  }
+});
+
+test("transient or unclassified failed reads remain unverified rather than absent", () => {
+  for (const stderr of [
+    "ERROR: (gcloud.scheduler.jobs.describe) 503 Service Unavailable",
+    "ERROR: request timed out contacting API",
+    "ERROR: API service is not enabled",
+    "",
+  ]) {
+    assert.equal(
+      describeOrExplain({ exitCode: 1, stderr }),
+      "read_unverified=fixlist-standard150-drain",
+    );
+  }
+});
+
 test("a readable resource passes its description through unchanged", () => {
   const ok = describeOrExplain({ exitCode: 0, stderr: "", stdout: "state: RUNNING" });
   assert.equal(ok, "state: RUNNING");

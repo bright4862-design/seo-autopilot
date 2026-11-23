@@ -141,3 +141,5 @@ sys.exit(99)
     assert marker in (proc.stdout + proc.stderr), (proc.stdout, proc.stderr)
     assert (calls.read_text().splitlines().count("update") if calls.exists() else 0) == updates
     assert ("ROLLBACK_UNVERIFIED" in proc.stderr) == (not expected_ok)
+    if kind == "already-restored":
+        assert "ROLLBACK_TRAFFIC_READBACK_OK" not in proc.stdout

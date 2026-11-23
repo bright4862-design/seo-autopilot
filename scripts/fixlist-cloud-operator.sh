@@ -325,7 +325,7 @@ print("\n".join(sorted(routes)))
 # probes cannot answer this: Cloud Run IAM rejects them before routing. The
 # only external proof is the image's build provenance.
 verify_worker_routes() {
-  local revision image digest timeout release_sha verdict=0
+  local revision image timeout release_sha verdict=0
   local want_routes got_routes
   revision="${TARGET_REVISION:-$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
     --region="$GCP_REGION" --project="$GCP_PROJECT" \
@@ -338,37 +338,27 @@ verify_worker_routes() {
   echo "revision: $revision"
   echo "image:    $image"
 
-  digest="${image##*@}"
-  if [ "$digest" = "$image" ]; then
-    echo "WARNING: revision runs a mutable tag, not an immutable digest."
-    digest=""
+  # Resolve the actual immutable bytes from the revision status. The spec can
+  # be a mutable tag: repository-name fallback previously chose whichever build
+  # happened to appear first among the latest 50.
+  local revision_json
+  revision_json="$(mktemp)"
+  if ! gcloud run revisions describe "$revision" \
+    --region="$GCP_REGION" --project="$GCP_PROJECT" --format=json > "$revision_json"; then
+    rm -f "$revision_json"
+    echo "INDETERMINATE: cannot read resolved worker revision image digest." >&2
+    return 1
   fi
 
-  # Match the image back to the Cloud Build that produced it. gcloud's --filter
-  # cannot reliably index into results.images, so the builds are pulled as JSON
-  # and matched here: by digest when the revision is digest-pinned, otherwise by
-  # image name.
   echo
-  echo "=== Build provenance ==="
-  release_sha=$(gcloud builds list --project="$GCP_PROJECT" --region="$GCP_REGION" --limit=50 \
-    --format=json 2>/dev/null | python3 -c '
-import json,sys
-builds=json.load(sys.stdin)
-image=sys.argv[1]; digest=sys.argv[2]
-name=image.split("@")[0].split(":")[0]
-for b in builds:
-    imgs=(b.get("results") or {}).get("images") or []
-    names=[i.get("name","") for i in imgs]
-    digs=[i.get("digest","") for i in imgs]
-    hit=(digest and digest in digs) or (not digest and any(n.split("@")[0].split(":")[0]==name for n in names))
-    if hit:
-        sha=(b.get("substitutions") or {}).get("_RELEASE_SHA","")
-        print(sha)
-        sys.stderr.write("build %s  status=%s  created=%s  _RELEASE_SHA=%s\n" % (
-            b.get("id",""), b.get("status",""), b.get("createTime",""), sha or "(unset)"))
-        break
-' "$image" "$digest" || true)
-
+  echo "=== Build provenance (exact resolved image digest) ==="
+  if ! release_sha="$(gcloud builds list --project="$GCP_PROJECT" --region="$GCP_REGION" --limit=50 \
+    --format=json 2>/dev/null | python3 "$REPO_ROOT/scripts/resolve_worker_build_provenance.py" \
+      --revision-json "$revision_json")"; then
+    release_sha=""
+    verdict=1
+  fi
+  rm -f "$revision_json"
   # The runner has this repository checked out with full history, so whether a
   # SHA declares the durable routes is a fact we can decide here rather than
   # asking a human to eyeball it.

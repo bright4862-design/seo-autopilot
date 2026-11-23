@@ -42,11 +42,17 @@ def test_single_owner_or_in_flight_promotion(desired, observed, expected):
     ([(CANDIDATE, 100)], [(CANDIDATE, 60), (CANDIDATE, 40)]),
     ([(CANDIDATE, 99)], [(CANDIDATE, 100)]),
     ([(CANDIDATE, 100)], [(CANDIDATE, 100), (FOREIGN, 1)]),
-    ([{"latestRevision": True, "percent": 100}], [(CANDIDATE, 100)]),
 ])
 def test_competing_or_ambiguous_traffic_is_refused(desired, observed):
     with pytest.raises(ValueError):
         check_ownership(service(desired, observed), CANDIDATE, PRIOR)
+
+
+def test_floating_latest_revision_is_refused():
+    snapshot = service([(CANDIDATE, 100)], [(CANDIDATE, 100)])
+    snapshot["spec"]["traffic"] = [{"latestRevision": True, "percent": 100}]
+    with pytest.raises(ValueError, match="floating"):
+        check_ownership(snapshot, CANDIDATE, PRIOR)
 
 
 def test_cli_refuses_foreign_operator_without_touching_traffic(tmp_path):

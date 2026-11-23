@@ -30,6 +30,13 @@ def simulate(tmp_path: Path, failure: str = "", fail_rollback: bool = False):
     fakebin.mkdir()
     scriptdir = tmp_path / "scripts"
     scriptdir.mkdir()
+    # Run the real strict traffic-readback helper in this hermetic temp repo.
+    # Previously this harness only stubbed the operator and therefore had no
+    # helper at the relative path that promotion now invokes.
+    (scriptdir / "assert_standard150_rollback_readback.py").write_text(
+        (ROOT / "scripts/assert_standard150_rollback_readback.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     log = tmp_path / "calls.txt"
 
     gcloud = fakebin / "gcloud"
@@ -47,9 +54,20 @@ with Path(os.environ["CALL_LOG"]).open("a") as out:
         if "--format=json" in a:
             out.write("service-json\\n")
             if failure == "service-json": sys.exit(9)
-            print(json.dumps({"status": {"traffic": [
-                {"revisionName": os.environ["REVISION"],
-                 "percent": 99 if failure == "wrong-traffic" else 100}]}}))
+            # The fake service reconciles to the candidate after promotion,
+            # or to the prior revision after a rollback command. Return both
+            # desired and observed routing, Ready and generation identity.
+            rollback = "rollback" in Path(os.environ["CALL_LOG"]).read_text().splitlines()
+            revision = os.environ["ROLLBACK_REVISION"] if rollback else os.environ["REVISION"]
+            percent = 99 if failure == "wrong-traffic" and not rollback else 100
+            traffic = [{"revisionName": revision, "percent": percent}]
+            print(json.dumps({
+                "metadata": {"generation": 7},
+                "spec": {"traffic": [{"revisionName": revision, "percent": 100}]},
+                "status": {"observedGeneration": 7,
+                           "conditions": [{"type": "Ready", "status": "True"}],
+                           "traffic": traffic},
+            }))
             sys.exit(0)
         out.write("service-url\\n")
         if failure == "service-url": sys.exit(9)
@@ -101,6 +119,7 @@ fi
         "FAIL_STAGE": failure,
         "FAIL_ROLLBACK": "1" if fail_rollback else "0",
         "CALL_LOG": str(log),
+        "RUNNER_TEMP": str(tmp_path),
     }
     result = subprocess.run(
         ["bash", "-c", promotion_step()],

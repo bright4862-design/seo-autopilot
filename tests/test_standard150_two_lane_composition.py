@@ -30,7 +30,7 @@ def test_promotion_retains_owner_pinning_and_drain_gate():
     owner = workflow.split("  promote-staged-worker-on-owner-comment:\n", 1)[1]
     # Only a two-space YAML job key ends this job; fields such as "    if: >-"
     # are indented and must not truncate the owner-step contract check.
-    next_job = re.search(r"(?m)^  [A-Za-z0-9_-]+:\\s*$", owner)
+    next_job = re.search(r"(?m)^  [A-Za-z0-9_-]+:\s*$", owner)
     if next_job:
         owner = owner[:next_job.start()]
     assert 'approved_revision="${approval[2]}"' in owner

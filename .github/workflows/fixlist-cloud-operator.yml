@@ -1305,7 +1305,7 @@ jobs:
           if [[ ! "$approved_revision" =~ ^fixlist-standard150-worker-[0-9]{5}-[a-z0-9]{3}$ ||
                 ! "$approved_image_digest" =~ ^sha256:[0-9a-f]{64}$ ||
                 ! "$approved_barrier_generation" =~ ^[1-9][0-9]*$ ]]; then
-            echo "Refusing: owner approval requires a canonical revision and immutable image digest." >&2
+            echo "Refusing: owner approval requires canonical revision, immutable image digest and exact closed-barrier generation." >&2
             exit 2
           fi
           expected="/promote-staged-worker $source_sha $approved_revision $approved_image_digest $approved_barrier_generation"

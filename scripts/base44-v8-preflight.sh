@@ -46,14 +46,14 @@ trap 'rm -rf "$TMP"' EXIT
 fixlist_install_base44_cli "$TMP"
 fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TMP/whoami" "$APP_ID"
 
-if ! "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions list > "$TMP/functions.txt"; then
+if ! "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions list > "$TMP/functions.txt" 2>&1; then
   echo "Base44 function inventory could not be read." >&2
   note_failure
 else
   node "$REPO_ROOT/scripts/base44_authority_schema.mjs" function-inventory "$TMP/functions.txt" || note_failure
 fi
 
-if ! "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" secrets list > "$TMP/secrets.txt"; then
+if ! "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" secrets list > "$TMP/secrets.txt" 2>&1; then
   echo "Base44 secret name list could not be read." >&2
   note_failure
 else

@@ -68,3 +68,11 @@ def test_exact_workflow_runs_readback_before_other_postchecks():
     assert "--context promotion" in section
     assert section.index("--context promotion") < section.index('service_url="$(gcloud run services describe')
     assert "percent = sum(int(item.get('percent')" not in section
+
+def test_zero_percent_tag_remains_permitted_after_convergence(tmp_path):
+    live = [{"revisionName": CANDIDATE, "percent": 100}]
+    tagged = {"revisionName": PRIOR, "percent": 0, "tag": "old"}
+    data = snapshot(desired=live + [tagged], observed=live + [tagged])
+    result = evaluate(tmp_path, data)
+    assert result.returncode == 0, result.stderr
+    assert "PROMOTION_TRAFFIC_READBACK_OK" in result.stdout

@@ -73,3 +73,39 @@ def test_preflight_uses_fixed_production_app_and_origin():
     assert "BASE44_APP_ID=6a498732ec779dfaaeab0e53" in body
     assert "BASE44_FUNCTION_ORIGIN=https://base44.app" in body
     assert body.index("verify-base44-site.sh") < body.index("verify-base44-functions.sh")
+
+def test_owner_diagnostic_is_required_before_traffic(tmp_path):
+    """The real pre-promotion Bash must ask for seven packages, not six."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    fake_script(scripts / "verify-base44-site.sh", "site")
+    function_script = scripts / "verify-base44-functions.sh"
+    function_script.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'printf "%s\n" "${VERIFY_OWNER_DEBUG_RUNTIME:-missing}" > "$FIXTURE_FLAG"\n'
+        '[[ "${VERIFY_OWNER_DEBUG_RUNTIME:-}" == "1" ]]\n'
+        'printf "%s\n" "functions" >> "$FIXTURE_CALLS"\n',
+        encoding="utf-8",
+    )
+    function_script.chmod(0o755)
+    log = tmp_path / "calls"
+    flag = tmp_path / "owner-flag"
+    env = dict(os.environ, FIXTURE_CALLS=str(log), FIXTURE_FLAG=str(flag))
+    result = subprocess.run(
+        ["bash", "-c", preflight()], cwd=tmp_path, env=env,
+        capture_output=True, text=True, timeout=8, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert log.read_text(encoding="utf-8").splitlines() == ["site", "functions"]
+    assert flag.read_text(encoding="utf-8").strip() == "1"
+    assert "BASE44_PREPROMOTION_RUNTIME_ROUTES_VERIFIED" in result.stdout
+
+
+def test_promotion_requires_explicit_opt_in_supported_by_verifier():
+    gate = preflight()
+    verifier = (ROOT / "scripts/verify-base44-functions.sh").read_text(encoding="utf-8")
+    assert "VERIFY_OWNER_DEBUG_RUNTIME=1" in gate
+    assert 'FUNCTION_ROUTES+=(ownerScanDebugControl)' in verifier
+    assert 'VERIFY_OWNER_DEBUG_RUNTIME must be 0 or 1' in verifier
+    assert gate.index("verify-base44-site.sh") < gate.index("verify-base44-functions.sh")

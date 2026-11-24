@@ -1636,6 +1636,11 @@ jobs:
               return 1
             fi
             if [[ "$ownership" == "ALREADY_RESTORED" ]]; then
+              # No write is needed, but 100% allocations alone are not proof of convergence.
+              if ! python3 scripts/assert_standard150_rollback_readback.py --expected-revision "$ROLLBACK_REVISION" --service-json "$before_json"; then
+                echo "ROLLBACK_UNVERIFIED: prior traffic is not independently confirmed" >&2
+                return 1
+              fi
               echo "ROLLBACK_ALREADY_RESTORED revision=$ROLLBACK_REVISION" >&2
               return 0
             fi

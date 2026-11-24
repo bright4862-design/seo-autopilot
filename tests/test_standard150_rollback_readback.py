@@ -81,6 +81,8 @@ def rollback_function():
 @pytest.mark.parametrize("kind,expected_ok,marker,updates", [
     ("baseline", True, "ROLLBACK_TRAFFIC_READBACK_OK", 1),
     ("already-restored", True, "ROLLBACK_ALREADY_RESTORED", 0),
+    ("already-restored-stale", False, "ROLLBACK_UNVERIFIED", 0),
+    ("already-restored-not-ready", False, "ROLLBACK_UNVERIFIED", 0),
     ("update-failed", False, "ROLLBACK_UNVERIFIED", 1),
     ("describe-failed", False, "ROLLBACK_UNVERIFIED", 0),
     ("wrong-revision", False, "ROLLBACK_UNVERIFIED", 0),
@@ -94,6 +96,10 @@ def test_actual_workflow_rollback_function(tmp_path, kind, expected_ok, marker, 
     before = state(desired=candidate, observed=candidate)
     if kind == "already-restored":
         before = state()
+    elif kind == "already-restored-stale":
+        before = state(generation=4, seen=3)
+    elif kind == "already-restored-not-ready":
+        before = state(ready="False")
     elif kind == "wrong-revision":
         foreign = [{"revisionName": "fixlist-standard150-worker-00102-foreign", "percent": 100}]
         before = state(desired=foreign, observed=foreign)
@@ -142,4 +148,7 @@ sys.exit(99)
     assert (calls.read_text().splitlines().count("update") if calls.exists() else 0) == updates
     assert ("ROLLBACK_UNVERIFIED" in proc.stderr) == (not expected_ok)
     if kind == "already-restored":
+        assert "ROLLBACK_TRAFFIC_READBACK_OK" in proc.stdout
+    if kind in ("already-restored-stale", "already-restored-not-ready"):
+        assert "ROLLBACK_ALREADY_RESTORED" not in proc.stderr
         assert "ROLLBACK_TRAFFIC_READBACK_OK" not in proc.stdout

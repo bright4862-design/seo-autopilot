@@ -225,7 +225,14 @@ def extract_page(
     if canonical_tag:
         canonical = resolve_canonical_href(final_url, canonical_tag.get("href", ""))
 
-    h1s = [clean_text(h.get_text(" ")) for h in soup.find_all("h1") if clean_text(h.get_text(" "))]
+    h1s = []
+    for heading in soup.find_all("h1"):
+        name = clean_text(heading.get_text(" "))
+        if not name:
+            name = clean_text(" ".join(image.get("alt") or "" for image in heading.find_all("img", alt=True)
+                                       if str(image.get("aria-hidden", "")).lower() != "true" and not image.has_attr("hidden")))
+        if name:
+            h1s.append(name)
     images = soup.find_all("img")
     missing_alt = sum(1 for img in images if not img.has_attr("alt"))
     schema_types = extract_schema_types(soup)

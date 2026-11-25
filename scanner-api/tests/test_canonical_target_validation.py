@@ -216,3 +216,21 @@ async def test_valid_target_does_not_generate_problem():
 
     assert source["canonical_target_state"] == "valid"
     assert not any(item["rule"].startswith("canonical_") and item["rule"] != "canonical_missing" for item in build_findings([source]))
+
+
+@pytest.mark.asyncio
+async def test_canonical_probe_preserves_declared_path_and_cached_variants():
+    lower = "https://example.com/co/fort-collins/ik032/"
+    declared = "https://example.com/co/fort-collins/IK032/"
+    no_slash = declared.rstrip("/")
+    first = _page(lower, canonical=declared)
+    second = _page("https://example.com/other/", canonical=no_slash)
+    returned = _response(declared, 200, body=f'<link rel="canonical" href="{declared}"><h1>Fort Collins</h1>')
+    moved = _response(no_slash, 301, headers={"location": lower})
+    client = FakeClient({declared: returned, no_slash: moved})
+
+    await validate_canonical_targets(client, [first, second], RobotsPolicy("https://example.com/robots.txt", "missing", 404), deadline=time.monotonic() + 10)
+
+    assert sorted(client.calls) == sorted([declared, no_slash])
+    assert (first["canonical_target_url"], first["canonical_target_state"]) == (declared, "valid")
+    assert (second["canonical_target_url"], second["canonical_target_state"]) == (no_slash, "target_redirected")

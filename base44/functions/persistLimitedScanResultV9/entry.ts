@@ -37,7 +37,7 @@ function mutableScanAdmissionValue() {
  * authority path to weaken, because none exists in this file.
  */
 
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "b36ca24b8e0f728e";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "cd3f3a5ef7dd6787";
 const WORKER_VERSION = "scan_job_worker_v1_cloud_tasks";
 const LIMITED_COMPLETION_VERSION = "durable_standard150_limited_v1";
 const LIMITED_COVERAGE_STATES = new Set(["limited_coverage", "inventory_unproven", "access_limited"]);

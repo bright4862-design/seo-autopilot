@@ -3,14 +3,14 @@ from __future__ import annotations
 from copy import deepcopy
 import re
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from .health_score_explanation import apply_score_ceiling, build_health_score_explanation
 from .accepted_content_evidence import IMAGE_APPLICABILITY_VERSION
 from .repair_coverage import repair_evidence_key_function
 from .review import compute_health_score_breakdown, group_page_recommendations, unwrap_scan_payload
 
-CALIBRATION_VERSION = "review_evidence_calibration_v7_content_applicability"
+CALIBRATION_VERSION = "review_evidence_calibration_v8_source_render_confidence"
 IMAGE_ALT_EVIDENCE_VERSION = "material_image_alt_v2_absent_attribute"
 IMAGE_ALT_RULES = {"image_alt_text", "missing_image_alt"}
 VERIFICATION_ONLY_RULES = {"potential_orphan_pages", "indexable_faceted_navigation"}
@@ -428,6 +428,39 @@ def _is_trailing_slash_only_healthy_redirect(fix: dict[str, Any]) -> bool:
     return source_path != destination_path and source_path.rstrip("/") == destination_path.rstrip("/")
 
 
+def _healthy_locale_entry(fix: dict[str, Any], sampled_markets: dict[str, int]) -> bool:
+    """Recognize the observed HTTPS apex → www → sampled locale homepage case."""
+    if fix.get("rule") != "redirect_chain" or _affected_page_count(fix) != 1:
+        return False
+    urls = fix.get("redirect_chain")
+    evidence = fix.get("redirect_fetch_evidence") or {}
+    if (not isinstance(evidence, dict) or not isinstance(urls, list) or len(urls) != 3 or fix.get("redirect_hop_count") != 2
+            or evidence.get("classification") != "redirect_to_usable_page" or evidence.get("final_status") != 200
+            or evidence.get("html_parse_ok") is not True or evidence.get("noindex") is not False
+            or fix.get("redirect_destination_indexability_state") != "Indexable"
+            or evidence.get("requested_url") != urls[0] or evidence.get("final_url") != urls[-1]):
+        return False
+    try:
+        first, alias, final = [urlparse(url) for url in urls]
+        for url in (first, alias, final):
+            if (url.scheme != "https" or not url.hostname or url.netloc != url.hostname or url.params
+                    or url.query or url.fragment):
+                return False
+    except (TypeError, ValueError, AttributeError):
+        return False
+    locale = final.path.strip("/").lower()
+    if (first.path not in {"", "/"} or alias.path not in {"", "/"} or alias.hostname != f"www.{first.hostname}"
+            or final.netloc != alias.netloc or not re.fullmatch(r"/[a-z]{2}(?:-[a-z]{2})?/?", final.path, re.I)
+            or _int(sampled_markets.get(locale)) <= 0):
+        return False
+    hops = evidence.get("redirect_chain")
+    return isinstance(hops, list) and len(hops) == 2 and all(
+        isinstance(hop, dict) and hop.get("url") == urls[index] and hop.get("status") in {301, 302, 307, 308}
+        and isinstance(hop.get("location"), str) and urljoin(urls[index], hop["location"]) == urls[index + 1]
+        for index, hop in enumerate(hops)
+    )
+
+
 def _is_single_healthy_sitemap_redirect(fix: dict[str, Any]) -> bool:
     if str(fix.get("rule") or "") not in SITEMAP_REDIRECT_RULES:
         return False
@@ -592,6 +625,10 @@ def apply_review_evidence_calibration(result: dict[str, Any], payload: dict[str,
     if not isinstance(source_fixes, list):
         source_fixes = calibrated_result.get("fixes") if isinstance(calibrated_result.get("fixes"), list) else []
 
+    sampling = unwrap_scan_payload(payload).get("sampling_evidence") or {}
+    sampled_markets = sampling.get("markets_sampled") if isinstance(sampling, dict) else None
+    if not isinstance(sampled_markets, dict):
+        sampled_markets = {}
     fixes: list[dict[str, Any]] = []
     for item in source_fixes:
         if not isinstance(item, dict):
@@ -605,7 +642,19 @@ def apply_review_evidence_calibration(result: dict[str, Any], payload: dict[str,
             item = _calibrate_image_alt_fix(item, evidence, key_function=key_function)
             if item is None:
                 continue
-        if _is_verification_only_fix(item):
+        if _healthy_locale_entry(item, sampled_markets):
+            item = {
+                **item, "priority": "low", "base_severity": "low", "non_scoring": True, "score_impact": 0,
+                "overall_priority_score": min(39, _int(item.get("overall_priority_score"))),
+                "evidence_status": "confirmed", "verification_state": "verified", "evidence_class": "opportunity",
+                "severity_calibration_reason": "healthy_homepage_to_sampled_locale",
+                "title": "Optional shortcut to the language homepage",
+                "issue_title": "Optional shortcut to the language homepage",
+                "recommendation": "You can redirect the bare domain directly to the language homepage to save one request.",
+                "recommended_value": "Redirect directly to the final homepage if you want to save one request.",
+                "plain_english_explanation": "Both redirects work. The final language homepage returned indexable HTML.",
+            }
+        elif _is_verification_only_fix(item):
             item = _calibrate_verification_only_fix(item)
         else:
             item = _calibrate_scope_sensitive_fix(item)
@@ -630,7 +679,7 @@ def apply_review_evidence_calibration(result: dict[str, Any], payload: dict[str,
 
     for key in ("recommended_actions", "cleaned_fixes", "raw_fixes", "fixes", "findings", "recommendations"):
         calibrated_result[key] = fixes
-    calibrated_result["top_recommended_actions"] = fixes[:5]
+    calibrated_result["top_recommended_actions"] = scoring_fixes[:5]
     calibrated_result["grouped_page_recommendations"] = group_page_recommendations(fixes)
     calibrated_result["health_score"] = score
     calibrated_result["seo_score"] = score
@@ -657,11 +706,11 @@ def apply_review_evidence_calibration(result: dict[str, Any], payload: dict[str,
         "health_score": score,
         "score": score,
         "health_grade": _health_grade(score, scan_status),
-        "top_concerns": [fix.get("issue_title") or fix.get("title") for fix in fixes[:3]],
+        "top_concerns": [fix.get("issue_title") or fix.get("title") for fix in scoring_fixes[:3]],
         "next_best_step": (
             report.get("next_best_step")
             if scan_status in {"blocked_or_incomplete", "incomplete_evidence", "inconclusive_insufficient_evidence"}
-            else ((fixes[0].get("issue_title") or fixes[0].get("title")) if fixes else "No high-confidence fixes were found in the reviewed sample.")
+            else ((scoring_fixes[0].get("issue_title") or scoring_fixes[0].get("title")) if scoring_fixes else "No high-confidence fixes were found in the reviewed sample.")
         ),
     }
     calibrated_result["website_health_report"] = report

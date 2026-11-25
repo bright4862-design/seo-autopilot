@@ -8,6 +8,7 @@ from typing import Any
 from functools import lru_cache
 from urllib.parse import urlparse
 
+from .accepted_content_evidence import missing_heading_needs_browser, raw_content_needs_browser
 from .coverage_authority import assess_coverage, coverage_inputs_from_payload
 from .repair_coverage import (
     REPAIR_COVERAGE_VERSION, PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION, evidence_url_key, normalize_repair_scope,
@@ -1481,7 +1482,7 @@ def build_page_pattern_findings(pages: list[dict[str, Any]], *, scan_origin: str
         if not canonical and search_metadata_applicable(page):
             add_bucket(buckets, "canonical_missing", "canonical", family, page, "Add canonical URLs across templates", "The page does not expose a canonical URL.", "Canonical URLs help search engines consolidate duplicate and near-duplicate versions of a page.", "Ask your web person to add self-referencing canonicals to the shared template or affected pages.", "developer")
         h1_count = int_or_zero(page.get("h1_count"))
-        if h1_count == 0:
+        if h1_count == 0 and not missing_heading_needs_browser(page):
             add_bucket(buckets, "missing_h1", "thin_content", family, page, "Fix missing H1 headings on templates", "The page has no main H1 heading.", "A clear H1 helps users and search engines understand the page topic.", "Add one clear H1 to the affected template or page.", "moderate")
         elif h1_count > 1:
             add_bucket(buckets, "multiple_h1", "thin_content", family, page, "Use one main page heading", "The page has more than one H1 heading.", "Multiple H1s can make the page structure less clear.", "Keep one H1 as the main page heading and make the rest H2/H3 headings.", "easy")
@@ -2108,7 +2109,7 @@ HTML_DEPENDENT_RULES = {
     "duplicate_title_query_variants", "duplicate_title_template",
     "missing_meta_description", "empty_meta_description", "malformed_meta_description",
     "meta_description_unusable", "duplicate_meta_description", "missing_h1", "multiple_h1", "schema",
-    "structured_data", "thin_content", "image_alt_text", "missing_image_alt", "image_alt_review", "visible_template_content",
+    "structured_data", "thin_content", "image_alt_text", "missing_image_alt", "image_alt_review", "visible_template_content", "rendered_template_review", "rendered_heading_review",
 }
 
 
@@ -2143,6 +2144,18 @@ def filter_html_dependent_fix_evidence(fix: dict[str, Any], pages: list[dict[str
         lookup = _html_dependent_page_lookup(pages, key_for, identity_version)
     affected = dedupe_strings([key_for(url) for url in (fix.get("affected_pages") or [fix.get("page_url") or "/"]) if key_for(url)])
     usable = [url for url in affected if page_has_usable_html(lookup.get(url, {})) and rule_is_applicable(lookup[url], rule)]
+    # Old scans may carry grouped HTML-only claims alongside current per-page
+    # observations. Remove only the unverified URLs before deriving coverage.
+    needs_browser = {"visible_template_content": raw_content_needs_browser, "missing_h1": missing_heading_needs_browser}.get(rule)
+    if needs_browser:
+        verified = [url for url in usable if not needs_browser(lookup[url])]
+        if len(verified) != len(usable):
+            verified_urls = set(verified)
+            samples = [sample for sample in (fix.get("repair_observation_samples") or [])
+                       if isinstance(sample, dict) and key_for(sample.get("page_url")) in verified_urls]
+            fix = {**fix, "source_pages": verified[:30], "repair_observation_samples": samples,
+                   "repair_observation_count": len(samples)}
+            usable = verified
     if not usable:
         return None
     return {**fix, "affected_pages": usable, "page_url": usable[0], "page_count": len(usable), "evidence_gate_version": PAGE_EVIDENCE_GATE_VERSION}

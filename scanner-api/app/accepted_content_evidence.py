@@ -18,7 +18,8 @@ from .stage2_local_entity_producer import LOCAL_ENTITY_PRODUCER_VERSION, extract
 
 
 IMAGE_APPLICABILITY_VERSION = "image_alt_applicability_v1"
-VISIBLE_TEMPLATE_VERSION = "visible_template_evidence_v1"
+VISIBLE_TEMPLATE_VERSION = "visible_template_evidence_v2_source_context"
+SUPPORTED_TEMPLATE_VERSIONS = {"visible_template_evidence_v1", VISIBLE_TEMPLATE_VERSION}
 MAX_HTML = 2_000_000
 MAX_IMAGE_SAMPLES = 40
 MAX_TEMPLATE_SAMPLES = 4
@@ -217,6 +218,31 @@ def _snippet(text: str, start: int, end: int) -> str:
     return (("…" if left else "") + text[left:right] + ("…" if right < len(text) else ""))[:260]
 
 
+def raw_content_needs_browser(page: dict[str, Any]) -> bool:
+    """An observed source problem can need a separate check of visitor-visible content."""
+    evidence = page.get("visible_template_evidence") or {}
+    if evidence.get("accepted") is not True or evidence.get("state") != "fail":
+        return False
+    # Tokens in title or metadata are defects in the HTML we actually received.
+    if any(sample.get("placement") in {"title", "meta"} for sample in evidence.get("samples", [])):
+        return False
+    # Specific placeholder copy or a static announcement is still a source
+    # defect in a document which also happens to load analytics.
+    if not {"empty_shell", "unresolved_template", "runtime_value"}.intersection(evidence.get("issue_types") or []):
+        return False
+    if "has_executable_script" in evidence:
+        return evidence["has_executable_script"] is True or evidence.get("embedded_surface") is True
+    # Older captures did not record external script tags separately. A zero
+    # byte count cannot prove that an empty shell was static.
+    return page.get("client_rendering_suspected") is True or bool(page.get("inline_script_bytes")) or "empty_shell" in evidence.get("issue_types", [])
+
+
+def missing_heading_needs_browser(page: dict[str, Any]) -> bool:
+    return page.get("h1_count") == 0 and (
+        raw_content_needs_browser(page) or page.get("client_rendering_suspected") is True
+    )
+
+
 def _template_evidence(soup: BeautifulSoup) -> dict[str, Any]:
     evidence: dict[str, Any] = {
         "version": VISIBLE_TEMPLATE_VERSION, "accepted": True, "state": "pass", "reason": "accepted_html",
@@ -331,6 +357,12 @@ def extract_accepted_content_evidence(html: str, evidence_class: str) -> dict[st
         # ancestors are decomposed below, so no later classification may
         # dereference a decomposed BeautifulSoup node.
         snapshots.append((alt_state, placement, applicability, applicability_reason))
+    has_executable_script = any(
+        str(tag.get("type") or "").split(";", 1)[0].strip().lower() in {
+            "", "module", "text/javascript", "application/javascript", "text/ecmascript", "application/ecmascript"
+        } and bool(tag.get("src") or _text(tag.string))
+        for tag in soup.find_all("script")
+    )
     _sanitize(soup)
     images.update(accepted=True, state="pass", reason="accepted_html", **dict.fromkeys(counts, 0))
     images["image_count"] = images["observation_count"] = len(snapshots)
@@ -347,7 +379,12 @@ def extract_accepted_content_evidence(html: str, evidence_class: str) -> dict[st
         images["state"] = "fail"
     elif images["uncertain_missing_alt_count"]:
         images["state"] = "not_verified"
-    result["visible_template_evidence"] = _template_evidence(soup)
+    result["visible_template_evidence"] = {
+        **_template_evidence(soup),
+        "evidence_basis": "source_html",
+        "has_executable_script": has_executable_script,
+        "embedded_surface": soup.find("iframe", src=True) is not None,
+    }
     result.update(_main_text_evidence(soup))
     h1 = soup.find("h1")
     location.update(title=_text(soup.title.get_text(" ")) if soup.title else "", h1=_text(h1.get_text(" ")) if h1 else "", visible_text=_text(soup.get_text(" ")))

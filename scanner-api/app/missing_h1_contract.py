@@ -4,6 +4,7 @@ from .scan_limits import current_page_cap
 
 from typing import Any
 
+from .accepted_content_evidence import missing_heading_needs_browser
 from .page_evidence_gate import page_evidence_class
 from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION, repair_evidence_key_function
 from .missing_h1_comparison_contract import (
@@ -96,7 +97,7 @@ def build_missing_h1_comparison_evidence(
         evidence_class = page_evidence_class(page)
         status_code = _status_code(page)
         h1_count = _h1_count(page)
-        evaluated = evidence_class == "usable_html" and status_code == 200 and h1_count is not None
+        evaluated = evidence_class == "usable_html" and status_code == 200 and h1_count is not None and not missing_heading_needs_browser(page)
         finding_present = (h1_count == 0) if evaluated else None
         indexable = _indexable(page)
         robots = page.get("robots") or page.get("robots_meta") or page.get("meta_robots") or ""

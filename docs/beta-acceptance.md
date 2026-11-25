@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `b36ca24b8e0f728e` |
+| Candidate fingerprint | `cd3f3a5ef7dd6787` |
 | Classifier | `archetype_classifier_v12_locale_normalized_structural_routes` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,12 +15,14 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `b36ca24b8e0f728e` with classifier
+fingerprint `cd3f3a5ef7dd6787` with classifier
 `archetype_classifier_v12_locale_normalized_structural_routes`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
-`review_evidence_calibration_v7_content_applicability`.
+`review_evidence_calibration_v8_source_render_confidence`.
 
-The current `b36ca24b8e0f728e` candidate prevents optional finalization requests during a crawl rate-limit stop or an outstanding 429 cooldown. Reports can still use evidence the crawl already saved. Verified limited reports explain throttling and distinguish usable pages from attempted URLs. Fresh live acceptance for this candidate remains pending.
+The candidate preserves the declared canonical request path, including its final slash. Source-only content and heading checks on dynamic pages carry zero score impact. The candidate also recognizes named image headings and verified homepage redirects to sampled language markets. Public browser acceptance remains pending.
+
+The historical `b36ca24b8e0f728e` candidate prevents optional finalization requests during a crawl rate-limit stop or an outstanding 429 cooldown. Reports can still use evidence the crawl already saved. Verified limited reports explain throttling and distinguish usable pages from attempted URLs. Fresh live acceptance for this candidate remains pending.
 
 The historical `2678b7511b2c5190` candidate protected the planned sample from backfill. A controlled live Standard 150 scan matched all 150 planned URLs in its signed result. In a separate short-throttle scan, the crawler retried after 3.03 seconds and saved all 60 planned URLs. The persistent-throttle scan saved a verified limited report with 50 usable pages and eight rate-limit diagnostics. Its fixture logs exposed two finalization requests during the site's cooldown. Offline replays of the prior candidate retained the exact planned URL set at 500 pages. A live ordinary-customer Standard 500 run remains pending.
 

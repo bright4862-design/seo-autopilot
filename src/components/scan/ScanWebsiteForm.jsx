@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { AlertCircle, Loader2 } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import DurableScanProgressSurface from "@/components/scan/DurableScanProgressSurface";
@@ -37,15 +37,9 @@ import {
 
 const ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV8";
 
-// Standard 150 is the only customer scan. There is no scan-size selector and no
-// customer-controlled scanner budget. The gateway owns the Python compatibility
-// translation, so the frontend never sends "advanced" as the customer mode.
+// Keep the legacy request shape. The server applies the account's scan limit
+// and returns the mode and cap on the accepted run.
 const STANDARD_SCAN_MODE = "standard_150";
-// The single customer-facing statement of scan scope. There is no scanner-size
-// selector and no selectable scan-size control anywhere in the DOM. The line
-// is derived from the attested policy rather than written literally here. An
-// owner-managed scan submits the override policy, so a fixed line promising
-// robots.txt is honoured would state the opposite of what the scan does.
 const STANDARD_SCAN_BUDGET = Object.freeze({ max_pages: 150, max_browser_render_attempts: 1, crawl_timeout_ms: 90000 });
 
 const CMS_OPTIONS = [
@@ -242,7 +236,7 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
     // runs before any durable scan identity or network scan work is created.
     submitLockRef.current = true;
     setSubmitting(true);
-    setActiveStep("Starting your scan");
+    setActiveStep("Checking scan access…");
     let access = null;
     try {
       access = await loadAccess();
@@ -257,7 +251,15 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
       submitLockRef.current = false;
       setSubmitting(false);
       setActiveStep("");
-      setError(`Standard 150 access is required to run scans. Unlock lifetime access for ${UNLOCK_PRICE_LABEL} on the Billing page.`);
+      if (access.unavailable) {
+        setError("We couldn’t check your scan access. Try again in a moment.");
+      } else if (access.conflict) {
+        setError("We couldn’t verify your account’s scan access. Check your account in Billing.");
+        setErrorAction("open_billing");
+      } else {
+        setError("This account needs scan access. Check the options in Billing.");
+        setErrorAction("open_billing");
+      }
       return;
     }
 
@@ -301,7 +303,6 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
       refreshDebugData();
 
       const safeScanBudget = STANDARD_SCAN_BUDGET;
-      setActiveStep("Reading your pages");
       const scanPayload = {
         website_url: normalizedUrl,
         requested_start_url: normalizedUrl,
@@ -453,7 +454,11 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
       recordDebug({ ...identityDebug(), status: "rejected", stage: "scan_admission_failed", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, error: err?.message || String(err) });
       refreshDebugData();
       setError(err?.message || "FixList could not start the scan. Please try again.");
-      if (err?.code === "scan_admission_busy") setErrorAction("open_dashboard");
+      if (["scan_admission_busy", "scan_admission_paused", "scan_staged_500_unavailable"].includes(err?.code)) {
+        setErrorAction("open_dashboard");
+      } else if (err?.code === "preview_scan_used") {
+        setErrorAction("open_billing");
+      }
     } finally {
       if (requestEpochRef.current === requestEpoch) {
         submitLockRef.current = false;
@@ -465,27 +470,20 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
   }
 
   return (
-    <div className="mx-auto w-full max-w-[680px] px-4 pb-24 pt-14 sm:px-6">
-      <form onSubmit={handleSubmit} noValidate aria-busy={isLoading} className="flex flex-col gap-8">
-        <div className="flex flex-col gap-4">
-          <p className="text-[13px] text-ink-faint">Read-only scan · no site changes</p>
-          <h1 className="text-[32px] font-semibold leading-tight tracking-tight text-ink sm:text-[38px]">Create your FixList</h1>
-          <p className="max-w-[52ch] text-[15px] leading-relaxed text-ink-muted">Enter a website URL and we’ll turn the scan into a plain-English list of what to fix, what matters most, and what may need a developer.</p>
-          {!isFocusedScan ? (
-            <p className="max-w-[54ch] text-[13px] leading-relaxed text-ink-faint">New accounts get one free Standard 150 test scan before payment. The preview is view-only; full access is required to copy, download, export, reveal the complete evidence, or run future scans.</p>
-          ) : null}
-          {isFocusedScan ? (
-            <div className="rounded-xl border border-hairline-soft bg-white px-4 py-3 text-[13px] leading-relaxed text-ink-muted">
-              <div className="font-medium text-ink">Focused section</div>
-              <div className="mt-1 break-all">{focusedUrl}</div>
-              <div className="mt-1 text-[12px] text-ink-faint">This creates a separate FixList. It will not replace or merge with the parent scan.</div>
-            </div>
-          ) : null}
-        </div>
+    <div className="mx-auto w-full max-w-[680px] px-4 pb-20 pt-9 sm:px-6 sm:pt-14">
+      <header className="mb-6 space-y-3 sm:mb-8">
+        <h1 className="text-[32px] font-semibold leading-tight tracking-tight text-ink sm:text-[38px]">
+          {isFocusedScan ? "Scan a section" : "Scan a website"}
+        </h1>
+        <p className="max-w-[48ch] text-[15px] leading-relaxed text-ink-muted">
+          Find out what to fix first and get a saved FixList you can come back to.
+        </p>
+      </header>
+      <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-6 rounded-2xl border border-hairline bg-white p-4 sm:p-6">
 
-        <div className="flex flex-col gap-6">
+        <div aria-busy={isLoading} className="flex flex-col gap-6">
           <div>
-            <label htmlFor="fixlist-website-url" className="text-[13px] font-medium text-ink">Website URL</label>
+            <label htmlFor="fixlist-website-url" className="text-[13px] font-medium text-ink">{isFocusedScan ? "Section URL" : "Website URL"}</label>
             <Input
               id="fixlist-website-url"
               value={websiteUrl}
@@ -500,23 +498,11 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
               className={`mt-2 h-11 rounded-lg border bg-white px-3 text-[15px] text-ink shadow-none transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 disabled:bg-ink/[0.025] disabled:text-ink-muted ${urlError ? "border-crit/50 focus-visible:ring-crit/20" : "border-hairline focus-visible:border-ink focus-visible:ring-ink/10"}`}
             />
             {urlError ? (
-              <p id="fixlist-website-url-error" className="mt-2 flex items-start gap-1.5 text-[13px] text-crit">
+              <p id="fixlist-website-url-error" role="alert" className="mt-2 flex items-start gap-1.5 text-[13px] text-crit">
                 <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{urlError}
               </p>
             ) : null}
-          </div>
-
-          <div>
-            <label htmlFor="fixlist-business-name" className="text-[13px] font-medium text-ink">Business or website name (optional)</label>
-            <Input
-              id="fixlist-business-name"
-              value={businessName}
-              onChange={(event) => setBusinessName(event.target.value)}
-              placeholder="Example Business"
-              autoComplete="organization"
-              disabled={isLoading}
-              className="mt-2 h-11 rounded-lg border border-hairline bg-white px-3 text-[15px] text-ink shadow-none transition focus-visible:border-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/10 focus-visible:ring-offset-1"
-            />
+            {isFocusedScan ? <p className="mt-2 text-[13px] text-ink-muted">This section gets a separate FixList.</p> : null}
           </div>
 
           <fieldset disabled={isLoading} className="disabled:opacity-60">
@@ -544,22 +530,26 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
             <p className="mt-2 text-[13px] leading-relaxed text-ink-faint">{ownershipHelpText(siteOwnership)}</p>
           </fieldset>
 
-          <p className="text-[13px] text-ink-muted">{scanSpecLine}</p>
+          <div className="rounded-xl border border-hairline-soft bg-paper px-4 py-3 text-[13px] leading-relaxed text-ink-muted">
+            <p className="font-medium text-ink">Scan limit</p>
+            <p>FixList confirms your account’s page limit when the scan starts.</p>
+            <p className="mt-1 text-ink-faint">{scanSpecLine}</p>
+          </div>
         </div>
 
         {error ? (
-          <div className="rounded-lg border border-crit/25 bg-crit/[0.04] p-4 text-[13px] leading-relaxed text-crit">
+          <div role="alert" className="rounded-lg border border-crit/25 bg-crit/[0.04] p-4 text-[13px] leading-relaxed text-crit">
             <div className="flex items-start gap-2">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <div className="min-w-0">
                 <span>{error}</span>
-                {errorAction === "open_dashboard" ? (
+                {errorAction ? (
                   <button
                     type="button"
-                    onClick={() => navigate("/dashboard")}
+                    onClick={() => navigate(errorAction === "open_billing" ? "/billing" : "/dashboard")}
                     className="mt-2 block font-semibold underline underline-offset-2"
                   >
-                    Open my scans
+                    {errorAction === "open_billing" ? "Open Billing" : "Open my scans"}
                   </button>
                 ) : null}
               </div>
@@ -567,7 +557,7 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
           </div>
         ) : null}
         {isLoading ? (
-          <div className="fixed left-1/2 top-4 z-[100] w-[calc(100%-2rem)] max-w-[560px] -translate-x-1/2 rounded-2xl border border-hairline bg-white p-5 text-ink shadow-lg">
+          <div className="rounded-xl border border-hairline bg-paper p-4 text-ink">
             <DurableScanProgressSurface
               durableScan={durableScan}
               targetLabel={scanTargetLabel}
@@ -586,20 +576,34 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
           <button
             type="submit"
             disabled={isLoading}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-ink px-5 py-2.5 text-[13px] font-medium text-paper transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink disabled:opacity-50 sm:w-auto sm:self-start"
+            className="inline-flex min-h-11 w-full items-center justify-center rounded-lg bg-ink px-5 py-2.5 text-[14px] font-medium text-paper transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink disabled:opacity-50 sm:w-auto sm:self-start"
           >
-            {isLoading ? <><Loader2 className="h-4 w-4 animate-spin" />Building FixList…</> : isFocusedScan ? "Scan this section" : "Create FixList"}
+            {isFocusedScan ? "Scan this section" : "Start scan"}
           </button>
-          <p className="text-[13px] leading-relaxed text-ink-muted">Scan time varies by site. FixList will tell you when it’s safe to leave this page.</p>
-          <p className="text-[12px] text-ink-faint">{isFocusedScan ? "This section gets its own scan budget." : "The page budget is set by your account."}</p>
+          {!isFocusedScan ? (
+            <p className="max-w-[56ch] text-[13px] leading-relaxed text-ink-muted">
+              New accounts can preview one free scan of up to 150 pages. The preview is view-only. Full access includes all fixes, exports, and repeat scans.
+            </p>
+          ) : null}
         </div>
 
-        <div className="border-t border-hairline-soft pt-6">
-          <button type="button" onClick={() => setOptionalOpen((value) => !value)} aria-expanded={optionalOpen} className="text-[13px] font-medium text-ink-muted underline-offset-4 transition-colors hover:text-ink hover:underline">
-            {optionalOpen ? "Hide optional settings" : "Optional: personalize your FixList"}
+        <div className="border-t border-hairline-soft pt-4">
+          <button type="button" onClick={() => setOptionalOpen((value) => !value)} aria-expanded={optionalOpen} className="min-h-10 text-[13px] font-medium text-ink-muted underline-offset-4 transition-colors hover:text-ink hover:underline">
+            {optionalOpen ? "Hide optional settings" : "Optional scan settings"}
           </button>
           {optionalOpen ? (
             <div className="mt-6 flex flex-col gap-6">
+              <div>
+                <label htmlFor="fixlist-business-name" className="text-[13px] font-medium text-ink">Business or website name (optional)</label>
+                <Input
+                  id="fixlist-business-name"
+                  value={businessName}
+                  onChange={(event) => setBusinessName(event.target.value)}
+                  autoComplete="organization"
+                  disabled={isLoading}
+                  className="mt-2 h-11 rounded-lg border border-hairline bg-white px-3 text-[15px] text-ink shadow-none transition focus-visible:border-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/10 focus-visible:ring-offset-1"
+                />
+              </div>
               <div>
                 <label htmlFor="fixlist-cms" className="text-[13px] font-medium text-ink">CMS / website builder</label>
                 <select id="fixlist-cms" value={cmsPlatform} onChange={(event) => setCmsPlatform(event.target.value)} disabled={isLoading} className="mt-2 h-11 w-full rounded-lg border border-hairline bg-white px-3 text-[15px] text-ink outline-none transition focus-visible:border-ink focus-visible:ring-2 focus-visible:ring-ink/10 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-60">
@@ -995,6 +999,7 @@ function customerScanAdmissionMessage(code, serverDetail = "", retryAfterSeconds
 
   // Curated admission copy remains first choice because it is more actionable.
   const messages = {
+    scan_staged_500_unavailable: "500-page scans are temporarily paused. Your saved reports are still available.",
     scan_admission_paused: "New scans are temporarily paused. Your existing results are still available.",
     scan_admission_busy: "Another scan is already running for this account. Open the dashboard to follow it before starting another.",
     scan_admission_pending: "This scan request is still being prepared. Please wait a few seconds and try again.",

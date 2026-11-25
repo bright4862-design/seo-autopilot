@@ -29,12 +29,9 @@ export default function TruthfulScanProgress({
   return (
     <div role="status" aria-live="polite" aria-atomic="true">
       <div className="flex items-start gap-3">
-        <Loader2 className="mt-0.5 h-5 w-5 shrink-0 animate-spin text-ink" />
+        <Loader2 aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0 text-ink motion-safe:animate-spin" />
         <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">
-            Scan running
-          </p>
-          <div className="mt-1 flex items-baseline justify-between gap-3">
+          <div className="flex items-baseline justify-between gap-3">
             <p className="text-[15px] font-medium tracking-tight">{phase}</p>
             {elapsedLabel ? (
               <span className="shrink-0 text-[12px] tabular-nums text-ink-faint">{elapsedLabel}</span>
@@ -50,10 +47,15 @@ export default function TruthfulScanProgress({
               {progress.countLabel}
             </p>
           ) : null}
+          {progress.pageLimit !== null ? (
+            <p className="mt-1 text-[12px] text-ink-muted">Up to {progress.pageLimit} pages in this scan</p>
+          ) : null}
           <p className="mt-1 text-[13px] leading-relaxed text-ink-muted">
             {longerThanUsual
-              ? "Still working — larger or slower sites can take a little longer."
-              : "FixList is actively working. Your result will open automatically when it is saved."}
+              ? "This is taking longer than usual."
+              : progress.status
+                ? "This page updates as your scan runs."
+                : "Keep this page open while we start your scan."}
           </p>
           {progress.canLeavePage ? (
             <p className="mt-2 text-[12px] leading-relaxed text-ink-faint">
@@ -62,7 +64,7 @@ export default function TruthfulScanProgress({
           ) : null}
           {canOpenSavedScan ? (
             <p className="mt-3 text-[13px] leading-relaxed text-ink">
-              This is taking longer than usual. You can{" "}
+              You can{" "}
               <button
                 type="button"
                 onClick={onOpenSavedScan}

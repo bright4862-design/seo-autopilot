@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 
 import { getScanRunWithFixList } from "@/lib/scanRuns";
 import { durableScanStatePresentation } from "@/lib/durableScanStatePresentation";
+import { confirmedScanPageLimit } from "@/lib/scanPresentation";
 import { readSiteOwnership, resolveScanOwnership } from "@/lib/siteOwnershipPolicy";
 
 const POLL_INTERVAL_MS = 3000;
@@ -22,7 +23,7 @@ const EMPTY_STATE = {
   pagesFound: 0,
   pagesCrawled: 0,
   pagesPlanned: 0,
-  pageCap: 150,
+  pageCap: null,
 };
 
 // The run is already fetched on every tick to decide completion. Surfacing the
@@ -34,7 +35,7 @@ function progressFrom(run) {
     pagesFound: Number(run?.pages_found) || 0,
     pagesCrawled: Number(run?.pages_crawled) || 0,
     pagesPlanned: Number.isInteger(run?.pages_planned) && run.pages_planned > 0 && run.pages_planned <= 500 ? run.pages_planned : 0,
-    pageCap: run?.page_cap === 500 ? 500 : 150,
+    pageCap: confirmedScanPageLimit(run),
   };
 }
 

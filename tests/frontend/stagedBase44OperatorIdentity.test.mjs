@@ -118,7 +118,8 @@ console.log(JSON.stringify({
   chmodSync(curl, 0o700);
   return (script, operation, selected, user, options = {}) => {
     const confirm = {
-      "prepare-owner": `PREPARE-BASE44-STAGED-150:${source}:${selected}`,
+      "prepare-owner": `PREPARE-BASE44-STAGED-150:${source}:${selected}${options.pilotExpiry ? ":" + options.pilotExpiry : ""}`,
+      "hold-published-pilot": `HOLD-BASE44-PUBLISHED-PILOT:${source}`,
       "prepare-paid": `PREPARE-BASE44-STAGED-PAID:${source}:${gatewayRevision}:${options.cap || "150"}`,
       "deploy-probe": `DEPLOY-BASE44-STAGED-PROBE:${source}`,
       disable: `DISABLE-BASE44-STAGED:${source}:${selected}`,
@@ -132,6 +133,7 @@ console.log(JSON.stringify({
         STAGED_OWNER_USER_ID: selected, EXPECTED_OWNER_USER_ID: selected, BASE44_OBSERVATIONS_DIR: output,
         EXPECTED_OPERATOR_USER_ID: options.intakeOperatorId || "",
         STAGED_COHORT_TARGET_ROLE: options.targetRole || "user",
+        STAGED_PUBLIC_PILOT_EXPIRES_AT: options.pilotExpiry || "",
         TEST_CLI: cli, TEST_TRACE: trace, TEST_USER: JSON.stringify(user),
         TEST_PROBE: JSON.stringify(options.probe || {}), TEST_V9: JSON.stringify(options.v9 || {}),
         STAGED_PAID_PAGE_CAP: options.cap || "150", STAGED_GATEWAY_REVISION: gatewayRevision,
@@ -298,7 +300,8 @@ for (const cap of ["150", "500"]) {
       ["invoke", intakeRoute, "staged_runtime_status"], ["gateway.health"],
       ["secrets", "set", "BETA_SCAN_INTAKE_ENABLED=false"], ["gateway.health"],
       ["secrets", "set", "SCAN_PIPELINE_MODE=staged", "SCAN_STAGED_OWNER_IDS=", "SCAN_PIPELINE_OWNER_IDS=",
-        "SCAN_STAGED_ROLLOUT_SCOPE=paid", `SCAN_STAGED_500_ENTITLED_ENABLED=${cap === "500"}`],
+        "SCAN_STAGED_ROLLOUT_SCOPE=paid", `SCAN_STAGED_500_ENTITLED_ENABLED=${cap === "500"}`,
+        "SCAN_PUBLIC_PILOT_EXPIRES_AT=0"],
       ["invoke", intakeRoute, "staged_runtime_status"], ["gateway.health"],
     ]);
     assert.match(result.stdout, /BASE44_STAGED_PAID_READBACK_VERIFIED.*public_intake=closed/);
@@ -397,4 +400,23 @@ test("ordinary collection fails closed on operator or isolation mismatch", t => 
   });
   assert.notEqual(widened.status, 0);
   assert.equal(existsSync(join(widened.output, "intake.json")), false);
+});
+
+test("published pilot preparation binds expiry to the named ordinary cohort", t => {
+  const pilotExpiry = String(Math.floor(Date.now() / 1000) + 1800);
+  const options = pilotOptions(london, { pilotExpiry });
+  options.v9.public_pilot_expires_at = Number(pilotExpiry);
+  const result = fixture(t)(operator, "prepare-owner", customer.id, london, options);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(result.calls.some(row => row.includes(`SCAN_PUBLIC_PILOT_EXPIRES_AT=${pilotExpiry}`)));
+});
+
+test("holding the published pilot closes only its launcher and verifies the exact runtime", t => {
+  const result = fixture(t)(operator, "hold-published-pilot", "", london, {
+    operatorId: london.id, expectedCli: london.email, v9: { public_pilot_expires_at: 0 },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.calls.filter(([name]) => name === "secrets"),
+    [["secrets", "set", "SCAN_PUBLIC_PILOT_EXPIRES_AT=0"]]);
+  assert.equal(result.calls.filter(row => row[1] === intakeRoute).length, 2);
 });

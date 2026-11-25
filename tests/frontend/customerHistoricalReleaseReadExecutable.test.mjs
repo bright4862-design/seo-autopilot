@@ -57,6 +57,7 @@ const HISTORICAL_FINGERPRINT = "5d94e93c54a9efb6";
 const PREVIOUS_CURRENT_FINGERPRINT = "01ebe8e90df1e6bd";
 const PREVIOUS_STAGED_FINGERPRINT = "118544dcf77d86cf";
 const PROTECTED_PLAN_STAGED_FINGERPRINT = "2678b7511b2c5190";
+const PREVIOUS_PILOT_FINGERPRINT = "b36ca24b8e0f728e";
 const UNKNOWN_FINGERPRINT = "aaaaaaaaaaaaaaaa";
 let handlerInvocationSequence = 0;
 
@@ -70,7 +71,7 @@ async function importHandler(harnessName, source) {
 
 async function sealedRows(fingerprint, staged, notice) {
   const buildSnapshot = staged ? buildStagedAuthoritySnapshot : buildAuthoritySnapshot;
-  const published = staged && fingerprint === PROTECTED_PLAN_STAGED_FINGERPRINT;
+  const published = staged && [PROTECTED_PLAN_STAGED_FINGERPRINT, PREVIOUS_PILOT_FINGERPRINT].includes(fingerprint);
   const evidencePage = "https://www.funbooker.com/fr/ville/paris";
   const snapshot = buildSnapshot({
     ...(published ? { identityVersion: PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION } : {}),
@@ -310,7 +311,7 @@ test("the next V9 reader opens prior signed staged results without marking them 
   };
 
   assert.equal(stagedReader.modules.RELEASE_FINGERPRINT, nextFingerprint);
-  for (const fingerprint of [PREVIOUS_STAGED_FINGERPRINT, PROTECTED_PLAN_STAGED_FINGERPRINT]) {
+  for (const fingerprint of [PREVIOUS_STAGED_FINGERPRINT, PROTECTED_PLAN_STAGED_FINGERPRINT, PREVIOUS_PILOT_FINGERPRINT]) {
     const response = await invokeWithFingerprint(fingerprint, { stagedReader });
     const body = await response.json();
     assert.equal(response.status, 200, body.error_code);

@@ -32,6 +32,7 @@ CHANGE_TICKET="${CHANGE_TICKET:-}"
 CUTOVER_REASON="${CUTOVER_REASON:-Standard 150 controlled cutover}"
 ACCEPTANCE_COHORT_ID="${ACCEPTANCE_COHORT_ID:-}"
 ACCEPTANCE_RELEASE_ID="${ACCEPTANCE_RELEASE_ID:-}"
+ACCEPTANCE_LAUNCHER_BUILD_ID="${ACCEPTANCE_LAUNCHER_BUILD_ID:-}"
 ACCEPTANCE_SOURCE_SHA="${ACCEPTANCE_SOURCE_SHA:-}"
 ACCEPTANCE_OWNER_USER_IDS="${ACCEPTANCE_OWNER_USER_IDS:-}"
 ACCEPTANCE_EXPIRES_AT="${ACCEPTANCE_EXPIRES_AT:-}"
@@ -949,17 +950,19 @@ write_acceptance_payload() {
   python3 - "$destination" "$BARRIER_EXPECTED_GENERATION" "$CUTOVER_REASON" "$CHANGE_TICKET" \
     "$ACCEPTANCE_COHORT_ID" "$ACCEPTANCE_RELEASE_ID" "$ACCEPTANCE_SOURCE_SHA" \
     "$ACCEPTANCE_OWNER_USER_IDS" "$ACCEPTANCE_EXPIRES_AT" \
-    "$ACCEPTANCE_TOTAL_CLAIM_BUDGET" "$ACCEPTANCE_PER_OWNER_CLAIM_BUDGET" <<'PY'
+    "$ACCEPTANCE_TOTAL_CLAIM_BUDGET" "$ACCEPTANCE_PER_OWNER_CLAIM_BUDGET" "$ACCEPTANCE_LAUNCHER_BUILD_ID" <<'PY'
 import json, re, sys
 
 (destination, generation, reason, ticket, cohort_id, release_id, source_sha,
- owners_raw, expires_at, total_budget, owner_budget) = sys.argv[1:]
+ owners_raw, expires_at, total_budget, owner_budget, launcher_build_id) = sys.argv[1:]
 owners = [item.strip() for item in owners_raw.split(",") if item.strip()]
 safe_id = re.compile(r"^[A-Za-z0-9_-]{6,160}$")
 if not safe_id.fullmatch(cohort_id) or not safe_id.fullmatch(release_id):
     raise SystemExit("Acceptance cohort and release IDs must be bounded safe IDs")
 if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
     raise SystemExit("Acceptance source SHA must be exact lowercase Git SHA")
+if launcher_build_id and not re.fullmatch(r"[0-9a-f]{64}", launcher_build_id):
+    raise SystemExit("Acceptance launcher build ID must be a 64-character SHA256")
 if not owners or len(owners) != len(set(owners)) or not all(safe_id.fullmatch(item) for item in owners):
     raise SystemExit("Acceptance owner allowlist is invalid")
 payload = {
@@ -975,6 +978,7 @@ payload = {
         "expires_at": int(expires_at),
         "total_claim_budget": int(total_budget),
         "per_owner_claim_budget": int(owner_budget),
+        **({"required_launcher_build_id": launcher_build_id} if launcher_build_id else {}),
     },
 }
 with open(destination, "w", encoding="utf-8") as handle:

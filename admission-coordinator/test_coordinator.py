@@ -551,6 +551,34 @@ class TargetCooldown(CoordinatorTestCase):
         self.assertNotIn("target_origin", mixed_replay)
         self.assertEqual(self.claim_origin("https://www.fixture.example").json["error"], "request_conflict")
 
+    def test_named_public_pilot_binds_fresh_and_replayed_claims_to_the_launcher_build(self):
+        build = "a" * 64
+        key = "scan_admission_control/global"
+        request = {"owner_user_id": OWNER, "request_id": "published_pilot_req01", "request_fingerprint": FINGERPRINT}
+        signed_request = {**request, "pilot_launcher_build_id": build}
+        self.assertEqual(self.post("/claim", signed_request).status_code, 423)
+        STORE[key] = {
+            "mode": "acceptance_only", "generation": 2, "claim_sequence": 0,
+            "acceptance": {
+                "cohort_id": "cohort_fixture", "release_id": "release_fixture", "source_sha": "a" * 40,
+                "owner_allowlist": [OWNER], "expires_at": self.NOW + 600,
+                "total_claim_budget": 1, "per_owner_claim_budget": 1, "required_launcher_build_id": build,
+                "total_claims_used": 0, "owner_claims_used": {},
+            },
+        }
+        before = deepcopy(STORE)
+        for unsafe in [request, {**request, "pilot_launcher_build_id": "b" * 64}]:
+            self.assertEqual(self.post("/claim", unsafe).status_code, 423)
+            self.assertEqual(STORE, before)
+        allowed = self.post("/claim", signed_request)
+        self.assertEqual(allowed.status_code, 200)
+        self.assertEqual(allowed.json["pilot_launcher_build_id"], build)
+        self.assertEqual(STORE[key]["acceptance"]["total_claims_used"], 1)
+        after = deepcopy(STORE)
+        self.assertEqual(self.post("/claim", request).status_code, 423)
+        self.assertEqual(self.post("/claim", signed_request).json["outcome"], "replayed")
+        self.assertEqual(STORE, after)
+
     def test_cooldown_refusal_leaves_acceptance_budget_untouched(self):
         signal = self.bind_origin()
         self.assertEqual(self.observe({**signal, "retry_after_seconds": 30}).json["outcome"], "recorded")

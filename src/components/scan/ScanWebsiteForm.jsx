@@ -4,7 +4,7 @@ import { AlertCircle } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import DurableScanProgressSurface from "@/components/scan/DurableScanProgressSurface";
-import { base44 } from "@/api/base44Client";
+import { base44, readPublishedScanOptions, usesPublishedScanPilot } from "@/api/base44Client";
 import useDurableScanCompletion from "@/hooks/useDurableScanCompletion";
 import { ensureScanProject } from "@/lib/activeProject";
 import { normalizeActionPriority, normalizeFindingEvidence, normalizeReviewEvidenceState, normalizeReviewScope, selectFinalReviewFixes } from "@/lib/reviewContract";
@@ -76,7 +76,32 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
   const [businessName, setBusinessName] = useState(project?.business_name || "");
   const [cmsPlatform, setCmsPlatform] = useState(normalizeCmsValue(project?.cms_platform || "custom"));
   const [keywordsText, setKeywordsText] = useState(Array.isArray(project?.important_keywords) ? project.important_keywords.join("\n") : "");
+  const [launchOptions, setLaunchOptions] = useState(null);
+  const [launchOptionsError, setLaunchOptionsError] = useState("");
+  const [launchOptionsAttempt, setLaunchOptionsAttempt] = useState(0);
   const scanMode = STANDARD_SCAN_MODE;
+  const checkingLaunchOptions = usesPublishedScanPilot && !launchOptions && !launchOptionsError;
+
+  function reloadLaunchOptions() {
+    setLaunchOptions(null);
+    setLaunchOptionsError("");
+    setLaunchOptionsAttempt(value => value + 1);
+  }
+
+  useEffect(() => {
+    if (!usesPublishedScanPilot) return;
+    let current = true;
+    readPublishedScanOptions().then(options => {
+      if (current) setLaunchOptions(options);
+    }).catch(error => {
+      if (current) setLaunchOptionsError(
+        error.message === "Your pilot scans are paused."
+          ? error.message
+          : "FixList couldn’t check your scan limit.",
+      );
+    });
+    return () => { current = false; };
+  }, [launchOptionsAttempt]);
   // Seeded from storage rather than set by an effect, so a reload paints the
   // stored answer immediately instead of flashing an unanswered question.
   const [siteOwnership, setSiteOwnership] = useState(() => readSiteOwnership(focusedUrl || project?.website_url || ""));
@@ -192,6 +217,7 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
       setSubmitting(false);
       setActiveStep("");
       clearDebugScanData();
+      if (usesPublishedScanPilot) reloadLaunchOptions();
     }
     window.addEventListener(CUSTOMER_BOUNDARY_EVENT, invalidatePendingRequest);
     return () => {
@@ -214,7 +240,7 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
 
   async function handleSubmit(event) {
     event.preventDefault();
-    if (submitLockRef.current || saving) return;
+    if (submitLockRef.current || saving || (usesPublishedScanPilot && !launchOptions)) return;
     let requestEpoch = requestEpochRef.current;
     setError("");
     setErrorAction("");
@@ -315,6 +341,7 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
         important_keywords: cleanedKeywords,
         competitor_urls: [],
         scan_mode: scanMode,
+        ...(launchOptions?.pilot ? { published_pilot_page_cap: launchOptions.pageCap } : {}),
         enable_screaming_frog_lite: true,
         force_internal_crawl: true,
         // respect_robots_txt stays true for both answers; see
@@ -454,6 +481,9 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
       recordDebug({ ...identityDebug(), status: "rejected", stage: "scan_admission_failed", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, error: err?.message || String(err) });
       refreshDebugData();
       setError(err?.message || "FixList could not start the scan. Please try again.");
+      if (usesPublishedScanPilot && ["scan_limit_changed", "scan_pilot_unavailable"].includes(err?.code)) {
+        reloadLaunchOptions();
+      }
       if (["scan_admission_busy", "scan_admission_paused", "scan_staged_500_unavailable"].includes(err?.code)) {
         setErrorAction("open_dashboard");
       } else if (err?.code === "preview_scan_used") {
@@ -532,7 +562,18 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
 
           <div className="rounded-xl border border-hairline-soft bg-paper px-4 py-3 text-[13px] leading-relaxed text-ink-muted">
             <p className="font-medium text-ink">Scan limit</p>
-            <p>FixList confirms your account’s page limit when the scan starts.</p>
+            {launchOptions ? (
+              <p>Up to {launchOptions.pageCap} pages per scan.</p>
+            ) : checkingLaunchOptions ? (
+              <p role="status">Checking your scan limit…</p>
+            ) : launchOptionsError ? (
+              <div>
+                <p role="alert">{launchOptionsError}</p>
+                <button type="button" className="underline" onClick={reloadLaunchOptions}>Check again</button>
+              </div>
+            ) : (
+              <p>FixList confirms your account’s page limit when the scan starts.</p>
+            )}
             <p className="mt-1 text-ink-faint">{scanSpecLine}</p>
           </div>
         </div>
@@ -575,7 +616,7 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
         <div className="flex flex-col gap-3">
           <button
             type="submit"
-            disabled={isLoading}
+            disabled={isLoading || (usesPublishedScanPilot && !launchOptions)}
             className="inline-flex min-h-11 w-full items-center justify-center rounded-lg bg-ink px-5 py-2.5 text-[14px] font-medium text-paper transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink disabled:opacity-50 sm:w-auto sm:self-start"
           >
             {isFocusedScan ? "Scan this section" : "Start scan"}

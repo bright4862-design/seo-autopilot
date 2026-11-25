@@ -39,7 +39,7 @@ function browserReader(result, generation) {
     () => sdk, {}, resolveScanFunctionRoute, generation,
   );
   const read = new Function("base44", "clearCustomerAuthBoundary", `${asScript("src/lib/scanRuns.js")}\nreturn getScanRunWithFixList;`)(client, () => {});
-  return { calls, read };
+  return { calls, read, invoke: client.functions.invoke };
 }
 
 test("the browser uses the V9 reader only when configured and preserves the exact failed run", async () => {
@@ -123,4 +123,64 @@ test("a signed staged rate-limit reason shows wait advice without a provider gue
   assert.match(view.title, /website.*rate.limit/i);
   assert.match(view.nextStep, /rate limit clears/i);
   assert.doesNotMatch(JSON.stringify(view), /Cloudflare/);
+});
+
+test("published pilot leaves the legacy launcher available and selects only its pinned readers", () => {
+  assert.equal(resolveScanFunctionRoute("startStandardScanJobV8", "PUBLISHED_PILOT"), "startStandardScanJobV8");
+  for (const name of ["getCustomerScanResult", "deleteCustomerScanData"]) {
+    assert.equal(resolveScanFunctionRoute(name + "V8", "PUBLISHED_PILOT"), deployments.functions[name + "V9"].route_name);
+  }
+});
+
+test("published launch options accept only a known release and one allowed cap", async () => {
+  const { parsePublishedScanOptions } = await import("../../src/lib/scanFunctionRouting.js");
+  const fingerprint = "a".repeat(16);
+  const response = { success: true, version: "published_scan_options_v1", release_fingerprint: fingerprint };
+  for (const page_cap of [150, 500]) {
+    const result = parsePublishedScanOptions({ ...response, launch: "pilot", page_cap }, fingerprint);
+    assert.deepEqual(result, { pilot: true, pageCap: page_cap });
+  }
+  assert.deepEqual(parsePublishedScanOptions({ ...response, launch: "legacy", page_cap: 150 }, fingerprint),
+    { pilot: false, pageCap: 150 });
+  for (const invalid of [
+    { ...response, launch: "pilot", page_cap: 501 },
+    { ...response, launch: "legacy", page_cap: 500 },
+    { ...response, launch: "pilot", page_cap: 500, release_fingerprint: "b".repeat(16) },
+    { ...response, launch: "paused", page_cap: null },
+  ]) {
+    assert.throws(() => parsePublishedScanOptions(invalid, fingerprint), /could not be verified|paused/);
+  }
+});
+
+test("published pilot falls back only for a read with a historical release mismatch", async () => {
+  const source = asScript("src/api/base44Client.js").replace("import.meta.env?.VITE_SCAN_FUNCTION_GENERATION", "generation");
+  const v9 = deployments.functions.getCustomerScanResultV9.route_name;
+  const calls = [];
+  const sdk = { functions: { invoke: async (name, body) => {
+    calls.push({ name, body });
+    if (name !== v9) return { data: { success: true } };
+    const error = new Error("read failed");
+    error.response = { data: { error_code: body.scenario } };
+    throw error;
+  } } };
+  const client = new Function("createClient", "appParams", "resolveScanFunctionRoute", "generation", source + "\nreturn base44;")(
+    () => sdk, {}, resolveScanFunctionRoute, "PUBLISHED_PILOT",
+  );
+  const historical = { scan_id: "history_001", scenario: "result_release_mismatch" };
+  assert.deepEqual(await client.functions.invoke("getCustomerScanResultV8", historical), { data: { success: true } });
+  assert.deepEqual(calls.map(call => call.name), [v9, "getCustomerScanResultV8"]);
+  calls.length = 0;
+  await assert.rejects(client.functions.invoke("getCustomerScanResultV8", { ...historical, scenario: "scan_not_found" }));
+  assert.deepEqual(calls.map(call => call.name), [v9]);
+});
+
+test("the normal form launch chooses V9 only after it has a server-confirmed pilot cap", async () => {
+  const { calls, invoke } = browserReader({ success: true }, "PUBLISHED_PILOT");
+  const payload = { request_id: "same_identity_for_all_retries", scan_mode: "standard_150" };
+  await invoke("startStandardScanJobV8", payload);
+  await invoke("startStandardScanJobV8", { ...payload, published_pilot_page_cap: 500 });
+  assert.deepEqual(calls, [
+    { name: "startStandardScanJobV8", body: payload },
+    { name: deployments.functions.startStandardScanJobV9.route_name, body: { ...payload, published_pilot_page_cap: 500 } },
+  ]);
 });

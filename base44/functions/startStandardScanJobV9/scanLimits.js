@@ -47,6 +47,15 @@ export function stagedScanOwnerEnabled(settings, ownerUserId) {
     && settings.ownerIds.includes(String(ownerUserId || ""));
 }
 
+export function publishedPilotLaunchPolicy({ settings, user, expiresAt, nowSeconds = Date.now() / 1_000 }) {
+  // A normal paid rollout explicitly retires the pilot with an expiry of 0.
+  // In cohort mode the same value keeps every fresh V9 pilot launch closed.
+  const configured = expiresAt !== undefined && !(settings.rolloutScope === "paid" && expiresAt === "0");
+  const namedCustomer = user?.role === "user" && stagedScanOwnerEnabled(settings, user.id);
+  const expiry = typeof expiresAt === "string" && /^[0-9]{1,12}$/.test(expiresAt) ? Number(expiresAt) : 0;
+  return { configured, namedCustomer, enabled: configured && namedCustomer && expiry > nowSeconds };
+}
+
 export function hasLargeScanGrant(access) {
   return access?.has_full_access === true && access?.access_status === "active" && access?.page_cap === 500;
 }

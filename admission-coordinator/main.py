@@ -33,6 +33,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import time
 from typing import Any, Callable
@@ -749,6 +750,7 @@ def health():
         "source_sha": SOURCE_SHA,
         "barrier_modes": sorted(admission.BARRIER_MODES),
         "claim_evidence_version": CLAIM_EVIDENCE_VERSION,
+        "published_pilot_launcher_binding": True,
         "claim_evidence_proof_label": CLAIM_EVIDENCE_LABEL.decode("ascii"),
         "drain_snapshot_version": control.DRAIN_SNAPSHOT_VERSION,
         "drain_snapshot_proof_label": control.SNAPSHOT_LABEL.decode("ascii"),
@@ -768,6 +770,9 @@ def claim():
     request_id = str(payload.get("request_id") or "").strip()
     fingerprint = str(payload.get("request_fingerprint") or "").strip()
     queue_if_origin_busy = payload.get("queue_if_origin_busy") is True
+    launcher_build = payload.get("pilot_launcher_build_id", "")
+    if not isinstance(launcher_build, str) or (launcher_build and not re.fullmatch(r"[0-9a-f]{64}", launcher_build)):
+        return response_error("invalid_pilot_launcher_build_id", 400)
     try:
         target_origin = admission.normalize_target_origin(payload["target_origin"]) if "target_origin" in payload else ""
     except admission.AdmissionError as error:
@@ -803,7 +808,12 @@ def claim():
             target_origin=target_origin,
         )
         if candidate.get("outcome") == admission.OUTCOME_REPLAYED:
+            if (document or {}).get("pilot_launcher_build_id", "") != launcher_build:
+                return {"outcome": None, "error": admission.ERROR_SCAN_INTAKE_PAUSED}
             return candidate
+        required_launcher = acceptance.get("required_launcher_build_id", "") if isinstance(acceptance, dict) else ""
+        if launcher_build != required_launcher:
+            return {"outcome": None, "error": admission.ERROR_SCAN_INTAKE_PAUSED}
         policy = admission.decide_claim_policy(
             control_document,
             owner_user_id=owner_user_id,
@@ -839,6 +849,8 @@ def claim():
             acceptance=reservation.get("acceptance"),
             target_origin=target_origin,
         )
+        if launcher_build:
+            claimed["write"]["pilot_launcher_build_id"] = launcher_build
         claimed["control_write"] = reservation["control_write"]
         return claimed
 
@@ -884,6 +896,8 @@ def claim():
     }
     if document.get("target_origin"):
         result["target_origin"] = document["target_origin"]
+    if document.get("pilot_launcher_build_id"):
+        result["pilot_launcher_build_id"] = document["pilot_launcher_build_id"]
     return jsonify(result)
 
 

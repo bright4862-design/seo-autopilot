@@ -212,6 +212,16 @@ A named non-administrator pilot can exercise 500 with an approved, active 500-pa
 
 Once the 500 corpus and production checks pass, `paid-500` enables already-entitled 500 launches. Run `prepare-paid` for cap 500 after the gateway verifies its matching flag. New requests from a verified 500 holder receive a clear pause response if the 500 tier is disabled. Existing grants and in-flight attempts keep their original cap.
 
+### Named Standard 500 pilot while Standard 150 is open
+
+Use this path after Standard 150 passes its public release checks. Both limits use the verified canonical staged worker. Keep the ordinary account's approved server-owned 500 grant, pilot expiry, and named account consistent across the launcher and coordinator. Standard 150 continues through its normal paid admission and preview paths.
+
+1. Publish the accepted V9 frontend with the Base44 release workflow's `paid_500_pilot_bundle` option, or set `FIXLIST_PUBLISHED_PAID_500_PILOT=true` when running the authorized production site publisher. The accepted-source checks still apply. Verify the regular Standard 150 account sees 150 and can use the standard launch button.
+2. Prepare the verified gateway in `paid-pilot-500` mode with the named account in `GATEWAY_STAGED_PILOT_OWNER_IDS`. Check the exact gateway source, serving revision, and owner-cohort hash. The broad paid 500 flag stays disabled.
+3. From the exact merged source, use the Base44 staged runtime operation `prepare-paid-500-pilot` with the signed-in administrator, the named ordinary account in `STAGED_OWNER_USER_ID`, the exact `STAGED_GATEWAY_REVISION`, and future Unix expiry `STAGED_PUBLIC_PILOT_EXPIRES_AT`. Confirm with `PREPARE-PAID-500-PILOT:<source>:<gateway-revision>:<owner>:<expiry>`. Verify the named account sees 500 in the published form.
+4. Run the Cloud Operator `start-published-500-pilot` operation with the current open barrier generation, exact named cohort, expiry, claim budgets, and the generated V9 launcher build. Confirm with `START-PUBLISHED-500-PILOT:<source>:<generation>:<cohort>:<launcher-build>`. The coordinator attests the paid pilot in the signed snapshot and preserves the open public barrier. Verify both ordinary browser paths, the exact worker source, and the new saved reports.
+5. Hold fresh Standard 500 pilot admissions with `hold-published-500-pilot` and `HOLD-PUBLISHED-500-PILOT:<source>:<generation>:<cohort>`. Set the launcher expiry to zero with the Base44 `hold-paid-500-pilot` operation and `HOLD-PAID-500-PILOT:<source>:<owner>`. Keep the gateway cohort and worker available while admitted 500 attempts drain. Verify Standard 150 still starts and both tiers' saved reports reopen.
+
 ## Rollback and recovery
 
 Close staged intake to stop new admissions. Keep the stage endpoints, queue, V9 functions and workspace available for attempts that already own a staged contract. Wait for the admission barrier and entry, stage, and drain queues to clear before changing the serving worker or removing its source tag. Existing sealed authority remains immutable.

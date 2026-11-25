@@ -927,10 +927,10 @@ PY
 write_barrier_payload() {
   local operation="$1" destination="$2"
   python3 - "$operation" "$destination" "$BARRIER_EXPECTED_PRIOR_MODE" \
-    "$BARRIER_EXPECTED_GENERATION" "$CUTOVER_REASON" "$CHANGE_TICKET" <<'PY'
+    "$BARRIER_EXPECTED_GENERATION" "$CUTOVER_REASON" "$CHANGE_TICKET" "$ACCEPTANCE_COHORT_ID" <<'PY'
 import json, sys
 
-operation, destination, prior_mode, generation, reason, ticket = sys.argv[1:]
+operation, destination, prior_mode, generation, reason, ticket, cohort = sys.argv[1:]
 payload = {
     "operation": operation,
     "reason": reason,
@@ -940,20 +940,22 @@ if operation == "status":
     payload["expected_generation"] = int(generation)
 else:
     payload["intended_prior"] = {"mode": prior_mode, "generation": int(generation)}
+if operation == "hold_500_pilot":
+    payload["cohort_id"] = cohort
 with open(destination, "w", encoding="utf-8") as handle:
     json.dump(payload, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 PY
 }
 
 write_acceptance_payload() {
-  local destination="$1"
-  python3 - "$destination" "$BARRIER_EXPECTED_GENERATION" "$CUTOVER_REASON" "$CHANGE_TICKET" \
+  local destination="$1" operation="$2"
+  python3 - "$destination" "$operation" "$BARRIER_EXPECTED_GENERATION" "$CUTOVER_REASON" "$CHANGE_TICKET" \
     "$ACCEPTANCE_COHORT_ID" "$ACCEPTANCE_RELEASE_ID" "$ACCEPTANCE_SOURCE_SHA" \
     "$ACCEPTANCE_OWNER_USER_IDS" "$ACCEPTANCE_EXPIRES_AT" \
     "$ACCEPTANCE_TOTAL_CLAIM_BUDGET" "$ACCEPTANCE_PER_OWNER_CLAIM_BUDGET" "$ACCEPTANCE_LAUNCHER_BUILD_ID" <<'PY'
 import json, re, sys
 
-(destination, generation, reason, ticket, cohort_id, release_id, source_sha,
+(destination, operation, generation, reason, ticket, cohort_id, release_id, source_sha,
  owners_raw, expires_at, total_budget, owner_budget, launcher_build_id) = sys.argv[1:]
 owners = [item.strip() for item in owners_raw.split(",") if item.strip()]
 safe_id = re.compile(r"^[A-Za-z0-9_-]{6,160}$")
@@ -965,12 +967,14 @@ if launcher_build_id and not re.fullmatch(r"[0-9a-f]{64}", launcher_build_id):
     raise SystemExit("Acceptance launcher build ID must be a 64-character SHA256")
 if not owners or len(owners) != len(set(owners)) or not all(safe_id.fullmatch(item) for item in owners):
     raise SystemExit("Acceptance owner allowlist is invalid")
+# Older coordinators reject this operation before they can open the barrier.
+if operation == "acceptance_only" and launcher_build_id:
+    operation = "published_pilot_acceptance"
 payload = {
-    # Older coordinators reject this operation before they can open the barrier.
-    "operation": "published_pilot_acceptance" if launcher_build_id else "acceptance_only",
+    "operation": operation,
     "reason": reason,
     "change_ticket": ticket,
-    "intended_prior": {"mode": "closed", "generation": int(generation)},
+    "intended_prior": {"mode": "open" if operation == "start_500_pilot" else "closed", "generation": int(generation)},
     "acceptance": {
         "cohort_id": cohort_id,
         "release_id": release_id,
@@ -995,8 +999,8 @@ call_barrier_operator() {
   set +x
   body="$OPERATOR_TMP/${operation}-body.json"
   response="$OPERATOR_TMP/${operation}-response.json"
-  if [[ "$operation" == "acceptance_only" ]]; then
-    write_acceptance_payload "$body"
+  if [[ "$operation" == "acceptance_only" || "$operation" == "start_500_pilot" ]]; then
+    write_acceptance_payload "$body" "$operation"
   else
     write_barrier_payload "$operation" "$body"
   fi
@@ -1049,10 +1053,13 @@ PY
 parse_barrier_response() {
   local expected_operation="$1"
   mapfile -t _barrier_values < <(python3 - "$BARRIER_RESPONSE_FILE" "$expected_operation" \
-    "$OPERATOR_TMP/operator-key" "$ADMISSION_DRAIN_SNAPSHOT_DERIVATION_LABEL" "$ACCEPTANCE_LAUNCHER_BUILD_ID" <<'PY'
+    "$OPERATOR_TMP/operator-key" "$ADMISSION_DRAIN_SNAPSHOT_DERIVATION_LABEL" "$ACCEPTANCE_LAUNCHER_BUILD_ID" \
+    "$ACCEPTANCE_COHORT_ID" "$SOURCE_SHA" "$ACCEPTANCE_OWNER_USER_IDS" "$ACCEPTANCE_EXPIRES_AT" \
+    "$BARRIER_EXPECTED_GENERATION" <<'PY'
 import hashlib, hmac, json, re, sys
 
-path, expected, key_path, snapshot_label, launcher_build_id = sys.argv[1:]
+(path, expected, key_path, snapshot_label, launcher_build_id, cohort_id, source_sha,
+ owners_raw, expires_at, prior_generation) = sys.argv[1:]
 value = json.load(open(path, encoding="utf-8"))
 if value.get("success") is not True or value.get("operation") != expected:
     raise SystemExit("Unexpected operator response")
@@ -1088,6 +1095,21 @@ if not hmac.compare_digest(proof, expected_proof):
 if expected == "acceptance_only" and launcher_build_id:
     if (snapshot.get("boundary") or {}).get("required_launcher_build_id") != launcher_build_id:
         raise SystemExit("Published pilot launcher binding is missing from the signed snapshot")
+if expected in {"start_500_pilot", "hold_500_pilot"}:
+    pilot = (snapshot.get("boundary") or {}).get("published_500_pilot") or {}
+    signed_barrier = snapshot.get("barrier") or {}
+    state = "configured" if expected == "start_500_pilot" else "held"
+    if (mode != "open" or signed_barrier.get("mode") != mode or signed_barrier.get("generation") != generation
+            or generation != int(prior_generation) + 1
+            or pilot.get("state") != state or pilot.get("page_cap") != 500 or pilot.get("cohort_id") != cohort_id):
+        raise SystemExit("The signed snapshot does not establish this Standard 500 pilot change")
+    if state == "configured":
+        owners = sorted(item.strip() for item in owners_raw.split(",") if item.strip())
+        digest = hashlib.sha256(json.dumps(owners, separators=(",", ":")).encode("utf-8")).hexdigest()
+        if (pilot.get("source_sha") != source_sha or pilot.get("required_launcher_build_id") != launcher_build_id
+                or pilot.get("owner_count") != len(owners) or pilot.get("owner_cohort_sha256") != digest
+                or pilot.get("expires_at") != int(expires_at)):
+            raise SystemExit("Standard 500 pilot source, launcher, account set or expiry mismatch")
 if any(not isinstance(item, int) or item < 0 for item in (total, live, active, expired, bound)):
     raise SystemExit("Invalid drain counts")
 print(mode)
@@ -1292,18 +1314,22 @@ open_claim_barrier() {
   echo "STANDARD150_CLAIM_BARRIER_OPEN generation=$BARRIER_GENERATION"
 }
 
+require_pilot_launcher_build() {
+  local exact_launcher
+  exact_launcher="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["functions"]["startStandardScanJobV9"]["build_id"])' \
+    "$REPO_ROOT/data/generated-staged-v9-routes.json")"
+  if [[ ! "$ACCEPTANCE_LAUNCHER_BUILD_ID" =~ ^[0-9a-f]{64}$ || "$ACCEPTANCE_LAUNCHER_BUILD_ID" != "$exact_launcher" ]]; then
+    echo "Published pilot launcher build ID does not match the exact source." >&2
+    return 1
+  fi
+}
+
 activate_acceptance_only() {
   require_exact_main_owner_source
   require_barrier_inputs
   local expected_confirmation="OPEN-STANDARD150-ACCEPTANCE:${SOURCE_SHA}:${BARRIER_EXPECTED_GENERATION}:${ACCEPTANCE_COHORT_ID}"
   if [[ -n "$ACCEPTANCE_LAUNCHER_BUILD_ID" ]]; then
-    local exact_launcher
-    exact_launcher="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["functions"]["startStandardScanJobV9"]["build_id"])' \
-      "$REPO_ROOT/data/generated-staged-v9-routes.json")"
-    if [[ ! "$ACCEPTANCE_LAUNCHER_BUILD_ID" =~ ^[0-9a-f]{64}$ || "$ACCEPTANCE_LAUNCHER_BUILD_ID" != "$exact_launcher" ]]; then
-      echo "Published pilot launcher build ID does not match the exact source." >&2
-      return 1
-    fi
+    require_pilot_launcher_build
     expected_confirmation+=":$ACCEPTANCE_LAUNCHER_BUILD_ID"
   fi
   require_confirmation "$expected_confirmation"
@@ -1317,6 +1343,25 @@ activate_acceptance_only() {
   [[ "$BARRIER_MODE" == "acceptance_only" ]] \
     || { echo "Coordinator did not enter acceptance-only mode." >&2; return 1; }
   echo "STANDARD150_ACCEPTANCE_ONLY generation=$BARRIER_GENERATION cohort=$ACCEPTANCE_COHORT_ID"
+}
+
+operate_published_500_pilot() {
+  local action="$1"
+  require_exact_main_owner_source
+  require_barrier_inputs
+  [[ "$BARRIER_EXPECTED_PRIOR_MODE" == open && "$ACCEPTANCE_COHORT_ID" =~ ^[A-Za-z0-9_-]{6,128}$ ]] \
+    || { echo 'The Standard 500 pilot requires an open public barrier and exact cohort ID.' >&2; return 1; }
+  if [[ "$action" == start ]]; then
+    require_pilot_launcher_build
+    [[ "$ACCEPTANCE_SOURCE_SHA" == "$SOURCE_SHA" ]] || return 1
+    require_confirmation "START-PUBLISHED-500-PILOT:${SOURCE_SHA}:${BARRIER_EXPECTED_GENERATION}:${ACCEPTANCE_COHORT_ID}:${ACCEPTANCE_LAUNCHER_BUILD_ID}"
+    require_drain_plane_live
+  else
+    require_confirmation "HOLD-PUBLISHED-500-PILOT:${SOURCE_SHA}:${BARRIER_EXPECTED_GENERATION}:${ACCEPTANCE_COHORT_ID}"
+  fi
+  call_barrier_operator "${action}_500_pilot" "/ops/barrier/pilot-500/$action"
+  parse_barrier_response "${action}_500_pilot"
+  echo "STANDARD500_PILOT action=$action generation=$BARRIER_GENERATION cohort=$ACCEPTANCE_COHORT_ID public_mode=$BARRIER_MODE"
 }
 
 case "$OPERATION" in
@@ -1377,6 +1422,14 @@ case "$OPERATION" in
 
   acceptance-only)
     activate_acceptance_only
+    ;;
+
+  start-published-500-pilot)
+    operate_published_500_pilot start
+    ;;
+
+  hold-published-500-pilot)
+    operate_published_500_pilot hold
     ;;
 
   pause-queue|resume-queue|activate-beta)

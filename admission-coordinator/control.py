@@ -26,6 +26,7 @@ AUDIT_LABEL = b"fixlist-admission-operator-audit-v1"
 COHORT_LABEL = b"fixlist-admission-acceptance-cohort-v1"
 
 MAX_ACCEPTANCE_OWNERS = 100
+MAX_PUBLISHED_500_PILOT_OWNERS = 5
 MAX_ACCEPTANCE_TOTAL_CLAIMS = 500
 MAX_ACCEPTANCE_LIFETIME_SECONDS = 14 * 24 * 60 * 60
 MAX_SNAPSHOT_SAMPLE = 64
@@ -129,6 +130,7 @@ def close_control(
         # A closed barrier never carries live acceptance authority. The
         # immutable cohort record and audit retain the prior definition.
         "acceptance": None,
+        admission.PUBLISHED_500_PILOT: None,
     }
 
 
@@ -264,6 +266,39 @@ def acceptance_control(
         "intended_prior_mode": current["mode"],
         "intended_prior_generation": int(current["generation"]),
         "acceptance": acceptance,
+    }
+
+
+def update_published_500_pilot(
+    current: dict[str, Any],
+    *,
+    snapshot_id: str,
+    definition: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if current["mode"] != admission.BARRIER_OPEN:
+        raise ControlError("barrier_not_open")
+    return {
+        **current,
+        "generation": int(current["generation"]) + 1,
+        "current_snapshot_id": _id(snapshot_id, "invalid_snapshot_id"),
+        admission.PUBLISHED_500_PILOT: (None if definition is None else {
+            **definition, "total_claims_used": 0, "owner_claims_used": {},
+        }),
+    }
+
+
+def published_500_pilot_boundary(definition: dict[str, Any], *, state: str) -> dict[str, Any]:
+    owners = definition["owner_allowlist"]
+    return {
+        "state": state,
+        "page_cap": 500,
+        "cohort_id": definition["cohort_id"],
+        "release_id": definition["release_id"],
+        "source_sha": definition["source_sha"],
+        "expires_at": definition["expires_at"],
+        "owner_count": len(owners),
+        "owner_cohort_sha256": hashlib.sha256(stable_serialize(owners).encode("utf-8")).hexdigest(),
+        "required_launcher_build_id": definition["required_launcher_build_id"],
     }
 
 

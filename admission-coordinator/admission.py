@@ -33,6 +33,7 @@ BARRIER_OPEN = "open"
 BARRIER_CLOSED = "closed"
 BARRIER_ACCEPTANCE_ONLY = "acceptance_only"
 BARRIER_MODES = frozenset({BARRIER_OPEN, BARRIER_CLOSED, BARRIER_ACCEPTANCE_ONLY})
+PUBLISHED_500_PILOT = "published_500_pilot"
 
 # A scan reaches exactly one of these, and only the durable worker or the
 # server-side watchdog may declare it. The browser has no vote.
@@ -130,6 +131,7 @@ def decide_claim_policy(
     *,
     owner_user_id: str,
     now: int,
+    published_500_pilot: bool = False,
 ) -> dict[str, Any]:
     """Decide whether the global barrier permits this authenticated owner.
 
@@ -141,9 +143,9 @@ def decide_claim_policy(
     owner = _require_id(owner_user_id, "invalid_owner_user_id")
     current = normalized_control(control)
     mode = current["mode"]
-    if mode == BARRIER_OPEN:
+    if mode == BARRIER_OPEN and not published_500_pilot:
         return {"allowed": True, "mode": mode, "control": current, "acceptance": None}
-    if mode == BARRIER_CLOSED:
+    if mode == BARRIER_CLOSED or (published_500_pilot and mode != BARRIER_OPEN):
         return {
             "allowed": False,
             "mode": mode,
@@ -151,7 +153,7 @@ def decide_claim_policy(
             "error": ERROR_SCAN_INTAKE_PAUSED,
         }
 
-    acceptance = current.get("acceptance")
+    acceptance = current.get(PUBLISHED_500_PILOT if published_500_pilot else "acceptance")
     if not isinstance(acceptance, dict):
         return {
             "allowed": False,
@@ -187,7 +189,7 @@ def decide_claim_policy(
         }
     return {
         "allowed": True,
-        "mode": mode,
+        "mode": BARRIER_ACCEPTANCE_ONLY,
         "control": current,
         "acceptance": {
             "cohort_id": str(acceptance.get("cohort_id") or ""),
@@ -204,9 +206,10 @@ def reserve_fresh_claim(
     *,
     owner_user_id: str,
     now: int,
+    published_500_pilot: bool = False,
 ) -> dict[str, Any]:
     """Reserve one global sequence/budget slot for a genuinely fresh claim."""
-    policy = decide_claim_policy(control, owner_user_id=owner_user_id, now=now)
+    policy = decide_claim_policy(control, owner_user_id=owner_user_id, now=now, published_500_pilot=published_500_pilot)
     if not policy.get("allowed"):
         return policy
     owner = _require_id(owner_user_id, "invalid_owner_user_id")
@@ -219,12 +222,13 @@ def reserve_fresh_claim(
         }
     write = {**current, "claim_sequence": int(current["claim_sequence"]) + 1}
     if policy["mode"] == BARRIER_ACCEPTANCE_ONLY:
-        acceptance = dict(current.get("acceptance") or {})
+        key = PUBLISHED_500_PILOT if published_500_pilot else "acceptance"
+        acceptance = dict(current.get(key) or {})
         used = dict(acceptance.get("owner_claims_used") or {})
         acceptance["total_claims_used"] = int(acceptance.get("total_claims_used") or 0) + 1
         used[owner] = int(used.get(owner) or 0) + 1
         acceptance["owner_claims_used"] = used
-        write["acceptance"] = acceptance
+        write[key] = acceptance
     return {
         **policy,
         "control_write": write,

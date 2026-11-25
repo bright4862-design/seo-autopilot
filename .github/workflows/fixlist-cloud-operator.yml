@@ -39,6 +39,8 @@ on:
           - cutover-resume
           - open-claim-barrier
           - acceptance-only
+          - start-published-500-pilot
+          - hold-published-500-pilot
           - sync-base44-signing-key
           - verify-base44-v8-preflight
           - apply-scanrun-comparison-evidence
@@ -134,6 +136,7 @@ on:
           - owner-canary
           - paid
           - paid-500
+          - paid-pilot-500
       gateway_staged_confirm:
         description: "ENABLE-STAGED-GATEWAY:<source>:<cohort-sha> or ENABLE-PAID-STAGED-GATEWAY:<source>:<serving-revision>:<150-or-500>"
         required: false
@@ -231,7 +234,7 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT }}
           workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
-          service_account: ${{ contains(fromJSON('["status","barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only"]'), inputs.operation) && env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT || env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+          service_account: ${{ contains(fromJSON('["status","barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only","start-published-500-pilot","hold-published-500-pilot"]'), inputs.operation) && env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT || env.GCP_OPERATOR_SERVICE_ACCOUNT }}
 
       # gcloud cannot mint an audience-scoped identity token from the
       # external_account credential written above, so the coordinator's operator
@@ -239,7 +242,7 @@ jobs:
       # step exists only to produce the token and must not replace the
       # credentials the gcloud steps below authenticate with.
       - name: Mint coordinator operator identity token
-        if: contains(fromJSON('["barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only","staged-queue-activate","staged-queue-drain-pause","staged-queue-recover"]'), inputs.operation) || (inputs.operation == 'deploy-dispatch-gateway' && startsWith(inputs.gateway_staged_config, 'paid'))
+        if: contains(fromJSON('["barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only","start-published-500-pilot","hold-published-500-pilot","staged-queue-activate","staged-queue-drain-pause","staged-queue-recover"]'), inputs.operation) || (inputs.operation == 'deploy-dispatch-gateway' && startsWith(inputs.gateway_staged_config, 'paid'))
         id: operator-id-token
         uses: google-github-actions/auth@v3
         with:
@@ -445,7 +448,7 @@ jobs:
           ACCEPTANCE_TOTAL_CLAIM_BUDGET: ${{ inputs.acceptance_total_claim_budget }}
           ACCEPTANCE_PER_OWNER_CLAIM_BUDGET: ${{ inputs.acceptance_per_owner_claim_budget }}
           ACCEPTANCE_LAUNCHER_BUILD_ID: ${{ inputs.acceptance_launcher_build_id }}
-          GCP_OPERATOR_SERVICE_ACCOUNT: ${{ contains(fromJSON('["status","barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only"]'), inputs.operation) && env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT || env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+          GCP_OPERATOR_SERVICE_ACCOUNT: ${{ contains(fromJSON('["status","barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only","start-published-500-pilot","hold-published-500-pilot"]'), inputs.operation) && env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT || env.GCP_OPERATOR_SERVICE_ACCOUNT }}
           FIXLIST_OPERATOR_ID_TOKEN: ${{ steps.operator-id-token.outputs.id_token }}
           FIXLIST_OPERATOR_TOKEN_AUDIENCE: ${{ env.ADMISSION_OPERATOR_AUDIENCE }}
         shell: bash
@@ -534,6 +537,7 @@ jobs:
           GATEWAY_CANARY_OWNER_USER_IDS: ${{ inputs.gateway_canary == 'owner-canary' && inputs.acceptance_owner_user_ids || '' }}
           GATEWAY_STAGED_CONFIG: ${{ inputs.gateway_staged_config || 'off' }}
           GATEWAY_STAGED_OWNER_IDS: ${{ inputs.gateway_staged_config == 'owner-canary' && inputs.acceptance_owner_user_ids || '' }}
+          GATEWAY_STAGED_PILOT_OWNER_IDS: ${{ inputs.gateway_staged_config == 'paid-pilot-500' && inputs.acceptance_owner_user_ids || '' }}
           GATEWAY_STAGED_CONFIRM: ${{ inputs.gateway_staged_confirm }}
           GATEWAY_STAGED_SERVING_REVISION: ${{ startsWith(inputs.gateway_staged_config, 'paid') && inputs.revision || '' }}
           FIXLIST_ADMISSION_ACCESS_TOKEN: ${{ steps.staged-barrier-auth.outputs.access_token }}

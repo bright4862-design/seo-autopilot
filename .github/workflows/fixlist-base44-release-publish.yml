@@ -16,6 +16,11 @@ on:
         description: "Exact current main SHA, or PUBLISH-BASE44-STAGED-V9:<main-sha> for the isolated V9 candidate."
         required: true
         type: string
+      paid_500_pilot_bundle:
+        description: "Build the customer form for the named Standard 500 pilot. Requires accepted public V9 routes."
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -136,6 +141,7 @@ jobs:
           SOURCE_SHA: ${{ github.sha }}
           CONFIRM: ${{ steps.confirm.outputs.confirm }}
           BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
+          FIXLIST_PUBLISHED_PAID_500_PILOT: ${{ inputs.paid_500_pilot_bundle }}
         run: /bin/bash scripts/deploy-base44-beta-site.sh
 
       - name: Remove ephemeral Base44 owner session

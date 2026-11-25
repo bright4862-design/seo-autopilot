@@ -36,6 +36,18 @@ read -r -a ROUTE_FIELDS <<<"$ROUTE_SELECTION"
 VERIFIED_FUNCTIONS=("${ROUTE_FIELDS[@]:1}")
 CHECKOUT_FUNCTIONS=("${VERIFIED_FUNCTIONS[@]}")
 PROMOTION_ARGS=()
+SCAN_FUNCTION_GENERATION=
+case "${FIXLIST_PUBLISHED_PAID_500_PILOT:-false}" in
+  false) ;;
+  true)
+    [[ "${ROUTE_FIELDS[0]}" == "v9" ]] || {
+      echo 'A paid 500 pilot bundle requires the accepted V9 public routes.' >&2
+      exit 2
+    }
+    SCAN_FUNCTION_GENERATION=PAID_PILOT
+    ;;
+  *) echo 'Invalid paid 500 pilot publication selection.' >&2; exit 2 ;;
+esac
 if [[ "${ROUTE_FIELDS[0]}" == "v9" ]]; then
   PROMOTION_ARGS=(--base44-v9 site-and-functions)
 fi
@@ -91,7 +103,7 @@ BASE44_APP_ID="$APP_ID" bash "$REPO_ROOT/scripts/verify-base44-functions.sh"
 printf 'BASE44_RELEASE_ROUTES_ACTIVE_PRE_SITE\n'
 
 # A fresh browser has no cached Base44 app ID; bind it to this deployment.
-VITE_SCAN_FUNCTION_GENERATION= VITE_BASE44_APP_ID="$APP_ID" VITE_FIXLIST_SOURCE_SHA="$SOURCE_SHA" npm run build
+VITE_SCAN_FUNCTION_GENERATION="$SCAN_FUNCTION_GENERATION" VITE_BASE44_APP_ID="$APP_ID" VITE_FIXLIST_SOURCE_SHA="$SOURCE_SHA" npm run build
 if [[ "${ROUTE_FIELDS[0]}" == "v9" ]]; then
   fixlist_require_pinned_checkout "$REPO_ROOT" "$SOURCE_SHA"
   fixlist_assert_active_v9_intake_closed "$REPO_ROOT" "$APP_ID" "$BASE44_EXPECTED_OWNER"

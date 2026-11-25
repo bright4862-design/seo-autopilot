@@ -283,7 +283,12 @@ def authenticate_operator() -> tuple[dict[str, Any] | None, tuple[Any, int] | No
     return payload, None
 
 
-def run_in_transaction(owner_user_id: str, decide: Callable[[dict[str, Any] | None], dict[str, Any]]):
+def run_in_transaction(
+    owner_user_id: str,
+    decide: Callable[[dict[str, Any] | None], dict[str, Any]],
+    *,
+    terminal_cooldown: dict[str, Any] | None = None,
+):
     """Apply a pure decision function inside one Firestore transaction.
 
     The read and the conditional write share a transaction, so two concurrent
@@ -299,6 +304,20 @@ def run_in_transaction(owner_user_id: str, decide: Callable[[dict[str, Any] | No
         snapshot = ref.get(transaction=transaction)
         document = snapshot.to_dict() if snapshot.exists else None
         decision = decide(document)
+        if terminal_cooldown is not None and not decision.get("error"):
+            # A different owner must never observe the released slot without
+            # the origin deadline from the same Firestore commit.
+            cooldown_ref = _target_cooldown_ref(client, terminal_cooldown["target_origin"])
+            cooldown = admission.decide_target_cooldown(
+                document, _document_value(cooldown_ref.get(transaction=transaction)),
+                terminal_cooldown, now=int(time.time()), clock_skew_seconds=MAX_CLOCK_SKEW_SECONDS,
+                terminal_release_retry=decision["outcome"] == admission.OUTCOME_ALREADY_RELEASED,
+            )
+            if cooldown.get("error"):
+                return cooldown
+            if cooldown.get("write"):
+                transaction.set(cooldown_ref, cooldown["write"])
+            decision["target_cooldown_outcome"] = cooldown["outcome"]
         write = decision.get("write")
         if write:
             transaction.set(ref, write)
@@ -910,6 +929,7 @@ def bind():
 
 
 @app.post("/release")
+@app.post("/release-with-target-cooldown")
 def release():
     payload, failure = authenticate()
     if failure:
@@ -919,17 +939,36 @@ def release():
     owner_user_id = str(payload.get("owner_user_id") or "").strip()
     scan_id = str(payload.get("scan_id") or "").strip()
     terminal_status = str(payload.get("terminal_status") or "").strip()
+    terminal_cooldown = None
+    # Older coordinators ignore extra fields on /release. Giving this handoff
+    # its own path makes a mixed deployment fail before releasing admission.
+    if request.path == "/release-with-target-cooldown":
+        try:
+            terminal_cooldown = admission.validate_terminal_cooldown_observation(
+                payload, now=int(time.time()), clock_skew_seconds=MAX_CLOCK_SKEW_SECONDS,
+            )
+        except admission.AdmissionError as error:
+            return response_error(error.code, 400)
+    elif "target_cooldown" in payload:
+        return response_error("target_cooldown_release_endpoint_required", 400)
 
     def decide(document: dict[str, Any] | None) -> dict[str, Any]:
-        return admission.decide_release(
+        decision = admission.decide_release(
             document,
             scan_id=scan_id,
             terminal_status=terminal_status,
             now=int(time.time()),
         )
+        if (
+            terminal_cooldown is not None
+            and decision["outcome"] == admission.OUTCOME_ALREADY_RELEASED
+            and (document or {}).get("terminal_status") != terminal_status
+        ):
+            return {"error": "target_cooldown_claim_conflict"}
+        return decision
 
     try:
-        decision = run_in_transaction(owner_user_id, decide)
+        decision = run_in_transaction(owner_user_id, decide, terminal_cooldown=terminal_cooldown)
     except admission.AdmissionError as error:
         return response_error(error.code, 400)
     except Exception:
@@ -939,14 +978,17 @@ def release():
         status = 404 if decision["error"] == admission.ERROR_CLAIM_NOT_FOUND else 409
         return response_error(decision["error"], status)
 
-    return jsonify({
+    result = {
         "success": True,
         "outcome": decision["outcome"],
         "request_id": decision.get("request_id", ""),
         "scan_id": decision.get("scan_id", ""),
         "barrier_generation": decision.get("barrier_generation", 0),
         "claim_sequence": decision.get("claim_sequence", 0),
-    })
+    }
+    if terminal_cooldown is not None:
+        result["target_cooldown_outcome"] = decision["target_cooldown_outcome"]
+    return jsonify(result)
 
 
 @app.post("/satisfy-unbound")

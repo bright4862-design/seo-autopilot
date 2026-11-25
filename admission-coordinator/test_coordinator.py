@@ -449,6 +449,66 @@ class TargetCooldown(CoordinatorTestCase):
     def observe(self, payload, **options):
         return self.post("/observe-target-cooldown", payload, **options)
 
+    def terminal_cooldown_payload(self, signal, status="complete"):
+        return {
+            "owner_user_id": signal["owner_user_id"],
+            "scan_id": signal["scan_id"],
+            "terminal_status": status,
+            "target_cooldown": {
+                **{key: signal[key] for key in ("request_id", "barrier_generation", "claim_sequence")},
+                "observation": {
+                    key: signal[key] for key in ("target_origin", "status_code", "observed_at", "retry_after_seconds")
+                },
+            },
+        }
+
+    def test_release_publishes_pending_observation_without_the_dedicated_relay(self):
+        signal = self.bind_origin()
+        payload = self.terminal_cooldown_payload(signal)
+        self.now += 180
+        released = self.post("/release-with-target-cooldown", payload)
+        self.assertEqual(released.status_code, 200)
+        self.assertEqual(released.json["outcome"], "released")
+        self.assertEqual(released.json["target_cooldown_outcome"], "recorded")
+        for owner in (OWNER, self.OTHER_OWNER):
+            denied = self.claim_origin(owner=owner, request_id="fresh_request")
+            self.assertEqual(denied.status_code, 429)
+            self.assertEqual(denied.headers["Retry-After"], "3420")
+
+        self.now += 30
+        replay = self.post("/release-with-target-cooldown", payload)
+        self.assertEqual(replay.json["outcome"], "already_released")
+        self.assertEqual(replay.json["target_cooldown_outcome"], "unchanged")
+        self.assertEqual(self.claim_origin(owner=self.OTHER_OWNER).headers["Retry-After"], "3390")
+        self.assertEqual(self.claim_origin("https://other.example", request_id="new_origin").json["outcome"], "claimed")
+        self.now = signal["observed_at"] + 3600
+        self.assertEqual(self.claim_origin(owner=self.OTHER_OWNER).json["outcome"], "claimed")
+
+    def test_bad_terminal_observation_cannot_release_or_change_cooldown(self):
+        signal = self.bind_origin()
+        before = {key: dict(value) for key, value in STORE.items()}
+        payload = self.terminal_cooldown_payload(signal, status="limited")
+        self.assertEqual(self.post("/release", payload).status_code, 400)
+        variations = [
+            ({"target_cooldown": {"observation": None}}, 400),
+            ({"target_cooldown": {**payload["target_cooldown"], "claim_sequence": signal["claim_sequence"] + 1}}, 409),
+            (self.terminal_cooldown_payload({**signal, "target_origin": "https://other.example:443"}), 409),
+            (self.terminal_cooldown_payload({**signal, "status_code": "429"}), 400),
+        ]
+        for change, expected_status in variations:
+            with self.subTest(change=change):
+                response = self.post("/release-with-target-cooldown", {**payload, **change})
+                self.assertEqual(response.status_code, expected_status)
+                self.assertEqual(STORE, before)
+
+    def test_expired_terminal_observation_releases_limited_scan_without_a_new_hold(self):
+        signal = self.bind_origin()
+        self.now = signal["observed_at"] + 3600
+        released = self.post("/release-with-target-cooldown", self.terminal_cooldown_payload(signal, status="limited"))
+        self.assertEqual(released.status_code, 200)
+        self.assertEqual(released.json["target_cooldown_outcome"], "expired")
+        self.assertEqual(self.claim_origin(owner=self.OTHER_OWNER).json["outcome"], "claimed")
+
     def test_verified_observation_blocks_fresh_claim_without_consuming_budget(self):
         signal = self.bind_origin("HTTPS://FIXTURE.example")
         recorded = self.observe(signal)

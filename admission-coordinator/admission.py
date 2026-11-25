@@ -313,6 +313,33 @@ def validate_cooldown_observation(payload: dict[str, Any], *, now: int, clock_sk
     return result
 
 
+def validate_terminal_cooldown_observation(payload: dict[str, Any], *, now: int, clock_skew_seconds: int) -> dict[str, Any]:
+    invalid = "invalid_target_cooldown_observation"
+    if set(payload) != {"owner_user_id", "scan_id", "terminal_status", "target_cooldown"}:
+        raise AdmissionError(invalid)
+    if payload["terminal_status"] not in ("complete", "limited"):
+        raise AdmissionError(invalid)
+    handoff = payload["target_cooldown"]
+    if not isinstance(handoff, dict) or set(handoff) != {
+        "request_id", "barrier_generation", "claim_sequence", "observation",
+    }:
+        raise AdmissionError(invalid)
+    observation = handoff["observation"]
+    if not isinstance(observation, dict) or set(observation) != {
+        "target_origin", "status_code", "observed_at", "retry_after_seconds",
+    }:
+        raise AdmissionError(invalid)
+    return validate_cooldown_observation({
+        **observation,
+        "action": TARGET_COOLDOWN_ACTION,
+        "owner_user_id": payload["owner_user_id"],
+        "scan_id": payload["scan_id"],
+        "request_id": handoff["request_id"],
+        "barrier_generation": handoff["barrier_generation"],
+        "claim_sequence": handoff["claim_sequence"],
+    }, now=now, clock_skew_seconds=clock_skew_seconds)
+
+
 def target_cooldown_expires_at(document: dict[str, Any] | None) -> int:
     if not document or document.get("version") != TARGET_COOLDOWN_VERSION:
         return 0
@@ -327,11 +354,13 @@ def decide_target_cooldown(
     *,
     now: int,
     clock_skew_seconds: int,
+    terminal_release_retry: bool = False,
 ) -> dict[str, Any]:
-    """Keep the maximum expiry from an exact, still-bound claim."""
+    """Keep the maximum expiry from an exact claim or its terminal release retry."""
+    eligible_states = {STATE_BOUND, STATE_RELEASED} if terminal_release_retry else {STATE_BOUND}
     if (
         not document
-        or document.get("state") != STATE_BOUND
+        or document.get("state") not in eligible_states
         or any(document.get(field) != observation[field] for field in _COOLDOWN_CLAIM_FIELDS)
         or observation["observed_at"] + clock_skew_seconds < int(document.get("claimed_at") or 0)
     ):

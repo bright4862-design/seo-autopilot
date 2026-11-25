@@ -8,22 +8,22 @@
       "package_digest": "0d5cf6f42490e3f631865b46edc6dcd2f2e1a001da534c9965a3801c5e40f6ad"
     },
     "durableScanWorkerControlV9": {
-      "route_name": "durableScanWorkerControlV9B884cea23230530fd",
-      "build_id": "4902406202f23068f3f6b9c8953988cd5b8e408ec2ac9f2b90887eef8d8be601",
+      "route_name": "durableScanWorkerControlV9B3ca85cbb724e9713",
+      "build_id": "2fa08d5828faa87e534ee66ba5282d8e04a6a9cf113000972a7cf2a505c1a40d",
       "runtime_activation_id": "durableScanWorkerControlV9-staged-runtime-20261111-v3",
-      "package_digest": "b98f90e6e887dcb7327ef66c83aaf29e7c193f40ee0d07a814bf160b02011241"
+      "package_digest": "fa3246ac54ebead7401f29e4929331811d69aacd012e6b991ca4aa15474e849b"
     },
     "persistDurableScanAuthorityV9": {
-      "route_name": "persistDurableScanAuthorityV9B42ff88927d79017d",
-      "build_id": "9a3f839c4c97699e30808ae93a095fa6a6157c4db08c83b9623eed24677e92e6",
+      "route_name": "persistDurableScanAuthorityV9B9eb82329b13905fc",
+      "build_id": "bf9aa064074fc63755911603ad5b745f91c960fd82378a484e8d4d82986d4a8b",
       "runtime_activation_id": "persistDurableScanAuthorityV9-staged-runtime-20261111-v5",
-      "package_digest": "8c018bc46f7fc85f70319a851d797d83762b365773c88b0bdbfdf56d73da28b3"
+      "package_digest": "48e44a49912dbf78f6bf6d2faa233798e29117d594168117f956670aed520fe7"
     },
     "persistLimitedScanResultV9": {
-      "route_name": "persistLimitedScanResultV9Bc3d21e647cdfc177",
-      "build_id": "2e2527e56ba3e8d4e814e4507dad53b20c8b01200fdc3d88336e13a2758340d8",
+      "route_name": "persistLimitedScanResultV9B90684c0e00dde6cf",
+      "build_id": "093439035d00a3337abd855e415a5a501f93f862a1b0bd2e593f96060d6897dd",
       "runtime_activation_id": "persistLimitedScanResultV9-staged-runtime-20261111-v4",
-      "package_digest": "baecad40fc29964dc3f1549c581294148568603f9e94aff212bc237f500d1960"
+      "package_digest": "e90ddcd8ed33a75e2bdf21ddaded9f7ad157315de449d534f402a7cc82442d0c"
     },
     "getCustomerScanResultV9": {
       "route_name": "getCustomerScanResultV9Ba05e5a72d8a049a0",

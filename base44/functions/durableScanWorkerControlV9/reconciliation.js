@@ -26,6 +26,7 @@ const SETTLED_RELEASE_STATES = new Set([
   ADMISSION_RELEASE_SATISFIED_UNBOUND,
 ]);
 const RELEASE_OUTCOMES = new Set(["released", "already_released"]);
+const COOLDOWN_OUTCOMES = new Set(["recorded", "unchanged", "expired"]);
 const SATISFY_OUTCOMES = new Set(["satisfied_unbound", "already_satisfied_unbound"]);
 const SAFE_RELEASE_FAILURE_CODES = new Set([
   "admission_release_failed",
@@ -45,6 +46,8 @@ const SAFE_RELEASE_FAILURE_CODES = new Set([
   "coordinator_state_ambiguous",
   "same_request_scan_identity_conflict",
   "scan_identity_conflict",
+  "target_cooldown_claim_conflict",
+  "invalid_target_cooldown_observation",
   "scan_not_bound",
   "barrier_generation_conflict",
   "admission_satisfy_unbound_unavailable",
@@ -262,6 +265,11 @@ export function coordinatorReleaseDecision(scan = {}, statusResult = {}) {
     return { action: "retry", failureCode: "coordinator_lease_state_ambiguous" };
   }
   if (state === "released" && (!coordinatorScanId || coordinatorScanId === expected.scanId)) {
+    if (scan?.crawl_timing?.target_cooldown_publication?.state === "unconfirmed") {
+      return coordinatorScanId === expected.scanId
+        ? { action: "release", reason: "verify_terminal_cooldown_handoff" }
+        : { action: "retry", failureCode: "coordinator_state_ambiguous" };
+    }
     return {
       action: "satisfy",
       reason: "exact_generation_already_released",
@@ -351,17 +359,25 @@ export async function releaseExactTerminalAdmission({
   }
 
   let result;
+  const publication = scan?.crawl_timing?.target_cooldown_publication;
+  const targetCooldown = publication?.state === "unconfirmed" ? {
+    request_id: expected.requestId,
+    barrier_generation: expected.barrierGeneration,
+    claim_sequence: expected.claimSequence,
+    observation: publication.observation ?? null,
+  } : undefined;
   try {
     result = await releaseAdmission({
       ownerUserId: expected.ownerUserId,
       scanId: expected.scanId,
       terminalStatus: expected.terminalStatus,
+      ...(targetCooldown ? { targetCooldown } : {}),
       timeoutMs: RECONCILE_COORDINATOR_TIMEOUT_MS,
     });
   } catch {
     result = { ok: false, outcomeUnknown: true, failureCode: "admission_unreachable" };
   }
-  if (!exactReleaseResponse(result, expected)) {
+  if (!exactReleaseResponse(result, expected) || (targetCooldown && !COOLDOWN_OUTCOMES.has(result.target_cooldown_outcome))) {
     return persistPending({
       entities,
       expected,

@@ -1,7 +1,8 @@
-"""Exercise the real extracted engine through a durable ten-batch chain."""
+"""Exercise the real extracted engine through durable three- and ten-batch chains."""
 import json
 import subprocess
 import sys
+import time
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -146,7 +147,8 @@ def test_exporter_writes_deterministic_static_site_and_refuses_replacement(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_500_page_scan_commits_ten_batches_and_duplicate_finalization_is_inert(mock_network, monkeypatch, tmp_path):
+@pytest.mark.parametrize("page_cap", [150, 500])
+async def test_staged_scan_commits_batches_under_signed_contact_grants(mock_network, monkeypatch, tmp_path, page_cap):
     origin = "https://staged-engine.example"
     exported_site = tmp_path / "site"
     export_fixture(origin, exported_site)
@@ -159,13 +161,16 @@ async def test_500_page_scan_commits_ten_batches_and_duplicate_finalization_is_i
             routes[f"{origin}/{url_path}"] = {"body": file.read_text(), "content_type": content_types[file.suffix]}
     mock_network(routes)
     monkeypatch.setenv("SCAN_EVIDENCE_SIGNING_KEY", "integration-test-key")
-    scan = {"id": "scan_500", "owner_user_id": "owner_500", "project_id": "project_500",
-            "request_id": "request_500", "idempotency_key": "request_500", "attempt_count": 1,
-            "scan_mode": "standard_500", "page_cap": 500, "pipeline_mode": "staged",
+    scan = {"id": "scan_test", "owner_user_id": "owner_test", "project_id": "project_test",
+            "request_id": "request_test", "idempotency_key": "request_test", "attempt_count": 1,
+            "scan_mode": f"standard_{page_cap}", "page_cap": page_cap, "pipeline_mode": "staged",
             "website_url": origin + "/", "respect_robots_txt": True,
+            "admission_target_origin": origin + ":443", "admission_barrier_generation": 4,
+            "admission_claim_sequence": 42,
             "owner_attested_robots_override": False, "status": "queued"}
     job = {**scan, "scan_id": scan["id"]}
     pending, completions, progress_values = [], [], []
+    acquired, open_grants = [], set()
 
     async def read(client, scan_id):
         assert scan_id == scan["id"]
@@ -177,7 +182,7 @@ async def test_500_page_scan_commits_ten_batches_and_duplicate_finalization_is_i
         return dict(scan)
 
     async def progress(client, current, crawled, planned, batch=None):
-        assert 0 <= crawled <= planned <= 500
+        assert 0 <= crawled <= planned <= page_cap
         progress_values.append(crawled)
         return await scan_job.mark_scan_progress(client, current, crawled, planned, batch)
 
@@ -185,22 +190,42 @@ async def test_500_page_scan_commits_ten_batches_and_duplicate_finalization_is_i
         assert name == "durableScanWorkerControlV9"
         assert envelope["proof"] == scan_job.create_authority_seal(
             {key: value for key, value in envelope.items() if key != "proof"}, "integration-test-key")
+        if contact := envelope.get("target_contact"):
+            assert contact["scan_id"] == scan["id"]
+            assert contact["scan_target_origin"] == contact["target_origin"] == origin + ":443"
+            assert contact["barrier_generation"] == 4 and contact["claim_sequence"] == 42
+            assert contact["attempt_count"] == 1
+            delivery = contact["delivery_id"]
+            if envelope["action"] == "acquire_target_contact":
+                assert not open_grants
+                assert delivery not in acquired
+                acquired.append(delivery)
+                open_grants.add(delivery)
+                return {"status_code": 200, "body": {
+                    "success": True, "outcome": "acquired",
+                    "seconds_remaining": contact["delivery_cutoff"] - int(time.time()),
+                }}
+            assert envelope["action"] == "settle_target_contact"
+            assert contact["receipt"]["observation"] is None
+            open_grants.remove(delivery)
+            return {"status_code": 200, "body": {"success": True, "outcome": "settled"}}
         return {"status_code": 200, "body": {"success": True, "scanRun": dict(scan)}}
 
     monkeypatch.setattr(scan_job, "invoke_function", invoke)
 
     async def complete(client, current, result, key):
-        assert result["pages_crawled"] == len(result["pages"]) == 500
-        assert len({page["url"] for page in result["pages"]}) == 500
-        assert result["page_cap"] == 500
+        assert not open_grants
+        assert result["pages_crawled"] == len(result["pages"]) == page_cap
+        assert len({page["url"] for page in result["pages"]}) == page_cap
+        assert result["page_cap"] == page_cap
         assert result["pipeline_limited"] is False
         assert "optional_checks_notice_reason" not in result["crawl_timing"]
         completions.append(result)
         scan["status"] = "complete"
-        return {"ok": True, "fix_list_id": "list_500"}
+        return {"ok": True, "fix_list_id": "list_test"}
 
     async def fail(*args, **kwargs):
-        pytest.fail("The 500-page staged scan failed")
+        pytest.fail("The staged scan failed")
 
     class Dispatcher:
         async def enqueue(self, current_job, stage, batch, *, limited=False):
@@ -210,31 +235,36 @@ async def test_500_page_scan_commits_ten_batches_and_duplicate_finalization_is_i
     runtime = StagedScanRuntime(store, Dispatcher(), StageDependencies(
         read, start, progress, complete, apply_post_crawl_transforms, fail,
         scanner.ScanState, scanner.plan_scan, scanner.crawl_batch, scanner.finalize_scan,
+        request_target_contact=scan_job.request_target_contact,
     ))
-    with scan_page_limit(500):
+    expected_batches = page_cap // 50
+    with scan_page_limit(page_cap):
         await runtime.process(None, "plan", job)
         delivered = []
         while pending:
             stage, task_job, batch, limited = pending.pop(0)
             delivered.append(stage)
             await runtime.process(None, stage, task_job, batch=batch, limited=limited)
-        assert delivered.count("batch") == 10
+        assert delivered.count("batch") == expected_batches
         assert delivered.count("finalize") == 1
-        assert progress_values[-1] == 500
-        duplicate = await runtime.process(None, "finalize", job, batch=10)
+        assert progress_values[-1] == page_cap
+        assert expected_batches + 1 <= len(acquired) <= expected_batches + 2
+        finished_contacts = list(acquired)
+        duplicate = await runtime.process(None, "finalize", job, batch=expected_batches)
     assert duplicate["skipped"] == "already_terminal"
+    assert acquired == finished_contacts
     assert len(completions) == 1
     # Exercise the real review and the actual V9 persistence/reader seal seam,
     # rather than stopping at a successful crawl or a stubbed completion call.
     result = completions[0]
-    (tmp_path / "scan-500.json").write_text(json.dumps(result))
+    (tmp_path / f"scan-{page_cap}.json").write_text(json.dumps(result))
     review = scan_job.run_local_review_isolated(result)
     original_envelope = scan_job.build_completion_envelope(scan, result, review, "integration-test-key")
     with scan_job.worker_function_generation("V9"):
         envelope = scan_job.build_completion_envelope(scan, result, review, "integration-test-key")
     assert len(json.dumps(envelope)) < len(json.dumps(original_envelope))
     assert envelope["scan"]["result_ready_at"] == result["result_ready_at"]
-    (tmp_path / "completion-500.json").write_text(json.dumps(envelope))
+    (tmp_path / f"completion-{page_cap}.json").write_text(json.dumps(envelope))
     script = """
       import assert from 'node:assert/strict';
       import {readFileSync} from 'node:fs';
@@ -243,29 +273,29 @@ async def test_500_page_scan_commits_ten_batches_and_duplicate_finalization_is_i
       import {stagedCompletionTime} from './base44/functions/persistDurableScanAuthorityV9/completionTimestamp.js';
       import {authorityRowsFromSnapshot} from './base44/functions/persistDurableScanAuthorityV9/authorityRows.js';
       import {authoritySnapshotFromRows, buildCustomerProjection, createAuthoritySeal, verifyAuthoritySeal} from './base44/functions/getCustomerScanResultV9/projection.js';
-      const {body, original, scan} = JSON.parse(readFileSync(0, 'utf8'));
+      const {body, original, scan, expectedCap} = JSON.parse(readFileSync(0, 'utf8'));
       const finishedAt = stagedCompletionTime(scan, body.scan);
       assert.ok(Date.parse(finishedAt) > Date.parse(scan.started_at));
       const options = {scan:body.scan,review:body.review,identity:body.identity,userId:body.identity.owner_user_id,now:finishedAt,identityVersion:'evidence_url_identity_v2_published_route'};
       assert.equal(firstFailedAuthorityPredicate(body.scan,body.review,{identityVersion:options.identityVersion}),'');
       const snapshot = buildAuthoritySnapshot(options);
       assert.deepEqual(snapshot,buildAuthoritySnapshot({...options,scan:original.scan,review:original.review}));
-      const rows = authorityRowsFromSnapshot(snapshot,{fixListId:'list_500',ownerUserId:options.userId});
-      const restored = authoritySnapshotFromRows({run:{...rows.scanRun,id:body.identity.scan_id,project_id:body.identity.project_id},fixList:{...rows.fixList,id:'list_500'},fixItems:rows.fixItems,userId:options.userId});
+      const rows = authorityRowsFromSnapshot(snapshot,{fixListId:'list_test',ownerUserId:options.userId});
+      const restored = authoritySnapshotFromRows({run:{...rows.scanRun,id:body.identity.scan_id,project_id:body.identity.project_id},fixList:{...rows.fixList,id:'list_test'},fixItems:rows.fixItems,userId:options.userId});
       assert.deepEqual(restored,snapshot);
       assert.equal(restored.scan.completed_at, finishedAt);
       assert.equal(restored.sealed_at, finishedAt);
       const proof = await createAuthoritySeal(snapshot,'integration-test-key',webcrypto);
       assert.equal(await verifyAuthoritySeal(restored,'integration-test-key',proof,webcrypto),true);
-      assert.equal(snapshot.scan.pages_crawled,500);
-      assert.equal(snapshot.scan.page_cap,500);
+      assert.equal(snapshot.scan.pages_crawled,expectedCap);
+      assert.equal(snapshot.scan.page_cap,expectedCap);
       const timing = {...options.scan.crawl_timing, optional_checks_notice_reason:'site_rate_limited'};
       const notified = buildAuthoritySnapshot({...options, scan:{...options.scan, crawl_timing:timing}});
       assert.equal(notified.scan.health_score, snapshot.scan.health_score);
       assert.deepEqual(notified.recommendations, snapshot.recommendations);
-      const notifiedRows = authorityRowsFromSnapshot(notified,{fixListId:'list_500',ownerUserId:options.userId});
+      const notifiedRows = authorityRowsFromSnapshot(notified,{fixListId:'list_test',ownerUserId:options.userId});
       const notifiedRun = {...notifiedRows.scanRun,id:body.identity.scan_id,project_id:body.identity.project_id};
-      const notifiedFixList = {...notifiedRows.fixList,id:'list_500'};
+      const notifiedFixList = {...notifiedRows.fixList,id:'list_test'};
       const notifiedReadback = authoritySnapshotFromRows({run:notifiedRun,fixList:notifiedFixList,fixItems:notifiedRows.fixItems,userId:options.userId});
       assert.equal(await verifyAuthoritySeal(notifiedReadback,'integration-test-key',await createAuthoritySeal(notified,'integration-test-key',webcrypto),webcrypto),true);
       const projection = buildCustomerProjection({run:notifiedRun,fixList:notifiedFixList,fixItems:notifiedRows.fixItems,fullAccess:true,authorityVerified:true,verifiedOptionalChecksNoticeReason:notifiedReadback.scan.crawl_timing.optional_checks_notice_reason});
@@ -273,7 +303,7 @@ async def test_500_page_scan_commits_ten_batches_and_duplicate_finalization_is_i
       assert.equal(projection.run.health_score,snapshot.scan.health_score);
     """
     checked = subprocess.run(["node", "--input-type=module", "-e", script],
-                             input=json.dumps({"body": envelope, "original": original_envelope, "scan": scan}), text=True, capture_output=True,
+                             input=json.dumps({"body": envelope, "original": original_envelope, "scan": scan, "expectedCap": page_cap}), text=True, capture_output=True,
                              cwd=Path(__file__).resolve().parents[2], timeout=30)
     assert checked.returncode == 0, checked.stderr
 

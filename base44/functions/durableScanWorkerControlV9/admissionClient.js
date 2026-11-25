@@ -42,6 +42,15 @@ export const SAFE_COORDINATOR_ERRORS = new Set([
   "invalid_claim_token_format",
   "admission_busy",
   "target_cooldown_claim_conflict",
+  "invalid_target_cooldown_observation",
+  "invalid_target_contact",
+  "target_cooldown_active",
+  "target_contact_busy",
+  "target_contact_unconfirmed",
+  "target_contact_capacity",
+  "target_contact_claim_conflict",
+  "target_contact_closed",
+  "target_contacts_draining",
   "request_conflict",
   "scan_identity_conflict",
   "barrier_generation_conflict",
@@ -149,6 +158,7 @@ async function callCoordinator(path, payload, { coordinatorUrl, signingKey, fetc
   try {
     response = await send(`${baseUrl}${path}`, {
       method: "POST",
+      ...(path === "/release-with-target-cooldown" || path.endsWith("-target-contact") ? { redirect: "error" } : {}),
       headers: {
         "content-type": "application/json",
         "x-fixlist-timestamp": timestamp,
@@ -224,14 +234,22 @@ export async function bindAdmission({ ownerUserId, requestId, claimToken, scanId
  * Called by the durable worker or the server watchdog -- never by a browser,
  * which is the entire point of moving terminal ownership off the client.
  */
-export async function releaseAdmission({ ownerUserId, scanId, terminalStatus, ...options } = {}) {
+export async function releaseAdmission({ ownerUserId, scanId, terminalStatus, targetCooldown, ...options } = {}) {
   if (!admissionEnabled(options.env ?? readEnv)) {
     return { ok: false, outcomeUnknown: false, failureCode: "admission_disabled" };
   }
-  return callCoordinator("/release", {
+  return callCoordinator(targetCooldown ? "/release-with-target-cooldown" : "/release", {
     owner_user_id: String(ownerUserId ?? ""),
     scan_id: String(scanId ?? ""),
     terminal_status: String(terminalStatus ?? ""),
+    ...(targetCooldown ? { target_cooldown: targetCooldown } : {}),
+  }, options);
+}
+
+export async function relayTargetContact({ action, contact, ...options }) {
+  return callCoordinator(action === "acquire_target_contact" ? "/acquire-target-contact" : "/settle-target-contact", {
+    ...contact,
+    action: `${action}_v1`,
   }, options);
 }
 

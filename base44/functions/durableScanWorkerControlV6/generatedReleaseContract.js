@@ -3,7 +3,7 @@
 // Run that generator after changing either input; CI fails on drift.
 
 export const RELEASE_CONTRACT_SCHEMA_VERSION = "beta_crawler_revision_v1";
-export const RELEASE_FINGERPRINT = "b36ca24b8e0f728e";
+export const RELEASE_FINGERPRINT = "cd3f3a5ef7dd6787";
 export const RELEASE_STATUS = "candidate";
 export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "acceptance_evidence_version": "standard150_acceptance_evidence_v2_aggregate_rss_fail_closed",
@@ -12,7 +12,7 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "artifact_filter_version": "artifact_filter_v4_wordpress_route_noise",
   "authority_seal_version": "scan_evidence_hmac_sha256_v1",
   "canonical_href_resolution_version": "canonical_href_resolution_v3_published_route_identity",
-  "canonical_target_evidence_version": "canonical_target_evidence_v2_origin_alias_equivalence",
+  "canonical_target_evidence_version": "canonical_target_evidence_v3_declared_request_path",
   "count_copy_version": "count_copy_v2_agreeing_verbs",
   "coverage_authority_evidence_version": "coverage_authority_evidence_v2_authoritative",
   "coverage_authority_version": "coverage_authority_v1_shared_decision",
@@ -60,7 +60,7 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "repair_write_contract_version": "repair_contract_v2_shadow_calibrated",
   "representative_page_version": "business_representative_page_v3_sitewide_archetype_ranking",
   "review_attestation_version": "standard_review_snapshot_hmac_identity_v1",
-  "review_evidence_calibration_version": "review_evidence_calibration_v7_content_applicability",
+  "review_evidence_calibration_version": "review_evidence_calibration_v8_source_render_confidence",
   "review_version": "python_review_v2_structural_marketplace",
   "route_boundary_classifier_version": "route_boundary_classifier_v2_wordpress_author_archives",
   "sampling_disclosure_version": "sampling_disclosure_v5_selection_language",
@@ -77,7 +77,7 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "title_evidence_version": "title_evidence_v1_contextual_duplicates",
   "trust_discovery_version": "trust_page_discovery_v1",
   "trust_finding_gate_version": "trust_page_finding_gate_v1",
-  "visible_template_evidence_version": "visible_template_evidence_v1",
+  "visible_template_evidence_version": "visible_template_evidence_v2_source_context",
   "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
 });
 

@@ -47,6 +47,7 @@ from .metadata_title_evidence import (
 )
 from .search_applicability import search_applicability, search_metadata_applicable, filter_search_findings
 from .stage2_shared_probe_orchestration import run_stage2_shared_probe_orchestration
+from .accepted_content_evidence import missing_heading_needs_browser
 from .content_evidence_findings import content_evidence_findings
 from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
 from .missing_h1_contract import apply_missing_h1_contract
@@ -1966,7 +1967,7 @@ def build_findings(pages: list[dict], *, scan_origin: str = "", identity_version
                 finding = create_finding("malformed_meta_description", "meta_description", "medium", "Fix malformed meta-description markup", path, explanation="A meta-description element exists without a usable content attribute.", recommendation="Output one valid meta name=\"description\" element with a non-empty content value.")
                 finding.update({"metadata_evidence_version": METADATA_EVIDENCE_VERSION, "meta_description_state": metadata_state})
                 findings.append(finding)
-        if page.get("h1_count", 0) == 0 and page.get("estimated_page_intent") != "internal_or_auth":
+        if page.get("h1_count", 0) == 0 and page.get("estimated_page_intent") != "internal_or_auth" and not missing_heading_needs_browser(page):
             findings.append(create_finding("missing_h1", "thin_content", "medium", "Add one clear page heading", path, explanation="The page does not have a clear H1 heading.", recommendation="Add one main heading that matches the page purpose."))
         if page.get("h1_count", 0) > 1:
             findings.append(create_finding("multiple_h1", "thin_content", "low", "Use one main page heading", path, explanation="The page has more than one H1 heading.", recommendation="Keep one H1 as the main page heading and make the rest H2/H3 headings."))

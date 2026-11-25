@@ -133,12 +133,12 @@ export function submissionObeysRobots(value) {
 
 export const ROBOTS_OBEYED_COPY = Object.freeze({
   help: "FixList will respect robots.txt and the site's other access controls.",
-  spec: "Scan depth: up to 150 pages · respects robots.txt · read-only",
+  spec: "Read-only scan · respects robots.txt",
 });
 
 export const ROBOTS_OVERRIDE_COPY = Object.freeze({
   help: "Because you own or manage this site, FixList can ignore robots.txt for this scan. This does not bypass logins, firewalls, bot challenges, or rate limits.",
-  spec: "Scan depth: up to 150 pages · owner robots override · read-only",
+  spec: "Read-only scan · owner robots override",
 });
 
 export function helpTextForPolicy(policy) {

@@ -63,8 +63,8 @@ test("customer copy offers one free Standard 150 preview before the same one-tim
   assert.match(landing, /One free Standard 150 test scan/i);
   assert.match(landing, /No payment before your preview/i);
   assert.match(landing, /Run free scan/i);
-  assert.match(scanForm, /one free Standard 150 test scan before payment/i);
-  assert.match(scanForm, /full access is required to copy, download, export/i);
+  assert.match(scanForm, /one free scan of up to 150 pages/i);
+  assert.match(scanForm, /The preview is view-only\. Full access includes all fixes, exports, and repeat scans/i);
   assert.match(fixList, /Free preview is view-only/i);
   assert.match(fixList, /copy, CSV\/PDF\/JSON downloads, exports/i);
   assert.match(billing, /one-time payment/i);

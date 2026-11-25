@@ -82,6 +82,7 @@ ACTIVE=false
 case "$OPERATION" in
   publish) EXPECTED_CONFIRM="PUBLISH-BASE44-STAGED-V9:$SOURCE_SHA" ;;
   verify) EXPECTED_CONFIRM="VERIFY-BASE44-STAGED-V9:$SOURCE_SHA" ;;
+  verify-pinned) EXPECTED_CONFIRM="VERIFY-PINNED-BASE44-STAGED-V9:$SOURCE_SHA" ;;
   active-preflight|active-restore) ACTIVE=true; EXPECTED_CONFIRM="PUBLISH-BASE44-ACTIVE-V9:$SOURCE_SHA" ;;
   recover-active) ACTIVE=true; EXPECTED_CONFIRM="RECOVER-BASE44-ACTIVE-V9:$SOURCE_SHA" ;;
   *) echo 'Unsupported staged V9 operation.' >&2; exit 2 ;;
@@ -102,7 +103,9 @@ if [[ -n "${BASE44_API_KEY:-}" ]]; then
   exit 2
 fi
 cd "$REPO_ROOT"
-if [[ "$OPERATION" == recover-active || "$ACTIVE" == false ]]; then
+if [[ "$OPERATION" == verify-pinned ]]; then
+  fixlist_require_pinned_checkout "$REPO_ROOT" "$SOURCE_SHA"
+elif [[ "$OPERATION" == recover-active || "$ACTIVE" == false ]]; then
   fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$SOURCE_SHA"
 fi
 if [[ "$ACTIVE" == true ]]; then
@@ -248,7 +251,7 @@ make_readback_project "$TASK_TMP/preflight"
 while IFS=$'\t' read -r name route; do
   pull_route "$TASK_TMP/preflight" "$route"
   if unregistered_alias "$TASK_TMP/preflight" "$route"; then
-    if [[ "$OPERATION" == verify ]]; then
+    if [[ "$OPERATION" == verify || "$OPERATION" == verify-pinned ]]; then
       echo "V9 deployed readback is missing $route." >&2
       exit 1
     fi
@@ -293,7 +296,7 @@ while IFS=$'\t' read -r name route; do
   printf '%s\t%s\n' "$name" "$digest" >> "$TASK_TMP/packages.tsv"
 done < "$TASK_TMP/create.tsv"
 
-if [[ "$ACTIVE" == true ]]; then
+if [[ "$ACTIVE" == true || "$OPERATION" == verify-pinned ]]; then
   source "$REPO_ROOT/scripts/verify-base44-staged-functions.sh"
   SOURCE_SHA="$SOURCE_SHA" BASE44_APP_ID="$APP_ID" BASE44_EXPECTED_OWNER="$BASE44_EXPECTED_OWNER" PROBE_REPORT="$TASK_TMP/runtime.json" \
     fixlist_verify_staged_functions pinned

@@ -49,6 +49,8 @@ export const SAFE_COORDINATOR_ERRORS = new Set([
   "not_terminal_status",
   "scan_not_bound",
   "coordinator_unavailable",
+  "target_cooldown_claim_conflict",
+  "invalid_target_cooldown_observation",
 ]);
 
 function readEnv(name) {
@@ -124,6 +126,7 @@ async function callCoordinator(path, payload, { coordinatorUrl, signingKey, fetc
   try {
     response = await send(`${baseUrl}${path}`, {
       method: "POST",
+      ...(path === "/release-with-target-cooldown" ? { redirect: "error" } : {}),
       headers: {
         "content-type": "application/json",
         "x-fixlist-timestamp": timestamp,
@@ -198,13 +201,14 @@ export async function bindAdmission({ ownerUserId, requestId, claimToken, scanId
  * Called by the durable worker or the server watchdog -- never by a browser,
  * which is the entire point of moving terminal ownership off the client.
  */
-export async function releaseAdmission({ ownerUserId, scanId, terminalStatus, ...options } = {}) {
+export async function releaseAdmission({ ownerUserId, scanId, terminalStatus, targetCooldown, ...options } = {}) {
   if (!admissionEnabled(options.env ?? readEnv)) {
     return { ok: false, outcomeUnknown: false, failureCode: "admission_disabled" };
   }
-  return callCoordinator("/release", {
+  return callCoordinator(targetCooldown ? "/release-with-target-cooldown" : "/release", {
     owner_user_id: String(ownerUserId ?? ""),
     scan_id: String(scanId ?? ""),
     terminal_status: String(terminalStatus ?? ""),
+    ...(targetCooldown ? { target_cooldown: targetCooldown } : {}),
   }, options);
 }

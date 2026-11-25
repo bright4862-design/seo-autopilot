@@ -19,6 +19,7 @@ const fingerprint = "2".repeat(16);
 const customerDigest = createHash("sha256").update(JSON.stringify([customer.id])).digest("hex");
 const gatewayOrigin = "https://fixlist-dispatch-gateway-tpucgyfewa-ew.a.run.app";
 const gatewayRevision = "fixlist-dispatch-gateway-staged-fixture";
+const pilotWorkerOrigin = "https://canary-00123-xyz---fixlist-standard150-worker-tpucgyfewa-ew.a.run.app";
 const emptyCohortDigest = createHash("sha256").update("[]").digest("hex");
 
 function fixture(t) {
@@ -33,7 +34,10 @@ function fixture(t) {
   writeFileSync(join(root, "data/beta-crawler-revision.json"), JSON.stringify({ fingerprint }));
   copyFileSync(routeManifest, join(root, routeManifest));
   for (const file of [operator, collector]) copyFileSync(file, join(root, file));
-  writeFileSync(join(root, "scripts/lib/release-source-guard.sh"), "fixlist_require_exact_main() { [[ \"$2\" == \"$SOURCE_SHA\" ]]; }\n");
+  writeFileSync(join(root, "scripts/lib/release-source-guard.sh"), [
+    'fixlist_require_exact_main() { [[ "$2" == "$SOURCE_SHA" && "$TEST_MAIN_MOVED" != true ]]; }',
+    'fixlist_require_merged_checkout() { [[ "$2" == "$SOURCE_SHA" && "$TEST_SOURCE_MERGED" == true ]]; }',
+  ].join("\n"));
   writeFileSync(join(root, "scripts/lib/base44-pinned-cli.sh"), `
 fixlist_install_base44_cli() { FIXLIST_BASE44_CLI="$TEST_CLI"; }
 fixlist_require_base44_owner() { [[ "$1" == "$TEST_CLI_USER" ]] || return 2; }
@@ -89,7 +93,7 @@ if (args[2] === "exec") {
         release_fingerprint: "${fingerprint}", configured_pipeline_mode: "staged", pipeline_mode: "staged",
         staged_owner_cohort_state: "explicit", staged_owner_count: 1, staged_owner_cohort_sha256: "3".repeat(64),
         staged_owner_enabled: true, intake_gate: "enabled", admission_gate: "enabled",
-        staged_rollout_scope: "off", staged_500_entitled_enabled: false,
+        staged_rollout_scope: "off", staged_500_entitled_enabled: false, paid_dispatch_gateway_origin: "${gatewayOrigin}",
         ...JSON.parse(process.env.TEST_V9),
       };
     } },
@@ -118,7 +122,8 @@ console.log(JSON.stringify({
   chmodSync(curl, 0o700);
   return (script, operation, selected, user, options = {}) => {
     const confirm = {
-      "prepare-owner": `PREPARE-BASE44-STAGED-150:${source}:${selected}`,
+      "prepare-owner": `PREPARE-BASE44-STAGED-150:${source}:${selected}${options.pilotExpiry ? ":" + options.pilotExpiry : ""}`,
+      "hold-published-pilot": `HOLD-BASE44-PUBLISHED-PILOT:${source}`,
       "prepare-paid": `PREPARE-BASE44-STAGED-PAID:${source}:${gatewayRevision}:${options.cap || "150"}`,
       "deploy-probe": `DEPLOY-BASE44-STAGED-PROBE:${source}`,
       disable: `DISABLE-BASE44-STAGED:${source}:${selected}`,
@@ -132,10 +137,22 @@ console.log(JSON.stringify({
         STAGED_OWNER_USER_ID: selected, EXPECTED_OWNER_USER_ID: selected, BASE44_OBSERVATIONS_DIR: output,
         EXPECTED_OPERATOR_USER_ID: options.intakeOperatorId || "",
         STAGED_COHORT_TARGET_ROLE: options.targetRole || "user",
+        STAGED_PUBLIC_PILOT_EXPIRES_AT: options.pilotExpiry || "",
+        STAGED_PILOT_WORKER_ORIGIN: options.workerOrigin ?? (options.pilotExpiry ? pilotWorkerOrigin : ""),
+        TEST_MAIN_MOVED: options.mainMoved ? "true" : "false",
+        TEST_SOURCE_MERGED: options.sourceMerged === false ? "false" : "true",
         TEST_CLI: cli, TEST_TRACE: trace, TEST_USER: JSON.stringify(user),
         TEST_PROBE: JSON.stringify(options.probe || {}), TEST_V9: JSON.stringify(options.v9 || {}),
         STAGED_PAID_PAGE_CAP: options.cap || "150", STAGED_GATEWAY_REVISION: gatewayRevision,
-        TEST_GATEWAY: JSON.stringify(options.gateway || {}), TEST_GATEWAY_AFTER_CLOSE: JSON.stringify(options.gatewayAfterClose || {}),
+        TEST_GATEWAY: JSON.stringify({
+          ...(options.pilotExpiry ? {
+            staged_rollout_scope: "off", staged_500_entitled_enabled: false,
+            staged_owner_count: 1, staged_owner_cohort_sha256: customerDigest,
+            canary_worker_origin: pilotWorkerOrigin, canary_owner_count: 1, canary_owner_cohort_sha256: customerDigest,
+          } : {}),
+          ...options.gateway,
+        }),
+        TEST_GATEWAY_AFTER_CLOSE: JSON.stringify(options.gatewayAfterClose || {}),
       },
     });
     const calls = existsSync(trace) ? readFileSync(trace, "utf8").trim().split("\n").map(JSON.parse) : [];
@@ -214,6 +231,8 @@ for (const [name, user, overrides] of [
   ["workspace API key without the personal CLI session", london, { apiKey: "b44k_mock" }],
   ["ordinary customer as the runtime caller", customer, {}],
   ["stale V9 intake build", london, { v9: { build_id: "0".repeat(64) } }],
+  ["an unavailable V9 gateway", london, { v9: { paid_dispatch_gateway_origin: "" } }],
+  ["a different V9 gateway", london, { v9: { paid_dispatch_gateway_origin: "https://other.example" } }],
 ]) {
   test(`pilot preparation makes zero configuration writes with ${name}`, t => {
     const result = fixture(t)(operator, "prepare-owner", customer.id, user, pilotOptions(london, overrides));
@@ -296,7 +315,8 @@ for (const cap of ["150", "500"]) {
       ["invoke", intakeRoute, "staged_runtime_status"], ["gateway.health"],
       ["secrets", "set", "BETA_SCAN_INTAKE_ENABLED=false"], ["gateway.health"],
       ["secrets", "set", "SCAN_PIPELINE_MODE=staged", "SCAN_STAGED_OWNER_IDS=", "SCAN_PIPELINE_OWNER_IDS=",
-        "SCAN_STAGED_ROLLOUT_SCOPE=paid", `SCAN_STAGED_500_ENTITLED_ENABLED=${cap === "500"}`],
+        "SCAN_STAGED_ROLLOUT_SCOPE=paid", `SCAN_STAGED_500_ENTITLED_ENABLED=${cap === "500"}`,
+        "SCAN_PUBLIC_PILOT_EXPIRES_AT=0"],
       ["invoke", intakeRoute, "staged_runtime_status"], ["gateway.health"],
     ]);
     assert.match(result.stdout, /BASE44_STAGED_PAID_READBACK_VERIFIED.*public_intake=closed/);
@@ -395,4 +415,38 @@ test("ordinary collection fails closed on operator or isolation mismatch", t => 
   });
   assert.notEqual(widened.status, 0);
   assert.equal(existsSync(join(widened.output, "intake.json")), false);
+});
+
+test("published pilot preparation binds expiry to the named ordinary cohort", t => {
+  const pilotExpiry = String(Math.floor(Date.now() / 1000) + 1800);
+  const options = pilotOptions(london, { pilotExpiry });
+  options.v9.public_pilot_expires_at = Number(pilotExpiry);
+  const result = fixture(t)(operator, "prepare-owner", customer.id, london, options);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(result.calls.some(row => row.includes(`SCAN_PUBLIC_PILOT_EXPIRES_AT=${pilotExpiry}`)));
+  assert.equal(result.calls.filter(([name]) => name === "gateway.health").length, 3);
+});
+
+test("published pilot preparation refuses a stale gateway or mismatched canary before any write", t => {
+  const pilotExpiry = String(Math.floor(Date.now() / 1000) + 1800);
+  for (const gateway of [
+    { source_sha: "b".repeat(40) },
+    { canary_owner_cohort_sha256: "b".repeat(64) },
+    { canary_worker_origin: null },
+  ]) {
+    const result = fixture(t)(operator, "prepare-owner", customer.id, london, pilotOptions(london, { pilotExpiry, gateway }));
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /does not route the named pilot/);
+    assert.equal(result.calls.some(([name]) => name === "secrets"), false);
+  }
+});
+
+test("holding the published pilot closes only its launcher and verifies the exact runtime", t => {
+  const result = fixture(t)(operator, "hold-published-pilot", "", london, {
+    operatorId: london.id, expectedCli: london.email, mainMoved: true, v9: { public_pilot_expires_at: 0 },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.calls.filter(([name]) => name === "secrets"),
+    [["secrets", "set", "SCAN_PUBLIC_PILOT_EXPIRES_AT=0"]]);
+  assert.equal(result.calls.filter(row => row[1] === intakeRoute).length, 2);
 });

@@ -16,7 +16,7 @@ from .robots_policy import SCANNER_USER_AGENT, SEARCH_USER_AGENT, annotate_robot
 from .security import DEFAULT_MAX_DECODED_RESPONSE_BYTES, safe_get_once
 
 
-CANONICAL_TARGET_EVIDENCE_VERSION = "canonical_target_evidence_v2_origin_alias_equivalence"
+CANONICAL_TARGET_EVIDENCE_VERSION = "canonical_target_evidence_v3_declared_request_path"
 DEFAULT_MAX_TARGETS = 20
 DEFAULT_CONCURRENCY = 4
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 8.0
@@ -33,8 +33,7 @@ def _normalize_url(value: str) -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return ""
     path = parsed.path or "/"
-    if path != "/":
-        path = path.rstrip("/")
+    # A trailing slash and path case belong to the HTTP request target.
     return parsed._replace(scheme=parsed.scheme.lower(), netloc=parsed.netloc.lower(), path=path, fragment="").geturl()
 
 
@@ -296,8 +295,11 @@ async def validate_canonical_targets(
 ) -> dict:
     page_by_url: dict[str, dict] = {}
     for page in pages:
-        for identity in _page_identity_urls(page):
-            page_by_url.setdefault(identity, page)
+        # A terminal response describes the final address. Its 200 cannot
+        # establish the status of the earlier address in a redirect chain.
+        served_url = _normalize_url(page.get("final_url") or page.get("url"))
+        if served_url:
+            page_by_url.setdefault(served_url, page)
 
     same_origin_sources: dict[str, list[dict]] = {}
     declaration_count = 0

@@ -227,7 +227,7 @@ const COPY = {
   },
   in_progress: {
     title: "This scan is still running",
-    detail: "FixList is still working. This page refreshes automatically and will show your saved result as soon as it is ready.",
+    detail: "This page refreshes automatically while your scan runs.",
     nextStep: "Leave this page open, or come back to it from your scan history.",
     retryAdvice: "Starting a second scan of the same site now would compete with this one for the same time budget.",
   },
@@ -335,10 +335,11 @@ function inProgressPresentation(record, now) {
     detail: COPY.in_progress.detail,
     nextStep: canLeavePage
       ? "You can close this page and come back to it from your scan history; the scan keeps running."
-      : "Leave this page open — it updates on its own as the scan works through the site.",
+      : "Keep this page open to see your report when it’s ready.",
     retryAdvice: COPY.in_progress.retryAdvice,
     countLabel: model.countLabel,
-    percent: model.percent,
+    pageLimit: model.pageLimit,
+    percent: model.status === "reviewing" ? null : model.percent,
     canLeavePage,
     slowNote: slowButHealthyNote(record, now),
   };
@@ -371,7 +372,7 @@ export function durableScanStatePresentation(record, { now = Date.now(), ownersh
   if (RUNNING_STATUSES.has(status)) return inProgressPresentation(source, now);
   // Every branch returns the same keys, so the page never has to guard a
   // progress field that only exists on one of them.
-  const settled = (kind, copy = COPY[kind]) => ({ kind, ...copy, countLabel: "", percent: null, canLeavePage: false, slowNote: "" });
+  const settled = (kind, copy = COPY[kind]) => ({ kind, ...copy, countLabel: "", pageLimit: null, percent: null, canLeavePage: false, slowNote: "" });
   if (status === "cancelled") return settled("cancelled");
   if (status === "limited" || status === "failed") {
     const kind = presentedKind(source, ownership);

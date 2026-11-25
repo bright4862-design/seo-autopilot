@@ -217,6 +217,9 @@ def acceptance_definition(value: Any, *, now: int, operator_id: str) -> dict[str
         maximum=total_budget,
         code="invalid_acceptance_owner_budget",
     )
+    launcher_build_id = source.get("required_launcher_build_id", "")
+    if not isinstance(launcher_build_id, str) or (launcher_build_id and not re.fullmatch(r"[0-9a-f]{64}", launcher_build_id)):
+        raise ControlError("invalid_acceptance_launcher_build_id")
     return {
         "version": ACCEPTANCE_COHORT_VERSION,
         "cohort_id": cohort_id,
@@ -228,6 +231,7 @@ def acceptance_definition(value: Any, *, now: int, operator_id: str) -> dict[str
         "per_owner_claim_budget": per_owner_budget,
         "created_at": int(now),
         "created_by": _id(operator_id, "invalid_operator_id"),
+        **({"required_launcher_build_id": launcher_build_id} if launcher_build_id else {}),
     }
 
 

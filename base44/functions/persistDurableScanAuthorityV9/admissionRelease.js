@@ -2,6 +2,7 @@ import { RELEASE_COMPONENT_VERSIONS } from "./generatedReleaseContract.js";
 
 const TERMINAL_STATUSES = new Set(["complete", "limited", "failed", "cancelled"]);
 const RELEASE_OUTCOMES = new Set(["released", "already_released"]);
+const COOLDOWN_OUTCOMES = new Set(["recorded", "unchanged", "expired"]);
 const SAFE_FAILURE_CODES = new Set([
   "admission_disabled",
   "admission_not_configured",
@@ -15,6 +16,8 @@ const SAFE_FAILURE_CODES = new Set([
   "claim_not_found",
   "scan_not_bound",
   "scan_identity_conflict",
+  "target_cooldown_claim_conflict",
+  "invalid_target_cooldown_observation",
   "request_conflict",
   "admission_release_identity_conflict",
   "admission_release_scan_changed",
@@ -115,12 +118,20 @@ export async function persistExactAdmissionRelease({
   }
 
   const attemptedAt = String(now());
+  const publication = scan?.crawl_timing?.target_cooldown_publication;
+  const targetCooldown = publication?.state === "unconfirmed" ? {
+    request_id: expected.request_id,
+    barrier_generation: expected.barrier_generation,
+    claim_sequence: expected.claim_sequence,
+    observation: publication.observation ?? null,
+  } : undefined;
   let result;
   try {
     result = await release({
       ownerUserId: expected.owner_user_id,
       scanId: expected.scan_id,
       terminalStatus: status,
+      ...(targetCooldown ? { targetCooldown } : {}),
     });
   } catch {
     result = { ok: false, outcomeUnknown: true, failureCode: "admission_unreachable" };
@@ -138,6 +149,7 @@ export async function persistExactAdmissionRelease({
     && coordinatorScanId === expected.scan_id
     && coordinatorBarrierGeneration === expected.barrier_generation
     && coordinatorClaimSequence === expected.claim_sequence
+    && (!targetCooldown || COOLDOWN_OUTCOMES.has(result.target_cooldown_outcome))
   );
 
   if (!exactCoordinatorGeneration) {

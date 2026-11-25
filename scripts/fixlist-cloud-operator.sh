@@ -32,6 +32,7 @@ CHANGE_TICKET="${CHANGE_TICKET:-}"
 CUTOVER_REASON="${CUTOVER_REASON:-Standard 150 controlled cutover}"
 ACCEPTANCE_COHORT_ID="${ACCEPTANCE_COHORT_ID:-}"
 ACCEPTANCE_RELEASE_ID="${ACCEPTANCE_RELEASE_ID:-}"
+ACCEPTANCE_LAUNCHER_BUILD_ID="${ACCEPTANCE_LAUNCHER_BUILD_ID:-}"
 ACCEPTANCE_SOURCE_SHA="${ACCEPTANCE_SOURCE_SHA:-}"
 ACCEPTANCE_OWNER_USER_IDS="${ACCEPTANCE_OWNER_USER_IDS:-}"
 ACCEPTANCE_EXPIRES_AT="${ACCEPTANCE_EXPIRES_AT:-}"
@@ -949,21 +950,24 @@ write_acceptance_payload() {
   python3 - "$destination" "$BARRIER_EXPECTED_GENERATION" "$CUTOVER_REASON" "$CHANGE_TICKET" \
     "$ACCEPTANCE_COHORT_ID" "$ACCEPTANCE_RELEASE_ID" "$ACCEPTANCE_SOURCE_SHA" \
     "$ACCEPTANCE_OWNER_USER_IDS" "$ACCEPTANCE_EXPIRES_AT" \
-    "$ACCEPTANCE_TOTAL_CLAIM_BUDGET" "$ACCEPTANCE_PER_OWNER_CLAIM_BUDGET" <<'PY'
+    "$ACCEPTANCE_TOTAL_CLAIM_BUDGET" "$ACCEPTANCE_PER_OWNER_CLAIM_BUDGET" "$ACCEPTANCE_LAUNCHER_BUILD_ID" <<'PY'
 import json, re, sys
 
 (destination, generation, reason, ticket, cohort_id, release_id, source_sha,
- owners_raw, expires_at, total_budget, owner_budget) = sys.argv[1:]
+ owners_raw, expires_at, total_budget, owner_budget, launcher_build_id) = sys.argv[1:]
 owners = [item.strip() for item in owners_raw.split(",") if item.strip()]
 safe_id = re.compile(r"^[A-Za-z0-9_-]{6,160}$")
 if not safe_id.fullmatch(cohort_id) or not safe_id.fullmatch(release_id):
     raise SystemExit("Acceptance cohort and release IDs must be bounded safe IDs")
 if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
     raise SystemExit("Acceptance source SHA must be exact lowercase Git SHA")
+if launcher_build_id and not re.fullmatch(r"[0-9a-f]{64}", launcher_build_id):
+    raise SystemExit("Acceptance launcher build ID must be a 64-character SHA256")
 if not owners or len(owners) != len(set(owners)) or not all(safe_id.fullmatch(item) for item in owners):
     raise SystemExit("Acceptance owner allowlist is invalid")
 payload = {
-    "operation": "acceptance_only",
+    # Older coordinators reject this operation before they can open the barrier.
+    "operation": "published_pilot_acceptance" if launcher_build_id else "acceptance_only",
     "reason": reason,
     "change_ticket": ticket,
     "intended_prior": {"mode": "closed", "generation": int(generation)},
@@ -975,6 +979,7 @@ payload = {
         "expires_at": int(expires_at),
         "total_claim_budget": int(total_budget),
         "per_owner_claim_budget": int(owner_budget),
+        **({"required_launcher_build_id": launcher_build_id} if launcher_build_id else {}),
     },
 }
 with open(destination, "w", encoding="utf-8") as handle:
@@ -1044,10 +1049,10 @@ PY
 parse_barrier_response() {
   local expected_operation="$1"
   mapfile -t _barrier_values < <(python3 - "$BARRIER_RESPONSE_FILE" "$expected_operation" \
-    "$OPERATOR_TMP/operator-key" "$ADMISSION_DRAIN_SNAPSHOT_DERIVATION_LABEL" <<'PY'
+    "$OPERATOR_TMP/operator-key" "$ADMISSION_DRAIN_SNAPSHOT_DERIVATION_LABEL" "$ACCEPTANCE_LAUNCHER_BUILD_ID" <<'PY'
 import hashlib, hmac, json, re, sys
 
-path, expected, key_path, snapshot_label = sys.argv[1:]
+path, expected, key_path, snapshot_label, launcher_build_id = sys.argv[1:]
 value = json.load(open(path, encoding="utf-8"))
 if value.get("success") is not True or value.get("operation") != expected:
     raise SystemExit("Unexpected operator response")
@@ -1080,6 +1085,9 @@ if not re.fullmatch(r"[0-9a-f]{64}", proof):
     raise SystemExit("Invalid drain snapshot proof")
 if not hmac.compare_digest(proof, expected_proof):
     raise SystemExit("Drain snapshot signature mismatch")
+if expected == "acceptance_only" and launcher_build_id:
+    if (snapshot.get("boundary") or {}).get("required_launcher_build_id") != launcher_build_id:
+        raise SystemExit("Published pilot launcher binding is missing from the signed snapshot")
 if any(not isinstance(item, int) or item < 0 for item in (total, live, active, expired, bound)):
     raise SystemExit("Invalid drain counts")
 print(mode)
@@ -1261,7 +1269,12 @@ barrier_status_command() {
 }
 
 verify_zero_admission_obligations_command() {
-  require_exact_main_owner_source
+  if [[ "${FIXLIST_DRAIN_READBACK_SOURCE_GUARD:-current}" == pinned && "${GITHUB_ACTIONS:-}" != true ]]; then
+    source "$REPO_ROOT/scripts/lib/release-source-guard.sh"
+    fixlist_require_merged_checkout "$REPO_ROOT" "$SOURCE_SHA"
+  else
+    require_exact_main_owner_source
+  fi
   require_confirmation "VERIFY-ZERO-ADMISSION:${SOURCE_SHA}:${BARRIER_EXPECTED_GENERATION}"
   verify_zero_admission_obligations
 }
@@ -1282,7 +1295,18 @@ open_claim_barrier() {
 activate_acceptance_only() {
   require_exact_main_owner_source
   require_barrier_inputs
-  require_confirmation "OPEN-STANDARD150-ACCEPTANCE:${SOURCE_SHA}:${BARRIER_EXPECTED_GENERATION}:${ACCEPTANCE_COHORT_ID}"
+  local expected_confirmation="OPEN-STANDARD150-ACCEPTANCE:${SOURCE_SHA}:${BARRIER_EXPECTED_GENERATION}:${ACCEPTANCE_COHORT_ID}"
+  if [[ -n "$ACCEPTANCE_LAUNCHER_BUILD_ID" ]]; then
+    local exact_launcher
+    exact_launcher="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["functions"]["startStandardScanJobV9"]["build_id"])' \
+      "$REPO_ROOT/data/generated-staged-v9-routes.json")"
+    if [[ ! "$ACCEPTANCE_LAUNCHER_BUILD_ID" =~ ^[0-9a-f]{64}$ || "$ACCEPTANCE_LAUNCHER_BUILD_ID" != "$exact_launcher" ]]; then
+      echo "Published pilot launcher build ID does not match the exact source." >&2
+      return 1
+    fi
+    expected_confirmation+=":$ACCEPTANCE_LAUNCHER_BUILD_ID"
+  fi
+  require_confirmation "$expected_confirmation"
   [[ "$ACCEPTANCE_SOURCE_SHA" == "$SOURCE_SHA" ]] \
     || { echo "Acceptance cohort must bind the exact main source SHA." >&2; return 1; }
   require_closed_drained_barrier

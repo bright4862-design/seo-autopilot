@@ -368,6 +368,8 @@ class OwnerCanaryRoutingTests(unittest.TestCase):
             payload = main.app.test_client().get("/health").get_json()
         self.assertEqual(payload["canary_worker_origin"], CANARY_ORIGIN)
         self.assertEqual(payload["canary_owner_count"], 1)
+        self.assertEqual(payload["canary_owner_cohort_sha256"],
+                         hashlib.sha256(json.dumps([CANARY_OWNER], separators=(",", ":")).encode()).hexdigest())
         self.assertNotIn(CANARY_OWNER, json.dumps(payload))
 
     def test_configuration_fails_closed(self):

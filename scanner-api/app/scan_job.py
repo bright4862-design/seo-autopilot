@@ -43,6 +43,7 @@ from .observability import emit
 from .page_output_privacy import project_scan_result_for_external_boundary
 from .scan_limits import current_page_cap, page_cap_for_mode, scan_page_limit, standard_scan_contract
 from .staged_telemetry import COMPLETION_FUNCTIONS, active_delivery
+from .target_cooldown import explicit_http_origin
 
 WORKER_VERSION = "scan_job_worker_v1_cloud_tasks"
 CONTROL_VERSION = "durable_standard150_control_v1"
@@ -282,6 +283,7 @@ def build_control_envelope(
     failure: dict[str, Any] | None = None,
     progress: dict[str, Any] | None = None,
     target_cooldown: dict[str, Any] | None = None,
+    target_contact: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     signed = {
         "version": CONTROL_VERSION,
@@ -294,6 +296,8 @@ def build_control_envelope(
         signed["progress"] = progress
     if action == "observe_target_cooldown":
         signed["target_cooldown"] = target_cooldown
+    if action in {"acquire_target_contact", "settle_target_contact"}:
+        signed["target_contact"] = target_contact
     return {**signed, "proof": create_authority_seal(signed, signing_key)}
 
 
@@ -373,6 +377,30 @@ async def publish_target_cooldown(client: httpx.AsyncClient, scan: dict[str, Any
     return response["status_code"] == 200 and body.get("success") is True and body.get("outcome") in {
         "recorded", "unchanged", "expired",
     }
+
+
+async def request_target_contact(client: httpx.AsyncClient, scan: dict[str, Any], action: str, details: dict[str, Any]):
+    """Control site egress through the exact, signed Base44 worker route."""
+    identity = _scan_identity(scan)
+    signing_key = str(os.getenv("SCAN_EVIDENCE_SIGNING_KEY") or "")
+    attempt = scan.get("attempt_count")
+    generation = scan.get("admission_barrier_generation")
+    sequence = scan.get("admission_claim_sequence")
+    origin = explicit_http_origin(str(scan.get("website_url") or ""))
+    if (not signing_key or not all(identity.values()) or not origin
+            or type(attempt) is not int or attempt < 1
+            or type(generation) is not int or generation < 0 or type(sequence) is not int or sequence < 1):
+        return {"status_code": 409, "body": {"error_code": "target_contact_claim_conflict"}}
+    contact = {
+        **details, "scan_id": identity["scan_id"], "owner_user_id": identity["owner_user_id"],
+        "request_id": identity["request_id"], "attempt_count": attempt,
+        "barrier_generation": generation, "claim_sequence": sequence, "scan_target_origin": origin,
+    }
+    envelope = build_control_envelope(
+        action, signing_key, scan_id=identity["scan_id"],
+        identity={**identity, "attempt_count": attempt}, target_contact=contact,
+    )
+    return await invoke_function(client, "durableScanWorkerControlV9", envelope, timeout=12.0)
 
 
 async def mark_scan_started(client: httpx.AsyncClient, scan: dict[str, Any]) -> dict[str, Any]:

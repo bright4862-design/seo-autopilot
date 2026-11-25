@@ -7,6 +7,7 @@ import zlib
 
 import httpx
 
+from .target_contact import TargetContacts, active_target_contacts
 from .target_cooldown import TargetCooldownRelay, active_target_cooldown
 from .transport_evidence import SKIP_RESPONSE_BODY_EXTENSION, TRANSFER_BODY_BYTES_HEADER
 
@@ -59,6 +60,7 @@ async def _bounded_decoded_response(
     *,
     max_decoded_bytes: int,
     cooldown: TargetCooldownRelay | None = None,
+    contacts: TargetContacts | None = None,
 ):
     limit = max(1, int(max_decoded_bytes))
     async with client.stream(
@@ -76,15 +78,17 @@ async def _bounded_decoded_response(
         extensions = getattr(streamed, "extensions", None) or {}
         # The response request still contains the numeric transport address.
         # This DNS-validated hop owns the precise logical responding origin.
+        rate_limited = contacts.observe_response(resolved.logical_url, streamed) if contacts is not None else False
         closed = cooldown.observe_response(resolved.logical_url, streamed) if cooldown is not None else None
-        if closed is not None:
+        if closed is not None or rate_limited:
             try:
                 await streamed.aclose()
             except httpx.HTTPError:
                 # The close error cannot erase the already observed headers.
                 pass
             finally:
-                closed.set()
+                if closed is not None:
+                    closed.set()
             return _decoded_response(streamed, resolved, body=b"", transfer_body_bytes=None)
         if streamed.status_code == 429 and extensions.get(SKIP_RESPONSE_BODY_EXTENSION) is True:
             return _decoded_response(streamed, resolved, body=b"", transfer_body_bytes=None)
@@ -296,12 +300,24 @@ async def safe_get_once(client, url: str, *, max_decoded_bytes: int | None = Non
     Host and TLS SNI retain the original hostname. HTTPX/httpcore therefore keeps
     normal certificate verification against the requested public hostname.
     """
+    contacts = active_target_contacts.get()
+    if contacts is not None:
+        contacts.require_contact_enabled()
     cooldown = active_target_cooldown.get()
     if cooldown is not None:
         await cooldown.before_request(url)
     resolved = resolve_public_http_url(url)
     if resolved is None:
         return None
+
+    if contacts is not None:
+        async with contacts.request(resolved.logical_url):
+            return await _bounded_decoded_response(
+                client,
+                resolved,
+                max_decoded_bytes=DEFAULT_MAX_DECODED_RESPONSE_BYTES if max_decoded_bytes is None else max_decoded_bytes,
+                cooldown=cooldown, contacts=contacts,
+            )
 
     if max_decoded_bytes is not None or cooldown is not None:
         return await _bounded_decoded_response(

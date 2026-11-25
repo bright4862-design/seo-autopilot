@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import hashlib
-from .accepted_content_evidence import IMAGE_APPLICABILITY_VERSION, VISIBLE_TEMPLATE_VERSION
+from .accepted_content_evidence import (
+    IMAGE_APPLICABILITY_VERSION, SUPPORTED_TEMPLATE_VERSIONS, missing_heading_needs_browser, raw_content_needs_browser,
+)
 from .page_evidence_gate import page_has_usable_html
 from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
 from .stage2_freshness_producer import enrich_pages_with_contextual_freshness_evidence
@@ -75,8 +77,14 @@ def content_evidence_findings(pages):
                     'Check each image in its page context. Give informative or functional images appropriate text; decorative images can use an empty alt attribute.' if uncertain
                     else 'Describe the evidenced informative images or give image controls an accessible name. Preserve deliberately decorative empty alt attributes.',
                     observations,count,uncertain=uncertain))
+        if missing_heading_needs_browser(page):
+            output.append(_fix(page, 'rendered_heading_review', 'thin_content', 'Check the main heading in a browser',
+                'The source HTML contains no named H1. The page can load its heading after JavaScript runs.',
+                'Open the page after it loads and check the main heading before editing the template.',
+                [{'page_url': url, 'status': status, 'issue_type': 'missing_h1', 'h1_count': 0,
+                  'excerpt': 'No named H1 in the source HTML.'}], 1, uncertain=True))
         template=page.get('visible_template_evidence') or {}
-        if template.get('version')==VISIBLE_TEMPLATE_VERSION and template.get('accepted') is True and template.get('state')=='fail':
+        if template.get('version') in SUPPORTED_TEMPLATE_VERSIONS and template.get('accepted') is True and template.get('state')=='fail':
             observations=[{'page_url':url,'status':status,'issue_type':o['kind'],
                            'excerpt':f"{o['placement']}: {o['snippet']}"} for o in template.get('samples',[])]
             count=template.get('issue_count') or len(observations)
@@ -84,6 +92,12 @@ def content_evidence_findings(pages):
                 observations += [{'page_url':url,'status':status,'issue_type':'wrong_location_copy','excerpt':text[:500]}
                                  for text in (page.get('template_content_issue_evidence') or [])[:4]]
                 count += len(observations)-len(template.get('samples',[]))
+            if raw_content_needs_browser(page):
+                output.append(_fix(page, 'rendered_template_review', 'web_dev', 'Check this content after the page loads',
+                    'The source HTML contains a placeholder or an empty content area. The visitor-visible result needs a browser check.',
+                    'Open an affected page, wait for its content to load, and check any embedded form or frame.',
+                    observations, count, uncertain=True))
+                continue
             output.append(_fix(page,'visible_template_content','web_dev','Fix unfinished visible page content',
                 'Accepted HTML contains unresolved template output, placeholder copy or an unfinished page shell. Review the recorded placement and excerpts.',
                 'Correct the source field or template responsible for the shown output. Verify the page content in its intended context after publication.',

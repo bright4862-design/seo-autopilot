@@ -14,6 +14,28 @@ fixlist_require_pinned_checkout() {
   fi
 }
 
+# Emergency recovery can only use a clean, previously merged release source.
+fixlist_require_merged_checkout() {
+  local repo_root="$1" source="$2"
+  [[ "$source" =~ ^[a-f0-9]{40}$ ]] || return 2
+  git -C "$repo_root" fetch origin main --quiet || return 2
+  if ! git -C "$repo_root" merge-base --is-ancestor "$source" refs/remotes/origin/main; then
+    echo 'Refusing: recovery source is outside the merged main history.' >&2
+    return 2
+  fi
+  export FIXLIST_EXACT_SOURCE_SHA="$source"
+  fixlist_require_pinned_checkout "$repo_root" "$source"
+}
+
+# Do not overwrite the published baseline with a candidate's package bytes.
+fixlist_require_frozen_base44_recovery() {
+  local repo_root="$1"
+  if ! node -e 'if (require(process.argv[1]).status !== "frozen_beta") process.exit(1)' "$repo_root/data/beta-crawler-revision.json"; then
+    echo 'Refusing: legacy Base44 recovery requires a frozen release. Restore a published pilot from its saved package snapshot.' >&2
+    return 2
+  fi
+}
+
 fixlist_require_exact_main() {
   local repo_root="$1"
   local expected_sha="${2:-}"

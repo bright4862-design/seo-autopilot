@@ -9,7 +9,7 @@ import * as admission from "../../base44/functions/startStandardScanJobV9/admiss
 import * as entitlement from "../../base44/functions/startStandardScanJobV9/entitlement.js";
 import * as admissionClient from "../../base44/functions/startStandardScanJobV9/admissionClient.js";
 import { admissionClaimEvidenceProof, verifyAdmissionClaimEvidence } from "../../base44/functions/startStandardScanJobV9/admissionClient.js";
-import { enqueueScanDrain, enqueueScanJob, normalizeAttemptCount, paidDispatchGatewayUrl } from "../../base44/functions/startStandardScanJobV9/cloudTasks.js";
+import { enqueueScanDrain, enqueueScanJob, normalizeAttemptCount, stagedDispatchGatewayUrl } from "../../base44/functions/startStandardScanJobV9/cloudTasks.js";
 import * as releaseContract from "../../base44/functions/startStandardScanJobV9/generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "../../base44/functions/startStandardScanJobV9/generatedBuildId.js";
 
@@ -47,7 +47,7 @@ function harness({
   }
   const dependencies = {
     "./scanLimits.js": scanLimits,
-    "./cloudTasks.js": { paidDispatchGatewayUrl },
+    "./cloudTasks.js": { stagedDispatchGatewayUrl },
     ...launch.modules,
     "./runtimeConfig.js": runtimeConfig,
     "./generatedReleaseContract.js": { ...releaseContract, RELEASE_FINGERPRINT: releaseFingerprint },
@@ -124,7 +124,8 @@ test("actual V9 intake returns a closed, no-store owner-only settings and releas
     admission_gate: "enabled",
   });
   assert.deepEqual(fixture.envReads.sort(), [
-    "SCAN_DISPATCH_GATEWAY_URL", "SCAN_PIPELINE_MODE", "SCAN_STAGED_500_ENTITLED_ENABLED", "SCAN_STAGED_OWNER_IDS", "SCAN_STAGED_ROLLOUT_SCOPE",
+    "SCAN_DISPATCH_GATEWAY_URL", "SCAN_PIPELINE_MODE", "SCAN_PUBLIC_PILOT_EXPIRES_AT",
+    "SCAN_STAGED_500_ENTITLED_ENABLED", "SCAN_STAGED_OWNER_IDS", "SCAN_STAGED_ROLLOUT_SCOPE",
   ]);
   assert.deepEqual(fixture.secretReads, ["BETA_SCAN_INTAKE_ENABLED", "BETA_SCAN_ADMISSION_ENABLED"]);
   assert.deepEqual(fixture.sideEffects, []);
@@ -275,6 +276,7 @@ const paidGrant = {
 function launchHarness({
   rows = [paidGrant], rollout = "paid", entitled500 = "true", mode = "staged", cohort = "",
   gateway = "https://dispatch-gateway.example", claimFailure, echoClaimOrigin = false, omitPersistedOrigin = false,
+  publicPilotExpiresAt, acknowledgePilot = true,
 } = {}) {
   const settings = {
     ...(rollout === null ? {} : { SCAN_STAGED_ROLLOUT_SCOPE: rollout }),
@@ -286,6 +288,7 @@ function launchHarness({
     SCAN_DISPATCH_GATEWAY_URL: gateway,
     TASKS_INVOKER_SERVICE_ACCOUNT: "invoker@example.test",
   };
+  if (publicPilotExpiresAt !== undefined) settings.SCAN_PUBLIC_PILOT_EXPIRES_AT = publicPilotExpiresAt;
   const signingKey = "mock admission signing key";
   const gates = {
     BETA_SCAN_INTAKE_ENABLED: "true", BETA_SCAN_ADMISSION_ENABLED: "true",
@@ -325,7 +328,7 @@ function launchHarness({
         "./admissionClient.js": {
           ...admissionClient,
           verifyAdmissionClaimEvidence,
-          claimAdmission: async ({ ownerUserId, requestId, targetOrigin }) => {
+          claimAdmission: async ({ ownerUserId, requestId, targetOrigin, pilotLauncherBuildId }) => {
             calls.push("claim");
             admittedOrigins.push(targetOrigin);
             if (claimFailure) return claimFailure;
@@ -333,12 +336,16 @@ function launchHarness({
             if (!replayed) {
               claimEvidence = {
                 version: "admission_claim_evidence_v1", owner_user_id: ownerUserId, request_id: requestId,
-                barrier_generation: 4, claim_sequence: 23, admission_mode: "open",
-                acceptance_cohort_id: "", acceptance_release_id: "", acceptance_source_sha: "", acceptance_expires_at: null,
+                barrier_generation: 4, claim_sequence: 23, admission_mode: pilotLauncherBuildId ? "acceptance_only" : "open",
+                acceptance_cohort_id: pilotLauncherBuildId ? "pilot_cohort" : "",
+                acceptance_release_id: pilotLauncherBuildId ? "pilot_release" : "",
+                acceptance_source_sha: pilotLauncherBuildId ? "a".repeat(40) : "",
+                acceptance_expires_at: pilotLauncherBuildId ? Number(publicPilotExpiresAt) : null,
               };
               binding = {
                 ...claimEvidence, scan_id: "",
                 ...(echoClaimOrigin ? { target_origin: targetOrigin } : {}),
+                ...(acknowledgePilot && pilotLauncherBuildId ? { pilot_launcher_build_id: pilotLauncherBuildId } : {}),
               };
             }
             return {
@@ -358,7 +365,7 @@ function launchHarness({
         },
         "./cloudTasks.js": {
           DRAIN_DELAY_SECONDS: 450, normalizeAttemptCount,
-          paidDispatchGatewayUrl: () => paidDispatchGatewayUrl(name => settings[name]),
+          stagedDispatchGatewayUrl: () => stagedDispatchGatewayUrl(name => settings[name]),
           enqueueScanDrain: async ({ requireGateway }) => {
             taskTransports.push({ stage: "drain", requireGateway });
             return { ok: true };
@@ -376,7 +383,8 @@ function launchHarness({
     request_id: "paid_request_01", project_id: project.id, website_url: project.website_url,
     scan_mode: "standard_500", page_cap: 500, staged_rollout_scope: "paid", ...overrides,
   });
-  return { submit, settings, calls, scans, dispatched, taskTransports, admittedOrigins };
+  return { submit, settings, calls, scans, dispatched, taskTransports, admittedOrigins,
+    options: () => fixture.post({ action: "published_scan_options" }) };
 }
 
 test("V9 target cooldown returns a generic 429 before accepting a paid or preview scan", async () => {
@@ -508,7 +516,7 @@ test("default-off scope preserves the named pilot and declines a fresh unavailab
   const pilot = launchHarness({ rows: [grant], rollout: null, entitled500: null, cohort: paidCustomer.id });
   assert.equal((await pilot.submit()).body.page_cap, 500);
   assert.equal(pilot.dispatched[0].staged_rollout_scope, undefined);
-  assert.ok(pilot.taskTransports.every(task => !task.requireGateway));
+  assert.deepEqual(pilot.taskTransports, [{ stage: "drain", requireGateway: true }, { stage: "entry", requireGateway: true }]);
   const paused = launchHarness({ rows: [grant], rollout: "off", entitled500: "false" });
   const result = await paused.submit();
   assert.equal(result.status, 503);
@@ -603,31 +611,39 @@ test("duplicate, revoked, and unverified grants fail before the server can choos
   }
 });
 
-test("paid intake never claims without a usable configured signed gateway", async () => {
+test("staged intake never claims without a usable configured signed gateway", async () => {
+  const routes = [
+    {},
+    { rollout: null, entitled500: null, cohort: paidCustomer.id },
+  ];
   for (const gateway of ["", "http://dispatch-gateway.example", "https://dispatch-gateway.example/path", "https://u:p@dispatch-gateway.example", "https://dispatch-gateway.example/?debug=1"]) {
-    for (const cap of [150, 500]) {
-      const fixture = launchHarness({ gateway, rows: [{ ...paidGrant, page_cap: cap }] });
-      const result = await fixture.submit();
-      assert.equal(result.status, 503, JSON.stringify(result.body));
-      assert.equal(result.body.failure_code, "dispatch_gateway_not_configured");
-      assert.deepEqual(fixture.calls, ["status"]);
-      assert.deepEqual(fixture.scans, []);
-      assert.deepEqual(fixture.taskTransports, []);
+    for (const route of routes) {
+      for (const cap of [150, 500]) {
+        const fixture = launchHarness({ ...route, gateway, rows: [{ ...paidGrant, page_cap: cap }] });
+        const result = await fixture.submit();
+        assert.equal(result.status, 503, JSON.stringify(result.body));
+        assert.equal(result.body.failure_code, "dispatch_gateway_not_configured");
+        assert.deepEqual(fixture.calls, ["status"]);
+        assert.deepEqual(fixture.scans, []);
+        assert.deepEqual(fixture.taskTransports, []);
+      }
     }
   }
-  const fixture = launchHarness({ rows: [{ ...paidGrant, page_cap: 500 }] });
-  const original = await fixture.submit();
-  assert.equal(original.status, 200);
-  fixture.settings.SCAN_DISPATCH_GATEWAY_URL = "";
-  const replay = await fixture.submit();
-  assert.equal(replay.status, 200);
-  assert.equal(replay.body.scan_id, original.body.scan_id);
-  assert.equal(replay.body.replayed, true);
-  assert.deepEqual(fixture.calls, ["claim", "create", "bind", "status"]);
-  assert.equal(fixture.taskTransports.length, 2);
+  for (const route of routes) {
+    const fixture = launchHarness({ ...route, rows: [{ ...paidGrant, page_cap: 500 }] });
+    const original = await fixture.submit();
+    assert.equal(original.status, 200);
+    fixture.settings.SCAN_DISPATCH_GATEWAY_URL = "";
+    const replay = await fixture.submit();
+    assert.equal(replay.status, 200);
+    assert.equal(replay.body.scan_id, original.body.scan_id);
+    assert.equal(replay.body.replayed, true);
+    assert.deepEqual(fixture.calls, ["claim", "create", "bind", "status"]);
+    assert.equal(fixture.taskTransports.length, 2);
+  }
 });
 
-test("paid task transport independently prevents direct Cloud Tasks fallback", async t => {
+test("staged task transport independently prevents direct Cloud Tasks fallback", async t => {
   const priorDeno = globalThis.Deno;
   const priorFetch = globalThis.fetch;
   t.after(() => {
@@ -652,14 +668,19 @@ test("paid task transport independently prevents direct Cloud Tasks fallback", a
     scanId: "scan_01", attemptCount: 1, signingKey: "mock gateway signing key",
   };
   const payload = { staged_rollout_scope: "paid", scan_mode: "standard_500", page_cap: 500 };
-  const entry = () => enqueueScanJob({ ...args, payload });
-  const drain = () => enqueueScanDrain({ ...args, payload: {}, requireGateway: true });
-  for (const run of [entry, drain]) assert.equal((await run()).failureCode, "dispatch_gateway_not_configured");
+  const ownerPayload = { pipeline_mode: "staged", scan_mode: "standard_150", page_cap: 150 };
+  const attempts = [
+    () => enqueueScanJob({ ...args, payload }),
+    () => enqueueScanDrain({ ...args, payload: {}, requireGateway: true }),
+    () => enqueueScanJob({ ...args, payload: ownerPayload }),
+    () => enqueueScanDrain({ ...args, payload: ownerPayload }),
+  ];
+  for (const run of attempts) assert.equal((await run()).failureCode, "dispatch_gateway_not_configured");
   assert.deepEqual(requests, []);
   assert.ok(observedEnv.every(name => name === "SCAN_DISPATCH_GATEWAY_URL"));
   gateway = "https://dispatch-gateway.example/";
-  for (const run of [entry, drain]) assert.equal((await run()).failureCode, "dispatch_gateway_invalid_scan_mode");
-  assert.equal(requests.length, 2);
+  for (const run of attempts) assert.equal((await run()).failureCode, "dispatch_gateway_invalid_scan_mode");
+  assert.equal(requests.length, attempts.length);
   for (const [url, init] of requests) {
     assert.equal(url, "https://dispatch-gateway.example/dispatch");
     assert.equal(init.redirect, "error");
@@ -669,4 +690,82 @@ test("paid task transport independently prevents direct Cloud Tasks fallback", a
   const legacy = await enqueueScanJob({ ...args, payload: { scan_mode: "standard_150" } });
   assert.equal(legacy.failureCode, "tasks_credentials_not_configured");
   assert.ok(observedEnv.includes("GCP_SERVICE_ACCOUNT_KEY"));
+});
+
+function namedPilot(options = {}) {
+  return launchHarness({
+    rollout: "off", entitled500: "false", cohort: paidCustomer.id,
+    publicPilotExpiresAt: String(Math.floor(Date.now() / 1000) + 3600),
+    ...options,
+  });
+}
+
+test("published scan options attest the ordinary owner's 150 or 500 cap without writing any rows", async () => {
+  for (const cap of [150, 500]) {
+    const fixture = namedPilot({ rows: [{ ...paidGrant, page_cap: cap }] });
+    const result = await fixture.options();
+    assert.equal(result.status, 200);
+    assert.equal(result.cacheControl, "no-store");
+    assert.deepEqual(result.body, {
+      success: true, version: "published_scan_options_v1", launch: "pilot", page_cap: cap,
+      release_fingerprint: releaseContract.RELEASE_FINGERPRINT,
+    });
+    assert.deepEqual(fixture.calls, []);
+  }
+});
+
+test("an old or unlisted client cannot use the pilot launcher to create a scan", async () => {
+  const unlisted = namedPilot({ cohort: "other_customer" });
+  const options = await unlisted.options();
+  assert.equal(options.body.launch, "legacy");
+  assert.equal(options.body.page_cap, 150);
+  for (const fixture of [unlisted, namedPilot({ publicPilotExpiresAt: "0" }), namedPilot()]) {
+    const result = await fixture.submit();
+    assert.equal(result.status, 409);
+    assert.deepEqual(fixture.calls, []);
+    assert.deepEqual(fixture.scans, []);
+  }
+});
+
+test("active named customer launches at the confirmed cap, and expiry or forged cap prevents new writes", async () => {
+  for (const cap of [150, 500]) {
+    const fixture = namedPilot({ rows: [{ ...paidGrant, page_cap: cap }] });
+    const mismatch = await fixture.submit({ published_pilot_page_cap: cap === 150 ? 500 : 150 });
+    assert.equal(mismatch.status, 409);
+    assert.equal(mismatch.body.failure_code, "scan_limit_changed");
+    assert.deepEqual(fixture.calls, []);
+    const accepted = await fixture.submit({ published_pilot_page_cap: cap });
+    assert.equal(accepted.body.accepted, true);
+    assert.equal(accepted.body.page_cap, cap);
+    assert.equal(fixture.scans[0].pipeline_mode, "staged");
+    assert.equal(fixture.dispatched[0].page_cap, cap);
+  }
+  const stale = namedPilot();
+  assert.equal((await stale.options()).body.launch, "pilot");
+  stale.settings.SCAN_PUBLIC_PILOT_EXPIRES_AT = "0";
+  assert.equal((await stale.submit({ published_pilot_page_cap: 150 })).status, 409);
+  assert.deepEqual(stale.calls, []);
+  const legacyRow = namedPilot();
+  assert.equal((await legacyRow.submit({ published_pilot_page_cap: 150, scan_id: "legacy_01" })).status, 409);
+  assert.deepEqual(legacyRow.calls, []);
+});
+
+test("a coordinator that has not verified the pilot build cannot start a new scan", async () => {
+  const fixture = namedPilot({ acknowledgePilot: false });
+  const result = await fixture.submit({ published_pilot_page_cap: 150 });
+  assert.equal(result.status, 503);
+  assert.equal(result.body.failure_code, "admission_claim_evidence_invalid");
+  assert.deepEqual(fixture.calls, ["claim"]);
+  assert.deepEqual(fixture.scans, []);
+  assert.deepEqual(fixture.dispatched, []);
+});
+
+test("the authenticated operator can read the exact pilot expiry or verify a hold", async () => {
+  const expiry = String(Math.floor(Date.now() / 1000) + 1800);
+  for (const value of [expiry, "0"]) {
+    const response = await harness({ settings: { ...staged, SCAN_PUBLIC_PILOT_EXPIRES_AT: value } }).post();
+    assert.equal(response.body.public_pilot_expires_at, Number(value));
+  }
+  const paid = launchHarness({ publicPilotExpiresAt: "0" });
+  assert.equal((await paid.submit()).body.accepted, true);
 });

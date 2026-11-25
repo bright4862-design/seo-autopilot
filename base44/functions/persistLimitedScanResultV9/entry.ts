@@ -37,7 +37,7 @@ function mutableScanAdmissionValue() {
  * authority path to weaken, because none exists in this file.
  */
 
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "b36ca24b8e0f728e";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "cd3f3a5ef7dd6787";
 const WORKER_VERSION = "scan_job_worker_v1_cloud_tasks";
 const LIMITED_COMPLETION_VERSION = "durable_standard150_limited_v1";
 const LIMITED_COVERAGE_STATES = new Set(["limited_coverage", "inventory_unproven", "access_limited"]);
@@ -323,6 +323,8 @@ const SAFE_RELEASE_ERRORS = new Set([
   "scan_not_bound",
   "scan_identity_conflict",
   "barrier_generation_conflict",
+  "target_cooldown_claim_conflict",
+  "invalid_target_cooldown_observation",
 ]);
 
 function releaseIdentity(scan) {
@@ -370,7 +372,14 @@ async function persistLimitedAdmissionRelease(entities, scan) {
   ) return { ok: false, retryable: true, failureCode: "admission_release_identity_invalid" };
 
   const attemptedAt = new Date().toISOString();
-  const result = await releaseAdmission(expected);
+  const publication = scan?.crawl_timing?.target_cooldown_publication;
+  const targetCooldown = publication?.state === "unconfirmed" ? {
+    request_id: expected.requestId,
+    barrier_generation: expected.barrierGeneration,
+    claim_sequence: expected.claimSequence,
+    observation: publication.observation ?? null,
+  } : undefined;
+  const result = await releaseAdmission(expected, targetCooldown);
   const outcome = cleanText(result?.outcome, 80).toLowerCase();
   const exactResponse = Boolean(
     result?.ok === true && RELEASE_OUTCOMES.has(outcome)
@@ -378,6 +387,7 @@ async function persistLimitedAdmissionRelease(entities, scan) {
     && cleanId(result?.scan_id) === expected.scanId
     && nonNegativeInteger(result?.barrier_generation) === expected.barrierGeneration
     && nonNegativeInteger(result?.claim_sequence) === expected.claimSequence
+    && (!targetCooldown || ["recorded", "unchanged", "expired"].includes(result.target_cooldown_outcome))
   );
   const fresh = await entities.ScanRun.get(expected.scanId).catch(() => null);
   if (!exactReleaseIdentity(fresh, expected)) {
@@ -410,7 +420,7 @@ async function persistLimitedAdmissionRelease(entities, scan) {
     : { ok: false, retryable: true, failureCode: fields.admission_release_failure_code, scanRun: persisted };
 }
 
-async function releaseAdmission(expected) {
+async function releaseAdmission(expected, targetCooldown) {
   const baseUrl = String(mutableScanAdmissionSecret("SCAN_ADMISSION_COORDINATOR_URL") || "").replace(/\/+$/, "");
   const root = String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || "");
   if (!baseUrl || !root || String(mutableScanAdmissionValue() || "") !== "true") {
@@ -420,6 +430,7 @@ async function releaseAdmission(expected) {
     owner_user_id: expected.ownerUserId,
     scan_id: expected.scanId,
     terminal_status: expected.status,
+    ...(targetCooldown ? { target_cooldown: targetCooldown } : {}),
   });
   const timestamp = String(Math.trunc(Date.now() / 1000));
   let signature;
@@ -433,8 +444,10 @@ async function releaseAdmission(expected) {
   const timeout = setTimeout(() => controller.abort(), 5_000);
   let response;
   try {
-    response = await fetch(`${baseUrl}/release`, {
+    const path = targetCooldown ? "/release-with-target-cooldown" : "/release";
+    response = await fetch(`${baseUrl}${path}`, {
       method: "POST",
+      ...(targetCooldown ? { redirect: "error" } : {}),
       headers: {
         "content-type": "application/json",
         "x-fixlist-timestamp": timestamp,

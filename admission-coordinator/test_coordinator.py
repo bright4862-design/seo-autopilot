@@ -145,8 +145,8 @@ import control  # noqa: E402
 
 main.OPERATOR_TOKEN_VERIFIER = lambda _token, _audience: {
     "iss": "https://accounts.google.com",
-    "aud": OPERATOR_AUDIENCE,
-    "email": OPERATOR_SERVICE_ACCOUNT,
+    "aud": main.OPERATOR_AUDIENCE,
+    "email": main.OPERATOR_SERVICE_ACCOUNT,
     "email_verified": True,
 }
 

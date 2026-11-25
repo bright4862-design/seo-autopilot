@@ -82,6 +82,14 @@ function stagedScanEnv(name: string) {
   return Deno.env.get(name);
 }
 
+function paidPilotScanEnv(name: string) {
+  return name === "SCAN_STAGED_PILOT_OWNER_IDS" ? mutableScanAdmissionSecret(name) : stagedScanEnv(name);
+}
+
+function publishedPilotExpiry(settings: ReturnType<typeof readStagedScanSettings>) {
+  return settings.rolloutScope === "paid" ? mutableScanAdmissionSecret(PUBLIC_PILOT_EXPIRY) : stagedScanEnv(PUBLIC_PILOT_EXPIRY);
+}
+
 function reportedGate(value: unknown) {
   if (value === "true") return "enabled";
   if (value === "false") return "disabled";
@@ -102,7 +110,7 @@ async function stagedRuntimeStatus(user, raw) {
     return response({ success: false, error_code: "invalid_action" }, 400);
   }
   try {
-    const settings = readStagedScanSettings(stagedScanEnv);
+    const settings = readStagedScanSettings(paidPilotScanEnv);
     const { cohort, ownerIds } = settings;
     // The launcher accepts trimmed owner IDs. Attest a cohort only when the
     // configured list also meets the strict deployment format.
@@ -115,8 +123,13 @@ async function stagedRuntimeStatus(user, raw) {
       const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalCohort));
       cohortHash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
     }
+    let pilotCohortHash: string | null = null;
+    if (settings.validPilotCohort) {
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify([...settings.pilotOwnerIds].sort())));
+      pilotCohortHash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+    }
     const enabled = stagedScanOwnerEnabled(settings, user.id);
-    const pilotExpiry = stagedScanEnv(PUBLIC_PILOT_EXPIRY);
+    const pilotExpiry = publishedPilotExpiry(settings);
     return response({
       success: true,
       schema_version: "fixlist_staged_v9_intake_readback_v1",
@@ -127,6 +140,8 @@ async function stagedRuntimeStatus(user, raw) {
       configured_pipeline_mode: settings.pipelineMode,
       staged_rollout_scope: settings.rolloutScope,
       staged_500_entitled_enabled: settings.entitled500Enabled,
+      staged_pilot_owner_count: pilotCohortHash === null ? null : settings.pilotOwnerIds.length,
+      staged_pilot_owner_cohort_sha256: pilotCohortHash,
       paid_dispatch_gateway_origin: stagedDispatchGatewayUrl(stagedScanEnv),
       pipeline_mode: enabled ? "staged" : "monolith",
       staged_owner_cohort_state: cohortState,
@@ -152,7 +167,7 @@ async function publishedScanOptions(base44, user, settings, pilot, body) {
     success: true, version, launch, page_cap: pageCap, release_fingerprint: RELEASE_FINGERPRINT,
   }, 200, noStore);
   if (!pilot.configured || !pilot.namedCustomer) return options("legacy", 150);
-  if (!pilot.enabled || !stagedDispatchGatewayUrl()) return options("paused", null);
+  if (!pilot.paidPilot && (!pilot.enabled || !stagedDispatchGatewayUrl())) return options("paused", null);
 
   const entitlement = await loadScanEntitlement(base44, user, { createPreviewAccess: false });
   if (!entitlement.ok) {
@@ -160,9 +175,13 @@ async function publishedScanOptions(base44, user, settings, pilot, body) {
       success: false, error_code: entitlement.failureCode, error: customerStatusDetail(entitlement.failureCode),
     }, entitlement.failureCode === "paid_access_conflict" ? 409 : 402, noStore);
   }
+  if (pilot.paidPilot && !hasLargeScanGrant(entitlement.record)) return options("legacy", 150);
+  if (!pilot.enabled || !stagedDispatchGatewayUrl()) return options("paused", null);
   const { page_cap } = resolveServerScanContract({
     access: entitlement.record, ownerUserId: user.id, verifiedAccess: entitlement.preview === false, settings,
+    paidPilot: pilot.paidPilot && pilot.enabled,
   });
+  if (pilot.paidPilot && page_cap !== 500) return options("paused", null);
   return options("pilot", page_cap);
 }
 
@@ -250,15 +269,22 @@ export default async function (req: Request): Promise<Response> {
       }, 400);
     }
 
-    const stagedSettings = readStagedScanSettings(stagedScanEnv);
-    const pilot = publishedPilotLaunchPolicy({ settings: stagedSettings, user, expiresAt: stagedScanEnv(PUBLIC_PILOT_EXPIRY) });
+    const stagedSettings = readStagedScanSettings(paidPilotScanEnv);
+    if (stagedSettings.rolloutScope === "invalid") {
+      const code = "scan_staged_rollout_configuration_invalid";
+      return jsonResponse({
+        success: false, accepted: false, version: VERSION, failure_code: code,
+        error: customerStatusDetail(code), retryable: true, ...identity.fields,
+      }, 503);
+    }
+    const pilot = publishedPilotLaunchPolicy({ settings: stagedSettings, user, expiresAt: publishedPilotExpiry(stagedSettings) });
     if (optionsRequest) return publishedScanOptions(base44, user, stagedSettings, pilot, body);
-    const pilotRequest = pilot.configured || Object.hasOwn(body, "published_pilot_page_cap");
-    if (pilotRequest && !pilot.enabled) {
+    const pilotRequest = (!pilot.paidPilot && pilot.configured) || Object.hasOwn(body, "published_pilot_page_cap");
+    if (pilotRequest && (!pilot.namedCustomer || (!pilot.paidPilot && !pilot.enabled))) {
       return pilotLaunchRefused("scan_pilot_unavailable");
     }
     if (pilotRequest && identity.fields.scan_id) return pilotLaunchRefused("scan_pilot_saved_request");
-    if (pilotRequest && ![150, 500].includes(body.published_pilot_page_cap)) {
+    if (pilotRequest && !(pilot.paidPilot ? [500] : [150, 500]).includes(body.published_pilot_page_cap)) {
       return pilotLaunchRefused("scan_limit_changed");
     }
 
@@ -315,14 +341,6 @@ export default async function (req: Request): Promise<Response> {
         error: "Focused scans require a fresh server-admitted scan.",
         ...identity.fields,
       }, 409);
-    }
-
-    if (stagedSettings.rolloutScope === "invalid") {
-      const code = "scan_staged_rollout_configuration_invalid";
-      return jsonResponse({
-        success: false, accepted: false, version: VERSION, failure_code: code,
-        error: customerStatusDetail(code), retryable: true, ...identity.fields,
-      }, 503);
     }
 
     let context;
@@ -437,6 +455,7 @@ export default async function (req: Request): Promise<Response> {
       const scanContract = resolveServerScanContract({
         access: entitlement.record, ownerUserId: user.id,
         verifiedAccess: entitlement.preview === false, settings: stagedSettings,
+        paidPilot: pilot.paidPilot && pilotRequest,
       });
       if (pilotRequest && scanContract.page_cap !== body.published_pilot_page_cap) {
         return pilotLaunchRefused("scan_limit_changed");
@@ -449,6 +468,7 @@ export default async function (req: Request): Promise<Response> {
         scanContract,
         requiresExistingScan,
         pilotRequest,
+        pilotReplayOnly: pilot.paidPilot && pilotRequest && !pilot.enabled,
         project: project.project,
         body,
         identity,
@@ -487,7 +507,8 @@ export default async function (req: Request): Promise<Response> {
       ? trustedScanContract(context.scan)
       : frozenTaskContract;
     const paidRoutePaused = stagedSettings.rolloutScope !== "paid"
-      || (scanContract.page_cap === 500 && !stagedSettings.entitled500Enabled);
+      || (scanContract.page_cap === 500 && !stagedSettings.entitled500Enabled
+        && !(pilot.paidPilot && pilotRequest));
     const paidDispatch = context.scan.staged_rollout_scope === "paid";
     const requireGateway = scanContract.pipeline_mode === "staged" || paidDispatch;
     const readOnlyReplay = context.readOnlyReplay || (paidDispatch && paidRoutePaused);
@@ -782,12 +803,13 @@ async function replayBoundScanWithoutAdmission({ base44, user, project, request,
 }
 
 async function admitServerOwnedScan({
-  base44, user, access, scanContract, requiresExistingScan, pilotRequest, project, body, identity, websiteUrl, scope, robotsPolicy,
+  base44, user, access, scanContract, requiresExistingScan, pilotRequest, pilotReplayOnly, project, body, identity, websiteUrl, scope, robotsPolicy,
 }) {
+  const pilotPageCap = pilotRequest && scanContract.staged_rollout_scope === "paid" ? 500 : undefined;
   const request = normalizeAdmissionIdentity({
     request_id: identity.fields.request_id,
     idempotency_key: identity.fields.idempotency_key,
-    request_fingerprint: await buildAdmissionFingerprint(websiteUrl, scope?.pathPrefix || "", robotsPolicy),
+    request_fingerprint: await buildAdmissionFingerprint(websiteUrl, scope?.pathPrefix || "", robotsPolicy, pilotPageCap),
   });
   if (!request.ok) {
     return { ok: false, status: 409, code: request.code, error: "The scan request identity is invalid." };
@@ -812,6 +834,8 @@ async function admitServerOwnedScan({
       targetOrigin,
       queueIfOriginBusy: scanContract.pipeline_mode === "staged",
       pilotLauncherBuildId: pilotRequest ? FUNCTION_BUILD_ID : undefined,
+      pilotPageCap,
+      pilotReplayOnly,
       env: mutableScanAdmissionEnv,
     });
   } catch {
@@ -826,7 +850,9 @@ async function admitServerOwnedScan({
     signingKey: String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || ""),
   });
   if (!verifiedEvidence || (claim.target_origin !== undefined && claim.target_origin !== targetOrigin)
-      || (pilotRequest && (claim.pilot_launcher_build_id !== FUNCTION_BUILD_ID || verifiedEvidence.admission_mode !== "acceptance_only"))) {
+      || (pilotRequest && (claim.pilot_launcher_build_id !== FUNCTION_BUILD_ID || verifiedEvidence.admission_mode !== "acceptance_only"))
+      || (pilotPageCap !== undefined && claim.pilot_page_cap !== pilotPageCap)
+      || (pilotReplayOnly && claim.outcome !== "replayed")) {
     return {
       ok: false,
       status: 503,
@@ -1087,13 +1113,14 @@ function coordinatorAdmissionFailure(result = {}, fallbackCode = "scan_admission
   };
 }
 
-async function buildAdmissionFingerprint(websiteUrl, pathPrefix = "", robotsPolicy = {}) {
+async function buildAdmissionFingerprint(websiteUrl, pathPrefix = "", robotsPolicy = {}, pilotPageCap?: number) {
   const normalizedPrefix = normalizeFocusedPathPrefix(pathPrefix);
   const pathSuffix = normalizedPrefix ? `|path:${normalizedPrefix}` : "";
   const policySuffix = robotsPolicy.owner_attested_robots_override === true
     ? "|robots:owner_override"
     : "|robots:respect";
-  const canonical = `${PUBLIC_SCAN_MODE}|${normalizeWebsiteUrl(websiteUrl)}${pathSuffix}${policySuffix}`;
+  const pilotSuffix = pilotPageCap === 500 ? "|cap:500" : "";
+  const canonical = `${PUBLIC_SCAN_MODE}|${normalizeWebsiteUrl(websiteUrl)}${pathSuffix}${policySuffix}${pilotSuffix}`;
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical)));
   return `standard150:${Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }

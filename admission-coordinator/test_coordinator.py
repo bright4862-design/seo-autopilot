@@ -716,6 +716,134 @@ class TargetCooldown(CoordinatorTestCase):
 
 
 class PublishedPilotAcceptance(CoordinatorTestCase):
+    def test_named_500_transitions_do_not_need_a_global_drain_snapshot(self):
+        source = "1" * 40
+        public_count = control.MAX_INTERNAL_OBLIGATIONS + 1
+        key = f"{main.CONTROL_COLLECTION}/{main.CONTROL_DOCUMENT}"
+        STORE[key] = {"mode": "open", "generation": 4, "claim_sequence": public_count}
+        for index in range(public_count):
+            public_owner = f"public_customer_{index}"
+            STORE[f"{main.COLLECTION}/{public_owner}"] = {
+                "owner_user_id": public_owner, "state": "bound", "admission_mode": "open",
+                "request_id": f"public_request_{index}", "scan_id": f"public_scan_{index}",
+                "barrier_generation": 4, "claim_sequence": index + 1,
+            }
+        context = {"reason": "Test named pilot under public load", "change_ticket": "test-pilot-load"}
+        definition = {
+            "cohort_id": "published_500", "release_id": "paid_candidate",
+            "source_sha": source, "owner_user_ids": [OWNER], "expires_at": int(time.time()) + 900,
+            "total_claim_budget": 1, "per_owner_claim_budget": 1, "required_launcher_build_id": "a" * 64,
+        }
+        with patch.object(main, "SOURCE_SHA", source):
+            started = self.operator_post("/ops/barrier/pilot-500/start", {
+                **context, "operation": "start_500_pilot", "acceptance": definition,
+                "intended_prior": {"mode": "open", "generation": 4},
+            })
+            self.assertEqual(started.status_code, 200, started.json)
+            held = self.operator_post("/ops/barrier/pilot-500/hold", {
+                **context, "operation": "hold_500_pilot", "cohort_id": definition["cohort_id"],
+                "intended_prior": {"mode": "open", "generation": 5},
+            })
+            self.assertEqual(held.status_code, 200, held.json)
+        for response, state, generation in [(started, "configured", 5), (held, "held", 6)]:
+            self.assertNotIn("drain_snapshot", response.json)
+            snapshot = response.json["pilot_snapshot"]
+            proof = snapshot.pop("proof")
+            self.assertTrue(control.verify_record(OPERATOR_SIGNING_ROOT, control.SNAPSHOT_LABEL, snapshot, proof))
+            self.assertEqual(snapshot["version"], "admission_published_500_pilot_snapshot_v1")
+            self.assertEqual(snapshot["barrier"]["mode"], "open")
+            self.assertEqual(snapshot["barrier"]["generation"], generation)
+            self.assertEqual(snapshot["boundary"]["published_500_pilot"]["state"], state)
+            self.assertIs(snapshot["drain_ready"], False)
+            self.assertNotIn("counts", snapshot)
+        self.assertEqual(STORE[key]["claim_sequence"], public_count)
+        status = self.operator_post("/ops/barrier/status", {
+            **context, "operation": "status", "expected_generation": 6,
+        })
+        self.assertEqual(status.status_code, 409, status.json)
+        self.assertEqual(status.json["error"], "drain_snapshot_capacity_exceeded")
+        self.assertEqual(self.claim(owner="another_public_customer").json["admission_mode"], "open")
+
+    def test_named_500_pilot_can_start_and_hold_while_public_claims_continue(self):
+        source = "1" * 40
+        build = "a" * 64
+        key = f"{main.CONTROL_COLLECTION}/{main.CONTROL_DOCUMENT}"
+        STORE[key] = {"mode": "open", "generation": 4, "claim_sequence": 0}
+        baseline = self.claim(owner="public_customer_1").json
+        self.assertEqual(baseline["admission_mode"], "open")
+        definition = {
+            "cohort_id": "published_500", "release_id": "paid_candidate",
+            "source_sha": source, "owner_user_ids": [OWNER],
+            "expires_at": int(time.time()) + 900,
+            "total_claim_budget": 1, "per_owner_claim_budget": 1,
+            "required_launcher_build_id": build,
+        }
+        operator_context = {"reason": "Test equivalent 150 and 500 admission", "change_ticket": "test-concurrent"}
+        operator_payload = {
+            **operator_context, "operation": "start_500_pilot",
+            "intended_prior": {"mode": "open", "generation": 4}, "acceptance": definition,
+        }
+        pilot_request = {
+            "owner_user_id": OWNER, "request_id": "published_500_req_1", "request_fingerprint": FINGERPRINT,
+            "pilot_launcher_build_id": build, "pilot_page_cap": 500,
+        }
+        with patch.object(main, "SOURCE_SHA", source):
+            self.assertEqual(self.post("/claim", pilot_request).status_code, 423)
+            started = self.operator_post("/ops/barrier/pilot-500/start", operator_payload)
+            self.assertEqual(started.status_code, 200, started.json)
+            self.assertEqual(started.json["barrier"]["mode"], "open")
+            self.assertEqual(started.json["pilot_snapshot"]["boundary"]["published_500_pilot"]["page_cap"], 500)
+            self.assertEqual(self.operator_post("/ops/barrier/pilot-500/start", operator_payload).status_code, 409)
+            for refusal, status in [
+                ({"owner_user_id": "unlisted_customer"}, 423),
+                ({"pilot_launcher_build_id": "b" * 64}, 423),
+                ({"pilot_page_cap": 150}, 400),
+            ]:
+                self.assertEqual(self.post("/claim", {**pilot_request, **refusal}).status_code, status)
+            self.assertEqual(self.claim(owner="public_customer_2").json["admission_mode"], "open")
+            replay_only = {**pilot_request, "pilot_replay_only": True}
+            self.assertEqual(self.post("/claim", replay_only).status_code, 423)
+            self.assertEqual(STORE[key]["published_500_pilot"]["total_claims_used"], 0)
+            with patch.object(main, "SOURCE_SHA", "2" * 40):
+                self.assertEqual(self.post("/claim", pilot_request).status_code, 423)
+            admitted = self.post("/claim", pilot_request)
+            self.assertEqual(admitted.status_code, 200, admitted.json)
+            self.assertEqual(admitted.json["admission_mode"], "acceptance_only")
+            self.assertEqual(admitted.json["pilot_page_cap"], 500)
+            self.assertEqual(STORE[key]["published_500_pilot"]["total_claims_used"], 1)
+            self.assertEqual(self.claim(request_id="public_same_owner").status_code, 429)
+            hold_payload = {
+                **operator_context, "operation": "hold_500_pilot", "cohort_id": "published_500",
+                "intended_prior": {"mode": "open", "generation": started.json["barrier"]["generation"]},
+            }
+            self.assertEqual(self.operator_post("/ops/barrier/pilot-500/hold",
+                                                {**hold_payload, "cohort_id": "another_pilot"}).status_code, 409)
+            held = self.operator_post("/ops/barrier/pilot-500/hold", hold_payload)
+            self.assertEqual(held.status_code, 200, held.json)
+            self.assertEqual(held.json["barrier"]["mode"], "open")
+            self.assertEqual(held.json["pilot_snapshot"]["boundary"]["published_500_pilot"]["state"], "held")
+            held_control = dict(STORE[key])
+            replay = self.post("/claim", replay_only)
+            self.assertEqual(replay.json["outcome"], "replayed")
+            self.assertEqual(replay.json["pilot_page_cap"], 500)
+            self.assertEqual(replay.json["claim_token"], admitted.json["claim_token"])
+            changed_cap = self.post("/claim", {
+                "owner_user_id": OWNER, "request_id": pilot_request["request_id"],
+                "request_fingerprint": "distinct_150_fingerprint",
+            })
+            self.assertEqual(changed_cap.status_code, 409)
+            self.assertEqual(changed_cap.json["error"], "request_conflict")
+            self.assertEqual(self.post("/claim", {**replay_only, "request_id": "another_500_request"}).status_code, 423)
+            with patch.object(main.time, "time", return_value=admitted.json["lease_expires_at"] + 1):
+                self.assertEqual(self.post("/claim", replay_only).status_code, 423)
+            self.assertEqual(STORE[key], held_control)
+            self.assertEqual(self.claim(owner="public_customer_3").json["admission_mode"], "open")
+        bound = self.post("/bind", {
+            "owner_user_id": OWNER, "request_id": pilot_request["request_id"],
+            "claim_token": admitted.json["claim_token"], "scan_id": SCAN_ID,
+        })
+        self.assertEqual(bound.status_code, 200, bound.json)
+
     def test_opening_the_pilot_requires_exact_source_and_attests_the_launcher(self):
         source = "1" * 40
         launcher = "a" * 64

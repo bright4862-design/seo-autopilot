@@ -125,12 +125,27 @@ def _staged_500_entitled_enabled() -> bool:
     return os.getenv("SCAN_STAGED_500_ENTITLED_ENABLED") == "true"
 
 
+def _staged_pilot_owners() -> frozenset[str]:
+    raw = os.getenv("SCAN_STAGED_PILOT_OWNER_IDS", "")
+    values = raw.split(",") if raw else []
+    owners = frozenset(values)
+    if (len(values) > CANARY_MAX_OWNERS or len(owners) != len(values)
+            or not all(CANARY_OWNER_ID_RE.fullmatch(owner) for owner in owners)):
+        raise RuntimeError("staged pilot requires at most five distinct exact owner IDs")
+    if owners and (_staged_rollout_scope() != "paid" or _staged_500_entitled_enabled()):
+        raise RuntimeError("staged pilot requires paid scope with broad 500 staging disabled")
+    return owners
+
+
 def _staged_configuration() -> tuple[str, frozenset[str]]:
     mode = os.getenv("SCAN_PIPELINE_MODE", "monolith").strip() or "monolith"
     raw = os.getenv("SCAN_STAGED_OWNER_IDS", "")
     values = raw.split(",") if raw else []
     owners = frozenset(values)
     scope = _staged_rollout_scope()
+    # Paid 150 availability does not depend on the separate 500 pilot list.
+    if scope != "paid":
+        _staged_pilot_owners()
     if scope != "paid" and _staged_500_entitled_enabled():
         raise RuntimeError("entitled 500 staging requires paid rollout scope")
     if scope == "paid":
@@ -254,11 +269,20 @@ def _valid_scan_mode(job: dict[str, Any]) -> bool:
         if paid_marker or job.get("pipeline_mode") == "staged":
             # Only Base44 can sign a marker from a newly admitted paid ScanRun.
             # Cloud Run independently checks the durable cap and task identity.
-            return (
+            valid_contract = (
                 job.get("staged_rollout_scope") == "paid" and job.get("pipeline_mode") == "staged"
                 and _valid_control_scan_contract(job, is_cleanup=False)
-                and (job["page_cap"] == 150 or _staged_500_entitled_enabled())
             )
+            if not valid_contract:
+                return False
+            if job["page_cap"] == 150:
+                return True
+            try:
+                pilot_owners = _staged_pilot_owners()
+            except RuntimeError:
+                return False
+            return _staged_500_entitled_enabled() or (isinstance(job.get("owner_user_id"), str)
+                                                     and job["owner_user_id"] in pilot_owners)
         cap = job.get("page_cap", 150)
         return (job.get("scan_mode") == "standard_150" and job.get("pipeline_mode") in (None, "monolith")
                 and type(cap) is int and cap == 150)
@@ -392,6 +416,12 @@ def health():
     mode, owners = _staged_configuration()
     cohort = json.dumps(sorted(owners), separators=(",", ":")).encode("utf-8")
     canary_cohort = json.dumps(sorted(CANARY_OWNER_USER_IDS), separators=(",", ":")).encode("utf-8")
+    try:
+        pilot_owners = _staged_pilot_owners()
+        pilot_count = len(pilot_owners)
+        pilot_hash = hashlib.sha256(json.dumps(sorted(pilot_owners), separators=(",", ":")).encode("utf-8")).hexdigest()
+    except RuntimeError:
+        pilot_count, pilot_hash = None, None
     return jsonify({
         "ok": True,
         "service": "fixlist-dispatch-gateway",
@@ -407,6 +437,9 @@ def health():
         "pipeline_mode": mode,
         "staged_rollout_scope": _staged_rollout_scope(),
         "staged_500_entitled_enabled": _staged_500_entitled_enabled(),
+        "staged_pilot_configuration_valid": pilot_hash is not None,
+        "staged_pilot_owner_count": pilot_count,
+        "staged_pilot_owner_cohort_sha256": pilot_hash,
         "staged_owner_count": len(owners),
         "staged_owner_cohort_sha256": hashlib.sha256(cohort).hexdigest(),
     })

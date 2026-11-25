@@ -532,6 +532,131 @@ class PaidStagedRoutingTests(unittest.TestCase):
         with patch.dict(os.environ, off), self.assertRaises(RuntimeError):
             main._staged_configuration()
 
+    def test_paid_pilot_keeps_public_150_and_only_names_exact_500_owners(self):
+        config = {**self.PAID, "SCAN_STAGED_PILOT_OWNER_IDS": "pilot_owner_01,pilot_owner_02"}
+        with patch.dict(os.environ, config):
+            for owner, cap, allowed in (
+                ("ordinary_customer_01", 150, True),
+                ("pilot_owner_01", 150, True),
+                ("pilot_owner_01", 500, True),
+                ("pilot_owner_02", 500, True),
+                ("ordinary_customer_01", 500, False),
+                ("PILOT_OWNER_01", 500, False),
+            ):
+                with self.subTest(owner=owner, cap=cap):
+                    value = self.paid_task(cap, owner_user_id=owner)
+                    expected = (value, None) if allowed else (None, "invalid_scan_mode")
+                    self.assertEqual(main.validate_dispatch({"queue_path": main.QUEUE_PATH, "task": value}), expected)
+
+    def test_paid_pilot_requires_the_signed_contract_and_exact_attempt_identity(self):
+        config = {**self.PAID, "SCAN_STAGED_PILOT_OWNER_IDS": "pilot_owner_01"}
+        with patch.dict(os.environ, config):
+            for changes, reason in (
+                ({"staged_rollout_scope": None}, "invalid_scan_mode"),
+                ({"pipeline_mode": "monolith"}, "invalid_scan_mode"),
+                ({"page_cap": "500"}, "invalid_scan_mode"),
+                ({"scan_mode": "standard_150"}, "invalid_scan_mode"),
+                ({"owner_user_id": []}, "invalid_scan_mode"),
+                ({"owner_user_id": {}}, "invalid_scan_mode"),
+                ({"attempt_count": "2"}, "scan_identity_mismatch"),
+                ({"project_id": None}, "scan_identity_mismatch"),
+                ({"idempotency_key": "different_request"}, "scan_identity_mismatch"),
+            ):
+                with self.subTest(changes=changes):
+                    value = self.paid_task(500, **{"owner_user_id": "pilot_owner_01", **changes})
+                    self.assertEqual(main.validate_dispatch({"queue_path": main.QUEUE_PATH, "task": value}), (None, reason))
+
+    def test_paid_pilot_signed_dispatch_retains_the_canonical_worker_and_audience(self):
+        config = {**self.PAID, "SCAN_STAGED_PILOT_OWNER_IDS": "pilot_owner_01"}
+        credentials = Mock(valid=True, token="unit-test-token")
+        upstream = Mock(status_code=200, ok=True)
+        upstream.json.return_value = {}
+        client = main.app.test_client()
+        with patch.dict(os.environ, config), patch.object(main.google.auth, "default", return_value=(credentials, None)), \
+                patch.object(main.requests, "post", return_value=upstream) as enqueue:
+            for cap, owner in ((150, "ordinary_customer_01"), (500, "pilot_owner_01")):
+                value = self.paid_task(cap, owner_user_id=owner)
+                raw = json.dumps({"queue_path": main.QUEUE_PATH, "task": value}).encode()
+                timestamp = str(int(time.time()))
+                headers = {"x-fixlist-timestamp": timestamp, "x-fixlist-signature": main._expected_signature(timestamp, raw)}
+                response = client.post("/dispatch", data=raw, headers=headers)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(enqueue.call_args.kwargs["json"], {"task": value})
+                self.assertEqual(value["httpRequest"]["url"], main.WORKER_URL)
+                self.assertEqual(value["httpRequest"]["oidcToken"]["audience"], main.WORKER_ORIGIN)
+                enqueue.reset_mock()
+                altered = json.dumps({"queue_path": main.QUEUE_PATH, "task": self.paid_task(cap, owner_user_id="someone_else_9")}).encode()
+                self.assertEqual(client.post("/dispatch", data=altered, headers=headers).status_code, 401)
+                enqueue.assert_not_called()
+
+    def test_paid_pilot_configuration_fails_closed(self):
+        for owners in (
+            "*", " ", "short", "pilot_owner_01,", ",pilot_owner_01", "pilot_owner_01,,pilot_owner_02",
+            "pilot_owner_01,pilot_owner_01", "pilot_owner_01, pilot_owner_02", "pilot_owner_01\n",
+            ",".join(f"pilot_owner_{number}" for number in range(6)),
+        ):
+            with self.subTest(owners=owners), patch.dict(os.environ, {**self.PAID, "SCAN_STAGED_PILOT_OWNER_IDS": owners}):
+                pilot = self.paid_task(500, owner_user_id="pilot_owner_01")
+                self.assertEqual(main.validate_dispatch({"queue_path": main.QUEUE_PATH, "task": pilot}), (None, "invalid_scan_mode"))
+        off = {"SCAN_STAGED_ROLLOUT_SCOPE": "off", "SCAN_PIPELINE_MODE": "monolith", "SCAN_STAGED_PILOT_OWNER_IDS": "pilot_owner_01"}
+        with patch.dict(os.environ, off), self.assertRaises(RuntimeError):
+            main._staged_configuration()
+        with patch.dict(os.environ, {**self.PAID, "SCAN_STAGED_PILOT_OWNER_IDS": "pilot_owner_01"}), \
+                patch.multiple(main, CANARY_WORKER_ORIGIN=CANARY_ORIGIN, CANARY_OWNER_USER_IDS=frozenset({CANARY_OWNER})), \
+                self.assertRaises(RuntimeError):
+            main._staged_configuration()
+
+    def test_paid_pilot_health_attests_the_bounded_cohort_without_owner_ids(self):
+        config = {**self.PAID, "SCAN_STAGED_PILOT_OWNER_IDS": "pilot_owner_02,pilot_owner_01"}
+        with patch.dict(os.environ, config):
+            health = main.app.test_client().get("/health").get_json()
+        self.assertEqual(health["staged_pilot_owner_count"], 2)
+        self.assertEqual(health["staged_pilot_owner_cohort_sha256"], hashlib.sha256(b'["pilot_owner_01","pilot_owner_02"]').hexdigest())
+        self.assertIs(health["staged_500_entitled_enabled"], False)
+        self.assertIsNone(health["canary_worker_origin"])
+        self.assertNotIn("pilot_owner_01", json.dumps(health))
+        with patch.dict(os.environ, self.PAID), patch.dict(os.environ, {"SCAN_STAGED_PILOT_OWNER_IDS": ""}):
+            disabled = main.app.test_client().get("/health").get_json()
+        self.assertEqual(disabled["staged_pilot_owner_count"], 0)
+        self.assertEqual(disabled["staged_pilot_owner_cohort_sha256"], hashlib.sha256(b'[]').hexdigest())
+
+    def test_invalid_pilot_configuration_preserves_public_paid_150_and_refuses_500(self):
+        for config in (
+            {**self.PAID, "SCAN_STAGED_PILOT_OWNER_IDS": "*"},
+            {**self.PAID_500, "SCAN_STAGED_PILOT_OWNER_IDS": "pilot_owner_01"},
+        ):
+            with self.subTest(config=config), patch.dict(os.environ, config):
+                public = self.paid_task(150)
+                self.assertEqual(main.validate_dispatch({"queue_path": main.QUEUE_PATH, "task": public}), (public, None))
+                for owner in ("pilot_owner_01", "ordinary_customer_01"):
+                    pilot = self.paid_task(500, owner_user_id=owner)
+                    self.assertEqual(main.validate_dispatch({"queue_path": main.QUEUE_PATH, "task": pilot}), (None, "invalid_scan_mode"))
+                response = main.app.test_client().get("/health")
+                self.assertEqual(response.status_code, 200)
+                health = response.get_json()
+                self.assertIs(health["staged_pilot_configuration_valid"], False)
+                self.assertIsNone(health["staged_pilot_owner_count"])
+                self.assertIsNone(health["staged_pilot_owner_cohort_sha256"])
+
+    def test_closing_paid_pilot_blocks_new_500_and_keeps_control_tasks_drainable(self):
+        config = {**self.PAID, "SCAN_STAGED_PILOT_OWNER_IDS": "pilot_owner_01"}
+        for owners in ("pilot_owner_01", "", "replacement_owner_01"):
+            with self.subTest(owners=owners), patch.dict(os.environ, {**config, "SCAN_STAGED_PILOT_OWNER_IDS": owners}):
+                value = self.paid_task(500, owner_user_id="pilot_owner_01")
+                expected = (value, None) if owners == "pilot_owner_01" else (None, "invalid_scan_mode")
+                self.assertEqual(main.validate_dispatch({"queue_path": main.QUEUE_PATH, "task": value}), expected)
+                watchdog = task(drain=True)
+                job = json.loads(base64.b64decode(watchdog["httpRequest"]["body"]))
+                job.update(scan_mode="standard_500", page_cap=500, pipeline_mode="staged", owner_user_id="pilot_owner_01", staged_rollout_scope="paid")
+                watchdog["httpRequest"]["body"] = encoded(job)
+                self.assertEqual(main.validate_dispatch({"queue_path": main.DRAIN_QUEUE_PATH, "task": watchdog}), (watchdog, None))
+                cleanup = deepcopy(watchdog)
+                cleanup["name"] = f"{main.DRAIN_QUEUE_PATH}/tasks/standard150-cleanup-scan_abc123-a1"
+                cleanup["httpRequest"]["url"] = main.WORKSPACE_DELETE_URL
+                del cleanup["scheduleTime"], job["drain_after"]
+                cleanup["httpRequest"]["body"] = encoded({**job, "workspace_cleanup": True})
+                self.assertEqual(main.validate_dispatch({"queue_path": main.DRAIN_QUEUE_PATH, "task": cleanup}), (cleanup, None))
+
 
 class SignatureTests(unittest.TestCase):
     def test_signature_is_bound_to_timestamp_and_body(self):

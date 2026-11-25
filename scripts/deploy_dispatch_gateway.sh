@@ -32,10 +32,12 @@ fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$CONFIRM"
 # a normal deployment explicitly restores monolith mode and removes its cohort.
 STAGED_PLAN="$(python3 "$REPO_ROOT/scripts/gateway_staged_config.py" \
   --config "${GATEWAY_STAGED_CONFIG:-off}" --owners "${GATEWAY_STAGED_OWNER_IDS:-}" \
-  --canary-owners "${GATEWAY_CANARY_OWNER_USER_IDS:-}")"
+  --canary-owners "${GATEWAY_CANARY_OWNER_USER_IDS:-}" --pilot-owners "${GATEWAY_STAGED_PILOT_OWNER_IDS:-}")"
 read -r GATEWAY_PIPELINE_MODE STAGED_ROLLOUT_SCOPE STAGED_500_ENABLED STAGED_OWNER_COUNT STAGED_COHORT_SHA < <(python3 -c \
   'import json,sys; p=json.loads(sys.argv[1]); print(p["pipeline_mode"],p["staged_rollout_scope"],str(p["staged_500_entitled_enabled"]).lower(),p["staged_owner_count"],p["staged_owner_cohort_sha256"])' "$STAGED_PLAN")
 STAGED_OWNER_IDS="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["owner_ids"])' "$STAGED_PLAN")"
+STAGED_PILOT_OWNER_IDS="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["pilot_owner_ids"])' "$STAGED_PLAN")"
+STAGED_PILOT_COHORT_SHA="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["staged_pilot_owner_cohort_sha256"])' "$STAGED_PLAN")"
 if [[ "$STAGED_ROLLOUT_SCOPE" == paid ]]; then
   STAGED_PAID_CAP=150
   if [[ "$STAGED_500_ENABLED" == true ]]; then STAGED_PAID_CAP=500; fi
@@ -43,7 +45,11 @@ if [[ "$STAGED_ROLLOUT_SCOPE" == paid ]]; then
   [[ "${GATEWAY_STAGED_SERVING_REVISION:-}" =~ ^${WORKER}-[a-z0-9-]+$ ]] || {
     echo 'Paid staging requires an exact serving worker revision.' >&2; exit 2;
   }
-  [[ "${GATEWAY_STAGED_CONFIRM:-}" == "ENABLE-PAID-STAGED-GATEWAY:${SOURCE_SHA}:${GATEWAY_STAGED_SERVING_REVISION}:${STAGED_PAID_CAP}" ]] || {
+  STAGED_PAID_CONFIRM="ENABLE-PAID-STAGED-GATEWAY:${SOURCE_SHA}:${GATEWAY_STAGED_SERVING_REVISION}:${STAGED_PAID_CAP}"
+  if [[ -n "$STAGED_PILOT_OWNER_IDS" ]]; then
+    STAGED_PAID_CONFIRM="ENABLE-PAID-PILOT-STAGED-GATEWAY:${SOURCE_SHA}:${GATEWAY_STAGED_SERVING_REVISION}:${STAGED_PILOT_COHORT_SHA}"
+  fi
+  [[ "${GATEWAY_STAGED_CONFIRM:-}" == "$STAGED_PAID_CONFIRM" ]] || {
     echo 'Paid staging requires exact source, serving revision and tier confirmation.' >&2; exit 2;
   }
   [[ -s "${GATEWAY_ADMISSION_ACCESS_TOKEN_FILE:-}" && -n "${GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT:-}" ]] || {
@@ -216,19 +222,14 @@ fi
 if [[ "$GATEWAY_PIPELINE_MODE" == staged ]]; then
   # First deploy and verify the zero-owner revision. Enabling staging is then
   # a separate deployment with its own exact source/cohort confirmation.
-  python3 - "$GATEWAY_ROLLBACK_BASELINE" "$SOURCE_SHA" "$STAGED_ROLLOUT_SCOPE" <<'PY'
-import hashlib,json,sys
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$REPO_ROOT/scripts" python3 - "$GATEWAY_ROLLBACK_BASELINE" "$SOURCE_SHA" "$STAGED_PLAN" <<'PY'
+import json,sys
+from gateway_staged_config import verify_activation_baseline
 previous=json.load(open(sys.argv[1]))
-empty_hash=hashlib.sha256(b'[]').hexdigest()
-previous_mode = (previous.get('pipeline_mode'), previous.get('staged_rollout_scope', 'off'))
-allowed = {('monolith', 'off')}
-if sys.argv[3] == 'paid' and previous.get('canary_owner_count') == 0:
-    allowed.add(('staged', 'paid'))
-if (previous.get('source_sha') != sys.argv[2] or previous_mode not in allowed
-        or previous.get('staged_owner_count') != 0
-        or (sys.argv[3] == 'paid' and (previous.get('canary_owner_count') != 0 or previous.get('canary_worker_origin')))
-        or previous.get('staged_owner_cohort_sha256') != empty_hash):
-    raise SystemExit('Staging requires a freshly verified zero-owner gateway baseline')
+try:
+    verify_activation_baseline(previous, sys.argv[2], json.loads(sys.argv[3]))
+except ValueError as exc:
+    raise SystemExit(str(exc))
 PY
 fi
 
@@ -332,6 +333,9 @@ ENV_VARS="${ENV_VARS}|SCAN_PIPELINE_MODE=$GATEWAY_PIPELINE_MODE|SCAN_STAGED_ROLL
 if [[ -n "$STAGED_OWNER_IDS" ]]; then
   ENV_VARS="${ENV_VARS}|SCAN_STAGED_OWNER_IDS=$STAGED_OWNER_IDS"
 fi
+if [[ -n "$STAGED_PILOT_OWNER_IDS" ]]; then
+  ENV_VARS="${ENV_VARS}|SCAN_STAGED_PILOT_OWNER_IDS=$STAGED_PILOT_OWNER_IDS"
+fi
 if [[ -n "$CANARY_WORKER_ORIGIN" ]]; then
   ENV_VARS="${ENV_VARS}|SCAN_CANARY_WORKER_ORIGIN=$CANARY_WORKER_ORIGIN|SCAN_CANARY_OWNER_USER_IDS=$GATEWAY_CANARY_OWNER_USER_IDS"
 fi
@@ -343,6 +347,7 @@ echo "signing_secret_ref=${SIGNING_SECRET}:${SIGNING_VERSION} (value not read)"
 echo "source_sha=$SOURCE_SHA"
 echo "canary_worker_origin=${CANARY_WORKER_ORIGIN:-<off>} canary_owner_count=$CANARY_OWNER_COUNT"
 echo "pipeline_mode=$GATEWAY_PIPELINE_MODE staged_rollout_scope=$STAGED_ROLLOUT_SCOPE staged_500_entitled_enabled=$STAGED_500_ENABLED staged_owner_count=$STAGED_OWNER_COUNT staged_cohort_sha256=$STAGED_COHORT_SHA"
+echo "staged_pilot_owner_cohort_sha256=$STAGED_PILOT_COHORT_SHA"
 
 echo
 echo "=== Reserve this deployment's revision name ==="
@@ -406,7 +411,8 @@ gcloud run revisions describe "$NEW_REVISION" \
 python3 "$REPO_ROOT/scripts/verify_gateway_deployment.py" \
   --created-revision-json "$CREATED_JSON" \
   --expected-revision "$NEW_REVISION" \
-  --expected-source-sha "$SOURCE_SHA"
+  --expected-source-sha "$SOURCE_SHA" \
+  --staged-pilot-owner-ids "$STAGED_PILOT_OWNER_IDS"
 
 # The traffic spec can be pinned by name to an older revision. While it is,
 # gcloud run deploy builds correctly, creates a Ready revision, routes nothing
@@ -505,7 +511,8 @@ python3 "$REPO_ROOT/scripts/verify_gateway_deployment.py" \
   --service-json "$GATEWAY_JSON" \
   --revision-json "$REVISION_JSON" \
   --expected-revision "$NEW_REVISION" \
-  --expected-source-sha "$SOURCE_SHA"
+  --expected-source-sha "$SOURCE_SHA" \
+  --staged-pilot-owner-ids "$STAGED_PILOT_OWNER_IDS"
 
 # Pinned to the constant the deployed source declares, so the assertion cannot
 # drift from the code it is meant to prove.
@@ -542,6 +549,7 @@ while :; do
       --pipeline-mode "$GATEWAY_PIPELINE_MODE" \
       --staged-rollout-scope "$STAGED_ROLLOUT_SCOPE" \
       --staged-500-entitled-enabled "$STAGED_500_ENABLED" \
+      --staged-pilot-owner-ids "$STAGED_PILOT_OWNER_IDS" \
       --staged-owner-ids "$STAGED_OWNER_IDS" 2>/dev/null)"; then
       break
     fi
@@ -564,6 +572,7 @@ while :; do
       --staged-owner-ids "$STAGED_OWNER_IDS" \
       --staged-rollout-scope "$STAGED_ROLLOUT_SCOPE" \
       --staged-500-entitled-enabled "$STAGED_500_ENABLED" \
+      --staged-pilot-owner-ids "$STAGED_PILOT_OWNER_IDS" \
       --canary-owner-count "$CANARY_OWNER_COUNT" >&2 || true
     exit 2
   fi

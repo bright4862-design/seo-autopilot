@@ -87,6 +87,7 @@ if (args[2] === "exec") {
         ...JSON.parse(process.env.TEST_PROBE)
       };
       if (name !== "${intakeRoute}" || payload.action !== "staged_runtime_status") throw new Error("unexpected intake route");
+      const changedPilot = readFileSync(process.env.TEST_TRACE, "utf8").includes("SCAN_PUBLIC_PILOT_EXPIRES_AT=");
       return {
         success: true, schema_version: "fixlist_staged_v9_intake_readback_v1",
         observed_at: new Date().toISOString(), build_id: "${buildId}", runtime_activation_id: "${activationId}",
@@ -95,6 +96,7 @@ if (args[2] === "exec") {
         staged_owner_enabled: true, intake_gate: "enabled", admission_gate: "enabled",
         staged_rollout_scope: "off", staged_500_entitled_enabled: false, paid_dispatch_gateway_origin: "${gatewayOrigin}",
         ...JSON.parse(process.env.TEST_V9),
+        ...(changedPilot ? JSON.parse(process.env.TEST_V9_AFTER_PILOT) : {}),
       };
     } },
   };
@@ -125,6 +127,8 @@ console.log(JSON.stringify({
       "prepare-owner": `PREPARE-BASE44-STAGED-150:${source}:${selected}${options.pilotExpiry ? ":" + options.pilotExpiry : ""}`,
       "hold-published-pilot": `HOLD-BASE44-PUBLISHED-PILOT:${source}`,
       "prepare-paid": `PREPARE-BASE44-STAGED-PAID:${source}:${gatewayRevision}:${options.cap || "150"}`,
+      "prepare-paid-500-pilot": `PREPARE-PAID-500-PILOT:${source}:${gatewayRevision}:${selected}:${options.pilotExpiry}`,
+      "hold-paid-500-pilot": `HOLD-PAID-500-PILOT:${source}:${selected}`,
       "deploy-probe": `DEPLOY-BASE44-STAGED-PROBE:${source}`,
       disable: `DISABLE-BASE44-STAGED:${source}:${selected}`,
     }[operation] || "";
@@ -143,9 +147,10 @@ console.log(JSON.stringify({
         TEST_SOURCE_MERGED: options.sourceMerged === false ? "false" : "true",
         TEST_CLI: cli, TEST_TRACE: trace, TEST_USER: JSON.stringify(user),
         TEST_PROBE: JSON.stringify(options.probe || {}), TEST_V9: JSON.stringify(options.v9 || {}),
+        TEST_V9_AFTER_PILOT: JSON.stringify(options.v9AfterPilot || {}),
         STAGED_PAID_PAGE_CAP: options.cap || "150", STAGED_GATEWAY_REVISION: gatewayRevision,
         TEST_GATEWAY: JSON.stringify({
-          ...(options.pilotExpiry ? {
+          ...(options.pilotExpiry && operation === "prepare-owner" ? {
             staged_rollout_scope: "off", staged_500_entitled_enabled: false,
             staged_owner_count: 1, staged_owner_cohort_sha256: customerDigest,
             canary_worker_origin: pilotWorkerOrigin, canary_owner_count: 1, canary_owner_cohort_sha256: customerDigest,
@@ -215,7 +220,7 @@ for (const [name, admin] of [["London", london], ["Bright", bright]]) {
     assert.ok(intakeReadbacks[0] < mutations[0] && mutations[1] < intakeReadbacks[1]);
     assert.deepEqual(calls[mutations[0]], ["secrets", "set", "BETA_SCAN_INTAKE_ENABLED=false"]);
     assert.deepEqual(calls[mutations[1]], ["secrets", "set", "SCAN_PIPELINE_MODE=staged", `SCAN_STAGED_OWNER_IDS=${customer.id}`,
-      "SCAN_STAGED_ROLLOUT_SCOPE=off", "SCAN_STAGED_500_ENTITLED_ENABLED=false"]);
+      "SCAN_STAGED_ROLLOUT_SCOPE=off", "SCAN_STAGED_500_ENTITLED_ENABLED=false", "SCAN_STAGED_PILOT_OWNER_IDS="]);
     assert.match(result.stdout, /public_intake=closed v9_attested=true pilot_cohort_matches=true/);
     assert.equal((result.stdout + result.stderr).includes(customer.id), false);
     assert.equal((result.stdout + result.stderr).includes(customerDigest), false);
@@ -316,7 +321,7 @@ for (const cap of ["150", "500"]) {
       ["secrets", "set", "BETA_SCAN_INTAKE_ENABLED=false"], ["gateway.health"],
       ["secrets", "set", "SCAN_PIPELINE_MODE=staged", "SCAN_STAGED_OWNER_IDS=", "SCAN_PIPELINE_OWNER_IDS=",
         "SCAN_STAGED_ROLLOUT_SCOPE=paid", `SCAN_STAGED_500_ENTITLED_ENABLED=${cap === "500"}`,
-        "SCAN_PUBLIC_PILOT_EXPIRES_AT=0"],
+        "SCAN_STAGED_PILOT_OWNER_IDS=", "SCAN_PUBLIC_PILOT_EXPIRES_AT=0"],
       ["invoke", intakeRoute, "staged_runtime_status"], ["gateway.health"],
     ]);
     assert.match(result.stdout, /BASE44_STAGED_PAID_READBACK_VERIFIED.*public_intake=closed/);
@@ -345,6 +350,36 @@ test("paid status cross-checks both runtimes without writing", t => {
   assert.deepEqual(JSON.parse(result.stdout.trim()), {
     base44_v9_attested: true, page_cap: 500, intake_gate: "disabled", admission_gate: "enabled",
   });
+});
+
+test("preparing and holding only the 500 pilot leaves the paid 150 intake settings untouched", t => {
+  const expiry = Math.floor(Date.now() / 1000) + 1800;
+  const emptyPilot = { staged_pilot_owner_count: 0, staged_pilot_owner_cohort_sha256: emptyCohortDigest };
+  const namedPilot = { staged_pilot_owner_count: 1, staged_pilot_owner_cohort_sha256: customerDigest };
+  const options = paidOptions();
+  options.v9.intake_gate = "enabled";
+  const prepared = fixture(t)(operator, "prepare-paid-500-pilot", customer.id, london, {
+    ...options, v9: { ...options.v9, ...emptyPilot },
+    v9AfterPilot: { ...namedPilot, public_pilot_expires_at: expiry },
+    gateway: namedPilot, pilotExpiry: String(expiry),
+  });
+  assert.equal(prepared.status, 0, prepared.stderr);
+  assert.deepEqual(prepared.calls.filter(([command]) => command === "secrets"), [
+    ["secrets", "set", `SCAN_STAGED_PILOT_OWNER_IDS=${customer.id}`, `SCAN_PUBLIC_PILOT_EXPIRES_AT=${expiry}`],
+  ]);
+  const mismatched = fixture(t)(operator, "prepare-paid-500-pilot", customer.id, london, {
+    ...options, v9: { ...options.v9, ...emptyPilot }, gateway: emptyPilot, pilotExpiry: String(expiry),
+  });
+  assert.equal(mismatched.status, 2);
+  assert.deepEqual(mismatched.calls.filter(([command]) => command === "secrets"), []);
+  const held = fixture(t)(operator, "hold-paid-500-pilot", customer.id, london, {
+    ...options, v9: { ...options.v9, ...namedPilot, public_pilot_expires_at: expiry },
+    v9AfterPilot: { public_pilot_expires_at: 0 }, mainMoved: true,
+  });
+  assert.equal(held.status, 0, held.stderr);
+  assert.deepEqual(held.calls.filter(([command]) => command === "secrets"), [
+    ["secrets", "set", "SCAN_PUBLIC_PILOT_EXPIRES_AT=0"],
+  ]);
 });
 
 test("off status verifies actual V9 rollback and keeps the operator read-only", t => {

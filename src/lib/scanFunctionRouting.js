@@ -6,6 +6,10 @@ const CUSTOMER_ROUTES = ["startStandardScanJob", "getCustomerScanResult", "delet
 export function resolveScanFunctionRoute(name, previewGeneration, routes = contract) {
   const key = CUSTOMER_ROUTES.find((canonical) => name === `${canonical}V8`);
   if (!key) return name;
+  // A paid pilot shares the already promoted public V9 scanner for both tiers.
+  if (previewGeneration === "PAID_PILOT" && routes.generation !== "v9") {
+    throw new Error("The staged scanner route is unavailable.");
+  }
   const pilotReader = previewGeneration === "PUBLISHED_PILOT" && key !== "startStandardScanJob";
   const stagedPreview = (previewGeneration === "V9" || pilotReader) && routes.generation === "v8";
   const selected = (stagedPreview ? routes.candidate_routes.v9 : routes.routes)[key];

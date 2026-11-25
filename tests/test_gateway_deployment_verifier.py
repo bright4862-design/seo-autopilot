@@ -408,3 +408,30 @@ def test_a_canary_deploy_requires_the_exact_origin_and_owner_count():
 
 def test_callers_that_do_not_ask_about_the_canary_are_unchanged():
     check_health(health())
+
+
+def test_created_revision_cli_verifies_the_exact_pilot_environment_before_promotion(tmp_path):
+    pilot = "pilot_owner_01"
+    created = revision()
+    created["spec"]["containers"][0]["env"].append({"name": "SCAN_STAGED_PILOT_OWNER_IDS", "value": pilot})
+    args = ["--created-revision-json", _write(tmp_path, "pilot-created.json", created),
+            "--expected-revision", NEW_REVISION, "--expected-source-sha", SOURCE_SHA,
+            "--staged-pilot-owner-ids"]
+    assert verifier.main([*args, pilot]) == 0
+    assert verifier.main([*args, "other_owner_01"]) == 2
+    assert verifier.main([*args, ""]) == 2
+
+
+def test_health_cli_requires_the_expected_pilot_cohort(tmp_path):
+    import hashlib
+    pilot = "pilot_owner_01"
+    payload = health(staged_pilot_owner_count=1,
+                     staged_pilot_owner_cohort_sha256=hashlib.sha256(b'["pilot_owner_01"]').hexdigest())
+    args = ["--health-json", _write(tmp_path, "pilot-health.json", payload),
+            "--expected-revision", NEW_REVISION, "--expected-source-sha", SOURCE_SHA,
+            "--expected-contract-version", CONTRACT_VERSION, "--queue-path", QUEUE,
+            "--drain-queue-path", DRAIN_QUEUE, "--worker-origin", WORKER_ORIGIN,
+            "--staged-pilot-owner-ids"]
+    assert verifier.main([*args, pilot]) == 0
+    assert verifier.main([*args, "other_owner_01"]) == 2
+    assert verifier.main([*args, ""]) == 2

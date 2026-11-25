@@ -37,6 +37,11 @@ def verify(service, revision, health, baseline, expected_revision, source_sha):
         canary["staged_rollout_scope"] = baseline["staged_rollout_scope"]
     if "staged_500_entitled_enabled" in baseline:
         canary["staged_500_entitled_enabled"] = baseline["staged_500_entitled_enabled"]
+    if "staged_pilot_owner_count" in baseline or "staged_pilot_owner_cohort_sha256" in baseline:
+        if "staged_pilot_owner_count" not in baseline or "staged_pilot_owner_cohort_sha256" not in baseline:
+            raise VerificationError("Rollback baseline pilot cohort attestation is incomplete")
+        canary.update(staged_pilot_owner_count=baseline["staged_pilot_owner_count"],
+                      staged_pilot_owner_cohort_sha256=baseline["staged_pilot_owner_cohort_sha256"])
     verify_runtime_health(health, expected_revision, source_sha, baseline["contract_version"],
                           baseline["queue"], baseline["drain_queue"], baseline["worker_origin"], **canary)
 

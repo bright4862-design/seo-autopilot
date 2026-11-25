@@ -81,6 +81,18 @@ def revision_env(revision: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def verify_pilot_environment(revision: dict[str, Any], expected_owner_ids: str) -> None:
+    containers = revision.get("spec", {}).get("containers") or []
+    if len(containers) != 1:
+        raise VerificationError("Gateway pilot environment requires one container")
+    entries = [entry for entry in containers[0].get("env", []) if entry.get("name") == "SCAN_STAGED_PILOT_OWNER_IDS"]
+    if expected_owner_ids:
+        if len(entries) != 1 or entries[0].get("value") != expected_owner_ids or "valueFrom" in entries[0]:
+            raise VerificationError("Gateway pilot environment does not match the exact expected owner cohort")
+    elif entries:
+        raise VerificationError("Gateway pilot environment unexpectedly carries a cohort")
+
+
 def _require_source_sha(revision: dict[str, Any], expected_source_sha: str, where: str) -> None:
     actual = revision_env(revision).get("FIXLIST_GATEWAY_SOURCE_SHA")
     if actual != expected_source_sha:
@@ -195,6 +207,9 @@ def verify_runtime_health(
     staged_owner_count: int | None = None,
     staged_rollout_scope: str | None = None,
     staged_500_entitled_enabled: bool | None = None,
+    staged_pilot_owner_ids: str | None = None,
+    staged_pilot_owner_count: int | None = None,
+    staged_pilot_owner_cohort_sha256: str | None = None,
 ) -> dict[str, str]:
     def require(name: str, actual: Any, expected: Any) -> None:
         if actual != expected:
@@ -229,6 +244,22 @@ def verify_runtime_health(
     if staged_500_entitled_enabled is not None:
         if health.get("staged_500_entitled_enabled") is not staged_500_entitled_enabled:
             raise VerificationError("Gateway /health does not attest the expected 500-page launch flag")
+    if staged_pilot_owner_ids is not None:
+        selected = sorted(staged_pilot_owner_ids.split(",")) if staged_pilot_owner_ids else []
+        if (len(selected) > 5 or len(set(selected)) != len(selected)
+                or any(not re.fullmatch(r"[A-Za-z0-9_-]{6,64}", owner) for owner in selected)):
+            raise VerificationError("Expected gateway pilot cohort is invalid")
+        staged_pilot_owner_count = len(selected)
+        staged_pilot_owner_cohort_sha256 = hashlib.sha256(json.dumps(selected, separators=(",", ":")).encode()).hexdigest()
+    if staged_pilot_owner_count is not None or staged_pilot_owner_cohort_sha256 is not None:
+        if (type(staged_pilot_owner_count) is not int or not 0 <= staged_pilot_owner_count <= 5
+                or not isinstance(staged_pilot_owner_cohort_sha256, str)
+                or not re.fullmatch(r"[a-f0-9]{64}", staged_pilot_owner_cohort_sha256)
+                or (staged_pilot_owner_count == 0 and staged_pilot_owner_cohort_sha256 != hashlib.sha256(b"[]").hexdigest())
+                or type(health.get("staged_pilot_owner_count")) is not int):
+            raise VerificationError("Gateway /health pilot cohort attestation is invalid")
+        require("staged_pilot_owner_count", health.get("staged_pilot_owner_count"), staged_pilot_owner_count)
+        require("staged_pilot_owner_cohort_sha256", health.get("staged_pilot_owner_cohort_sha256"), staged_pilot_owner_cohort_sha256)
     require("contract_version", health.get("contract_version"), expected_contract_version)
     require("source_sha", health.get("source_sha"), expected_source_sha)
     # The one field that distinguishes two revisions built from the same commit.
@@ -264,6 +295,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--canary-owner-count", type=int, default=None)
     parser.add_argument("--pipeline-mode", choices=("monolith", "staged"), default=None)
     parser.add_argument("--staged-owner-ids", default="")
+    parser.add_argument("--staged-pilot-owner-ids", default=None)
     parser.add_argument("--staged-rollout-scope", choices=("off", "paid"), default=None)
     parser.add_argument("--staged-500-entitled-enabled", choices=("false", "true"))
     args = parser.parse_args(argv)
@@ -295,22 +327,31 @@ def main(argv: list[str] | None = None) -> int:
                 staged_owner_ids=args.staged_owner_ids,
                 staged_rollout_scope=args.staged_rollout_scope,
                 staged_500_entitled_enabled=None if args.staged_500_entitled_enabled is None else args.staged_500_entitled_enabled == "true",
+                staged_pilot_owner_ids=args.staged_pilot_owner_ids,
             )
         elif args.created_revision_json:
+            created = _load(args.created_revision_json)
             proven = verify_created_revision(
-                _load(args.created_revision_json),
+                created,
                 args.expected_revision,
                 args.expected_source_sha,
             )
+            if args.staged_pilot_owner_ids is not None:
+                verify_pilot_environment(created, args.staged_pilot_owner_ids)
         else:
             if not args.service_json or not args.revision_json:
                 parser.error("control-plane mode needs --service-json and --revision-json")
+            service = _load(args.service_json)
+            revision = _load(args.revision_json)
             proven = verify_control_plane(
-                _load(args.service_json),
-                _load(args.revision_json),
+                service,
+                revision,
                 args.expected_revision,
                 args.expected_source_sha,
             )
+            if args.staged_pilot_owner_ids is not None:
+                verify_pilot_environment(revision, args.staged_pilot_owner_ids)
+                verify_pilot_environment({"spec": service.get("spec", {}).get("template", {}).get("spec", {})}, args.staged_pilot_owner_ids)
     except VerificationError as error:
         print(f"Refusing gateway deployment: {error}", file=sys.stderr)
         return 2

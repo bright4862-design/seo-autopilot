@@ -139,6 +139,133 @@ def test_deploy_config_planner_is_bounded(config, owners, canary, ok):
         assert plan["staged_500_entitled_enabled"] is (config == "paid-500")
 
 
+def test_paid_pilot_planner_binds_a_separate_sorted_cohort():
+    result = subprocess.run([sys.executable, str(ROOT / "scripts/gateway_staged_config.py"),
+                             "--config", "paid-pilot-500", "--pilot-owners", f"{OTHER},{OWNER}"],
+                            text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    planned = json.loads(result.stdout)
+    assert planned["pipeline_mode"] == "staged"
+    assert planned["staged_rollout_scope"] == "paid"
+    assert planned["staged_500_entitled_enabled"] is False
+    assert planned["owner_ids"] == ""
+    assert planned["pilot_owner_ids"] == f"{OWNER},{OTHER}"
+    assert planned["staged_pilot_owner_count"] == 2
+    assert planned["staged_pilot_owner_cohort_sha256"] == cohort_hash([OWNER, OTHER])
+
+
+@pytest.mark.parametrize("config,pilot,owners,canary", [
+    ("paid-pilot-500", "", "", ""), ("paid-pilot-500", "*", "", ""),
+    ("paid-pilot-500", f"{OWNER},{OWNER}", "", ""),
+    ("paid-pilot-500", OWNER, OWNER, ""), ("paid-pilot-500", OWNER, "", OWNER),
+    ("off", OWNER, "", ""), ("paid", OWNER, "", ""), ("paid-500", OWNER, "", ""),
+    ("owner-canary", OWNER, OWNER, OWNER),
+])
+def test_paid_pilot_planner_refuses_missing_malformed_or_mixed_cohorts(config, pilot, owners, canary):
+    planner = load_module("scripts/gateway_staged_config.py", "gateway_pilot_planner")
+    with pytest.raises(ValueError):
+        planner.plan(config, owners, canary, pilot)
+
+
+def paid_baseline(*, pilot="", broad=False):
+    return {"source_sha": "a" * 40, "pipeline_mode": "staged", "staged_rollout_scope": "paid",
+            "staged_owner_count": 0, "staged_owner_cohort_sha256": cohort_hash([]),
+            "canary_owner_count": 0, "canary_worker_origin": None,
+            "staged_500_entitled_enabled": broad,
+            "staged_pilot_owner_count": 1 if pilot else 0,
+            "staged_pilot_owner_cohort_sha256": cohort_hash([pilot] if pilot else [])}
+
+
+def test_pilot_activation_and_backtrack_bind_the_same_source_paid_baseline():
+    planner = load_module("scripts/gateway_staged_config.py", "gateway_pilot_baseline")
+    pilot = planner.plan("paid-pilot-500", "", "", OWNER)
+    paid = planner.plan("paid", "", "")
+    planner.verify_activation_baseline(paid_baseline(), "a" * 40, pilot)
+    planner.verify_activation_baseline(paid_baseline(pilot=OWNER), "a" * 40, pilot)
+    planner.verify_activation_baseline(paid_baseline(pilot=OWNER), "a" * 40, paid)
+    for baseline in (
+        {**paid_baseline(), "source_sha": "b" * 40},
+        paid_baseline(broad=True), paid_baseline(pilot=OTHER),
+        {**paid_baseline(), "canary_worker_origin": ORIGIN},
+        {**paid_baseline(), "staged_pilot_owner_count": True},
+    ):
+        with pytest.raises(ValueError):
+            planner.verify_activation_baseline(baseline, "a" * 40, pilot)
+    broad = planner.plan("paid-500", "", "")
+    with pytest.raises(ValueError):
+        planner.verify_activation_baseline(paid_baseline(pilot=OWNER), "a" * 40, broad)
+
+
+def test_pilot_health_verifier_binds_count_and_cohort_and_requires_empty_when_disabled(gateway, monkeypatch):
+    monkeypatch.setenv("SCAN_PIPELINE_MODE", "staged")
+    monkeypatch.setenv("SCAN_STAGED_ROLLOUT_SCOPE", "paid")
+    monkeypatch.setenv("SCAN_STAGED_PILOT_OWNER_IDS", OWNER)
+    health = gateway.app.test_client().get("/health").get_json()
+    verifier = load_module("scripts/verify_gateway_deployment.py", "paid_pilot_verifier")
+    args = (health, gateway.GATEWAY_RUNTIME_REVISION, gateway.GATEWAY_SOURCE_SHA,
+            gateway.GATEWAY_CONTRACT_VERSION, gateway.QUEUE_PATH, gateway.DRAIN_QUEUE_PATH, gateway.WORKER_ORIGIN)
+    verifier.verify_runtime_health(*args, staged_pilot_owner_ids=OWNER)
+    for expected in (OTHER, ""):
+        with pytest.raises(verifier.VerificationError, match="pilot"):
+            verifier.verify_runtime_health(*args, staged_pilot_owner_ids=expected)
+    for change in ({"staged_pilot_owner_count": True}, {"staged_pilot_owner_cohort_sha256": cohort_hash([OTHER])}):
+        with pytest.raises(verifier.VerificationError, match="pilot"):
+            verifier.verify_runtime_health({**health, **change}, *args[1:], staged_pilot_owner_ids=OWNER)
+
+
+def test_rollback_requires_the_original_paid_pilot_cohort(gateway, monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / "scripts"))
+    rollback = load_module("scripts/verify_gateway_rollback.py", "paid_pilot_rollback")
+    monkeypatch.setenv("SCAN_PIPELINE_MODE", "staged")
+    monkeypatch.setenv("SCAN_STAGED_ROLLOUT_SCOPE", "paid")
+    monkeypatch.setenv("SCAN_STAGED_PILOT_OWNER_IDS", OWNER)
+    baseline = gateway.app.test_client().get("/health").get_json()
+    revision_name, source = "gateway-fixture", "a" * 40
+    baseline.update(revision=revision_name, source_sha=source)
+    revision = {"metadata": {"name": revision_name}, "status": {"imageDigest": "img@sha256:" + "a" * 64,
+                "conditions": [{"type": "Ready", "status": "True"}]},
+                "spec": {"containers": [{"env": [{"name": "FIXLIST_GATEWAY_SOURCE_SHA", "value": source}]}]}}
+    service = {"status": {"traffic": [{"revisionName": revision_name, "percent": 100}]}}
+    rollback.verify(service, revision, baseline, baseline, revision_name, source)
+    for change in ({"staged_pilot_owner_count": 0}, {"staged_pilot_owner_cohort_sha256": cohort_hash([OTHER])}):
+        with pytest.raises(rollback.VerificationError, match="pilot"):
+            rollback.verify(service, revision, {**baseline, **change}, baseline, revision_name, source)
+
+
+def test_pilot_environment_verification_refuses_missing_extra_or_ambiguous_settings():
+    verifier = load_module("scripts/verify_gateway_deployment.py", "pilot_environment_verifier")
+    def revision(entries):
+        return {"spec": {"containers": [{"env": entries}]}}
+    entry = {"name": "SCAN_STAGED_PILOT_OWNER_IDS", "value": OWNER}
+    verifier.verify_pilot_environment(revision([entry]), OWNER)
+    verifier.verify_pilot_environment(revision([]), "")
+    for entries, expected in (([], OWNER), ([entry], OTHER), ([entry], ""), ([entry, entry], OWNER),
+                              ([{**entry, "valueFrom": {"secretKeyRef": {"name": "unexpected"}}}], OWNER)):
+        with pytest.raises(verifier.VerificationError, match="pilot"):
+            verifier.verify_pilot_environment(revision(entries), expected)
+
+
+@pytest.mark.parametrize("valid_confirmation", [True, False])
+def test_pilot_deploy_binds_confirmation_to_source_worker_and_sorted_cohort(tmp_path, valid_confirmation):
+    text = (ROOT / "scripts/deploy_dispatch_gateway.sh").read_text()
+    setup = text[text.index('STAGED_PLAN='):text.index('\n# The gateway uses')]
+    source = "a" * 40
+    worker = "fixlist-standard150-worker-00123-abc"
+    confirm = f"ENABLE-PAID-PILOT-STAGED-GATEWAY:{source}:{worker}:{cohort_hash([OWNER])}"
+    credential = tmp_path / "fixture-credential"
+    credential.write_text("fixture")
+    env = {**os.environ, "REPO_ROOT": str(ROOT), "SOURCE_SHA": source,
+           "GATEWAY_STAGED_CONFIG": "paid-pilot-500", "GATEWAY_STAGED_PILOT_OWNER_IDS": OWNER,
+           "GATEWAY_STAGED_SERVING_REVISION": worker, "WORKER": "fixlist-standard150-worker",
+           "GATEWAY_STAGED_CONFIRM": confirm if valid_confirmation else confirm[:-1] + "0",
+           "GATEWAY_ADMISSION_ACCESS_TOKEN_FILE": str(credential), "GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT": "fixture"}
+    command = setup + '\nprintf "%s\\n" "$STAGED_500_ENABLED" "$STAGED_PILOT_OWNER_IDS"\n'
+    result = subprocess.run(["bash", "-euo", "pipefail", "-c", command], env=env, text=True, capture_output=True)
+    assert (result.returncode == 0) is valid_confirmation, result.stderr
+    if valid_confirmation:
+        assert result.stdout.splitlines() == ["false", OWNER]
+
+
 @pytest.mark.parametrize("queue_target", ["null", '{"uriOverride":{"host":"other.example"}}'])
 def test_paid_cutover_checks_barrier_queue_targets_and_worker_runtime(tmp_path, queue_target):
     (tmp_path / "scripts").mkdir()

@@ -64,15 +64,17 @@ if [[ "$OWNER_ID" != "$OPERATOR_ID" ]]; then
   PILOT=true
 fi
 if [[ -n "$PUBLIC_PILOT_EXPIRES_AT" ]]; then
-  [[ "$OPERATION" == prepare-owner && "$PILOT" == true && "$TARGET_ROLE" == user
+  [[ ( "$OPERATION" == prepare-owner || "$OPERATION" == prepare-paid-500-pilot ) && "$PILOT" == true && "$TARGET_ROLE" == user
     && "$PUBLIC_PILOT_EXPIRES_AT" =~ ^[1-9][0-9]{9,11}$ ]] || refuse "Published pilot expiry requires a named ordinary account and a Unix timestamp."
   pilot_now="$(date +%s)"
   (( PUBLIC_PILOT_EXPIRES_AT > pilot_now && PUBLIC_PILOT_EXPIRES_AT <= pilot_now + 14 * 86400 )) \
     || refuse "Select a future pilot expiry within the coordinator's acceptance window."
   [[ "$GATEWAY_REVISION" =~ ^fixlist-dispatch-gateway-[a-z0-9-]+$ && ${#GATEWAY_REVISION} -le 63 ]] \
     || refuse "exact serving STAGED_GATEWAY_REVISION required for the published pilot"
-  [[ "$PILOT_WORKER_ORIGIN" =~ ^https://canary-[a-z0-9-]+---fixlist-standard150-worker-[a-z0-9-]+\.a\.run\.app$ ]] \
-    || refuse "use the verified STAGED_PILOT_WORKER_ORIGIN for the named gateway canary"
+  if [[ "$OPERATION" == prepare-owner ]]; then
+    [[ "$PILOT_WORKER_ORIGIN" =~ ^https://canary-[a-z0-9-]+---fixlist-standard150-worker-[a-z0-9-]+\.a\.run\.app$ ]] \
+      || refuse "use the verified STAGED_PILOT_WORKER_ORIGIN for the named gateway canary"
+  fi
 fi
 case "$OPERATION" in
   status|status-paid|status-off) ;;
@@ -85,11 +87,18 @@ case "$OPERATION" in
   prepare-paid)
     [[ "$CONFIRM" == "PREPARE-BASE44-STAGED-PAID:$SOURCE_SHA:$GATEWAY_REVISION:$PAID_PAGE_CAP" ]] \
       || refuse "exact source, gateway revision and paid tier confirmation required" ;;
+  prepare-paid-500-pilot)
+    [[ -n "$PUBLIC_PILOT_EXPIRES_AT" ]] || refuse "a future paid pilot expiry is required"
+    [[ "$CONFIRM" == "PREPARE-PAID-500-PILOT:$SOURCE_SHA:$GATEWAY_REVISION:$OWNER_ID:$PUBLIC_PILOT_EXPIRES_AT" ]] \
+      || refuse "exact paid pilot source, gateway, account and expiry confirmation required" ;;
+  hold-paid-500-pilot)
+    [[ "$PILOT" == true && "$TARGET_ROLE" == user && "$CONFIRM" == "HOLD-PAID-500-PILOT:$SOURCE_SHA:$OWNER_ID" ]] \
+      || refuse "exact paid pilot source and account confirmation required" ;;
   disable)
     [[ "$CONFIRM" == "DISABLE-BASE44-STAGED:$SOURCE_SHA:$OWNER_ID" ]] || refuse "exact disable confirmation required" ;;
   *) refuse "unsupported operation" ;;
 esac
-if [[ "$OPERATION" == hold-published-pilot ]]; then
+if [[ "$OPERATION" == hold-published-pilot || "$OPERATION" == hold-paid-500-pilot ]]; then
   fixlist_require_merged_checkout "$REPO_ROOT" "$SOURCE_SHA"
 else
   fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$SOURCE_SHA"
@@ -184,7 +193,8 @@ const value = result?.data && typeof result.data === "object" ? result.data : re
 const fields = ["schema_version", "success", "observed_at", "build_id", "runtime_activation_id",
   "release_fingerprint", "configured_pipeline_mode", "pipeline_mode", "staged_owner_cohort_state",
   "staged_owner_count", "staged_owner_cohort_sha256", "staged_owner_enabled", "intake_gate", "admission_gate",
-  "staged_rollout_scope", "staged_500_entitled_enabled", "paid_dispatch_gateway_origin", "public_pilot_expires_at"];
+  "staged_rollout_scope", "staged_500_entitled_enabled", "paid_dispatch_gateway_origin", "public_pilot_expires_at",
+  "staged_pilot_owner_count", "staged_pilot_owner_cohort_sha256"];
 const safe = Object.fromEntries(fields.map(key => [key, value?.[key]]));
 console.log("FIXLIST_V9_PILOT_READBACK=" + JSON.stringify(safe));
 NODE
@@ -230,14 +240,25 @@ const expectsGateway = phase === 'preflight' || phase === 'prepared' || phase.st
 if (expectsGateway && report.paid_dispatch_gateway_origin !== gatewayOrigin) process.exit(1);
 if (phase.startsWith('paid-')) {
   if (phase !== 'paid-preflight') {
+    const paidPilot = phase.startsWith('paid-pilot-');
     if (report.configured_pipeline_mode !== 'staged' || report.staged_rollout_scope !== 'paid'
-        || report.staged_500_entitled_enabled !== (cap === '500')
+        || report.staged_500_entitled_enabled !== (!paidPilot && cap === '500')
         || report.pipeline_mode !== 'monolith' || report.staged_owner_enabled !== false
         || report.staged_owner_cohort_state !== 'empty' || report.staged_owner_count !== 0
         || report.staged_owner_cohort_sha256 !== emptyCohort
         || !['enabled', 'disabled'].includes(report.intake_gate)
         || !['enabled', 'disabled'].includes(report.admission_gate)
         || (phase === 'paid-prepared' && report.intake_gate !== 'disabled')) process.exit(1);
+    if (paidPilot) {
+      const empty = report.staged_pilot_owner_count === 0 && report.staged_pilot_owner_cohort_sha256 === emptyCohort;
+      const named = report.staged_pilot_owner_count === 1 && report.staged_pilot_owner_cohort_sha256 === cohortDigest;
+      if (phase === 'paid-pilot-prepare' && ((!empty && !named) || report.intake_gate !== 'enabled'
+          || report.admission_gate !== 'enabled')) process.exit(1);
+      if (phase === 'paid-pilot-prepared' && (!named || report.public_pilot_expires_at !== Number(pilotExpiresAt)
+          || report.intake_gate !== 'enabled' || report.admission_gate !== 'enabled')) process.exit(1);
+      if (phase === 'paid-pilot-hold' && !named) process.exit(1);
+      if (phase === 'paid-pilot-held' && (!named || report.public_pilot_expires_at !== 0)) process.exit(1);
+    }
     fs.writeFileSync(output, JSON.stringify({
       base44_v9_attested: true, page_cap: Number(cap), intake_gate: report.intake_gate,
       admission_gate: report.admission_gate,
@@ -266,19 +287,23 @@ import fs from 'node:fs';
 const [file, sha, revision, scope, cap, ownerId, workerOrigin] = process.argv.slice(2);
 const health = JSON.parse(fs.readFileSync(file, 'utf8'));
 const pilot = scope === 'off';
+const paidPilot = scope === 'paid-pilot';
 const digest = createHash('sha256').update(JSON.stringify(pilot ? [ownerId] : [])).digest('hex');
 if (health.ok !== true || health.service !== 'fixlist-dispatch-gateway'
     || health.source_sha !== sha || health.revision !== revision
-    || health.pipeline_mode !== 'staged' || health.staged_rollout_scope !== scope
-    || health.staged_500_entitled_enabled !== (!pilot && cap === '500')
+    || health.pipeline_mode !== 'staged' || health.staged_rollout_scope !== (paidPilot ? 'paid' : scope)
+    || health.staged_500_entitled_enabled !== (!pilot && !paidPilot && cap === '500')
     || health.canary_worker_origin !== (pilot ? workerOrigin : null)
     || health.canary_owner_count !== (pilot ? 1 : 0)
     || health.staged_owner_count !== (pilot ? 1 : 0) || health.staged_owner_cohort_sha256 !== digest
     || (pilot && health.canary_owner_cohort_sha256 !== digest)) process.exit(1);
+if (paidPilot && (health.staged_pilot_owner_count !== 1
+    || health.staged_pilot_owner_cohort_sha256 !== createHash('sha256').update(JSON.stringify([ownerId])).digest('hex'))) process.exit(1);
 NODE
 }
 
 if [[ "$PAID" == true || "$OPERATION" == prepare-owner || "$OPERATION" == status-off \
+  || "$OPERATION" == prepare-paid-500-pilot || "$OPERATION" == hold-paid-500-pilot \
   || "$OPERATION" == hold-published-pilot || ( "$PILOT" == true && "$OPERATION" == status ) ]]; then
   command -v timeout >/dev/null || refuse "timeout is required for customer pilot readback"
   v9_intake_identity="$(node -p 'const row = require(process.argv[1]).functions.startStandardScanJobV9; [row.route_name, row.build_id, row.runtime_activation_id].join(" ")' \
@@ -339,12 +364,29 @@ NODE
     if ! "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" secrets set \
       "SCAN_PIPELINE_MODE=staged" "SCAN_STAGED_OWNER_IDS=" "SCAN_PIPELINE_OWNER_IDS=" \
       "SCAN_STAGED_ROLLOUT_SCOPE=paid" "SCAN_STAGED_500_ENTITLED_ENABLED=$entitled500" \
-      "SCAN_PUBLIC_PILOT_EXPIRES_AT=0" > "$TMP/config.log" 2>&1; then
+      "SCAN_STAGED_PILOT_OWNER_IDS=" "SCAN_PUBLIC_PILOT_EXPIRES_AT=0" > "$TMP/config.log" 2>&1; then
       refuse "paid configuration write failed after intake was closed; state must be re-read"
     fi
     v9_intake_readback paid-prepared || refuse "intake closed but exact V9 paid configuration is unverified"
     verify_staged_gateway paid || refuse "intake closed but the serving gateway changed during paid preparation"
     echo "BASE44_STAGED_PAID_READBACK_VERIFIED source_sha=$SOURCE_SHA gateway_revision=$GATEWAY_REVISION page_cap=$PAID_PAGE_CAP public_intake=closed"
+    ;;
+  prepare-paid-500-pilot)
+    verify_staged_gateway paid-pilot || refuse "serving gateway does not attest the exact named paid pilot"
+    v9_intake_readback paid-pilot-prepare || refuse "active paid Standard 150 or pilot configuration is unverified"
+    "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" secrets set \
+      "SCAN_STAGED_PILOT_OWNER_IDS=$OWNER_ID" "SCAN_PUBLIC_PILOT_EXPIRES_AT=$PUBLIC_PILOT_EXPIRES_AT" > "$TMP/paid-pilot.log" 2>&1 \
+      || refuse "paid pilot configuration write failed"
+    v9_intake_readback paid-pilot-prepared || refuse "paid pilot configuration requires fresh readback"
+    verify_staged_gateway paid-pilot || refuse "gateway changed while preparing the paid pilot"
+    echo "BASE44_PAID_500_PILOT_PREPARED source_sha=$SOURCE_SHA gateway_revision=$GATEWAY_REVISION"
+    ;;
+  hold-paid-500-pilot)
+    v9_intake_readback paid-pilot-hold || refuse "the exact paid pilot cohort is unverified"
+    "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" secrets set "SCAN_PUBLIC_PILOT_EXPIRES_AT=0" > "$TMP/paid-pilot-hold.log" 2>&1 \
+      || refuse "paid pilot hold write failed"
+    v9_intake_readback paid-pilot-held || refuse "paid pilot hold requires fresh readback"
+    echo "BASE44_PAID_500_PILOT_HELD source_sha=$SOURCE_SHA"
     ;;
   hold-published-pilot)
     v9_intake_readback published-pilot-preflight || refuse "the exact pilot launcher is unverified"
@@ -375,7 +417,7 @@ NODE
       fi
       if ! "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" secrets set \
         "SCAN_PIPELINE_MODE=staged" "SCAN_STAGED_OWNER_IDS=$OWNER_ID" \
-        "SCAN_STAGED_ROLLOUT_SCOPE=off" "SCAN_STAGED_500_ENTITLED_ENABLED=false" \
+        "SCAN_STAGED_ROLLOUT_SCOPE=off" "SCAN_STAGED_500_ENTITLED_ENABLED=false" "SCAN_STAGED_PILOT_OWNER_IDS=" \
         ${pilot_expiry_setting[@]+"${pilot_expiry_setting[@]}"} > "$TMP/config.log" 2>&1; then
         refuse "staged config write failed after intake was closed; state must be re-read"
       fi
@@ -383,7 +425,7 @@ NODE
       # Does NOT remove a worker tag/queue or disable task execution.
       if ! "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" secrets set \
         "SCAN_PIPELINE_MODE=monolith" "SCAN_STAGED_OWNER_IDS=" \
-        "SCAN_STAGED_ROLLOUT_SCOPE=off" "SCAN_STAGED_500_ENTITLED_ENABLED=false" > "$TMP/config.log" 2>&1; then
+        "SCAN_STAGED_ROLLOUT_SCOPE=off" "SCAN_STAGED_500_ENTITLED_ENABLED=false" "SCAN_STAGED_PILOT_OWNER_IDS=" > "$TMP/config.log" 2>&1; then
         refuse "disable write failed after intake was closed; state must be re-read"
       fi
     fi

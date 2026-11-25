@@ -33,9 +33,6 @@ export function readStagedScanSettings(env) {
   const enableEntitled500 = env("SCAN_STAGED_500_ENTITLED_ENABLED") === "true";
   const pilotCohort = env("SCAN_STAGED_PILOT_OWNER_IDS");
   const pilotOwnerIds = String(pilotCohort || "").split(",").filter(Boolean);
-  const validPilotCohort = !pilotCohort || (pilotCohort === pilotOwnerIds.join(",")
-    && pilotOwnerIds.length <= 5 && pilotOwnerIds.every(id => /^[A-Za-z0-9_-]{6,64}$/.test(id))
-    && new Set(pilotOwnerIds).size === pilotOwnerIds.length);
   const pipelineMode = mode === "staged" || mode === "monolith" ? mode : mode ? "invalid" : "absent";
   const ownerIds = String(cohort || "").split(",").map(value => value.trim()).filter(Boolean);
   let rolloutScope = "invalid";
@@ -43,10 +40,12 @@ export function readStagedScanSettings(env) {
   if (scope === "paid" && pipelineMode === "staged" && !cohort && !env("SCAN_PIPELINE_OWNER_IDS")) {
     rolloutScope = "paid";
   }
-  if (!validPilotCohort || (pilotOwnerIds.length && (rolloutScope !== "paid" || enableEntitled500))) {
-    rolloutScope = "invalid";
-  }
-  const entitled500Enabled = rolloutScope === "paid" && enableEntitled500;
+  // A bad optional pilot setting must stop 500 without taking paid 150 offline.
+  const validPilotCohort = !pilotCohort || (rolloutScope === "paid" && !enableEntitled500
+    && pilotCohort === pilotOwnerIds.join(",") && pilotOwnerIds.length <= 5
+    && pilotOwnerIds.every(id => /^[A-Za-z0-9_-]{6,64}$/.test(id))
+    && new Set(pilotOwnerIds).size === pilotOwnerIds.length);
+  const entitled500Enabled = rolloutScope === "paid" && enableEntitled500 && validPilotCohort;
   return {pipelineMode, cohort, ownerIds, rolloutScope, entitled500Enabled, pilotOwnerIds, validPilotCohort};
 }
 
@@ -60,7 +59,7 @@ export function publishedPilotLaunchPolicy({ settings, user, expiresAt, nowSecon
   // A normal paid rollout explicitly retires the pilot with an expiry of 0.
   // In cohort mode the same value keeps every fresh V9 pilot launch closed.
   const configured = paidPilot ? settings.pilotOwnerIds.length > 0 : expiresAt !== undefined;
-  const namedCustomer = user?.role === "user" && (paidPilot
+  const namedCustomer = settings.validPilotCohort && user?.role === "user" && (paidPilot
     ? settings.pilotOwnerIds.includes(String(user.id || "")) : stagedScanOwnerEnabled(settings, user.id));
   const expiry = typeof expiresAt === "string" && /^[0-9]{1,12}$/.test(expiresAt) ? Number(expiresAt) : 0;
   return { configured, namedCustomer, paidPilot, enabled: configured && namedCustomer && expiry > nowSeconds };
@@ -77,7 +76,7 @@ export function resolveServerScanContract({
   const paid = settings.rolloutScope === "paid" && verifiedAccess === true
     && access?.has_full_access === true && access?.access_status === "active"
     && (!largeGrant || settings.entitled500Enabled
-      || (paidPilot === true && settings.pilotOwnerIds.includes(String(ownerUserId || ""))))
+      || (paidPilot === true && settings.validPilotCohort && settings.pilotOwnerIds.includes(String(ownerUserId || ""))))
     && (access.grant_source === "stripe_checkout" || (access.grant_source === "manual_grant" && largeGrant));
   const staged = paid || stagedScanOwnerEnabled(settings, ownerUserId);
   if (settings.rolloutScope === "invalid") throw new Error("scan_staged_rollout_configuration_invalid");

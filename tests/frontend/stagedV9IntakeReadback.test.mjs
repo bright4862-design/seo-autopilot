@@ -279,7 +279,7 @@ function launchHarness({
   rows = [paidGrant], rollout = "paid", entitled500 = "true", mode = "staged", cohort = "",
   gateway = "https://dispatch-gateway.example", claimFailure, echoClaimOrigin = false, omitPersistedOrigin = false,
   publicPilotExpiresAt, acknowledgePilot = true, pilotOwners, pilotClaimCap, claimMode, user = paidCustomer,
-  acknowledgeCap = true, invalidClaimProof = false,
+  acknowledgeCap = true, invalidClaimProof = false, interruptBeforeDrain = false,
 } = {}) {
   const settings = {
     ...(rollout === null ? {} : { SCAN_STAGED_ROLLOUT_SCOPE: rollout }),
@@ -378,6 +378,10 @@ function launchHarness({
           DRAIN_DELAY_SECONDS: 450, normalizeAttemptCount,
           stagedDispatchGatewayUrl: () => stagedDispatchGatewayUrl(name => settings[name]),
           enqueueScanDrain: async ({ requireGateway }) => {
+            if (interruptBeforeDrain) {
+              interruptBeforeDrain = false;
+              throw new Error("fixture interruption after binding and before enqueue");
+            }
             taskTransports.push({ stage: "drain", requireGateway });
             return { ok: true };
           },
@@ -894,19 +898,45 @@ test("a paid pilot expiry hold keeps public 150 open and only replays previously
   assert.equal(normal.dispatched[0].staged_rollout_scope, "paid");
 });
 
-test("malformed or conflicting paid pilot lists fail closed without any claim", async () => {
+test("a paid pilot interruption after binding and before enqueue recovers the original attempt after hold", async () => {
+  const fixture = paidNamedPilot({ interruptBeforeDrain: true });
+  const original = await fixture.submit({ published_pilot_page_cap: 500 });
+  assert.equal(original.status, 500);
+  assert.deepEqual(fixture.calls, ["claim", "create", "bind"]);
+  assert.deepEqual(fixture.taskTransports, []);
+  fixture.settings.SCAN_PUBLIC_PILOT_EXPIRES_AT = "0";
+  const replay = await fixture.submit({ published_pilot_page_cap: 500 });
+  assert.equal(replay.body.accepted, true, JSON.stringify(replay.body));
+  assert.equal(replay.body.replayed, true);
+  assert.equal(replay.body.scan_id, fixture.scans[0].id);
+  assert.equal(fixture.scans.length, 1);
+  assert.deepEqual(fixture.calls, ["claim", "create", "bind", "claim"]);
+  assert.deepEqual(fixture.taskTransports, [{ stage: "drain", requireGateway: true }, { stage: "entry", requireGateway: true }]);
+  assert.equal(fixture.dispatched[0].attempt_count, 1);
+});
+
+test("malformed or conflicting paid pilot lists stop 500 without interrupting paid 150", async () => {
   for (const overrides of [
     { pilotOwners: "*" }, { pilotOwners: "short" }, { pilotOwners: " user_123" },
     { pilotOwners: "user_123," }, { pilotOwners: "user_123,user_123" },
     { pilotOwners: "user_001,user_002,user_003,user_004,user_005,user_006" },
-    { entitled500: "true" }, { cohort: "other_customer" }, { rollout: "off" },
+    { entitled500: "true" },
   ]) {
     const fixture = paidNamedPilot(overrides);
-    const result = await fixture.submit();
-    assert.equal(result.body.failure_code, "scan_staged_rollout_configuration_invalid", JSON.stringify(overrides));
-    assert.deepEqual(fixture.calls, []);
+    const result = await fixture.submit({ published_pilot_page_cap: 500 });
+    assert.equal(result.body.failure_code, "scan_pilot_unavailable", JSON.stringify(overrides));
+    assert.notEqual((await fixture.submit()).body.accepted, true);
+    assert.deepEqual(fixture.calls, ["status"]);
     assert.deepEqual(fixture.scans, []);
+    const standard = paidNamedPilot({ ...overrides, rows: [{ ...paidGrant, page_cap: 150 }] });
+    assert.equal((await standard.options()).body.page_cap, 150);
+    assert.equal((await standard.submit()).body.accepted, true);
+    assert.equal(standard.dispatched[0].staged_rollout_scope, "paid");
+    assert.equal(standard.dispatched[0].page_cap, 150);
   }
+  const invalidPaidCohort = paidNamedPilot({ cohort: "other_customer" });
+  assert.equal((await invalidPaidCohort.submit()).body.failure_code, "scan_staged_rollout_configuration_invalid");
+  assert.deepEqual(invalidPaidCohort.calls, []);
   const oldCohort = paidNamedPilot();
   oldCohort.settings.SCAN_PIPELINE_OWNER_IDS = "other_customer";
   assert.equal((await oldCohort.submit()).body.failure_code, "scan_staged_rollout_configuration_invalid");
@@ -936,7 +966,7 @@ test("paid pilot runtime readback attests a sorted bounded cohort without disclo
     assert.equal(result.body.staged_pilot_owner_count, valid ? ids.length : null);
     assert.equal(result.body.staged_pilot_owner_cohort_sha256,
       valid ? createHash("sha256").update(JSON.stringify(ids)).digest("hex") : null);
-    assert.equal(result.body.staged_rollout_scope, valid ? "paid" : "invalid");
+    assert.equal(result.body.staged_rollout_scope, "paid");
     assert.doesNotMatch(JSON.stringify(result.body), /pilot_user|duplicate_user/);
   }
 });

@@ -46,6 +46,7 @@ if(scenario==='missingProgress') delete run.last_committed_batch;
 const projected={...run,advanced_scan_backend:'python_scanner_api',deno_fallback_used:false,ai_review_backend:'python_review_api',python_review_fallback_used:false,worker_peak_memory_bytes:123456789,email:'never-print@example.com',main_text:'private page body'};
 if(scenario==='missingMemory') delete projected.worker_peak_memory_bytes;
 if(scenario==='fingerprintMismatch') projected.beta_revision_fingerprint='b'.repeat(16);
+if(scenario==='unconfirmedCooldown') projected.crawl_timing={target_cooldown_publication:{state:'unconfirmed',observation:{target_origin:'https://never-print.example:443'}}};
 const grant={id:'access_123',owner_user_id:owner,user_email:'never-print@example.com',has_full_access:true,access_status:'active',plan_id:'standard150_lifetime',app_id:'6a498732ec779dfaaeab0e53',grant_source:'manual_grant',granted_at:'2026-11-01T00:00:00Z',page_cap:150};
 if(scenario==='legacyGrant') delete grant.page_cap;
 if(scenario==='grant500') grant.page_cap=500;
@@ -161,12 +162,17 @@ test('a legacy active grant without page_cap resolves to the server default 150'
   assert.equal(result.report.acceptance_verified,true);
 });
 
-for (const [scenario, missing] of [['missingProgress','batch_progress'],['missingMemory','measured_memory'],['fingerprintMismatch','release_fingerprint']]) {
+for (const [scenario, missing] of [['missingProgress','batch_progress'],['missingMemory','measured_memory'],['fingerprintMismatch','release_fingerprint'],['unconfirmedCooldown','target_cooldown_publication']]) {
   test(`missing or mismatched ${missing} remains explicitly unverified`, t => {
     const result=fixture(t).run(scenario);
     assert.equal(result.status,1);
     assert.equal(result.report.acceptance_verified,false);
     assert.ok(result.report.unverified.includes(missing));
+    if (scenario==='unconfirmedCooldown') {
+      assert.equal(result.report.authority_verified,true);
+      assert.equal(result.report.target_cooldown_publication,'unconfirmed');
+      assert.doesNotMatch(JSON.stringify(result.report),/never-print\.example/);
+    }
     assert.equal(result.calls.filter(row=>row.name===launchRoute).length,1);
   });
 }

@@ -70,6 +70,8 @@ For a release containing target-origin cooldowns, deploy the admission coordinat
 
 Immediately before opening the cohort, recheck the canonical coordinator source against the selected release. The cohort and queue controls verify admission state independently of that source. Older claims can omit the origin marker for compatibility. The cooldown pilot must demonstrate a newly admitted origin marker, an authenticated 429 observation, and a fresh claim refused during the recorded pause before allocating a scan or consuming allowance. Reopen the original signed report during that pause and verify another origin remains available. Exercise both 150 and 500 page caps with their authorized grants.
 
+If a pilot report records an unconfirmed cooldown, close its cohort and stop test traffic to that origin through the observation's original expiry. The report can retain its verified crawl evidence. Public opening requires a live outage test that preserves the signed report, refuses a second account without contacting the origin, and confirms the original expiry after relay recovery and claim release. Verify that an outstanding unexpired observation alerts the operator.
+
 For rollback, close new intake and drain origin-aware attempts while their coordinator observation endpoint is available. After those attempts reach terminal states, restore the preceding coordinator. Existing origin cooldown records expire at their recorded timestamps.
 
 Do not run a deployment command that replaces environment variables without retaining the new stage settings. Existing build manifests use explicit environment lists; include the reviewed stage variables in the candidate deployment configuration.

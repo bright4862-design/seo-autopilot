@@ -48,6 +48,7 @@ export function buildLimitedResultSnapshot({
 
   const coverageReasons = textArray(review?.coverage_reasons, 12, 200);
   const scanStatus = text(review?.scan_status, 120);
+  const cooldownPublication = scan?.crawl_timing?.target_cooldown_publication;
 
   const retainedCoverage = sanitizeScanCoverage(scan?.scan_coverage || review?.scan_coverage);
   const emptyStagedEvidence = version === LIMITED_RESULT_INTEGRITY_VERSION
@@ -99,6 +100,10 @@ export function buildLimitedResultSnapshot({
       coverage_state: text(review?.coverage_state, 120),
       coverage_reasons: coverageReasons,
       coverage_authority_version: text(review?.coverage_authority_version, 160),
+      // Omitting this field keeps existing snapshots and their proofs valid.
+      ...(version === LIMITED_RESULT_INTEGRITY_VERSION && cooldownPublication !== undefined
+        ? { crawl_timing: { target_cooldown_publication: cooldownPublication } }
+        : {}),
       ...([
         LIMITED_RESULT_INTEGRITY_VERSION,
         LIMITED_RESULT_INTEGRITY_VERSION_V4,

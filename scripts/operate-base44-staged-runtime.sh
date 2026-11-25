@@ -201,8 +201,9 @@ if (phase === 'off-status') {
   }) + '\n', {flag:'w',mode:0o600});
   process.exit(0);
 }
+const expectsGateway = phase === 'preflight' || phase === 'prepared' || phase.startsWith('paid-');
+if (expectsGateway && report.paid_dispatch_gateway_origin !== gatewayOrigin) process.exit(1);
 if (phase.startsWith('paid-')) {
-  if (report.paid_dispatch_gateway_origin !== gatewayOrigin) process.exit(1);
   if (phase !== 'paid-preflight') {
     if (report.configured_pipeline_mode !== 'staged' || report.staged_rollout_scope !== 'paid'
         || report.staged_500_entitled_enabled !== (cap === '500')
@@ -316,7 +317,7 @@ NODE
   prepare-owner|disable)
     verify_probe_package || refuse "deployed operator package mismatch"
     if [[ "$OPERATION" == prepare-owner ]]; then
-      v9_intake_readback preflight || refuse "deployed V9 intake does not match the selected source"
+      v9_intake_readback preflight || refuse "deployed V9 intake source or dispatcher origin does not match"
     fi
     # Stop *new* Base44 intake first. Leave admission enabled so committed
     # scans can reconcile/release coordinator claims and finish persistence.
@@ -350,7 +351,7 @@ if (operation === 'disable' && (report.env_mode !== 'monolith' || report.owner_m
 NODE
     then refuse "runtime configuration did not converge; never infer activation from a secrets write"; fi
     if [[ "$OPERATION" == prepare-owner ]]; then
-      v9_intake_readback prepared || refuse "intake closed but the exact V9 pilot cohort could not be verified"
+      v9_intake_readback prepared || refuse "intake closed but the exact V9 pilot cohort or dispatcher origin could not be verified"
       echo "BASE44_STAGED_CONFIG_READBACK_VERIFIED mode=$OPERATION source_sha=$SOURCE_SHA public_intake=closed v9_attested=true pilot_cohort_matches=true"
     else
       echo "BASE44_STAGED_CONFIG_READBACK_VERIFIED mode=$OPERATION source_sha=$SOURCE_SHA public_intake=closed v9_attested=false"

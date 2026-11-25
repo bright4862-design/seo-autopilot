@@ -513,6 +513,7 @@ def _operator_error_status(code: str) -> int:
 
 def _barrier_response(operation: str, payload: dict[str, Any]) -> dict[str, Any]:
     context = control.validate_operator_context(payload)
+    published_500_pilot_only = operation in {"start_500_pilot", "hold_500_pilot"}
     now = int(time.time())
     snapshot_id = _new_record_id("snapshot")
     audit_event_id = _new_record_id("audit")
@@ -526,8 +527,10 @@ def _barrier_response(operation: str, payload: dict[str, Any]) -> dict[str, Any]
         current = admission.normalized_control(
             _document_value(control_ref.get(transaction=transaction))
         )
-        admissions = _transaction_documents(transaction, _active_admission_query(client))
-        invocations = _transaction_documents(transaction, _live_reconciliation_query(client))
+        admissions, invocations = [], []
+        if not published_500_pilot_only:
+            admissions = _transaction_documents(transaction, _active_admission_query(client))
+            invocations = _transaction_documents(transaction, _live_reconciliation_query(client))
 
         def record_cohort(definition: dict[str, Any]) -> None:
             cohort_ref = client.collection(COHORT_COLLECTION).document(definition["cohort_id"])
@@ -697,6 +700,7 @@ def _barrier_response(operation: str, payload: dict[str, Any]) -> dict[str, Any]
             operator_id=OPERATOR_ID,
             signing_root=OPERATOR_SIGNING_ROOT,
             boundary=boundary,
+            published_500_pilot_only=published_500_pilot_only,
             **context,
         )
         audit = control.build_audit_event(
@@ -721,7 +725,7 @@ def _barrier_response(operation: str, payload: dict[str, Any]) -> dict[str, Any]
                 "claim_sequence": result["claim_sequence"],
                 "current_snapshot_id": snapshot_id,
             },
-            "drain_snapshot": control.public_snapshot(snapshot),
+            ("pilot_snapshot" if published_500_pilot_only else "drain_snapshot"): control.public_snapshot(snapshot),
             "audit_event_id": audit_event_id,
         }
 

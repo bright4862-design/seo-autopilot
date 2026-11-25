@@ -716,6 +716,54 @@ class TargetCooldown(CoordinatorTestCase):
 
 
 class PublishedPilotAcceptance(CoordinatorTestCase):
+    def test_named_500_transitions_do_not_need_a_global_drain_snapshot(self):
+        source = "1" * 40
+        public_count = control.MAX_INTERNAL_OBLIGATIONS + 1
+        key = f"{main.CONTROL_COLLECTION}/{main.CONTROL_DOCUMENT}"
+        STORE[key] = {"mode": "open", "generation": 4, "claim_sequence": public_count}
+        for index in range(public_count):
+            public_owner = f"public_customer_{index}"
+            STORE[f"{main.COLLECTION}/{public_owner}"] = {
+                "owner_user_id": public_owner, "state": "bound", "admission_mode": "open",
+                "request_id": f"public_request_{index}", "scan_id": f"public_scan_{index}",
+                "barrier_generation": 4, "claim_sequence": index + 1,
+            }
+        context = {"reason": "Test named pilot under public load", "change_ticket": "test-pilot-load"}
+        definition = {
+            "cohort_id": "published_500", "release_id": "paid_candidate",
+            "source_sha": source, "owner_user_ids": [OWNER], "expires_at": int(time.time()) + 900,
+            "total_claim_budget": 1, "per_owner_claim_budget": 1, "required_launcher_build_id": "a" * 64,
+        }
+        with patch.object(main, "SOURCE_SHA", source):
+            started = self.operator_post("/ops/barrier/pilot-500/start", {
+                **context, "operation": "start_500_pilot", "acceptance": definition,
+                "intended_prior": {"mode": "open", "generation": 4},
+            })
+            self.assertEqual(started.status_code, 200, started.json)
+            held = self.operator_post("/ops/barrier/pilot-500/hold", {
+                **context, "operation": "hold_500_pilot", "cohort_id": definition["cohort_id"],
+                "intended_prior": {"mode": "open", "generation": 5},
+            })
+            self.assertEqual(held.status_code, 200, held.json)
+        for response, state, generation in [(started, "configured", 5), (held, "held", 6)]:
+            self.assertNotIn("drain_snapshot", response.json)
+            snapshot = response.json["pilot_snapshot"]
+            proof = snapshot.pop("proof")
+            self.assertTrue(control.verify_record(OPERATOR_SIGNING_ROOT, control.SNAPSHOT_LABEL, snapshot, proof))
+            self.assertEqual(snapshot["version"], "admission_published_500_pilot_snapshot_v1")
+            self.assertEqual(snapshot["barrier"]["mode"], "open")
+            self.assertEqual(snapshot["barrier"]["generation"], generation)
+            self.assertEqual(snapshot["boundary"]["published_500_pilot"]["state"], state)
+            self.assertIs(snapshot["drain_ready"], False)
+            self.assertNotIn("counts", snapshot)
+        self.assertEqual(STORE[key]["claim_sequence"], public_count)
+        status = self.operator_post("/ops/barrier/status", {
+            **context, "operation": "status", "expected_generation": 6,
+        })
+        self.assertEqual(status.status_code, 409, status.json)
+        self.assertEqual(status.json["error"], "drain_snapshot_capacity_exceeded")
+        self.assertEqual(self.claim(owner="another_public_customer").json["admission_mode"], "open")
+
     def test_named_500_pilot_can_start_and_hold_while_public_claims_continue(self):
         source = "1" * 40
         build = "a" * 64
@@ -744,7 +792,7 @@ class PublishedPilotAcceptance(CoordinatorTestCase):
             started = self.operator_post("/ops/barrier/pilot-500/start", operator_payload)
             self.assertEqual(started.status_code, 200, started.json)
             self.assertEqual(started.json["barrier"]["mode"], "open")
-            self.assertEqual(started.json["drain_snapshot"]["boundary"]["published_500_pilot"]["page_cap"], 500)
+            self.assertEqual(started.json["pilot_snapshot"]["boundary"]["published_500_pilot"]["page_cap"], 500)
             self.assertEqual(self.operator_post("/ops/barrier/pilot-500/start", operator_payload).status_code, 409)
             for refusal, status in [
                 ({"owner_user_id": "unlisted_customer"}, 423),
@@ -773,7 +821,7 @@ class PublishedPilotAcceptance(CoordinatorTestCase):
             held = self.operator_post("/ops/barrier/pilot-500/hold", hold_payload)
             self.assertEqual(held.status_code, 200, held.json)
             self.assertEqual(held.json["barrier"]["mode"], "open")
-            self.assertEqual(held.json["drain_snapshot"]["boundary"]["published_500_pilot"]["state"], "held")
+            self.assertEqual(held.json["pilot_snapshot"]["boundary"]["published_500_pilot"]["state"], "held")
             replay = self.post("/claim", replay_only)
             self.assertEqual(replay.json["outcome"], "replayed")
             self.assertEqual(replay.json["pilot_page_cap"], 500)

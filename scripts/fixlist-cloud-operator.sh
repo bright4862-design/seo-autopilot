@@ -1051,7 +1051,10 @@ PY
 }
 
 parse_barrier_response() {
-  local expected_operation="$1"
+  local expected_operation="$1" expected_fields=9
+  if [[ "$expected_operation" == start_500_pilot || "$expected_operation" == hold_500_pilot ]]; then
+    expected_fields=4
+  fi
   mapfile -t _barrier_values < <(python3 - "$BARRIER_RESPONSE_FILE" "$expected_operation" \
     "$OPERATOR_TMP/operator-key" "$ADMISSION_DRAIN_SNAPSHOT_DERIVATION_LABEL" "$ACCEPTANCE_LAUNCHER_BUILD_ID" \
     "$ACCEPTANCE_COHORT_ID" "$SOURCE_SHA" "$ACCEPTANCE_OWNER_USER_IDS" "$ACCEPTANCE_EXPIRES_AT" \
@@ -1064,7 +1067,8 @@ value = json.load(open(path, encoding="utf-8"))
 if value.get("success") is not True or value.get("operation") != expected:
     raise SystemExit("Unexpected operator response")
 barrier = value.get("barrier") or {}
-snapshot = value.get("drain_snapshot") or {}
+pilot_operation = expected in {"start_500_pilot", "hold_500_pilot"}
+snapshot = value.get("pilot_snapshot" if pilot_operation else "drain_snapshot") or {}
 counts = snapshot.get("counts") or {}
 mode = str(barrier.get("mode") or "")
 generation = barrier.get("generation")
@@ -1086,21 +1090,25 @@ if mode not in {"open", "closed", "acceptance_only"}:
     raise SystemExit("Invalid barrier mode")
 if not isinstance(generation, int) or generation < 0:
     raise SystemExit("Invalid barrier generation")
-if version != "admission_drain_snapshot_v1" or not snapshot_id:
-    raise SystemExit("Invalid drain snapshot identity")
+expected_version = "admission_published_500_pilot_snapshot_v1" if pilot_operation else "admission_drain_snapshot_v1"
+snapshot_kind = "pilot" if pilot_operation else "drain"
+if version != expected_version or not snapshot_id:
+    raise SystemExit(f"Invalid {snapshot_kind} snapshot identity")
 if not re.fullmatch(r"[0-9a-f]{64}", proof):
-    raise SystemExit("Invalid drain snapshot proof")
+    raise SystemExit(f"Invalid {snapshot_kind} snapshot proof")
 if not hmac.compare_digest(proof, expected_proof):
-    raise SystemExit("Drain snapshot signature mismatch")
+    raise SystemExit(f"{snapshot_kind.capitalize()} snapshot signature mismatch")
 if expected == "acceptance_only" and launcher_build_id:
     if (snapshot.get("boundary") or {}).get("required_launcher_build_id") != launcher_build_id:
         raise SystemExit("Published pilot launcher binding is missing from the signed snapshot")
-if expected in {"start_500_pilot", "hold_500_pilot"}:
+if pilot_operation:
     pilot = (snapshot.get("boundary") or {}).get("published_500_pilot") or {}
     signed_barrier = snapshot.get("barrier") or {}
     state = "configured" if expected == "start_500_pilot" else "held"
     if (mode != "open" or signed_barrier.get("mode") != mode or signed_barrier.get("generation") != generation
             or generation != int(prior_generation) + 1
+            or signed_barrier.get("current_snapshot_id") != snapshot_id or barrier.get("current_snapshot_id") != snapshot_id
+            or snapshot.get("drain_ready") is not False or "counts" in snapshot
             or pilot.get("state") != state or pilot.get("page_cap") != 500 or pilot.get("cohort_id") != cohort_id):
         raise SystemExit("The signed snapshot does not establish this Standard 500 pilot change")
     if state == "configured":
@@ -1110,20 +1118,21 @@ if expected in {"start_500_pilot", "hold_500_pilot"}:
                 or pilot.get("owner_count") != len(owners) or pilot.get("owner_cohort_sha256") != digest
                 or pilot.get("expires_at") != int(expires_at)):
             raise SystemExit("Standard 500 pilot source, launcher, account set or expiry mismatch")
-if any(not isinstance(item, int) or item < 0 for item in (total, live, active, expired, bound)):
+if not pilot_operation and any(not isinstance(item, int) or item < 0 for item in (total, live, active, expired, bound)):
     raise SystemExit("Invalid drain counts")
 print(mode)
 print(generation)
 print(snapshot_id)
 print("true" if ready else "false")
-print(total)
-print(live)
-print(active)
-print(expired)
-print(bound)
+if not pilot_operation:
+    print(total)
+    print(live)
+    print(active)
+    print(expired)
+    print(bound)
 PY
   )
-  if [[ ${#_barrier_values[@]} -ne 9 ]]; then
+  if [[ ${#_barrier_values[@]} -ne $expected_fields ]]; then
     echo "Coordinator barrier response did not satisfy the signed snapshot contract." >&2
     return 1
   fi
@@ -1131,6 +1140,9 @@ PY
   BARRIER_GENERATION="${_barrier_values[1]}"
   BARRIER_SNAPSHOT_ID="${_barrier_values[2]}"
   BARRIER_DRAIN_READY="${_barrier_values[3]}"
+  if [[ "$expected_fields" -eq 4 ]]; then
+    return 0
+  fi
   BARRIER_TOTAL_OBLIGATIONS="${_barrier_values[4]}"
   BARRIER_LIVE_RECONCILIATIONS="${_barrier_values[5]}"
   BARRIER_CLAIMED_ACTIVE="${_barrier_values[6]}"

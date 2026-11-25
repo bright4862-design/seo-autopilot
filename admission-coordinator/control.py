@@ -17,6 +17,7 @@ import admission
 
 
 DRAIN_SNAPSHOT_VERSION = "admission_drain_snapshot_v1"
+PUBLISHED_500_PILOT_SNAPSHOT_VERSION = "admission_published_500_pilot_snapshot_v1"
 AUDIT_EVENT_VERSION = "admission_operator_audit_v1"
 ACCEPTANCE_COHORT_VERSION = "admission_acceptance_cohort_v1"
 RECONCILIATION_INVOCATION_VERSION = "admission_reconciliation_invocation_v1"
@@ -355,7 +356,32 @@ def build_snapshot(
     change_ticket: str,
     signing_root: str,
     boundary: dict[str, Any] | None = None,
+    published_500_pilot_only: bool = False,
 ) -> dict[str, Any]:
+    unsigned = {
+        "version": PUBLISHED_500_PILOT_SNAPSHOT_VERSION if published_500_pilot_only else DRAIN_SNAPSHOT_VERSION,
+        "snapshot_id": _id(snapshot_id, "invalid_snapshot_id"),
+        "created_at": int(now),
+        "operator_id": _id(operator_id, "invalid_operator_id"),
+        "reason": reason,
+        "change_ticket": change_ticket,
+        "barrier": {
+            "mode": control["mode"],
+            "generation": int(control["generation"]),
+            "claim_sequence": int(control["claim_sequence"]),
+            "reconciliation_sequence": admission.normalize_claim_sequence(
+                control.get("reconciliation_sequence", 0)
+            ),
+            "current_snapshot_id": str(control.get("current_snapshot_id") or ""),
+        },
+        "boundary": boundary or {},
+    }
+    if published_500_pilot_only:
+        # Start and hold fence only fresh 500 admissions. Neither establishes
+        # a global drain, so no obligation counts or digests are collected.
+        unsigned["drain_ready"] = False
+        return {**unsigned, "proof": sign_record(signing_root, SNAPSHOT_LABEL, unsigned)}
+
     obligations = [item for item in (_admission_obligation(doc) for doc in admission_documents) if item]
     obligations.sort(key=lambda item: (int(item["claim_sequence"]), item["owner_user_id"], item["request_id"]))
     live = [item for item in (_live_reconciliation(doc, now=now) for doc in reconciliation_documents) if item]
@@ -383,23 +409,7 @@ def build_snapshot(
         raise ControlError("drain_snapshot_capacity_exceeded")
     obligations_digest = hashlib.sha256(stable_serialize(obligations).encode("utf-8")).hexdigest()
     reconciliation_digest = hashlib.sha256(stable_serialize(live).encode("utf-8")).hexdigest()
-    unsigned = {
-        "version": DRAIN_SNAPSHOT_VERSION,
-        "snapshot_id": _id(snapshot_id, "invalid_snapshot_id"),
-        "created_at": int(now),
-        "operator_id": _id(operator_id, "invalid_operator_id"),
-        "reason": reason,
-        "change_ticket": change_ticket,
-        "barrier": {
-            "mode": control["mode"],
-            "generation": int(control["generation"]),
-            "claim_sequence": int(control["claim_sequence"]),
-            "reconciliation_sequence": admission.normalize_claim_sequence(
-                control.get("reconciliation_sequence", 0)
-            ),
-            "current_snapshot_id": str(control.get("current_snapshot_id") or ""),
-        },
-        "boundary": boundary or {},
+    unsigned.update({
         "admission_obligations_digest": obligations_digest,
         "live_reconciliation_digest": reconciliation_digest,
         "admission_obligation_sample": obligations[:MAX_SNAPSHOT_SAMPLE],
@@ -415,7 +425,7 @@ def build_snapshot(
             and counts["claimed_active"] == 0
             and counts["live_reconciliation"] == 0
         ),
-    }
+    })
     # The signed/public manifest stays bounded. The full lists are persisted in
     # the immutable Firestore record under explicitly internal keys so the
     # operator can later prove each pre-boundary obligation from the digest

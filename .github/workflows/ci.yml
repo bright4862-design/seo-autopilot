@@ -94,6 +94,9 @@ jobs:
       - name: Run root scanner regression tests
         run: pytest tests/
 
+      - name: Verify scan admission and target cooldowns
+        run: PYTHONPATH=admission-coordinator python -m pytest -q admission-coordinator
+
       - name: Verify signed comparison gateway
         run: pytest dispatch-gateway/test_gateway.py
 

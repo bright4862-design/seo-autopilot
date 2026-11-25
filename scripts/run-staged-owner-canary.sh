@@ -175,6 +175,9 @@ try {
   requireCondition(['complete', 'limited', 'failed', 'cancelled'].includes(report.terminal_status), 'canary_timeout');
   report.authority_verified = projection.authority_verified === true;
   report.release_contract_current = projection.release_contract_current === true;
+  if (projection.run?.crawl_timing?.target_cooldown_publication?.state === 'unconfirmed') {
+    report.target_cooldown_publication = 'unconfirmed';
+  }
   report.release_fingerprint = /^[a-f0-9]{16}$/.test(String(projection.run?.beta_revision_fingerprint || '')) ? projection.run.beta_revision_fingerprint : null;
   report.page_cap = run.page_cap;
   report.pipeline_mode = run.pipeline_mode;
@@ -199,6 +202,7 @@ try {
     batch_progress:report.committed_batch_count > 0 && safeInteger(run.pages_planned) && run.pages_planned > 0 && run.pages_planned <= 150 && report.pages_crawled > 0 && report.pages_crawled <= run.pages_planned,
     duration:report.duration_ms !== null,
     measured_memory:report.worker_peak_memory_bytes !== null,
+    target_cooldown_publication:report.target_cooldown_publication !== 'unconfirmed',
   };
   report.unverified = Object.entries(checks).filter(([, verified]) => !verified).map(([name]) => name);
   report.acceptance_verified = report.unverified.length === 0;

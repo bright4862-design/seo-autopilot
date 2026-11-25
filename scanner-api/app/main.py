@@ -928,7 +928,7 @@ async def scan_job(
 def build_staged_runtime():
     """Late construction keeps SDK credentials and clients out of module import."""
     from . import scanner
-    from .scan_job import mark_scan_progress
+    from .scan_job import mark_scan_progress, publish_target_cooldown
     from .stage_tasks import configured_dispatcher
     from .staged_scan import StageDependencies, StagedScanRuntime
     from .workspace import configured_workspace
@@ -937,7 +937,7 @@ def build_staged_runtime():
         complete=complete_authority, transform=apply_post_crawl_transforms,
         fail=write_terminal_failure, state_type=scanner.ScanState,
         plan=scanner.plan_scan, crawl=scanner.crawl_batch, finalize=scanner.finalize_scan,
-        review=review_staged_result,
+        review=review_staged_result, publish_target_cooldown=publish_target_cooldown,
     ))
 
 

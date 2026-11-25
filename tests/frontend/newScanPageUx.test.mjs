@@ -142,13 +142,13 @@ test("discovery inventory and the 150-page cap are never presented as progress",
 test("scan refusal messaging preserves curated copy and safe server detail", () => {
   assert.match(scanForm, /const MAX_SERVER_DETAIL = 240/);
   assert.match(scanForm, /function serverProvidedDetail\(value\)/);
-  assert.match(scanForm, /function customerScanAdmissionMessage\(code, serverDetail = ""\)/);
+  assert.match(scanForm, /function customerScanAdmissionMessage\(code, serverDetail = "", retryAfterSeconds = null\)/);
   assert.match(scanForm, /const curated = messages\[String\(code \|\| ""\)\]/);
   assert.match(scanForm, /if \(curated\) return curated/);
   assert.match(scanForm, /const detail = serverProvidedDetail\(serverDetail\)/);
   assert.match(scanForm, /if \(detail\) return detail/);
   assert.match(scanForm, /The scan job could not be accepted\. No fallback scan was started\./);
-  assert.match(scanForm, /customerScanAdmissionMessage\(failureCode, jobData\?\.error\)/);
+  assert.match(scanForm, /customerScanAdmissionMessage\(failureCode, jobData\?\.error, jobData\?\.retry_after_seconds\)/);
   assert.match(scanForm, /boundary: "async_job_refused"|logScanBoundary\("async_job_refused"/);
   assert.match(scanForm, /failure_code: failureCode/);
   assert.match(scanForm, /dispatcher_version: String\(jobData\?\.version \|\| ""\)/);
@@ -156,6 +156,59 @@ test("scan refusal messaging preserves curated copy and safe server detail", () 
     "wrapped Base44 refusals must preserve the parsed server payload");
   assert.match(scanForm, /typeof error\?\.message === "string"/,
     "a safe wrapper message must survive when no structured carrier is present");
+});
+
+test("a site cooldown stops the launch retry loop and shows only the bounded wait", async () => {
+  const actual = [
+    /^function normalizeFunctionResponse\([\s\S]*?^\}/m,
+    /^async function submitStandardScanJob\([\s\S]*?^\}/m,
+    /^function serverProvidedDetail\([\s\S]*?^\}/m,
+    /^function customerScanAdmissionMessage\([\s\S]*?^\}/m,
+  ].map((pattern) => {
+    const code = scanForm.match(pattern)?.[0];
+    assert.ok(code, `missing scan form function for ${pattern}`);
+    return code;
+  }).join("\n");
+  const buildHarness = new Function("callBase44Function", "clearCustomerAuthBoundary", "window", `
+    const ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV8";
+    const UNLOCK_PRICE_LABEL = "$49";
+    const MAX_SERVER_DETAIL = 240;
+    ${actual}
+    return { submitStandardScanJob, customerScanAdmissionMessage };
+  `);
+  const refusal = {
+    accepted: false,
+    retryable: true,
+    failure_code: "target_cooldown_active",
+    retry_after: 3600,
+    retry_after_seconds: 3600,
+    error: "Private backend detail",
+  };
+
+  for (const throwsTransportError of [false, true]) {
+    let launches = 0;
+    const { submitStandardScanJob, customerScanAdmissionMessage } = buildHarness(
+      async () => {
+        launches += 1;
+        if (throwsTransportError) throw Object.assign(new Error("HTTP 429"), { response: { data: refusal } });
+        return { data: refusal };
+      },
+      () => false,
+      { setTimeout: () => assert.fail("a site cooldown must not retry automatically") },
+    );
+    const result = await submitStandardScanJob({});
+    assert.equal(launches, 1);
+    assert.equal(result.failure_code, "target_cooldown_active");
+    const message = (seconds) => customerScanAdmissionMessage(result.failure_code, result.error, seconds);
+    assert.equal(message(result.retry_after_seconds), "This site has asked automated scanners to wait. Try again in about 1 hour.");
+    assert.equal(message(60), "This site has asked automated scanners to wait. Try again in about 1 minute.");
+    assert.equal(message(47), "This site has asked automated scanners to wait. Try again in about 47 seconds.");
+    assert.equal(message(3661), "This site has asked automated scanners to wait. Try again in about 1 hour and 2 minutes.");
+    assert.equal(message(86_401), "This site has asked automated scanners to wait. Try again in about 24 hours and 1 minute.");
+    for (const unverified of [undefined, 0, "5", -1, 1.5, Infinity]) {
+      assert.equal(message(unverified), "This site has asked automated scanners to wait. Try again later.");
+    }
+  }
 });
 
 test("unsafe server refusal detail is rejected before rendering", () => {

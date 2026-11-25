@@ -16,8 +16,9 @@ import {diffEntity, normalizeProperty, readLocalSchema} from './base44_authority
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const APP_ID = '6a498732ec779dfaaeab0e53';
 export const STAGED_SCHEMA_ENTITIES = Object.freeze(['ScanRun', 'FixList', 'FixItem', 'Access']);
+const ADMISSION_TARGET_ORIGIN = 'admission_target_origin';
 const ADDITIONS = Object.freeze({
-  ScanRun: ['page_cap', 'pipeline_mode', 'staged_rollout_scope', 'pages_planned', 'workspace_cleanup_state', 'workspace_cleanup_completed_at', 'last_committed_batch'],
+  ScanRun: ['page_cap', 'pipeline_mode', 'staged_rollout_scope', 'pages_planned', 'workspace_cleanup_state', 'workspace_cleanup_completed_at', 'last_committed_batch', ADMISSION_TARGET_ORIGIN],
   FixItem: ['affected_page_count', 'affected_page_count_is_lower_bound', 'template_impact_estimates'],
   Access: ['page_cap'],
 });
@@ -36,6 +37,11 @@ export function compareStagedSchemas(schemas, local = localSchemas()) {
 
 export function planStagedSchemas(schemas, local = localSchemas()) {
   requireCondition(object(schemas), 'four-entity inventory required');
+  const originProperty = local.ScanRun?.properties?.[ADMISSION_TARGET_ORIGIN];
+  requireCondition(originProperty?.type === 'string' && !Object.hasOwn(originProperty, 'default')
+    && !local.ScanRun.required?.includes(ADMISSION_TARGET_ORIGIN)
+    && equal(originProperty.rls, {write: {user_condition: {role: 'admin'}}}),
+  'ScanRun.admission_target_origin must be a protected optional string');
   const after = structuredClone(schemas), operations = [];
   for (const name of STAGED_SCHEMA_ENTITIES) {
     const schema = after[name];
@@ -82,6 +88,8 @@ function matchesExpected(expected, observed, operations) {
 
 export function assertRollbackRows(evidence, operations) {
   requireCondition(evidence?.complete === true && object(evidence.rows), 'rollback row inventory is unverified');
+  const removesOrigin = operations.some(({entity, kind, property}) =>
+    entity === 'ScanRun' && kind === 'add_property' && property === ADMISSION_TARGET_ORIGIN);
   const counts = {};
   for (const name of ['ScanRun', 'FixItem', 'Access']) {
     const rows = evidence.rows[name];
@@ -93,6 +101,7 @@ export function assertRollbackRows(evidence, operations) {
         requireCondition(['complete', 'limited', 'failed', 'cancelled'].includes(row.status), 'active or unknown ScanRun status blocks rollback');
         requireCondition(!row.pipeline_mode || row.pipeline_mode === 'monolith', 'staged ScanRun blocks rollback');
         requireCondition(row.scan_mode !== 'standard_500' && (row.page_cap == null || row.page_cap === 150), 'large-cap ScanRun blocks rollback');
+        if (removesOrigin) requireCondition(row[ADMISSION_TARGET_ORIGIN] == null || row[ADMISSION_TARGET_ORIGIN] === '', 'retained admission origin blocks rollback');
         requireCondition(['staged_rollout_scope', 'pages_planned', 'last_committed_batch', 'workspace_cleanup_state', 'workspace_cleanup_completed_at'].every(key => row[key] == null || row[key] === ''), 'retained staged ScanRun evidence blocks rollback');
       } else if (name === 'Access') {
         requireCondition(row.page_cap == null || row.page_cap === 150, '500 or unknown Access entitlement blocks rollback');

@@ -457,6 +457,12 @@ export async function executeStaged500Canary(base44, config, now = Date.now, sle
       // independent receipt must bind this result to the exact worker.
       report.durable_worker_receipt_required = true;
     }
+    if (projection.run?.crawl_timing?.target_cooldown_publication?.state === "unconfirmed") {
+      report.target_cooldown_publication = "unconfirmed";
+      report.unverified.push("target_cooldown_publication_unconfirmed");
+    }
+    require(!ordinary || operator.run.target_cooldown_publication === report.target_cooldown_publication,
+      "ordinary_cooldown_publication_mismatch");
     report.terminal_outcome_verified = true;
     if (!report.memory.finalize_peak_bytes) report.unverified.push("finalize_memory_measurement");
     // The private workspace receipt collector measures the completion request
@@ -528,6 +534,8 @@ export async function observeOrdinaryPilotRun(base44, config, now = Date.now,
           admission_claim_proof_present: true,
           authority_proof_present: /^[a-f0-9]{64}$/.test(run.authority_proof || ""),
           result_integrity_proof_present: /^[a-f0-9]{64}$/.test(run.result_integrity_proof || ""),
+          ...(run.crawl_timing?.target_cooldown_publication?.state === "unconfirmed"
+            ? { target_cooldown_publication: "unconfirmed" } : {}),
           ...(run.status === "limited" ? { termination_reasons: receiptTerminationReasons(run.coverage_reasons) } : {}),
         },
       };
@@ -573,6 +581,7 @@ function ordinaryReadbackContext(packet, expected, operator, env, { verifyTask =
       || run.scan_mode !== "standard_500" || run.page_cap !== 500 || run.pipeline_mode !== "staged"
       || run.admission_mode !== "acceptance_only" || run.admission_acceptance_source_sha !== expected.sourceSha
       || run.admission_claim_proof_present !== true || run.beta_revision_fingerprint !== expected.fingerprint
+      || (run.target_cooldown_publication !== undefined && run.target_cooldown_publication !== "unconfirmed")
       || !["complete", "limited"].includes(run.status)
       || !positive(run.attempt_count) || run.attempt_count >= 2 ** 31
       || !positive(run.pages_crawled) || !positive(run.pages_planned) || run.pages_crawled > run.pages_planned || run.pages_planned > 500
@@ -612,6 +621,7 @@ function ordinaryReadbackContext(packet, expected, operator, env, { verifyTask =
     "scan_mode", "page_cap", "pipeline_mode", "admission_mode", "admission_acceptance_source_sha",
     "status", "pages_crawled", "pages_planned", "last_committed_batch", "attempt_count",
     "started_at", "completed_at", "beta_revision_fingerprint", "admission_claim_proof_present",
+    "target_cooldown_publication",
     ...(complete ? ["authority_seal_version", "authority_proof_present"] : ["result_integrity_version", "result_integrity_proof_present"]),
   ];
   const safeOperator = {
@@ -641,6 +651,7 @@ function collectOrdinaryBrowserReport(report, { operator, provenance, duration, 
       || report.committed_batch_count !== batches || report.attempt_count !== run.attempt_count
       || report.scan_started_at !== run.started_at || report.scan_completed_at !== run.completed_at || report.duration_ms !== duration
       || report.functional_500_verified !== functional500 || report.durable_worker_owned !== complete
+      || report.target_cooldown_publication !== run.target_cooldown_publication
       || report.durable_worker_receipt_required !== !complete || !Array.isArray(report.progress) || digest(report.progress) !== digest(progress)
       || !positive(projectionBytes) || report.payload_bytes.completion_request !== null
       || report.memory?.scope !== "finalize_only" || report.memory.all_stages_verified !== false
@@ -687,11 +698,14 @@ function collectOrdinaryBrowserReport(report, { operator, provenance, duration, 
     page_cap: run.page_cap, pages_crawled: run.pages_crawled, pages_planned: run.pages_planned,
     committed_batch_count: batches, duration_ms: duration, terminal_outcome_verified: true,
     functional_500_verified: functional500, full_500_gate: false, acceptance_verified: false, outcome, progress,
+    ...(run.target_cooldown_publication === "unconfirmed" ? { target_cooldown_publication: "unconfirmed" } : {}),
     selection_coverage: selection, durable_worker_owned: complete, durable_worker_receipt_required: !complete,
     payload_bytes: { customer_projection: projectionBytes, completion_request: null },
     memory: { finalize_peak_bytes: peak, scope: "finalize_only", all_stages_verified: false },
     unverified: ["completion_request_byte_measurement", "all_stage_memory_measurement", "per_scan_runtime_revision_receipt",
-      ...(complete && !selection ? ["signed_selection_coverage"] : []), ...(peak === null ? ["finalize_memory_measurement"] : [])],
+      ...(complete && !selection ? ["signed_selection_coverage"] : []),
+      ...(run.target_cooldown_publication === "unconfirmed" ? ["target_cooldown_publication_unconfirmed"] : []),
+      ...(peak === null ? ["finalize_memory_measurement"] : [])],
     failure_code: null, ...(!complete ? { termination_reasons: run.termination_reasons } : {}),
     ...(throttled ? { throttled_priority_summary: priorities } : {}),
   };

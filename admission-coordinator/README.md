@@ -69,6 +69,7 @@ bounded coordination metadata:
 | `owner_user_id` | Who holds admission |
 | `request_id` | The request key that won |
 | `request_fingerprint` | `scan_mode\|url`, to detect a reused request key |
+| `target_origin` | Optional normalized HTTP origin for origin cooldown decisions |
 | `claim_token` | Capability that authorizes the bind |
 | `scan_id` | Canonical Base44 ScanRun entity id, empty until bound |
 | `state` | `claimed` → `bound` → `released` |
@@ -85,8 +86,27 @@ content **never** enter this document. A test asserts the exact key set.
 | `GET /health` | Unauthenticated liveness and config echo |
 | `POST /claim` | Win, replay, or be told to wait. Creates nothing. |
 | `POST /bind` | Attach the canonical server-created ScanRun id to a claim |
+| `POST /observe-target-cooldown` | Record or extend an exact bound scan's origin cooldown |
 | `POST /release` | Free admission once a scan is terminal |
 | `POST /status` | Read-only lease view for the watchdog |
+
+### Origin cooldowns
+
+Target-aware callers send `target_origin` on `/claim`. The coordinator accepts an
+HTTP scheme and ASCII host with an optional port, and echoes the normalized
+origin when it is stored on the winning claim. Omitted origin fields keep
+the existing claim and replay contract. A fresh, otherwise eligible claim in
+a cooldown returns `429 target_cooldown_active` with the remaining seconds in
+both `retry_after_seconds` and the `Retry-After` header.
+
+The authenticated observation body uses `action: observe_target_cooldown_v1`
+and `status_code: 429` with the exact bound `owner_user_id`, `scan_id`,
+`request_id`, `barrier_generation`, `claim_sequence` and `target_origin`. It
+accepts a response receipt time `observed_at` in Unix seconds and a positive
+integer `retry_after_seconds`. The coordinator retains the greatest expiry
+across observations for the origin, up to 24 hours from each original receipt
+time. An expired origin record allows fresh claims. The response outcome is
+`recorded`, `unchanged`, or `expired`.
 
 ## Configuration
 

@@ -15,6 +15,7 @@ import {
   scanIsTerminal,
 } from "./admission.js";
 import {
+  admissionTargetOrigin,
   bindAdmission,
   claimAdmission,
   releaseAdmission,
@@ -40,8 +41,8 @@ function corsHeaders() {
   return { ...CORS_HEADERS };
 }
 
-function jsonResponse(payload, status = 200) {
-  return Response.json(payload, { status, headers: corsHeaders() });
+function jsonResponse(payload, status = 200, headers = {}) {
+  return Response.json(payload, { status, headers: { ...corsHeaders(), ...headers } });
 }
 
 function mutableScanIntakeValue() {
@@ -403,16 +404,20 @@ export default async function (req: Request): Promise<Response> {
         robotsPolicy,
       });
       if (!admitted.ok) {
+        const cooldownHeaders = admitted.status === 429 && admitted.code === "target_cooldown_active"
+          ? { "Retry-After": String(admitted.retryAfter), "Access-Control-Expose-Headers": "Retry-After" }
+          : {};
         return jsonResponse({
           success: false,
           accepted: false,
           version: VERSION,
           retryable: admitted.retryable === true,
           retry_after: admitted.retryAfter || undefined,
+          ...(admitted.code === "target_cooldown_active" ? { retry_after_seconds: admitted.retryAfter } : {}),
           failure_code: admitted.code,
           error: admitted.error,
           ...identity.fields,
-        }, admitted.status);
+        }, admitted.status, cooldownHeaders);
       }
       context = admitted.context;
       identity.fields.scan_id = String(context.scan.id);
@@ -742,12 +747,14 @@ async function admitServerOwnedScan({
     });
   }
 
+  const targetOrigin = admissionTargetOrigin(websiteUrl);
   let claim;
   try {
     claim = await claimAdmission({
       ownerUserId: String(user.id),
       requestId: request.request_id,
       requestFingerprint: request.request_fingerprint,
+      targetOrigin,
       env: mutableScanAdmissionEnv,
     });
   } catch {
@@ -755,13 +762,13 @@ async function admitServerOwnedScan({
   }
   if (!claim?.ok) return coordinatorAdmissionFailure(claim);
 
-  const admissionEvidence = await verifiedAdmissionClaim({
+  const verifiedEvidence = await verifiedAdmissionClaim({
     claim,
     ownerUserId: String(user.id),
     requestId: request.request_id,
     signingKey: String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || ""),
   });
-  if (!admissionEvidence) {
+  if (!verifiedEvidence || (claim.target_origin !== undefined && claim.target_origin !== targetOrigin)) {
     return {
       ok: false,
       status: 503,
@@ -772,6 +779,10 @@ async function admitServerOwnedScan({
     };
   }
 
+  const admissionEvidence = {
+    ...verifiedEvidence,
+    ...(targetOrigin && claim.target_origin === targetOrigin ? { admission_target_origin: targetOrigin } : {}),
+  };
   const claimToken = String(claim.claim_token || "").trim();
   const claimedScanId = String(claim.scan_id || "").trim();
   if (claim.outcome === "replayed" && claimedScanId) {
@@ -976,6 +987,20 @@ function nonNegativeInteger(value) {
 
 function coordinatorAdmissionFailure(result = {}, fallbackCode = "scan_admission_state_unavailable") {
   const upstream = String(result?.failureCode || fallbackCode);
+  if (upstream === "target_cooldown_active") {
+    const seconds = result.retryAfterSeconds;
+    if (result.status === 429 && Number.isSafeInteger(seconds) && seconds > 0) {
+      return {
+        ok: false,
+        status: 429,
+        code: "target_cooldown_active",
+        error: "This site has asked automated scanners to wait. Try again after the requested pause.",
+        retryable: true,
+        retryAfter: seconds,
+      };
+    }
+    return { ok: false, status: 503, code: fallbackCode, error: "Scan admission is temporarily unavailable.", retryable: true, retryAfter: 2 };
+  }
   if (upstream === "admission_busy") {
     return {
       ok: false,
@@ -1114,6 +1139,9 @@ async function recoverOrCreateServerScan({
       admission_release_failure_code: "",
       admission_reconciliation_version: ADMISSION_RECONCILIATION_VERSION,
     });
+    if (admissionEvidence.admission_target_origin && created?.admission_target_origin !== admissionEvidence.admission_target_origin) {
+      throw Object.assign(new Error("admission_target_origin_not_saved"), { status: 503, code: "admission_target_origin_not_saved" });
+    }
     return normalizeRecoveredServerScan({ scans, scan: created });
   } catch (error) {
     // A create/update response can be lost after Base44 committed it. Recover by
@@ -1158,6 +1186,7 @@ function validateServerScanContext({ scan, user, project, request, websiteUrl, a
     || String(scan.project_id || "") !== String(project.id)
     || authorityDomain(scan.website_url || scan.submitted_url) !== authorityDomain(websiteUrl)
     || !matchesPersistedAdmissionEvidence(scan, admissionEvidence)
+    || (admissionEvidence.admission_target_origin && scan.admission_target_origin !== admissionEvidence.admission_target_origin)
     || !sameRobotsPolicy(scan, robotsPolicy)
   ) {
     return { ok: false, status: 409, code: "scan_request_identity_conflict", error: "The scan request identity does not match." };

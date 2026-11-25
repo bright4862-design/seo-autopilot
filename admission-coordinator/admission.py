@@ -14,6 +14,8 @@ document -- those live in Base44 behind the existing authority seal.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from ipaddress import ip_address
 import re
 from typing import Any
 
@@ -64,6 +66,19 @@ MAX_LEASE_SECONDS = 3600
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _FINGERPRINT_MAX = 512
+
+_TARGET_ORIGIN_RE = re.compile(
+    r"(https?)://(\[[0-9a-f:.]+\]|[a-z0-9.-]+)(?::([0-9]{1,5}))?",
+    re.ASCII | re.IGNORECASE,
+)
+_DNS_LABEL_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+TARGET_COOLDOWN_VERSION = "target_cooldown_v1"
+TARGET_COOLDOWN_ACTION = "observe_target_cooldown_v1"
+MAX_TARGET_COOLDOWN_SECONDS = 24 * 60 * 60
+_COOLDOWN_CLAIM_FIELDS = (
+    "owner_user_id", "scan_id", "request_id", "barrier_generation", "claim_sequence", "target_origin",
+)
+_COOLDOWN_OBSERVATION_FIELDS = {*_COOLDOWN_CLAIM_FIELDS, "action", "status_code", "observed_at", "retry_after_seconds"}
 
 
 def normalize_barrier_generation(value: Any) -> int:
@@ -244,6 +259,94 @@ def _require_fingerprint(value: Any) -> str:
     return text
 
 
+def normalize_target_origin(value: Any) -> str:
+    """Normalize one HTTP origin without DNS or host-alias inference."""
+    match = _TARGET_ORIGIN_RE.fullmatch(value) if isinstance(value, str) else None
+    if not match:
+        raise AdmissionError("invalid_target_origin")
+    scheme, host, explicit_port = match.groups()
+    scheme, host = scheme.lower(), host.lower()
+    port = int(explicit_port) if explicit_port is not None else (443 if scheme == "https" else 80)
+    if not 1 <= port <= 65535:
+        raise AdmissionError("invalid_target_origin")
+
+    try:
+        address = ip_address(host[1:-1] if host.startswith("[") else host)
+    except ValueError:
+        labels = host.removesuffix(".").split(".")
+        if (len(host.removesuffix(".")) > 253 or all(label.isdigit() for label in labels)
+                or any(not _DNS_LABEL_RE.fullmatch(label) for label in labels)):
+            raise AdmissionError("invalid_target_origin") from None
+    else:
+        if not address.is_global or address.is_multicast:
+            raise AdmissionError("invalid_target_origin")
+        if host.startswith("[") != (address.version == 6):
+            raise AdmissionError("invalid_target_origin")
+        host = f"[{address.compressed}]" if address.version == 6 else address.compressed
+
+    return f"{scheme}://{host}:{port}"
+
+
+def validate_cooldown_observation(payload: dict[str, Any], *, now: int, clock_skew_seconds: int) -> dict[str, Any]:
+    """Validate one authenticated signal before any storage is read."""
+    invalid = "invalid_target_cooldown_observation"
+    if (set(payload) != _COOLDOWN_OBSERVATION_FIELDS or payload["action"] != TARGET_COOLDOWN_ACTION
+            or type(payload["status_code"]) is not int or payload["status_code"] != 429):
+        raise AdmissionError(invalid)
+    for name in ("barrier_generation", "claim_sequence", "observed_at", "retry_after_seconds"):
+        if type(payload[name]) is not int or payload[name] < (0 if name == "barrier_generation" else 1):
+            raise AdmissionError(invalid)
+    if payload["observed_at"] > now + clock_skew_seconds:
+        raise AdmissionError(invalid)
+
+    result = {field: payload[field] for field in _COOLDOWN_CLAIM_FIELDS}
+    for name in ("owner_user_id", "scan_id", "request_id"):
+        if not isinstance(payload[name], str):
+            raise AdmissionError(invalid)
+        result[name] = _require_id(payload[name], invalid)
+    try:
+        result["target_origin"] = normalize_target_origin(payload["target_origin"])
+    except AdmissionError:
+        raise AdmissionError(invalid) from None
+    result["observed_at"] = payload["observed_at"]
+    result["expires_at"] = payload["observed_at"] + min(payload["retry_after_seconds"], MAX_TARGET_COOLDOWN_SECONDS)
+    return result
+
+
+def target_cooldown_expires_at(document: dict[str, Any] | None) -> int:
+    if not document or document.get("version") != TARGET_COOLDOWN_VERSION:
+        return 0
+    timestamp = document.get("expires_at")
+    return int(timestamp.timestamp()) if isinstance(timestamp, datetime) and timestamp.tzinfo is not None else 0
+
+
+def decide_target_cooldown(
+    document: dict[str, Any] | None,
+    current: dict[str, Any] | None,
+    observation: dict[str, Any],
+    *,
+    now: int,
+    clock_skew_seconds: int,
+) -> dict[str, Any]:
+    """Keep the maximum expiry from an exact, still-bound claim."""
+    if (
+        not document
+        or document.get("state") != STATE_BOUND
+        or any(document.get(field) != observation[field] for field in _COOLDOWN_CLAIM_FIELDS)
+        or observation["observed_at"] + clock_skew_seconds < int(document.get("claimed_at") or 0)
+    ):
+        return {"error": "target_cooldown_claim_conflict"}
+    expires_at = observation["expires_at"]
+    if expires_at <= now:
+        return {"outcome": "expired"}
+    if expires_at <= target_cooldown_expires_at(current):
+        return {"outcome": "unchanged"}
+    return {"outcome": "recorded", "write": {
+        "version": TARGET_COOLDOWN_VERSION,
+        "expires_at": datetime.fromtimestamp(expires_at, tz=timezone.utc),
+    }}
+
+
 def normalize_lease_seconds(value: Any) -> int:
     try:
         seconds = int(value)
@@ -290,6 +393,7 @@ def decide_claim(
     claim_sequence: int = 0,
     admission_mode: str = BARRIER_OPEN,
     acceptance: dict[str, Any] | None = None,
+    target_origin: str = "",
 ) -> dict[str, Any]:
     """Decide whether this caller wins admission.
 
@@ -331,6 +435,9 @@ def decide_claim(
         "acceptance_expires_at": acceptance_source.get("expires_at"),
     }
 
+    if target_origin:
+        fresh["target_origin"] = target_origin
+
     # Rule A -- nothing holds admission: no document, already released, or the
     # previous lease expired without a terminal result.
     if not is_lease_active(document, moment):
@@ -354,7 +461,8 @@ def decide_claim(
 
     # Rule C -- same request id, different fingerprint. The request key has been
     # reused for different work; refusing is the only safe answer.
-    if held_fingerprint != fingerprint:
+    held_origin = document.get("target_origin")
+    if held_fingerprint != fingerprint or (held_origin and target_origin and held_origin != target_origin):
         return {"outcome": None, "error": ERROR_REQUEST_CONFLICT, "document": document}
 
     # Rule B -- exact same request replayed. Hand back the existing claim so a

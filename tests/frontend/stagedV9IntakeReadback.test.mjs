@@ -7,6 +7,7 @@ import * as runtimeConfig from "../../base44/functions/fixlistStagedRuntimeContr
 import * as scanLimits from "../../base44/functions/startStandardScanJobV9/scanLimits.js";
 import * as admission from "../../base44/functions/startStandardScanJobV9/admission.js";
 import * as entitlement from "../../base44/functions/startStandardScanJobV9/entitlement.js";
+import * as admissionClient from "../../base44/functions/startStandardScanJobV9/admissionClient.js";
 import { admissionClaimEvidenceProof, verifyAdmissionClaimEvidence } from "../../base44/functions/startStandardScanJobV9/admissionClient.js";
 import { enqueueScanDrain, enqueueScanJob, normalizeAttemptCount, paidDispatchGatewayUrl } from "../../base44/functions/startStandardScanJobV9/cloudTasks.js";
 import * as releaseContract from "../../base44/functions/startStandardScanJobV9/generatedReleaseContract.js";
@@ -84,7 +85,9 @@ function harness({
         method: "POST",
         body: JSON.stringify(body),
       }));
-      return { status: response.status, cacheControl: response.headers.get("cache-control"), body: await response.json() };
+      const result = { status: response.status, cacheControl: response.headers.get("cache-control"), body: await response.json() };
+      const retryAfter = response.headers.get("retry-after");
+      return retryAfter === null ? result : { ...result, retryAfter };
     },
   };
 }
@@ -271,7 +274,7 @@ const paidGrant = {
 
 function launchHarness({
   rows = [paidGrant], rollout = "paid", entitled500 = "true", mode = "staged", cohort = "",
-  gateway = "https://dispatch-gateway.example",
+  gateway = "https://dispatch-gateway.example", claimFailure, echoClaimOrigin = false, omitPersistedOrigin = false,
 } = {}) {
   const settings = {
     ...(rollout === null ? {} : { SCAN_STAGED_ROLLOUT_SCOPE: rollout }),
@@ -292,6 +295,7 @@ function launchHarness({
   const dispatched = [];
   const taskTransports = [];
   const calls = [];
+  const admittedOrigins = [];
   let binding = null;
   let claimEvidence;
   const project = { id: "project_01", owner_user_id: paidCustomer.id, website_url: "https://example.com/" };
@@ -308,6 +312,7 @@ function launchHarness({
           create: async row => {
             calls.push("create");
             const scan = { id: "scan_01", ...row };
+            if (omitPersistedOrigin) delete scan.admission_target_origin;
             scans.push(scan);
             return scan;
           },
@@ -318,9 +323,12 @@ function launchHarness({
         "./admission.js": admission,
         "./entitlement.js": entitlement,
         "./admissionClient.js": {
+          ...admissionClient,
           verifyAdmissionClaimEvidence,
-          claimAdmission: async ({ ownerUserId, requestId }) => {
+          claimAdmission: async ({ ownerUserId, requestId, targetOrigin }) => {
             calls.push("claim");
+            admittedOrigins.push(targetOrigin);
+            if (claimFailure) return claimFailure;
             const replayed = binding?.request_id === requestId;
             if (!replayed) {
               claimEvidence = {
@@ -328,7 +336,10 @@ function launchHarness({
                 barrier_generation: 4, claim_sequence: 23, admission_mode: "open",
                 acceptance_cohort_id: "", acceptance_release_id: "", acceptance_source_sha: "", acceptance_expires_at: null,
               };
-              binding = { ...claimEvidence, scan_id: "" };
+              binding = {
+                ...claimEvidence, scan_id: "",
+                ...(echoClaimOrigin ? { target_origin: targetOrigin } : {}),
+              };
             }
             return {
               ...binding, ok: true, outcome: replayed ? "replayed" : "claimed", claim_token: "test-claim",
@@ -365,8 +376,94 @@ function launchHarness({
     request_id: "paid_request_01", project_id: project.id, website_url: project.website_url,
     scan_mode: "standard_500", page_cap: 500, staged_rollout_scope: "paid", ...overrides,
   });
-  return { submit, settings, calls, scans, dispatched, taskTransports };
+  return { submit, settings, calls, scans, dispatched, taskTransports, admittedOrigins };
 }
+
+test("V9 target cooldown returns a generic 429 before accepting a paid or preview scan", async () => {
+  const pendingPreview = {
+    id: "pending_01", owner_user_id: paidCustomer.id, user_email: paidCustomer.email,
+    access_status: "pending", has_full_access: false, plan_id: entitlement.ACCESS_PLAN_ID,
+    grant_source: "checkout_pending", app_id: entitlement.ACCESS_APP_ID,
+  };
+  for (const grant of [{ ...paidGrant, page_cap: 150 }, { ...paidGrant, page_cap: 500 }, pendingPreview]) {
+    const fixture = launchHarness({
+      rows: [grant],
+      claimFailure: { ok: false, status: 429, failureCode: "target_cooldown_active", retryAfterSeconds: 3600 },
+    });
+    const result = await fixture.submit({
+      website_url: "https://WWW.example.com:8443/test?location=local",
+      target_origin: "https://unrelated.example:443",
+    });
+    assert.deepEqual(fixture.admittedOrigins, ["https://www.example.com:8443"]);
+    assert.equal(result.status, 429);
+    assert.equal(result.retryAfter, "3600");
+    assert.equal(result.body.success, false);
+    assert.equal(result.body.accepted, false);
+    assert.equal(result.body.failure_code, "target_cooldown_active");
+    assert.equal(result.body.retry_after, 3600);
+    assert.equal(result.body.retry_after_seconds, 3600);
+    assert.match(result.body.error, /site.*wait/i);
+    assert.deepEqual(fixture.calls, ["claim"]);
+    assert.deepEqual(fixture.scans, []);
+    assert.deepEqual(fixture.dispatched, []);
+    assert.deepEqual(fixture.taskTransports, []);
+  }
+});
+
+test("V9 target cooldown opt-in is durable only for a confirmed coordinator lease", async () => {
+  for (const echoClaimOrigin of [false, true]) {
+    const fixture = launchHarness({ echoClaimOrigin });
+    const launched = await fixture.submit({
+      target_origin: "https://unrelated.example:443",
+      admission_target_origin: "https://unrelated.example:443",
+    });
+    assert.equal(launched.status, 200);
+    assert.equal(fixture.scans.length, 1);
+    assert.equal(fixture.scans[0].admission_target_origin, echoClaimOrigin ? "https://example.com:443" : undefined);
+    const replay = await fixture.submit();
+    assert.equal(replay.status, 200);
+    assert.equal(replay.body.replayed, true);
+    assert.equal(fixture.scans.length, 1);
+  }
+});
+
+test("V9 target cooldown never dispatches a new-era row missing its confirmed origin", async () => {
+  const fixture = launchHarness({ echoClaimOrigin: true, omitPersistedOrigin: true });
+  const missing = await fixture.submit();
+  assert.equal(missing.status, 503);
+  assert.equal(missing.body.failure_code, "admission_target_origin_not_saved");
+  const replay = await fixture.submit();
+  assert.equal(replay.status, 202);
+  assert.equal(replay.body.failure_code, "scan_admission_pending");
+  assert.deepEqual(fixture.calls, ["claim", "create", "claim"]);
+  assert.equal(fixture.scans.length, 1);
+  assert.deepEqual(fixture.taskTransports, []);
+});
+
+test("V9 sends the target cooldown key through the signed claim transport", async () => {
+  const signingKey = "claim test key";
+  const options = {
+    ownerUserId: "owner_123", requestId: "request_123", requestFingerprint: "fingerprint",
+    coordinatorUrl: "https://coordinator.example", signingKey,
+    env: () => "true",
+  };
+  const requests = [];
+  const fetchImpl = async (url, request) => {
+    assert.equal(url, "https://coordinator.example/claim");
+    const expected = await admissionClient.admissionSignature(
+      signingKey, request.headers["x-fixlist-timestamp"], request.body,
+    );
+    assert.equal(request.headers["x-fixlist-signature"], expected);
+    requests.push(JSON.parse(request.body));
+    return Response.json({ success: false, error: "target_cooldown_active", retry_after_seconds: 19 }, { status: 429, headers: { "Retry-After": "19" } });
+  };
+  const result = await admissionClient.claimAdmission({ ...options, targetOrigin: "https://example.com:443", fetchImpl });
+  assert.equal(requests[0].target_origin, "https://example.com:443");
+  assert.equal(result.failureCode, "target_cooldown_active");
+  assert.equal(result.retryAfterSeconds, 19);
+  await admissionClient.claimAdmission({ ...options, fetchImpl });
+  assert.equal(Object.hasOwn(requests[1], "target_origin"), false);
+});
 
 test("paid rollout persists and dispatches the verified cap for a regular Stripe customer", async () => {
   for (const cap of [150, 500, "500"]) {

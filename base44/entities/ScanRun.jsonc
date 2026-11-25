@@ -372,6 +372,17 @@
         }
       }
     },
+    "admission_target_origin": {
+      "type": "string",
+      "description": "Exact origin returned by the coordinator for an origin-aware lease. Omitted for older admissions.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
     "admission_mode": {
       "type": "string",
       "enum": [

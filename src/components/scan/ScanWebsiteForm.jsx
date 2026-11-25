@@ -361,7 +361,7 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
           http_status: Number(jobData?.status || 0) || undefined,
         });
         throw Object.assign(
-          new Error(customerScanAdmissionMessage(failureCode, jobData?.error)),
+          new Error(customerScanAdmissionMessage(failureCode, jobData?.error, jobData?.retry_after_seconds)),
           { code: failureCode, version: String(jobData?.version || "") },
         );
       }
@@ -974,7 +974,25 @@ function serverProvidedDetail(value) {
   return text;
 }
 
-function customerScanAdmissionMessage(code, serverDetail = "") {
+function customerScanAdmissionMessage(code, serverDetail = "", retryAfterSeconds = null) {
+  if (code === "target_cooldown_active") {
+    const reason = "This site has asked automated scanners to wait.";
+    if (!Number.isSafeInteger(retryAfterSeconds) || retryAfterSeconds < 1) {
+      return `${reason} Try again later.`;
+    }
+    if (retryAfterSeconds < 60) {
+      return `${reason} Try again in about ${retryAfterSeconds} second${retryAfterSeconds === 1 ? "" : "s"}.`;
+    }
+    const totalMinutes = Math.ceil(retryAfterSeconds / 60);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    const delay = [
+      hours > 0 ? `${hours} hour${hours === 1 ? "" : "s"}` : "",
+      minutes > 0 ? `${minutes} minute${minutes === 1 ? "" : "s"}` : "",
+    ].filter(Boolean).join(" and ");
+    return `${reason} Try again in about ${delay}.`;
+  }
+
   // Curated admission copy remains first choice because it is more actionable.
   const messages = {
     scan_admission_paused: "New scans are temporarily paused. Your existing results are still available.",

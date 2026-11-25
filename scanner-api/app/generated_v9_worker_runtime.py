@@ -3,7 +3,7 @@
 V9_WORKER_RELEASE_FINGERPRINT = "b36ca24b8e0f728e"
 V9_WORKER_FUNCTION_IDENTITIES = {
     "durableScanWorkerControlV9": {
-        "build_id": "fbe0f00d633a9625514f46b84216ec1bb37a0edbb89b995bebb8164799227afa",
+        "build_id": "4902406202f23068f3f6b9c8953988cd5b8e408ec2ac9f2b90887eef8d8be601",
         "runtime_activation_id": "durableScanWorkerControlV9-staged-runtime-20261111-v3"
     },
     "persistDurableScanAuthorityV9": {
@@ -11,12 +11,12 @@ V9_WORKER_FUNCTION_IDENTITIES = {
         "runtime_activation_id": "persistDurableScanAuthorityV9-staged-runtime-20261111-v5"
     },
     "persistLimitedScanResultV9": {
-        "build_id": "7f318cec85d54157a2d419f6f65004197bcd5bd7d09a744b33172aa1c292e0b4",
+        "build_id": "2e2527e56ba3e8d4e814e4507dad53b20c8b01200fdc3d88336e13a2758340d8",
         "runtime_activation_id": "persistLimitedScanResultV9-staged-runtime-20261111-v4"
     }
 }
 V9_WORKER_FUNCTION_ROUTES = {
-    "durableScanWorkerControlV9": "durableScanWorkerControlV9B6190fcd1bdcf9a79",
+    "durableScanWorkerControlV9": "durableScanWorkerControlV9B884cea23230530fd",
     "persistDurableScanAuthorityV9": "persistDurableScanAuthorityV9B42ff88927d79017d",
-    "persistLimitedScanResultV9": "persistLimitedScanResultV9B89dbbf4fb309c136"
+    "persistLimitedScanResultV9": "persistLimitedScanResultV9Bc3d21e647cdfc177"
 }

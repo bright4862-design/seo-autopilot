@@ -183,6 +183,9 @@ test("the first ordinary V9 scan supplies its own exact task evidence without ne
   fake.run.admission_acceptance_source_sha = sha;
   fake.run.admission_cohort_evidence_version = "admission_claim_evidence_v1";
   fake.run.admission_cohort_evidence_proof = "e".repeat(64);
+  fake.run.crawl_timing = {
+    target_cooldown_publication: { state: "unconfirmed", observation: { target_origin: "https://private.example:443" } },
+  };
   const ordinary = { ...config(), provenance, ordinaryScanId: fake.run.id };
   const operator = {
     auth: { me: async () => ({ id: pilotOperator, email: "londonparisbrussels@gmail.com", role: "admin" }) },
@@ -194,7 +197,8 @@ test("the first ordinary V9 scan supplies its own exact task evidence without ne
   const observationTimes = [observationTime, receiptTime];
   const operatorReadback = await observeOrdinaryPilotRun(operator, ordinary, () => observationTimes.shift());
   assert.equal(operatorReadback.run.authority_proof_present, true);
-  assert.doesNotMatch(JSON.stringify(operatorReadback), /f{64}|e{64}|londonparisbrussels|never-print-private/);
+  assert.equal(operatorReadback.run.target_cooldown_publication, "unconfirmed");
+  assert.doesNotMatch(JSON.stringify(operatorReadback), /f{64}|e{64}|londonparisbrussels|never-print-private|private\.example/);
   ordinary.operatorReadback = operatorReadback;
   const run = { ...fake.run, advanced_scan_backend: "python_scanner_api", deno_fallback_used: false,
     ai_review_backend: "python_review_api", python_review_fallback_used: false, geo_readiness: emptyGeoReadiness() };
@@ -217,6 +221,7 @@ test("the first ordinary V9 scan supplies its own exact task evidence without ne
   assert.equal(report.scan_id, fake.run.id);
   assert.equal(report.functional_500_verified, true);
   assert.equal(report.full_500_gate, false);
+  assert.equal(report.target_cooldown_publication, "unconfirmed");
   assert.equal(report.observed_at, operatorReadback.observed_at);
   assert.equal(report.committed_batch_count, 10);
   assert.ok(fake.calls.some(call => call.name === resultRoute));
@@ -227,6 +232,11 @@ test("the first ordinary V9 scan supplies its own exact task evidence without ne
   const discrepant = await executeStaged500Canary(fake.sdk, staged, () => receiptTime);
   assert.equal(discrepant.failure_code, "ordinary_customer_projection_mismatch");
   projection.run.pages_crawled = 500;
+  const timing = projection.run.crawl_timing;
+  delete projection.run.crawl_timing;
+  const cooldownMismatch = await executeStaged500Canary(fake.sdk, staged, () => receiptTime);
+  assert.equal(cooldownMismatch.failure_code, "ordinary_cooldown_publication_mismatch");
+  projection.run.crawl_timing = timing;
 
   const importReadback = config => import(`data:text/javascript;base64,${Buffer.from(renderOrdinaryReadback(config)).toString("base64")}`);
   const browser = await importReadback(staged);
@@ -298,7 +308,8 @@ test("the first ordinary V9 scan supplies its own exact task evidence without ne
   assert.match(collect("collect-ordinary-readback", browserFile, reportFile).stderr, /ordinary_stage_task_observation_mismatch/);
   writeFileSync(taskFile, JSON.stringify(ownTask));
   for (const change of [{ committed_batch_count: 9 }, { terminal_outcome_verified: "yes" }, { full_500_gate: true },
-    { acceptance_verified: true }, { production_freeze: true }, { duration_ms: 1 }, { release_fingerprint: "b".repeat(16) }]) {
+    { acceptance_verified: true }, { production_freeze: true }, { duration_ms: 1 }, { release_fingerprint: "b".repeat(16) },
+    { target_cooldown_publication: undefined }]) {
     writeFileSync(browserFile, JSON.stringify({ ...report, ...change }));
     assert.match(collect("collect-ordinary-readback", browserFile, reportFile).stderr, /ordinary_operator_report_mismatch/);
   }
@@ -329,6 +340,9 @@ test("the first ordinary V9 scan supplies its own exact task evidence without ne
   writeFileSync(browserFile, JSON.stringify({ ...limitedReport, outcome: "limited_budget", termination_reasons: ["staged_wall_budget"] }));
   const limitedReceipt = collect("collect-ordinary-readback", browserFile, path.join(directory, "limited.json"));
   assert.equal(limitedReceipt.status, 0, limitedReceipt.stderr);
+  const savedLimitedReceipt = JSON.parse(readFileSync(path.join(directory, "limited.json"), "utf8"));
+  assert.equal(savedLimitedReceipt.target_cooldown_publication, "unconfirmed");
+  assert.ok(savedLimitedReceipt.unverified.includes("target_cooldown_publication_unconfirmed"));
   writeFileSync(operatorFile, JSON.stringify({ ...fullOperator, terminal_observed_at: new Date(observationTime).toISOString() }));
   assert.match(collect("collect-ordinary-readback", browserFile, reportFile).stderr, /ordinary_operator_window_invalid/);
   writeFileSync(operatorFile, JSON.stringify(fullOperator));
@@ -542,6 +556,21 @@ test("complete500 requires ten committed batches and retains truthful measuremen
   assert.equal(starts[0].value.scan_mode, "standard_500");
   assert.equal("page_cap" in starts[0].value, false);
   assert.doesNotMatch(JSON.stringify(report), /private@example|never-print-private|authority_proof/);
+});
+
+test("500-page readback preserves a signed report while flagging unconfirmed cooldown publication", async () => {
+  for (const scenario of ["complete", "limited"]) {
+    const fake = fakeSdk(scenario);
+    fake.projection.run.crawl_timing = {
+      target_cooldown_publication: { state: "unconfirmed", observation: { target_origin: "https://private.example:443" } },
+    };
+    const report = await executeStaged500Canary(fake.sdk, config(), () => now);
+    assert.equal(report.terminal_outcome_verified, true);
+    assert.equal(report.full_500_gate, false);
+    assert.equal(report.target_cooldown_publication, "unconfirmed");
+    assert.ok(report.unverified.includes("target_cooldown_publication_unconfirmed"));
+    assert.doesNotMatch(JSON.stringify(report), /private\.example/);
+  }
 });
 
 test("the current signed result carries a private digest of planned sections and a separate checked-page count", async () => {
@@ -790,6 +819,11 @@ test("corpus dry-run starts no scans and complete execution remains sequential a
   const bad = await runCorpus(input, { now, execute: true, executeSite: async site => ({ exitCode: 0, report: { ...corpusScan(site), source_sha: "0".repeat(40) } }) });
   assert.equal(bad.scans.length, 1);
   assert.ok(bad.failures.includes("scan_report_identity_mismatch"));
+  const pendingCooldown = await runCorpus(input, { now, execute: true, executeSite: async site => ({
+    exitCode: 0, report: { ...corpusScan(site), target_cooldown_publication: "unconfirmed" },
+  }) });
+  assert.equal(pendingCooldown.scans.length, 1);
+  assert.ok(pendingCooldown.failures.includes(`target_cooldown_publication_unconfirmed:${input.sites[0].site_id}`));
 });
 
 function measuredCorpusScan(site) {

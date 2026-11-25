@@ -7,6 +7,7 @@ before ``main`` is imported, because ``main`` binds ``firestore`` at import time
 """
 
 import contextlib
+from copy import deepcopy
 import hashlib
 import hmac
 import importlib
@@ -17,6 +18,7 @@ import sys
 import time
 import types
 import unittest
+from unittest.mock import patch
 
 STORE: dict[str, dict] = {}
 
@@ -405,6 +407,224 @@ class Lifecycle(CoordinatorTestCase):
         second = self.claim(owner="6a498da58ef5cec1f5cd4487").json["claim_token"]
         self.assertNotEqual(first, second)
         self.assertGreaterEqual(len(first), 32)
+
+
+class TargetCooldown(CoordinatorTestCase):
+    NOW = 1_800_000_000
+    ORIGIN = "https://fixture.example:443"
+    OTHER_OWNER = "other_owner"
+
+    def setUp(self):
+        super().setUp()
+        self.now = self.NOW
+        clock = patch.object(main.time, "time", side_effect=lambda: self.now)
+        clock.start()
+        self.addCleanup(clock.stop)
+
+    def claim_origin(self, origin=ORIGIN, *, owner=OWNER, request_id="req_alpha"):
+        return self.post("/claim", {
+            "owner_user_id": owner,
+            "request_id": request_id,
+            "request_fingerprint": FINGERPRINT,
+            "target_origin": origin,
+        })
+
+    def bind_origin(self, origin=ORIGIN):
+        claimed = self.claim_origin(origin)
+        self.assertEqual(claimed.status_code, 200)
+        bound = self.post("/bind", {
+            "owner_user_id": OWNER, "request_id": "req_alpha",
+            "claim_token": claimed.json["claim_token"], "scan_id": SCAN_ID,
+        })
+        self.assertEqual(bound.status_code, 200)
+        return {
+            "action": "observe_target_cooldown_v1", "status_code": 429,
+            "owner_user_id": OWNER, "scan_id": SCAN_ID, "request_id": "req_alpha",
+            "barrier_generation": claimed.json["barrier_generation"],
+            "claim_sequence": claimed.json["claim_sequence"],
+            "target_origin": self.ORIGIN,
+            "observed_at": self.now, "retry_after_seconds": 3600,
+        }
+
+    def observe(self, payload, **options):
+        return self.post("/observe-target-cooldown", payload, **options)
+
+    def test_verified_observation_blocks_fresh_claim_without_consuming_budget(self):
+        signal = self.bind_origin("HTTPS://FIXTURE.example")
+        recorded = self.observe(signal)
+        self.assertEqual(recorded.status_code, 200)
+        self.assertEqual(recorded.json, {"success": True, "outcome": "recorded"})
+        store_before = {key: dict(value) for key, value in STORE.items()}
+
+        denied = self.claim_origin("https://fixture.example", owner=self.OTHER_OWNER)
+        self.assertEqual(denied.status_code, 429)
+        self.assertEqual(denied.json, {
+            "success": False, "error": "target_cooldown_active", "retry_after_seconds": 3600,
+        })
+        self.assertEqual(denied.headers["Retry-After"], "3600")
+        self.assertEqual(STORE, store_before)
+
+        self.now += 3599
+        self.assertEqual(self.claim_origin(owner=self.OTHER_OWNER).json["retry_after_seconds"], 1)
+        self.now += 1
+        self.assertEqual(self.claim_origin(owner=self.OTHER_OWNER).json["outcome"], "claimed")
+
+    def test_fresh_claim_echoes_its_persisted_canonical_origin(self):
+        claimed = self.claim_origin("HTTPS://FIXTURE.example")
+        self.assertEqual(claimed.status_code, 200)
+        self.assertEqual(claimed.json.get("target_origin"), self.ORIGIN)
+        self.assertEqual(STORE[f"scan_admission/{OWNER}"]["target_origin"], self.ORIGIN)
+        self.assertNotIn("target_origin", claimed.json["cohort_evidence"])
+
+    def test_legacy_claim_and_exact_replay_during_cooldown(self):
+        signal = self.bind_origin()
+        self.assertEqual(self.observe(signal).status_code, 200)
+        replayed = self.claim_origin().json
+        self.assertEqual(replayed["outcome"], "replayed")
+        self.assertEqual(replayed["target_origin"], self.ORIGIN)
+        self.assertEqual(self.claim().json["target_origin"], self.ORIGIN)
+        legacy = self.claim(owner=self.OTHER_OWNER).json
+        self.assertEqual(legacy["outcome"], "claimed")
+        self.assertNotIn("target_origin", legacy)
+        mixed_replay = self.claim_origin(owner=self.OTHER_OWNER).json
+        self.assertEqual(mixed_replay["outcome"], "replayed")
+        self.assertNotIn("target_origin", mixed_replay)
+        self.assertEqual(self.claim_origin("https://www.fixture.example").json["error"], "request_conflict")
+
+    def test_cooldown_refusal_leaves_acceptance_budget_untouched(self):
+        signal = self.bind_origin()
+        self.assertEqual(self.observe({**signal, "retry_after_seconds": 30}).json["outcome"], "recorded")
+        key = "scan_admission_control/global"
+        STORE[key] = {
+            **STORE[key], "mode": "acceptance_only", "generation": 2,
+            "acceptance": {
+                "cohort_id": "cohort_fixture", "release_id": "release_fixture", "source_sha": "a" * 40,
+                "owner_allowlist": [self.OTHER_OWNER], "expires_at": self.NOW + 600,
+                "total_claim_budget": 1, "per_owner_claim_budget": 1,
+                "total_claims_used": 0, "owner_claims_used": {},
+            },
+        }
+        before = deepcopy(STORE)
+        self.assertEqual(self.claim_origin(owner=self.OTHER_OWNER).json["error"], "target_cooldown_active")
+        self.assertEqual(STORE, before)
+
+        self.now += 30
+        self.assertEqual(self.claim_origin(owner=self.OTHER_OWNER).json["outcome"], "claimed")
+        self.assertEqual(STORE[key]["acceptance"]["owner_claims_used"], {self.OTHER_OWNER: 1})
+        self.assertEqual(STORE[key]["acceptance"]["total_claims_used"], 1)
+
+    def test_exhausted_acceptance_does_not_disclose_cooldown(self):
+        signal = self.bind_origin()
+        self.assertEqual(self.observe(signal).json["outcome"], "recorded")
+        key = "scan_admission_control/global"
+        STORE[key] = {
+            **STORE[key], "mode": "acceptance_only", "generation": 2,
+            "acceptance": {
+                "cohort_id": "cohort_fixture", "release_id": "release_fixture", "source_sha": "a" * 40,
+                "owner_allowlist": [self.OTHER_OWNER], "expires_at": self.NOW + 600,
+                "total_claim_budget": 1, "per_owner_claim_budget": 1,
+                "total_claims_used": 1, "owner_claims_used": {self.OTHER_OWNER: 1},
+            },
+        }
+        before = deepcopy(STORE)
+        denied = self.claim_origin(owner=self.OTHER_OWNER)
+        self.assertEqual(denied.json, {"success": False, "error": "scan_intake_paused"})
+        self.assertEqual(denied.status_code, 423)
+        self.assertEqual(STORE, before)
+
+    def test_cooldown_read_failure_only_rejects_fresh_target_aware_claims(self):
+        signal = self.bind_origin()
+        self.assertEqual(self.observe(signal).json["outcome"], "recorded")
+        before = deepcopy(STORE)
+        get = FakeDocumentRef.get
+
+        def unavailable(ref, transaction=None):
+            if ref.key.startswith("scan_target_cooldowns/"):
+                raise RuntimeError("Firestore read interrupted")
+            return get(ref, transaction=transaction)
+
+        with patch.object(FakeDocumentRef, "get", unavailable):
+            failed = self.claim_origin(owner=self.OTHER_OWNER)
+            self.assertEqual(failed.status_code, 503)
+            self.assertEqual(failed.json["error"], "coordinator_unavailable")
+            self.assertEqual(self.claim_origin().json["outcome"], "replayed")
+            self.assertEqual(STORE, before)
+            self.assertEqual(self.claim(owner=self.OTHER_OWNER).json["outcome"], "claimed")
+
+    def test_origin_cooldown_does_not_imply_an_alias(self):
+        self.assertEqual(self.observe(self.bind_origin()).status_code, 200)
+        independent = ("http://fixture.example", "https://www.fixture.example",
+                       "https://fixture.example:8443", "https://other.example", "https://fixture.example.")
+        for index, origin in enumerate(independent):
+            with self.subTest(origin=origin):
+                self.assertEqual(self.claim_origin(origin, owner=f"owner{index}").json["outcome"], "claimed")
+
+    def test_observation_requires_exact_live_claim(self):
+        observation = self.bind_origin()
+        store_before = {key: dict(value) for key, value in STORE.items()}
+        for changed in (
+            {"target_origin": "https://www.fixture.example"},
+            {"request_id": "old_request"},
+            {"owner_user_id": "wrong_owner"},
+            {"scan_id": "old_scan"},
+            {"barrier_generation": observation["barrier_generation"] + 1},
+            {"claim_sequence": observation["claim_sequence"] + 1},
+        ):
+            with self.subTest(changed=changed):
+                rejected = self.observe({**observation, **changed})
+                self.assertEqual(rejected.status_code, 409)
+                self.assertEqual(rejected.json["error"], "target_cooldown_claim_conflict")
+                self.assertEqual(STORE, store_before)
+
+        released = self.post("/release", {
+            "owner_user_id": OWNER, "scan_id": SCAN_ID, "terminal_status": "complete",
+        })
+        self.assertEqual(released.status_code, 200)
+        self.assertEqual(self.observe(observation).status_code, 409)
+
+    def test_observation_authentication_and_retry_after_validation(self):
+        observation = self.bind_origin()
+        store_before = {key: dict(value) for key, value in STORE.items()}
+        self.assertEqual(self.observe(observation, signature="00" * 32).status_code, 401)
+        for changed in (
+            {"action": "release"}, {"status_code": 503}, {"status_code": "429"},
+            {"observed_at": self.NOW + 301}, {"observed_at": True},
+            {"retry_after_seconds": 0}, {"retry_after_seconds": -1}, {"retry_after_seconds": "3600"},
+            {"retry_after_seconds": True}, {"retry_after_seconds": 0.5},
+            {"target_origin": "https://fixture.example/resource"},
+            {"terminal_status": "complete"},
+        ):
+            with self.subTest(changed=changed):
+                self.assertEqual(self.observe({**observation, **changed}).status_code, 400)
+                self.assertEqual(STORE, store_before)
+
+    def test_observations_are_bounded_and_max_update_uses_original_timestamp(self):
+        observation = self.bind_origin()
+        expired = {**observation, "retry_after_seconds": 1}
+        self.now += 2
+        self.assertEqual(self.observe(expired).json["outcome"], "expired")
+
+        long = {**observation, "retry_after_seconds": 100_000}
+        self.assertEqual(self.observe(long).json["outcome"], "recorded")
+        self.now += 10
+        self.assertEqual(self.observe(long).json["outcome"], "unchanged")
+        self.assertEqual(self.observe({**observation, "retry_after_seconds": 120}).json["outcome"], "unchanged")
+        self.assertEqual(self.claim_origin(owner=self.OTHER_OWNER).json["retry_after_seconds"], 86_388)
+
+        later = {**long, "observed_at": self.now}
+        self.assertEqual(self.observe(later).json["outcome"], "recorded")
+        self.assertEqual(self.claim_origin(owner=self.OTHER_OWNER).json["retry_after_seconds"], 86_400)
+
+    def test_invalid_claim_origins_do_not_allocate_an_owner_slot(self):
+        for origin in (None, "", True, "https://fixture.example/other", "https://a@fixture.example",
+                       "https://fixture.example?x=1", "https://fixture.example:65536",
+                       "http://10.0.0.1", "https://[::1]", "https://[93.184.216.34]",
+                       "https://fixture.example\n"):
+            with self.subTest(origin=origin):
+                response = self.claim_origin(origin)
+                self.assertEqual(response.json, {"success": False, "error": "invalid_target_origin"})
+                self.assertEqual(response.status_code, 400)
+                self.assertFalse(STORE)
 
 
 class StatusSurface(CoordinatorTestCase):

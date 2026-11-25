@@ -281,6 +281,7 @@ def build_control_envelope(
     identity: dict[str, Any] | None = None,
     failure: dict[str, Any] | None = None,
     progress: dict[str, Any] | None = None,
+    target_cooldown: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     signed = {
         "version": CONTROL_VERSION,
@@ -291,6 +292,8 @@ def build_control_envelope(
     }
     if action == "progress":
         signed["progress"] = progress
+    if action == "observe_target_cooldown":
+        signed["target_cooldown"] = target_cooldown
     return {**signed, "proof": create_authority_seal(signed, signing_key)}
 
 
@@ -352,6 +355,24 @@ async def read_scan_run(client: httpx.AsyncClient, scan_id: str) -> dict[str, An
         return None
     scan = response["body"].get("scanRun")
     return scan if isinstance(scan, dict) else None
+
+
+async def publish_target_cooldown(client: httpx.AsyncClient, scan: dict[str, Any], observation: dict[str, Any]) -> bool:
+    """Relay the same observed timestamp and TTL through signed, physical V9."""
+    signing_key = str(os.getenv("SCAN_EVIDENCE_SIGNING_KEY") or "")
+    identity = _scan_identity(scan)
+    attempt = scan.get("attempt_count")
+    if not signing_key or not all(identity.values()) or type(attempt) is not int or not 1 <= attempt < 2**53:
+        return False
+    envelope = build_control_envelope(
+        "observe_target_cooldown", signing_key, scan_id=identity["scan_id"],
+        identity={**identity, "attempt_count": attempt}, target_cooldown=observation,
+    )
+    response = await invoke_function(client, "durableScanWorkerControlV9", envelope, timeout=20.0)
+    body = response["body"]
+    return response["status_code"] == 200 and body.get("success") is True and body.get("outcome") in {
+        "recorded", "unchanged", "expired",
+    }
 
 
 async def mark_scan_started(client: httpx.AsyncClient, scan: dict[str, Any]) -> dict[str, Any]:

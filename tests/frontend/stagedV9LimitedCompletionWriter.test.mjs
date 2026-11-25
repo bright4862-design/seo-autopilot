@@ -27,7 +27,7 @@ const identity = {
 const contract = { scan_mode: "standard_500", page_cap: 500, pipeline_mode: "staged" };
 const robots = { respect_robots_txt: true, owner_attested_robots_override: false };
 
-async function envelope(completedAt) {
+async function envelope(completedAt, scanFields = {}) {
   const signed = {
     version: "durable_standard150_limited_v1",
     identity,
@@ -36,6 +36,7 @@ async function envelope(completedAt) {
       pages_crawled: 50, pages_found: 500, worker_peak_memory_bytes: 100_000_000,
       scan_coverage: { urls_attempted: 50, usable_html_pages: 50, unique_retained_destinations: 50 },
       ...(completedAt ? { result_ready_at: completedAt } : {}),
+      ...scanFields,
     },
     review: {
       coverage_state: "limited_coverage", scan_status: "limited",
@@ -158,4 +159,35 @@ test("V9 limited replay preserves the earlier seal and completion time", async (
   assert.equal(replay.body.scanRun.result_integrity_sealed_at, startedAt);
   assert.equal(replay.body.scanRun.completed_at, previousCompletion);
   assert.equal(fixture.writes, writes);
+});
+
+test("V9 limited persistence seals the unconfirmed target cooldown with the saved report", async () => {
+  const publication = {
+    state: "unconfirmed",
+    reason: "publication_unavailable",
+    observation: {
+      status_code: 429,
+      target_origin: "https://example.test:443",
+      observed_at: Date.parse(startedAt) / 1000,
+      retry_after_seconds: 3600,
+    },
+  };
+  const fixture = writerFixture();
+  const input = await envelope(readyAt, { crawl_timing: { target_cooldown_publication: publication } });
+  const first = await fixture.post(input);
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  const run = first.body.scanRun;
+  assert.equal(run.status, "limited");
+  assert.deepEqual(run.crawl_timing?.target_cooldown_publication, publication);
+
+  const args = { identity, scan: run, review: run, now: readyAt, version: run.result_integrity_version };
+  const snapshot = buildLimitedResultSnapshot(args);
+  assert.equal(await verifyLimitedResultProof(snapshot, key, run.result_integrity_proof), true);
+  const tamperedRun = { ...run, crawl_timing: { target_cooldown_publication: { ...publication, state: "acknowledged" } } };
+  const tamperedSnapshot = buildLimitedResultSnapshot({ ...args, scan: tamperedRun });
+  assert.equal(await verifyLimitedResultProof(tamperedSnapshot, key, run.result_integrity_proof), false);
+
+  const replay = await fixture.post(input);
+  assert.equal(replay.body.replayed, true);
+  assert.equal(replay.body.scanRun.result_integrity_proof, run.result_integrity_proof);
 });

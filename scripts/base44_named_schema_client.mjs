@@ -165,7 +165,7 @@ async function fetchInventory(destination, entities = AUTHORITY_ENTITIES) {
 // Project metadata only. Missing/looping pagination is never proof of no rows.
 async function stagedRows(destination) {
   const fields = {
-    ScanRun: "id,status,scan_mode,pipeline_mode,page_cap,pages_planned,last_committed_batch,workspace_cleanup_state,workspace_cleanup_completed_at",
+    ScanRun: "id,status,scan_mode,pipeline_mode,page_cap,pages_planned,last_committed_batch,workspace_cleanup_state,workspace_cleanup_completed_at,admission_target_origin",
     FixItem: "id,affected_page_count,affected_page_count_is_lower_bound,template_impact_estimates",
     Access: "id,page_cap",
   };

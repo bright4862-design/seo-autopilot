@@ -187,6 +187,10 @@ export async function runCorpus(manifest, { now = Date.now(), execute = false, e
         return false;
       }
     }
+    if (scan.target_cooldown_publication === "unconfirmed") {
+      report.failures.push(`target_cooldown_publication_unconfirmed:${site.site_id}`);
+      return false;
+    }
     if (!matchesExpectedOutcome(scan, site.expectation)) { report.failures.push(`scan_outcome_mismatch:${site.site_id}`); return false; }
     const verified = verifyReceiptSummary(result.receipt, scan, result.reportDigest);
     const observation = report.scans.at(-1);

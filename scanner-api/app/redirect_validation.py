@@ -7,6 +7,7 @@ from urllib.parse import unquote, urldefrag, urljoin, urlparse
 from .page_evidence_gate import page_evidence_class, page_has_usable_html
 from .robots_policy import SCANNER_USER_AGENT, SEARCH_USER_AGENT
 from .security import REDIRECT_STATUSES, is_public_http_url, safe_get_once
+from .target_cooldown import TargetCooldownActive
 
 
 # Keep the frozen component marker stable for this focused additive patch. The
@@ -172,6 +173,8 @@ async def fetch_with_redirect_evidence(
                 })
                 return None, evidence
         except Exception as exc:
+            if isinstance(exc, TargetCooldownActive) and not hops:
+                raise
             evidence.update({
                 "state": "redirect_destination_unverified" if hops else "fetch_failed",
                 "hop_count": len(hops),

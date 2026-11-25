@@ -63,6 +63,7 @@ from .render_followup import RENDER_FOLLOWUP_VERSION, run_render_followup
 from .robots_policy import RobotsPolicy, SCANNER_USER_AGENT, annotate_robots_evidence, load_robots_policy
 from .security import is_public_http_url, safe_get
 from .sitemap import load_sitemap_urls
+from .target_cooldown import TargetCooldownActive, active_target_cooldown
 from .url_frontier_policy import FRONTIER_POLICY_VERSION, classify_frontier_url
 
 VERSION = "python_scanner_v6_finalize_rate_limit_backoff"
@@ -1007,6 +1008,13 @@ async def plan_scan(
                 else RATE_LIMIT_REQUEST_INTERVAL_SECONDS
             ),
         )
+        # Discovery may observe an origin pause on robots/sitemap rather than
+        # on a page. Preserve the pause without inventing a failed page.
+        cooldown_relay = active_target_cooldown.get()
+        if cooldown_relay is not None:
+            await cooldown_relay.drain()
+            if cooldown_relay.remaining_hold():
+                rate_limit_pacer.rate_limit_blocked_scan = True
 
 
     state = ScanState(
@@ -1184,7 +1192,12 @@ async def crawl_batch(state: ScanState, max_pages: int = 50) -> list[dict]:
                             if rate_limit_pacer.retry_count >= RATE_LIMIT_MAX_RETRIES:
                                 break
                             rate_limit_pacer.retry_count += 1
-                            page = await fetch_and_extract(client, target, snapshot, robots_policy=robots_policy)
+                            try:
+                                page = await fetch_and_extract(client, target, snapshot, robots_policy=robots_policy)
+                            except TargetCooldownActive:
+                                rate_limit_pacer.retry_count -= 1
+                                rate_limit_pacer.rate_limit_blocked_scan = True
+                                break
                             retry_status = int(page.get("status_code") or 0)
                             if 200 <= retry_status < 400:
                                 rate_limit_pacer.recovered_count += 1
@@ -1197,6 +1210,9 @@ async def crawl_batch(state: ScanState, max_pages: int = 50) -> list[dict]:
                     # same BeautifulSoup tree used for SEO evidence. Do not retain
                     # raw HTML between stages or parse large documents twice.
                     discovered = page.pop("_links", [])
+                except TargetCooldownActive:
+                    rate_limit_pacer.rate_limit_blocked_scan = True
+                    return
                 except Exception:
                     page = extract_page("", target, target, 0, "", snapshot, fetch_error="worker_processing_failed")
                     discovered = []
@@ -1771,6 +1787,8 @@ async def fetch_and_extract(
         if redirect_evidence is not None:
             apply_redirect_evidence(page, redirect_evidence)
         return page
+    except TargetCooldownActive:
+        raise
     except Exception as exc:
         return extract_page("", url, url, 0, "", discovery, fetch_error=str(exc)[:220])
 

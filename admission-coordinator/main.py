@@ -56,6 +56,7 @@ SNAPSHOT_COLLECTION = os.environ.get("ADMISSION_SNAPSHOT_COLLECTION", "scan_admi
 AUDIT_COLLECTION = os.environ.get("ADMISSION_AUDIT_COLLECTION", "scan_admission_audit").strip() or "scan_admission_audit"
 COHORT_COLLECTION = os.environ.get("ADMISSION_COHORT_COLLECTION", "scan_admission_cohorts").strip() or "scan_admission_cohorts"
 RECONCILIATION_COLLECTION = os.environ.get("ADMISSION_RECONCILIATION_COLLECTION", "scan_admission_reconciliation").strip() or "scan_admission_reconciliation"
+TARGET_COOLDOWN_COLLECTION = "scan_target_cooldowns"
 CONTROL_DOCUMENT = "global"
 FIRESTORE_PROJECT = os.environ.get("FIRESTORE_PROJECT", "").strip()
 FIRESTORE_DATABASE = os.environ.get("FIRESTORE_DATABASE", "").strip()
@@ -335,9 +336,15 @@ def _live_reconciliation_query(client: firestore.Client):
     )
 
 
+def _target_cooldown_ref(client: firestore.Client, target_origin: str):
+    key = hashlib.sha256(target_origin.encode("ascii")).hexdigest()
+    return client.collection(TARGET_COOLDOWN_COLLECTION).document(key)
+
+
 def run_claim_transaction(
     owner_user_id: str,
-    decide: Callable[[dict[str, Any] | None, dict[str, Any] | None], dict[str, Any]],
+    target_origin: str,
+    decide: Callable[[dict[str, Any] | None, dict[str, Any] | None, Callable[[], int]], dict[str, Any]],
 ):
     """Serialize one claim against the global barrier and owner slot.
 
@@ -353,7 +360,14 @@ def run_claim_transaction(
     def _apply(transaction: firestore.Transaction) -> dict[str, Any]:
         control_document = _document_value(control_ref.get(transaction=transaction))
         owner_document = _document_value(owner_ref.get(transaction=transaction))
-        decision = decide(owner_document, control_document)
+
+        def read_cooldown_expiry() -> int:
+            if not target_origin:
+                return 0
+            ref = _target_cooldown_ref(client, target_origin)
+            return admission.target_cooldown_expires_at(_document_value(ref.get(transaction=transaction)))
+
+        decision = decide(owner_document, control_document, read_cooldown_expiry)
         if decision.get("control_write"):
             transaction.set(control_ref, decision["control_write"])
         if decision.get("write"):
@@ -688,6 +702,10 @@ def claim():
     owner_user_id = str(payload.get("owner_user_id") or "").strip()
     request_id = str(payload.get("request_id") or "").strip()
     fingerprint = str(payload.get("request_fingerprint") or "").strip()
+    try:
+        target_origin = admission.normalize_target_origin(payload["target_origin"]) if "target_origin" in payload else ""
+    except admission.AdmissionError as error:
+        return response_error(error.code, 400)
 
     # Minted here, never accepted from the caller: the token is the capability
     # that later authorizes the bind, so the coordinator must be its only source.
@@ -696,6 +714,7 @@ def claim():
     def decide(
         document: dict[str, Any] | None,
         control_document: dict[str, Any] | None,
+        read_cooldown_expiry: Callable[[], int],
     ) -> dict[str, Any]:
         moment = int(time.time())
         current = admission.normalized_control(control_document)
@@ -715,6 +734,7 @@ def claim():
             claim_sequence=int(current["claim_sequence"]) + 1,
             admission_mode=current["mode"],
             acceptance=acceptance,
+            target_origin=target_origin,
         )
         if candidate.get("outcome") == admission.OUTCOME_REPLAYED:
             return candidate
@@ -734,6 +754,11 @@ def claim():
         )
         if not reservation.get("allowed"):
             return {"outcome": None, "error": reservation.get("error", admission.ERROR_SCAN_INTAKE_PAUSED)}
+        # Reservation is a pure decision. Discard it on an origin refusal so
+        # the barrier sequence, cohort budget and owner slot are untouched.
+        retry_after = read_cooldown_expiry() - moment
+        if retry_after > 0:
+            return {"error": "target_cooldown_active", "retry_after_seconds": retry_after}
         claimed = admission.decide_claim(
             document,
             owner_user_id=owner_user_id,
@@ -746,18 +771,24 @@ def claim():
             claim_sequence=reservation["claim_sequence"],
             admission_mode=reservation["mode"],
             acceptance=reservation.get("acceptance"),
+            target_origin=target_origin,
         )
         claimed["control_write"] = reservation["control_write"]
         return claimed
 
     try:
-        decision = run_claim_transaction(owner_user_id, decide)
+        decision = run_claim_transaction(owner_user_id, target_origin, decide)
     except admission.AdmissionError as error:
         return response_error(error.code, 400)
     except Exception:
         return response_error("coordinator_unavailable", 503)
 
     if decision.get("error"):
+        if decision["error"] == "target_cooldown_active":
+            retry_after = decision["retry_after_seconds"]
+            return jsonify({
+                "success": False, "error": "target_cooldown_active", "retry_after_seconds": retry_after,
+            }), 429, {"Retry-After": str(retry_after)}
         if decision["error"] == admission.ERROR_SCAN_INTAKE_PAUSED:
             return response_error(decision["error"], 423)
         return response_error(decision["error"], 409)
@@ -772,7 +803,7 @@ def claim():
 
     document = decision["document"]
     claim_evidence, claim_evidence_proof = _claim_evidence(document)
-    return jsonify({
+    result = {
         "success": True,
         "outcome": outcome,
         # On a fresh claim this is the token just minted; on an exact replay it
@@ -787,7 +818,49 @@ def claim():
         "admission_mode": str(document.get("admission_mode") or admission.BARRIER_OPEN),
         "cohort_evidence": claim_evidence,
         "cohort_evidence_proof": claim_evidence_proof,
-    })
+    }
+    if document.get("target_origin"):
+        result["target_origin"] = document["target_origin"]
+    return jsonify(result)
+
+
+@app.post("/observe-target-cooldown")
+def observe_target_cooldown():
+    payload, failure = authenticate()
+    if failure:
+        return failure
+    assert payload is not None
+
+    try:
+        observation = admission.validate_cooldown_observation(
+            payload, now=int(time.time()), clock_skew_seconds=MAX_CLOCK_SKEW_SECONDS,
+        )
+    except admission.AdmissionError as error:
+        return response_error(error.code, 400)
+
+    try:
+        client = _firestore_client()
+        owner_ref = client.collection(COLLECTION).document(observation["owner_user_id"])
+        cooldown_ref = _target_cooldown_ref(client, observation["target_origin"])
+
+        @firestore.transactional
+        def apply_observation(transaction: firestore.Transaction) -> dict[str, Any]:
+            decision = admission.decide_target_cooldown(
+                _document_value(owner_ref.get(transaction=transaction)),
+                _document_value(cooldown_ref.get(transaction=transaction)),
+                observation, now=int(time.time()), clock_skew_seconds=MAX_CLOCK_SKEW_SECONDS,
+            )
+            if decision.get("write"):
+                transaction.set(cooldown_ref, decision["write"])
+            return decision
+
+        decision = apply_observation(client.transaction())
+    except Exception:
+        return response_error("coordinator_unavailable", 503)
+
+    if decision.get("error"):
+        return response_error(decision["error"], 409)
+    return jsonify({"success": True, "outcome": decision["outcome"]})
 
 
 @app.post("/bind")

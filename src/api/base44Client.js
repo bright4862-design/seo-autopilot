@@ -68,9 +68,25 @@ function decorateFunctionError(error) {
 const scanFunctionGeneration = import.meta.env?.VITE_SCAN_FUNCTION_GENERATION;
 export const usesPublishedScanPilot = scanFunctionGeneration === "PUBLISHED_PILOT";
 
+function isPilotRouteUnavailable(error) {
+  const payload = getErrorPayload(error);
+  if (payload.error_code) return false;
+  const status = Number(error?.response?.status ?? error?.status ?? payload.status);
+  return [404, 405, 500, 502, 503, 504].includes(status)
+    || (!status && (error?.code === "ERR_NETWORK" || error?.originalError?.code === "ERR_NETWORK"));
+}
+
 export async function readPublishedScanOptions() {
   const capabilityRoute = resolveScanFunctionRoute("startStandardScanJobV8", "V9");
-  const response = await rawBase44.functions.invoke(capabilityRoute, { action: "published_scan_options" });
+  let response;
+  try {
+    response = await rawBase44.functions.invoke(capabilityRoute, { action: "published_scan_options" });
+  } catch (error) {
+    // The signed coordinator still decides whether the old launcher may admit
+    // this account. A missing V9 route need not block existing V8 access.
+    if (!isPilotRouteUnavailable(error)) throw error;
+    return { pageCap: 150, pilot: false, pilotUnavailable: true };
+  }
   return parsePublishedScanOptions(response?.data ?? response, RELEASE_FINGERPRINT);
 }
 
@@ -370,7 +386,7 @@ if (rawBase44?.functions?.invoke) {
       return sanitizeFunctionResponse(invokedFunctionName, response);
     } catch (error) {
       if (usesPublishedScanPilot && functionName === "getCustomerScanResultV8"
-          && getErrorPayload(error).error_code === "result_release_mismatch") {
+          && (getErrorPayload(error).error_code === "result_release_mismatch" || isPilotRouteUnavailable(error))) {
         // A retained V8 reader can still verify its own seals. Never replay
         // launch or deletion requests against a different function.
         try {

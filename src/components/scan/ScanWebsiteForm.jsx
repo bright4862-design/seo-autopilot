@@ -562,7 +562,12 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
 
           <div className="rounded-xl border border-hairline-soft bg-paper px-4 py-3 text-[13px] leading-relaxed text-ink-muted">
             <p className="font-medium text-ink">Scan limit</p>
-            {launchOptions ? (
+            {launchOptions?.pilotUnavailable ? (
+              <div>
+                <p role="status">Standard scans check up to 150 pages. Pilot access is temporarily unavailable.</p>
+                <button type="button" className="underline" onClick={reloadLaunchOptions}>Check again</button>
+              </div>
+            ) : launchOptions ? (
               <p>Up to {launchOptions.pageCap} pages per scan.</p>
             ) : checkingLaunchOptions ? (
               <p role="status">Checking your scan limit…</p>

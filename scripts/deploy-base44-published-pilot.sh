@@ -58,9 +58,9 @@ verify_drain() {
     CONFIRM="VERIFY-ZERO-ADMISSION:$SOURCE_SHA:$BARRIER_EXPECTED_GENERATION" bash "$ROOT/scripts/fixlist-cloud-operator.sh"
 }
 verify_v9() {
-  SOURCE_SHA="$SOURCE_SHA" CONFIRM="VERIFY-BASE44-STAGED-V9:$SOURCE_SHA" BASE44_APP_ID="$APP_ID" \
+  SOURCE_SHA="$SOURCE_SHA" CONFIRM="VERIFY-PINNED-BASE44-STAGED-V9:$SOURCE_SHA" BASE44_APP_ID="$APP_ID" \
     BASE44_EXPECTED_OWNER="$BASE44_EXPECTED_OWNER" READINESS_OUTPUT="$backup/v9-$1.json" \
-    bash "$ROOT/scripts/deploy-base44-staged-functions.sh" verify
+    fixlist_publish_v9_packages verify-pinned
 }
 verify_site() {
   PUBLIC_URL=https://getfixlist.com/ BASE44_URL=https://getfixlist.base44.app/ EXPECTED_SOURCE_SHA="$1" \
@@ -110,13 +110,15 @@ before_upload_difference="$(difference before-upload)"
 [[ -z "$before_upload_difference" ]] || refuse "The function inventory changed before upload."
 
 mutation_started=true
+printf 'Recovery copy captured at %s\n' "$backup"
 site_status=0
 timeout --kill-after=5s 180 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" site deploy --no-build --yes || site_status=$?
 
 # Snapshot reconciliation can change live function packages even when the site
 # call returns an error. Restore only routes with different or missing bytes.
 capture after-upload
-restore_routes="$(difference after-upload)"
+restore_routes="$(node "$ROOT/scripts/lib/base44-pilot-inventory.mjs" restore-plan "$backup/before/digests.json" "$backup/after-upload/digests.json")"
+last_capture=after-upload
 if [[ -n "$restore_routes" ]]; then
   named_routes=()
   while IFS= read -r route; do named_routes+=("$route"); done <<< "$restore_routes"
@@ -124,13 +126,14 @@ if [[ -n "$restore_routes" ]]; then
     timeout --kill-after=5s 180 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions deploy "${named_routes[@]}"
   )
   capture after-restore
-  after_restore_difference="$(difference after-restore)"
-  [[ -z "$after_restore_difference" ]] || refuse "Restored packages did not match the original deployed inventory."
+  last_capture=after-restore
 fi
 verify_v8
 verify_v9 after
-verify_drain
 fixlist_assert_active_v9_intake_closed "$ROOT" "$APP_ID" "$BASE44_EXPECTED_OWNER"
+after_restore_difference="$(difference "$last_capture")"
+[[ -z "$after_restore_difference" ]] || refuse "Restored packages did not match the original deployed inventory."
 (( site_status == 0 )) || refuse "The site upload did not report success; function packages were checked."
 verify_site "$SOURCE_SHA"
+verify_drain
 printf 'BASE44_PUBLISHED_PILOT_VERIFIED source_sha=%s baseline_sha=%s admission=closed\n' "$SOURCE_SHA" "$PUBLIC_BASELINE_SHA"

@@ -654,6 +654,8 @@ def _barrier_response(operation: str, payload: dict[str, Any]) -> dict[str, Any]
                     "release_id": definition["release_id"],
                     "source_sha": definition["source_sha"],
                 }
+                if definition.get("required_launcher_build_id"):
+                    boundary["required_launcher_build_id"] = definition["required_launcher_build_id"]
             else:
                 raise control.ControlError("invalid_barrier_operation")
             transaction.set(control_ref, result)
@@ -710,7 +712,14 @@ def _handle_barrier_operation(operation: str):
         return failure
     assert payload is not None
     supplied_operation = str(payload.get("operation") or operation).strip().replace("-", "_")
-    if supplied_operation != operation:
+    if operation == "acceptance_only" and supplied_operation == "published_pilot_acceptance":
+        acceptance = payload.get("acceptance")
+        launcher = acceptance.get("required_launcher_build_id") if isinstance(acceptance, dict) else None
+        if not isinstance(launcher, str) or not re.fullmatch(r"[0-9a-f]{64}", launcher):
+            return response_error("invalid_acceptance_launcher_build_id", 400)
+        if not re.fullmatch(r"[0-9a-f]{40}", SOURCE_SHA) or acceptance.get("source_sha") != SOURCE_SHA:
+            return response_error("acceptance_source_mismatch", 409)
+    elif supplied_operation != operation:
         return response_error("barrier_operation_conflict", 409)
     try:
         return jsonify(_barrier_response(operation, payload))

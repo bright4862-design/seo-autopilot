@@ -450,6 +450,7 @@ test("credential-free release checkouts never attempt a network fetch", () => {
 test("acceptance-only admission is exact-source, allowlisted, expiring and budget bounded", () => {
   assert.match(workflow, /- acceptance-only/);
   assert.match(workflow, /ACCEPTANCE_SOURCE_SHA: \$\{\{ github\.sha \}\}/);
+  assert.match(workflow, /ACCEPTANCE_LAUNCHER_BUILD_ID: \$\{\{ inputs\.acceptance_launcher_build_id \}\}/);
   assert.match(cloudOperator, /OPEN-STANDARD150-ACCEPTANCE:\$\{SOURCE_SHA\}:\$\{BARRIER_EXPECTED_GENERATION\}:\$\{ACCEPTANCE_COHORT_ID\}/);
   assert.match(cloudOperator, /owner_user_ids/);
   assert.match(cloudOperator, /expires_at/);

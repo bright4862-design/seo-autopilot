@@ -275,6 +275,39 @@ test("known exact aliases are idempotent and can be verified without republishin
   }finally{f.cleanup();}
 });
 
+test("pilot recovery can prove the pinned runtime after main advances without publishing a missing route", t => {
+  const script = "scripts/after-pilot-upload.sh";
+  for (const packagesPresent of [true, false]) {
+    const f = fixture();
+    t.after(f.cleanup);
+    writeFileSync(join(f.root, script), [
+      "set -euo pipefail",
+      'export FIXLIST_EXACT_SOURCE_SHA="$SOURCE_SHA"',
+      'export CONFIRM="VERIFY-PINNED-BASE44-STAGED-V9:$SOURCE_SHA"',
+      "source scripts/deploy-base44-staged-functions.sh",
+      "fixlist_publish_v9_packages verify-pinned",
+    ].join("\n"));
+    const result = f.run({
+      TEST_GUARD_FAIL: "yes",
+      TEST_PREEXIST: packagesPresent ? "yes" : "no",
+      TEST_FLAT_PULL: "yes",
+    }, [], script);
+    assert.doesNotMatch(text(f.events), /source-guard/);
+    assert.match(text(f.events), /pinned-source/);
+    assert.doesNotMatch(text(f.calls), /functions deploy/);
+    if (packagesPresent) {
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(JSON.parse(text(f.readiness)).source_sha, sourceSha);
+      assert.deepEqual(text(f.calls).trim().split("\n"), [...aliases.map(pullCall), execCall]);
+    } else {
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /V9 deployed readback is missing/);
+      assert.equal(existsSync(f.readiness), false);
+      assert.equal(text(f.calls).trim(), pullCall(aliases[0]));
+    }
+  }
+});
+
 test("V9 flat pull permits only the pinned CLI's omission of the config newline",()=>{
   const f=fixture();try{
     const result=f.run({TEST_FLAT_PULL:"yes",TEST_PREEXIST:"yes",TEST_TAMPER_PULL:aliases[0],TEST_TAMPER_MODE:"config"});

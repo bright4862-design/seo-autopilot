@@ -91,12 +91,16 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     const [project, list, output, restoreProject] = args;
     const result = captureFunctionInventory(project, fs.readFileSync(list, "utf8"), restoreProject);
     fs.writeFileSync(output, JSON.stringify(result, null, 2) + "\n", { flag: "wx", mode: 0o600 });
-  } else if (action === "compare" && args.length === 2) {
+  } else if (["compare", "restore-plan"].includes(action) && args.length === 2) {
     const [before, after] = args.map(file => JSON.parse(fs.readFileSync(file, "utf8")));
     const { missingOrChanged, unexpected } = compareFunctionInventories(before, after);
-    if (unexpected.length) throw new Error("Unexpected registered Base44 functions: " + unexpected.join(", "));
+    if (unexpected.length) {
+      const detail = "Unexpected registered Base44 functions: " + unexpected.join(", ");
+      if (action === "compare") throw new Error(detail);
+      process.stderr.write(detail + "\n");
+    }
     if (missingOrChanged.length) process.stdout.write(missingOrChanged.join("\n") + "\n");
   } else {
-    throw new Error("Use capture PROJECT LIST OUTPUT [RESTORE] or compare BEFORE AFTER");
+    throw new Error("Use capture PROJECT LIST OUTPUT [RESTORE], compare BEFORE AFTER, or restore-plan BEFORE AFTER");
   }
 }

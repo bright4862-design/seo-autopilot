@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { captureFunctionInventory, compareFunctionInventories } from "../../scripts/lib/base44-pilot-inventory.mjs";
 
 function project(t) {
@@ -49,6 +50,24 @@ test("a missing listed package or link cannot be used for recovery", t => {
   assert.throws(() => captureFunctionInventory(before, "  launcherV8\n  readerV9B0000\n"), /disagree/);
   fs.symlinkSync("entry.ts", path.join(before, "base44/functions/launcherV8/copy.ts"));
   assert.throws(() => captureFunctionInventory(before, "  launcherV8\n"), /Unsupported/);
+});
+
+test("recovery selects original routes even if site publication adds another alias", t => {
+  const root = project(t);
+  const before = path.join(root, "before.json");
+  const after = path.join(root, "after.json");
+  fs.writeFileSync(before, JSON.stringify({ launcherV8: "original", readerV9B0000: "original" }));
+  fs.writeFileSync(after, JSON.stringify({ launcherV8: "changed", unknownRelease: "additional" }));
+  const inventory = fileURLToPath(new URL("../../scripts/lib/base44-pilot-inventory.mjs", import.meta.url));
+  const plan = spawnSync(process.execPath, [inventory, "restore-plan", before, after], { encoding: "utf8" });
+  assert.equal(plan.status, 0, plan.stderr);
+  assert.equal(plan.stdout, "launcherV8\nreaderV9B0000\n");
+  assert.match(plan.stderr, /Unexpected registered Base44 functions: unknownRelease/);
+
+  fs.writeFileSync(after, JSON.stringify({ launcherV8: "original", readerV9B0000: "original", unknownRelease: "additional" }));
+  const comparison = spawnSync(process.execPath, [inventory, "compare", before, after], { encoding: "utf8" });
+  assert.notEqual(comparison.status, 0);
+  assert.match(comparison.stderr, /Unexpected registered Base44 functions: unknownRelease/);
 });
 
 test("the site pilot authenticates a freshly pinned CLI before probing the V9 launcher", t => {

@@ -715,6 +715,44 @@ class TargetCooldown(CoordinatorTestCase):
                 self.assertFalse(STORE)
 
 
+class PublishedPilotAcceptance(CoordinatorTestCase):
+    def test_opening_the_pilot_requires_exact_source_and_attests_the_launcher(self):
+        source = "1" * 40
+        launcher = "a" * 64
+        key = f"{main.CONTROL_COLLECTION}/{main.CONTROL_DOCUMENT}"
+        STORE[key] = {"mode": "closed", "generation": 4, "claim_sequence": 0}
+        path = "/ops/barrier/acceptance-only"
+        acceptance = {
+            "cohort_id": "public_pilot_150", "release_id": "public_candidate",
+            "source_sha": source, "owner_user_ids": [OWNER],
+            "expires_at": int(time.time()) + 900, "total_claim_budget": 1, "per_owner_claim_budget": 1,
+        }
+        payload = {
+            "operation": "published_pilot_acceptance", "reason": "test published pilot",
+            "change_ticket": "test-150", "intended_prior": {"mode": "closed", "generation": 4},
+            "acceptance": acceptance,
+        }
+        with patch.object(main, "SOURCE_SHA", source):
+            missing = self.operator_post(path, payload)
+            self.assertEqual(missing.status_code, 400)
+            self.assertEqual(missing.json["error"], "invalid_acceptance_launcher_build_id")
+            acceptance["required_launcher_build_id"] = launcher
+            wrong_source = {**payload, "acceptance": {**acceptance, "source_sha": "2" * 40}}
+            stale = self.operator_post(path, wrong_source)
+            self.assertEqual(stale.status_code, 409)
+            self.assertEqual(stale.json["error"], "acceptance_source_mismatch")
+            self.assertEqual(STORE[key]["mode"], "closed")
+            response = self.operator_post(path, payload)
+
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(response.json["operation"], "acceptance_only")
+        self.assertEqual(STORE[key]["acceptance"]["required_launcher_build_id"], launcher)
+        snapshot = response.json["drain_snapshot"]
+        proof = snapshot.pop("proof")
+        self.assertEqual(snapshot["boundary"]["required_launcher_build_id"], launcher)
+        self.assertTrue(control.verify_record(OPERATOR_SIGNING_ROOT, control.SNAPSHOT_LABEL, snapshot, proof))
+
+
 class StatusSurface(CoordinatorTestCase):
     def test_status_reports_an_active_lease_without_the_token(self):
         self.claim()

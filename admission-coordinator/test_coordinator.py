@@ -822,10 +822,21 @@ class PublishedPilotAcceptance(CoordinatorTestCase):
             self.assertEqual(held.status_code, 200, held.json)
             self.assertEqual(held.json["barrier"]["mode"], "open")
             self.assertEqual(held.json["pilot_snapshot"]["boundary"]["published_500_pilot"]["state"], "held")
+            held_control = dict(STORE[key])
             replay = self.post("/claim", replay_only)
             self.assertEqual(replay.json["outcome"], "replayed")
             self.assertEqual(replay.json["pilot_page_cap"], 500)
+            self.assertEqual(replay.json["claim_token"], admitted.json["claim_token"])
+            changed_cap = self.post("/claim", {
+                "owner_user_id": OWNER, "request_id": pilot_request["request_id"],
+                "request_fingerprint": "distinct_150_fingerprint",
+            })
+            self.assertEqual(changed_cap.status_code, 409)
+            self.assertEqual(changed_cap.json["error"], "request_conflict")
             self.assertEqual(self.post("/claim", {**replay_only, "request_id": "another_500_request"}).status_code, 423)
+            with patch.object(main.time, "time", return_value=admitted.json["lease_expires_at"] + 1):
+                self.assertEqual(self.post("/claim", replay_only).status_code, 423)
+            self.assertEqual(STORE[key], held_control)
             self.assertEqual(self.claim(owner="public_customer_3").json["admission_mode"], "open")
         bound = self.post("/bind", {
             "owner_user_id": OWNER, "request_id": pilot_request["request_id"],

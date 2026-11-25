@@ -63,6 +63,7 @@ function harness({
     "base44:runtime": { secrets: { get: name => {
       secretReads.push(name);
       if (operator && ["SCAN_PIPELINE_MODE", "SCAN_STAGED_OWNER_IDS"].includes(name)) return settings[name];
+      if (["SCAN_STAGED_PILOT_OWNER_IDS", "SCAN_PUBLIC_PILOT_EXPIRES_AT"].includes(name)) return gates[name];
       if (launch.entities && Object.hasOwn(gates, name)) return gates[name];
       if (name !== "BETA_SCAN_INTAKE_ENABLED" && name !== "BETA_SCAN_ADMISSION_ENABLED") {
         return sideEffect(`secrets.get:${name}`);
@@ -127,9 +128,9 @@ test("actual V9 intake returns a closed, no-store owner-only settings and releas
   });
   assert.deepEqual(fixture.envReads.sort(), [
     "SCAN_DISPATCH_GATEWAY_URL", "SCAN_PIPELINE_MODE", "SCAN_PUBLIC_PILOT_EXPIRES_AT",
-    "SCAN_STAGED_500_ENTITLED_ENABLED", "SCAN_STAGED_OWNER_IDS", "SCAN_STAGED_PILOT_OWNER_IDS", "SCAN_STAGED_ROLLOUT_SCOPE",
+    "SCAN_STAGED_500_ENTITLED_ENABLED", "SCAN_STAGED_OWNER_IDS", "SCAN_STAGED_ROLLOUT_SCOPE",
   ]);
-  assert.deepEqual(fixture.secretReads, ["BETA_SCAN_INTAKE_ENABLED", "BETA_SCAN_ADMISSION_ENABLED"]);
+  assert.deepEqual(fixture.secretReads, ["SCAN_STAGED_PILOT_OWNER_IDS", "BETA_SCAN_INTAKE_ENABLED", "BETA_SCAN_ADMISSION_ENABLED"]);
   assert.deepEqual(fixture.sideEffects, []);
 });
 
@@ -297,6 +298,7 @@ function launchHarness({
   const gates = {
     BETA_SCAN_INTAKE_ENABLED: "true", BETA_SCAN_ADMISSION_ENABLED: "true",
     SCAN_ADMISSION_COORDINATOR_URL: "https://coordinator.example", SCAN_EVIDENCE_SIGNING_KEY: signingKey,
+    SCAN_STAGED_PILOT_OWNER_IDS: pilotOwners, SCAN_PUBLIC_PILOT_EXPIRES_AT: publicPilotExpiresAt,
   };
   const scans = [];
   const dispatched = [];
@@ -398,7 +400,7 @@ function launchHarness({
     request_id: "paid_request_01", project_id: project.id, website_url: project.website_url,
     scan_mode: "standard_500", page_cap: 500, staged_rollout_scope: "paid", ...overrides,
   });
-  return { submit, settings, calls, scans, dispatched, taskTransports, admittedOrigins, claimRequests,
+  return { submit, settings, gates, calls, scans, dispatched, taskTransports, admittedOrigins, claimRequests,
     options: () => fixture.post({ action: "published_scan_options" }) };
 }
 
@@ -817,6 +819,7 @@ test("a named paid 500 pilot and public paid 150 share the canonical staged disp
   assert.equal(normal.dispatched[0].staged_rollout_scope, "paid");
   assert.equal(normal.dispatched[0].pipeline_mode, "staged");
   assert.equal(normal.dispatched[0].page_cap, 150);
+  assert.notEqual(normal.scans[0].request_fingerprint, pilot.scans[0].request_fingerprint);
   assert.deepEqual(normal.claimRequests, [{ pilotLauncherBuildId: undefined, pilotPageCap: undefined }]);
 });
 
@@ -879,7 +882,8 @@ test("a paid pilot expiry hold keeps public 150 open and only replays previously
   const fixture = paidNamedPilot();
   const original = await fixture.submit({ published_pilot_page_cap: 500 });
   assert.equal(original.body.accepted, true);
-  fixture.settings.SCAN_PUBLIC_PILOT_EXPIRES_AT = "0";
+  fixture.gates.SCAN_PUBLIC_PILOT_EXPIRES_AT = "0";
+  assert.notEqual(fixture.settings.SCAN_PUBLIC_PILOT_EXPIRES_AT, "0");
   assert.equal((await fixture.options()).body.launch, "paused");
   const replay = await fixture.submit({ published_pilot_page_cap: 500 });
   assert.equal(replay.body.scan_id, original.body.scan_id);
@@ -904,7 +908,7 @@ test("a paid pilot interruption after binding and before enqueue recovers the or
   assert.equal(original.status, 500);
   assert.deepEqual(fixture.calls, ["claim", "create", "bind"]);
   assert.deepEqual(fixture.taskTransports, []);
-  fixture.settings.SCAN_PUBLIC_PILOT_EXPIRES_AT = "0";
+  fixture.gates.SCAN_PUBLIC_PILOT_EXPIRES_AT = "0";
   const replay = await fixture.submit({ published_pilot_page_cap: 500 });
   assert.equal(replay.body.accepted, true, JSON.stringify(replay.body));
   assert.equal(replay.body.replayed, true);
@@ -957,8 +961,9 @@ test("the real signed claim transport carries only the supplied bounded pilot ca
 test("paid pilot runtime readback attests a sorted bounded cohort without disclosing account IDs", async () => {
   const base = { SCAN_PIPELINE_MODE: "staged", SCAN_STAGED_ROLLOUT_SCOPE: "paid", SCAN_PUBLIC_PILOT_EXPIRES_AT: "0" };
   for (const cohort of [undefined, "", "pilot_user_b,pilot_user_a", "bad,", "duplicate_user,duplicate_user"]) {
-    const settings = { ...base, ...(cohort === undefined ? {} : { SCAN_STAGED_PILOT_OWNER_IDS: cohort }) };
-    const result = await harness({ settings }).post();
+    const settings = { ...base, SCAN_STAGED_PILOT_OWNER_IDS: "stale_pilot", SCAN_PUBLIC_PILOT_EXPIRES_AT: "1900000000" };
+    const gates = { SCAN_STAGED_PILOT_OWNER_IDS: cohort, SCAN_PUBLIC_PILOT_EXPIRES_AT: "0" };
+    const result = await harness({ settings, gates }).post();
     assert.equal(result.status, 200);
     assert.equal(result.body.public_pilot_expires_at, 0);
     const valid = cohort !== "bad," && cohort !== "duplicate_user,duplicate_user";

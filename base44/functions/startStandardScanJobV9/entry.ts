@@ -82,6 +82,14 @@ function stagedScanEnv(name: string) {
   return Deno.env.get(name);
 }
 
+function paidPilotScanEnv(name: string) {
+  return name === "SCAN_STAGED_PILOT_OWNER_IDS" ? mutableScanAdmissionSecret(name) : stagedScanEnv(name);
+}
+
+function publishedPilotExpiry(settings: ReturnType<typeof readStagedScanSettings>) {
+  return settings.rolloutScope === "paid" ? mutableScanAdmissionSecret(PUBLIC_PILOT_EXPIRY) : stagedScanEnv(PUBLIC_PILOT_EXPIRY);
+}
+
 function reportedGate(value: unknown) {
   if (value === "true") return "enabled";
   if (value === "false") return "disabled";
@@ -102,7 +110,7 @@ async function stagedRuntimeStatus(user, raw) {
     return response({ success: false, error_code: "invalid_action" }, 400);
   }
   try {
-    const settings = readStagedScanSettings(stagedScanEnv);
+    const settings = readStagedScanSettings(paidPilotScanEnv);
     const { cohort, ownerIds } = settings;
     // The launcher accepts trimmed owner IDs. Attest a cohort only when the
     // configured list also meets the strict deployment format.
@@ -121,7 +129,7 @@ async function stagedRuntimeStatus(user, raw) {
       pilotCohortHash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
     }
     const enabled = stagedScanOwnerEnabled(settings, user.id);
-    const pilotExpiry = stagedScanEnv(PUBLIC_PILOT_EXPIRY);
+    const pilotExpiry = publishedPilotExpiry(settings);
     return response({
       success: true,
       schema_version: "fixlist_staged_v9_intake_readback_v1",
@@ -261,7 +269,7 @@ export default async function (req: Request): Promise<Response> {
       }, 400);
     }
 
-    const stagedSettings = readStagedScanSettings(stagedScanEnv);
+    const stagedSettings = readStagedScanSettings(paidPilotScanEnv);
     if (stagedSettings.rolloutScope === "invalid") {
       const code = "scan_staged_rollout_configuration_invalid";
       return jsonResponse({
@@ -269,7 +277,7 @@ export default async function (req: Request): Promise<Response> {
         error: customerStatusDetail(code), retryable: true, ...identity.fields,
       }, 503);
     }
-    const pilot = publishedPilotLaunchPolicy({ settings: stagedSettings, user, expiresAt: stagedScanEnv(PUBLIC_PILOT_EXPIRY) });
+    const pilot = publishedPilotLaunchPolicy({ settings: stagedSettings, user, expiresAt: publishedPilotExpiry(stagedSettings) });
     if (optionsRequest) return publishedScanOptions(base44, user, stagedSettings, pilot, body);
     const pilotRequest = (!pilot.paidPilot && pilot.configured) || Object.hasOwn(body, "published_pilot_page_cap");
     if (pilotRequest && (!pilot.namedCustomer || (!pilot.paidPilot && !pilot.enabled))) {
@@ -797,10 +805,11 @@ async function replayBoundScanWithoutAdmission({ base44, user, project, request,
 async function admitServerOwnedScan({
   base44, user, access, scanContract, requiresExistingScan, pilotRequest, pilotReplayOnly, project, body, identity, websiteUrl, scope, robotsPolicy,
 }) {
+  const pilotPageCap = pilotRequest && scanContract.staged_rollout_scope === "paid" ? 500 : undefined;
   const request = normalizeAdmissionIdentity({
     request_id: identity.fields.request_id,
     idempotency_key: identity.fields.idempotency_key,
-    request_fingerprint: await buildAdmissionFingerprint(websiteUrl, scope?.pathPrefix || "", robotsPolicy),
+    request_fingerprint: await buildAdmissionFingerprint(websiteUrl, scope?.pathPrefix || "", robotsPolicy, pilotPageCap),
   });
   if (!request.ok) {
     return { ok: false, status: 409, code: request.code, error: "The scan request identity is invalid." };
@@ -816,7 +825,6 @@ async function admitServerOwnedScan({
   }
 
   const targetOrigin = admissionTargetOrigin(websiteUrl);
-  const pilotPageCap = pilotRequest && scanContract.staged_rollout_scope === "paid" ? 500 : undefined;
   let claim;
   try {
     claim = await claimAdmission({
@@ -1105,13 +1113,14 @@ function coordinatorAdmissionFailure(result = {}, fallbackCode = "scan_admission
   };
 }
 
-async function buildAdmissionFingerprint(websiteUrl, pathPrefix = "", robotsPolicy = {}) {
+async function buildAdmissionFingerprint(websiteUrl, pathPrefix = "", robotsPolicy = {}, pilotPageCap?: number) {
   const normalizedPrefix = normalizeFocusedPathPrefix(pathPrefix);
   const pathSuffix = normalizedPrefix ? `|path:${normalizedPrefix}` : "";
   const policySuffix = robotsPolicy.owner_attested_robots_override === true
     ? "|robots:owner_override"
     : "|robots:respect";
-  const canonical = `${PUBLIC_SCAN_MODE}|${normalizeWebsiteUrl(websiteUrl)}${pathSuffix}${policySuffix}`;
+  const pilotSuffix = pilotPageCap === 500 ? "|cap:500" : "";
+  const canonical = `${PUBLIC_SCAN_MODE}|${normalizeWebsiteUrl(websiteUrl)}${pathSuffix}${policySuffix}${pilotSuffix}`;
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical)));
   return `standard150:${Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }

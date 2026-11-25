@@ -115,6 +115,11 @@ async function stagedRuntimeStatus(user, raw) {
       const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalCohort));
       cohortHash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
     }
+    let pilotCohortHash: string | null = null;
+    if (settings.validPilotCohort) {
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify([...settings.pilotOwnerIds].sort())));
+      pilotCohortHash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+    }
     const enabled = stagedScanOwnerEnabled(settings, user.id);
     const pilotExpiry = stagedScanEnv(PUBLIC_PILOT_EXPIRY);
     return response({
@@ -127,6 +132,8 @@ async function stagedRuntimeStatus(user, raw) {
       configured_pipeline_mode: settings.pipelineMode,
       staged_rollout_scope: settings.rolloutScope,
       staged_500_entitled_enabled: settings.entitled500Enabled,
+      staged_pilot_owner_count: pilotCohortHash === null ? null : settings.pilotOwnerIds.length,
+      staged_pilot_owner_cohort_sha256: pilotCohortHash,
       paid_dispatch_gateway_origin: stagedDispatchGatewayUrl(stagedScanEnv),
       pipeline_mode: enabled ? "staged" : "monolith",
       staged_owner_cohort_state: cohortState,
@@ -152,7 +159,7 @@ async function publishedScanOptions(base44, user, settings, pilot, body) {
     success: true, version, launch, page_cap: pageCap, release_fingerprint: RELEASE_FINGERPRINT,
   }, 200, noStore);
   if (!pilot.configured || !pilot.namedCustomer) return options("legacy", 150);
-  if (!pilot.enabled || !stagedDispatchGatewayUrl()) return options("paused", null);
+  if (!pilot.paidPilot && (!pilot.enabled || !stagedDispatchGatewayUrl())) return options("paused", null);
 
   const entitlement = await loadScanEntitlement(base44, user, { createPreviewAccess: false });
   if (!entitlement.ok) {
@@ -160,9 +167,13 @@ async function publishedScanOptions(base44, user, settings, pilot, body) {
       success: false, error_code: entitlement.failureCode, error: customerStatusDetail(entitlement.failureCode),
     }, entitlement.failureCode === "paid_access_conflict" ? 409 : 402, noStore);
   }
+  if (pilot.paidPilot && !hasLargeScanGrant(entitlement.record)) return options("legacy", 150);
+  if (!pilot.enabled || !stagedDispatchGatewayUrl()) return options("paused", null);
   const { page_cap } = resolveServerScanContract({
     access: entitlement.record, ownerUserId: user.id, verifiedAccess: entitlement.preview === false, settings,
+    paidPilot: pilot.paidPilot && pilot.enabled,
   });
+  if (pilot.paidPilot && page_cap !== 500) return options("paused", null);
   return options("pilot", page_cap);
 }
 
@@ -251,14 +262,21 @@ export default async function (req: Request): Promise<Response> {
     }
 
     const stagedSettings = readStagedScanSettings(stagedScanEnv);
+    if (stagedSettings.rolloutScope === "invalid") {
+      const code = "scan_staged_rollout_configuration_invalid";
+      return jsonResponse({
+        success: false, accepted: false, version: VERSION, failure_code: code,
+        error: customerStatusDetail(code), retryable: true, ...identity.fields,
+      }, 503);
+    }
     const pilot = publishedPilotLaunchPolicy({ settings: stagedSettings, user, expiresAt: stagedScanEnv(PUBLIC_PILOT_EXPIRY) });
     if (optionsRequest) return publishedScanOptions(base44, user, stagedSettings, pilot, body);
-    const pilotRequest = pilot.configured || Object.hasOwn(body, "published_pilot_page_cap");
-    if (pilotRequest && !pilot.enabled) {
+    const pilotRequest = (!pilot.paidPilot && pilot.configured) || Object.hasOwn(body, "published_pilot_page_cap");
+    if (pilotRequest && (!pilot.namedCustomer || (!pilot.paidPilot && !pilot.enabled))) {
       return pilotLaunchRefused("scan_pilot_unavailable");
     }
     if (pilotRequest && identity.fields.scan_id) return pilotLaunchRefused("scan_pilot_saved_request");
-    if (pilotRequest && ![150, 500].includes(body.published_pilot_page_cap)) {
+    if (pilotRequest && !(pilot.paidPilot ? [500] : [150, 500]).includes(body.published_pilot_page_cap)) {
       return pilotLaunchRefused("scan_limit_changed");
     }
 
@@ -315,14 +333,6 @@ export default async function (req: Request): Promise<Response> {
         error: "Focused scans require a fresh server-admitted scan.",
         ...identity.fields,
       }, 409);
-    }
-
-    if (stagedSettings.rolloutScope === "invalid") {
-      const code = "scan_staged_rollout_configuration_invalid";
-      return jsonResponse({
-        success: false, accepted: false, version: VERSION, failure_code: code,
-        error: customerStatusDetail(code), retryable: true, ...identity.fields,
-      }, 503);
     }
 
     let context;
@@ -437,8 +447,10 @@ export default async function (req: Request): Promise<Response> {
       const scanContract = resolveServerScanContract({
         access: entitlement.record, ownerUserId: user.id,
         verifiedAccess: entitlement.preview === false, settings: stagedSettings,
+        paidPilot: pilot.paidPilot && pilot.enabled && pilotRequest,
       });
-      if (pilotRequest && scanContract.page_cap !== body.published_pilot_page_cap) {
+      const heldPaidPilot = pilot.paidPilot && !pilot.enabled && hasLargeScanGrant(entitlement.record);
+      if (pilotRequest && !heldPaidPilot && scanContract.page_cap !== body.published_pilot_page_cap) {
         return pilotLaunchRefused("scan_limit_changed");
       }
       const requiresExistingScan = hasLargeScanGrant(entitlement.record) && scanContract.page_cap !== 500;
@@ -487,7 +499,8 @@ export default async function (req: Request): Promise<Response> {
       ? trustedScanContract(context.scan)
       : frozenTaskContract;
     const paidRoutePaused = stagedSettings.rolloutScope !== "paid"
-      || (scanContract.page_cap === 500 && !stagedSettings.entitled500Enabled);
+      || (scanContract.page_cap === 500 && !stagedSettings.entitled500Enabled
+        && !(pilot.paidPilot && pilot.enabled && pilotRequest));
     const paidDispatch = context.scan.staged_rollout_scope === "paid";
     const requireGateway = scanContract.pipeline_mode === "staged" || paidDispatch;
     const readOnlyReplay = context.readOnlyReplay || (paidDispatch && paidRoutePaused);
@@ -803,6 +816,7 @@ async function admitServerOwnedScan({
   }
 
   const targetOrigin = admissionTargetOrigin(websiteUrl);
+  const pilotPageCap = pilotRequest && scanContract.staged_rollout_scope === "paid" ? 500 : undefined;
   let claim;
   try {
     claim = await claimAdmission({
@@ -812,6 +826,7 @@ async function admitServerOwnedScan({
       targetOrigin,
       queueIfOriginBusy: scanContract.pipeline_mode === "staged",
       pilotLauncherBuildId: pilotRequest ? FUNCTION_BUILD_ID : undefined,
+      pilotPageCap,
       env: mutableScanAdmissionEnv,
     });
   } catch {
@@ -826,7 +841,8 @@ async function admitServerOwnedScan({
     signingKey: String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || ""),
   });
   if (!verifiedEvidence || (claim.target_origin !== undefined && claim.target_origin !== targetOrigin)
-      || (pilotRequest && (claim.pilot_launcher_build_id !== FUNCTION_BUILD_ID || verifiedEvidence.admission_mode !== "acceptance_only"))) {
+      || (pilotRequest && (claim.pilot_launcher_build_id !== FUNCTION_BUILD_ID || verifiedEvidence.admission_mode !== "acceptance_only"))
+      || (pilotPageCap !== undefined && claim.pilot_page_cap !== pilotPageCap)) {
     return {
       ok: false,
       status: 503,

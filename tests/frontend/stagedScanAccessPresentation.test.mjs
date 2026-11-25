@@ -212,3 +212,48 @@ test("the normal form launch chooses V9 only after it has a server-confirmed pil
     { name: deployments.functions.startStandardScanJobV9.route_name, body: { ...payload, published_pilot_page_cap: 500 } },
   ]);
 });
+
+
+test("PAID_PILOT requires public V9 and never downgrades ordinary 150 launches to V8", async () => {
+  const routes = { generation: "v9", routes: publicRouteContract.candidate_routes.v9 };
+  assert.throws(() => resolveScanFunctionRoute("startStandardScanJobV8", "PAID_PILOT"), /staged scanner route is unavailable/);
+  const calls = [];
+  const sdk = { functions: { invoke: async (name, body) => { calls.push({ name, body }); return { data: { success: true } }; } } };
+  const source = asScript("src/api/base44Client.js").replace("import.meta.env?.VITE_SCAN_FUNCTION_GENERATION", "generation");
+  const client = new Function("createClient", "appParams", "resolveScanFunctionRoute", "generation", source + "\nreturn {base44, usesPublishedScanPilot};")(
+    () => sdk, {}, (name, generation) => resolveScanFunctionRoute(name, generation, routes), "PAID_PILOT",
+  );
+  assert.equal(client.usesPublishedScanPilot, true);
+  for (const payload of [{ request_id: "public_150" }, { request_id: "named_500", published_pilot_page_cap: 500 }]) {
+    await client.base44.functions.invoke("startStandardScanJobV8", payload);
+  }
+  assert.deepEqual(calls.map(row => row.name), Array(2).fill(deployments.functions.startStandardScanJobV9.route_name));
+  for (const name of ["getCustomerScanResult", "deleteCustomerScanData"]) {
+    assert.equal(resolveScanFunctionRoute(name + "V8", "PAID_PILOT", routes), deployments.functions[name + "V9"].route_name);
+  }
+});
+
+test("PAID_PILOT reads verified options from the active V9 launcher and fails closed when it is unavailable", async () => {
+  const routes = { generation: "v9", routes: publicRouteContract.candidate_routes.v9 };
+  const fingerprint = "a".repeat(16);
+  const calls = [];
+  let response = { success: true, version: "published_scan_options_v1", release_fingerprint: fingerprint, launch: "legacy", page_cap: 150 };
+  const sdk = { functions: { invoke: async (name, body) => {
+    calls.push({ name, body });
+    if (response instanceof Error) throw response;
+    return { data: response };
+  } } };
+  const source = asScript("src/api/base44Client.js").replace("import.meta.env?.VITE_SCAN_FUNCTION_GENERATION", "generation");
+  const options = new Function("createClient", "appParams", "resolveScanFunctionRoute", "generation",
+    "parsePublishedScanOptions", "RELEASE_FINGERPRINT", source + "\nreturn readPublishedScanOptions;")(
+    () => sdk, {}, (name, generation) => resolveScanFunctionRoute(name, generation, routes), "PAID_PILOT", parsePublishedScanOptions, fingerprint,
+  );
+  assert.deepEqual(await options(), { pageCap: 150, pilot: false });
+  response = { ...response, launch: "pilot", page_cap: 500 };
+  assert.deepEqual(await options(), { pageCap: 500, pilot: true });
+  response = Object.assign(new Error("temporarily missing"), { status: 404 });
+  await assert.rejects(options(), /temporarily missing/);
+  assert.deepEqual(calls, Array.from({ length: 3 }, () => ({
+    name: deployments.functions.startStandardScanJobV9.route_name, body: { action: "published_scan_options" },
+  })));
+});

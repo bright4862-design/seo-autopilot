@@ -114,6 +114,8 @@ test("actual V9 intake returns a closed, no-store owner-only settings and releas
     configured_pipeline_mode: "staged",
     staged_rollout_scope: "off",
     staged_500_entitled_enabled: false,
+    staged_pilot_owner_count: 0,
+    staged_pilot_owner_cohort_sha256: createHash("sha256").update("[]").digest("hex"),
     paid_dispatch_gateway_origin: gatewayOrigin,
     pipeline_mode: "staged",
     staged_owner_cohort_state: "explicit",
@@ -125,7 +127,7 @@ test("actual V9 intake returns a closed, no-store owner-only settings and releas
   });
   assert.deepEqual(fixture.envReads.sort(), [
     "SCAN_DISPATCH_GATEWAY_URL", "SCAN_PIPELINE_MODE", "SCAN_PUBLIC_PILOT_EXPIRES_AT",
-    "SCAN_STAGED_500_ENTITLED_ENABLED", "SCAN_STAGED_OWNER_IDS", "SCAN_STAGED_ROLLOUT_SCOPE",
+    "SCAN_STAGED_500_ENTITLED_ENABLED", "SCAN_STAGED_OWNER_IDS", "SCAN_STAGED_PILOT_OWNER_IDS", "SCAN_STAGED_ROLLOUT_SCOPE",
   ]);
   assert.deepEqual(fixture.secretReads, ["BETA_SCAN_INTAKE_ENABLED", "BETA_SCAN_ADMISSION_ENABLED"]);
   assert.deepEqual(fixture.sideEffects, []);
@@ -276,7 +278,8 @@ const paidGrant = {
 function launchHarness({
   rows = [paidGrant], rollout = "paid", entitled500 = "true", mode = "staged", cohort = "",
   gateway = "https://dispatch-gateway.example", claimFailure, echoClaimOrigin = false, omitPersistedOrigin = false,
-  publicPilotExpiresAt, acknowledgePilot = true,
+  publicPilotExpiresAt, acknowledgePilot = true, pilotOwners, pilotClaimCap, claimMode, user = paidCustomer,
+  acknowledgeCap = true, invalidClaimProof = false,
 } = {}) {
   const settings = {
     ...(rollout === null ? {} : { SCAN_STAGED_ROLLOUT_SCOPE: rollout }),
@@ -289,6 +292,7 @@ function launchHarness({
     TASKS_INVOKER_SERVICE_ACCOUNT: "invoker@example.test",
   };
   if (publicPilotExpiresAt !== undefined) settings.SCAN_PUBLIC_PILOT_EXPIRES_AT = publicPilotExpiresAt;
+  if (pilotOwners !== undefined) settings.SCAN_STAGED_PILOT_OWNER_IDS = pilotOwners;
   const signingKey = "mock admission signing key";
   const gates = {
     BETA_SCAN_INTAKE_ENABLED: "true", BETA_SCAN_ADMISSION_ENABLED: "true",
@@ -299,12 +303,13 @@ function launchHarness({
   const taskTransports = [];
   const calls = [];
   const admittedOrigins = [];
+  const claimRequests = [];
   let binding = null;
   let claimEvidence;
-  const project = { id: "project_01", owner_user_id: paidCustomer.id, website_url: "https://example.com/" };
+  const project = { id: "project_01", owner_user_id: user.id, website_url: "https://example.com/" };
   const matches = (row, query) => Object.entries(query).every(([key, value]) => row[key] === value);
   const fixture = harness({
-    user: paidCustomer, settings, gates,
+    user, settings, gates,
     launch: {
       entities: {
         Access: { filter: async query => rows.filter(row => matches(row, query)) },
@@ -328,7 +333,8 @@ function launchHarness({
         "./admissionClient.js": {
           ...admissionClient,
           verifyAdmissionClaimEvidence,
-          claimAdmission: async ({ ownerUserId, requestId, targetOrigin, pilotLauncherBuildId }) => {
+          claimAdmission: async ({ ownerUserId, requestId, targetOrigin, pilotLauncherBuildId, pilotPageCap }) => {
+            claimRequests.push({ pilotLauncherBuildId, pilotPageCap });
             calls.push("claim");
             admittedOrigins.push(targetOrigin);
             if (claimFailure) return claimFailure;
@@ -336,7 +342,7 @@ function launchHarness({
             if (!replayed) {
               claimEvidence = {
                 version: "admission_claim_evidence_v1", owner_user_id: ownerUserId, request_id: requestId,
-                barrier_generation: 4, claim_sequence: 23, admission_mode: pilotLauncherBuildId ? "acceptance_only" : "open",
+                barrier_generation: 4, claim_sequence: 23, admission_mode: claimMode ?? (pilotLauncherBuildId ? "acceptance_only" : "open"),
                 acceptance_cohort_id: pilotLauncherBuildId ? "pilot_cohort" : "",
                 acceptance_release_id: pilotLauncherBuildId ? "pilot_release" : "",
                 acceptance_source_sha: pilotLauncherBuildId ? "a".repeat(40) : "",
@@ -346,11 +352,13 @@ function launchHarness({
                 ...claimEvidence, scan_id: "",
                 ...(echoClaimOrigin ? { target_origin: targetOrigin } : {}),
                 ...(acknowledgePilot && pilotLauncherBuildId ? { pilot_launcher_build_id: pilotLauncherBuildId } : {}),
+                ...(acknowledgeCap && (pilotClaimCap ?? pilotPageCap) !== undefined ? { pilot_page_cap: pilotClaimCap ?? pilotPageCap } : {}),
               };
             }
             return {
               ...binding, ok: true, outcome: replayed ? "replayed" : "claimed", claim_token: "test-claim",
-              cohort_evidence: claimEvidence, cohort_evidence_proof: await admissionClaimEvidenceProof(claimEvidence, signingKey),
+              cohort_evidence: claimEvidence,
+              cohort_evidence_proof: invalidClaimProof ? "0".repeat(64) : await admissionClaimEvidenceProof(claimEvidence, signingKey),
             };
           },
           statusAdmission: async () => {
@@ -383,7 +391,7 @@ function launchHarness({
     request_id: "paid_request_01", project_id: project.id, website_url: project.website_url,
     scan_mode: "standard_500", page_cap: 500, staged_rollout_scope: "paid", ...overrides,
   });
-  return { submit, settings, calls, scans, dispatched, taskTransports, admittedOrigins,
+  return { submit, settings, calls, scans, dispatched, taskTransports, admittedOrigins, claimRequests,
     options: () => fixture.post({ action: "published_scan_options" }) };
 }
 
@@ -768,4 +776,160 @@ test("the authenticated operator can read the exact pilot expiry or verify a hol
   }
   const paid = launchHarness({ publicPilotExpiresAt: "0" });
   assert.equal((await paid.submit()).body.accepted, true);
+});
+
+
+function paidNamedPilot(options = {}) {
+  return launchHarness({
+    rollout: "paid", entitled500: "false", pilotOwners: paidCustomer.id,
+    publicPilotExpiresAt: String(Math.floor(Date.now() / 1000) + 3600),
+    rows: [{ ...paidGrant, page_cap: 500 }], ...options,
+  });
+}
+
+test("a named paid 500 pilot and public paid 150 share the canonical staged dispatch contract", async () => {
+  const pilot = paidNamedPilot();
+  assert.equal((await pilot.options()).body.launch, "pilot");
+  assert.equal((await pilot.options()).body.page_cap, 500);
+  assert.deepEqual(pilot.calls, []);
+  const accepted = await pilot.submit({ published_pilot_page_cap: 500 });
+  assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
+  assert.equal(accepted.body.page_cap, 500);
+  assert.deepEqual(pilot.claimRequests, [{ pilotLauncherBuildId: FUNCTION_BUILD_ID, pilotPageCap: 500 }]);
+  assert.equal(pilot.scans[0].admission_mode, "acceptance_only");
+  for (const row of [pilot.scans[0], pilot.dispatched[0]]) {
+    assert.equal(row.page_cap, 500);
+    assert.equal(row.pipeline_mode, "staged");
+    assert.equal(row.staged_rollout_scope, "paid");
+  }
+  const normal = paidNamedPilot({ pilotOwners: "other_customer", rows: [{ ...paidGrant, page_cap: 150 }] });
+  assert.equal((await normal.options()).body.page_cap, 150);
+  assert.equal((await normal.options()).body.launch, "legacy");
+  assert.equal((await normal.submit()).body.accepted, true);
+  assert.equal(normal.scans[0].admission_mode, "open");
+  assert.equal(normal.dispatched[0].staged_rollout_scope, "paid");
+  assert.equal(normal.dispatched[0].pipeline_mode, "staged");
+  assert.equal(normal.dispatched[0].page_cap, 150);
+  assert.deepEqual(normal.claimRequests, [{ pilotLauncherBuildId: undefined, pilotPageCap: undefined }]);
+});
+
+test("paid pilot permission requires an ordinary named customer, an active verified 500 grant and exact browser marker", async () => {
+  for (const overrides of [
+    { pilotOwners: "other_customer" },
+    { user: { ...paidCustomer, role: "admin" } },
+    { rows: [{ ...paidGrant, page_cap: 150 }] },
+    { rows: [{ ...paidGrant, page_cap: 500, access_status: "revoked" }] },
+    { rows: [{ ...paidGrant, page_cap: 500, stripe_checkout_session_id: "" }] },
+  ]) {
+    const fixture = paidNamedPilot(overrides);
+    const result = await fixture.submit({ published_pilot_page_cap: 500 });
+    assert.equal(result.body.accepted, false, JSON.stringify(result.body));
+    assert.deepEqual(fixture.scans, []);
+    assert.deepEqual(fixture.dispatched, []);
+    assert.equal(fixture.calls.includes("claim"), false);
+  }
+  for (const marker of [undefined, 150, "500", 501]) {
+    const fixture = paidNamedPilot();
+    const result = await fixture.submit(marker === undefined ? {} : { published_pilot_page_cap: marker });
+    assert.notEqual(result.body.accepted, true);
+    assert.deepEqual(fixture.scans, []);
+    assert.equal(fixture.calls.includes("claim"), false);
+  }
+  const manual = paidNamedPilot({ rows: [{ ...paidGrant, page_cap: 500, grant_source: "manual_grant", granted_at: paidGrant.paid_at }] });
+  assert.equal((await manual.submit({ published_pilot_page_cap: 500 })).body.accepted, true);
+});
+
+test("named 150 customers retain their existing staged paid path and never see an elevated option", async () => {
+  for (const expiry of ["0", String(Math.floor(Date.now() / 1000) + 3600)]) {
+    const fixture = paidNamedPilot({ rows: [{ ...paidGrant, page_cap: 150 }], publicPilotExpiresAt: expiry });
+    assert.equal((await fixture.options()).body.launch, "legacy");
+    assert.equal((await fixture.options()).body.page_cap, 150);
+    assert.equal((await fixture.submit()).body.accepted, true);
+    assert.equal(fixture.dispatched[0].staged_rollout_scope, "paid");
+    assert.deepEqual(fixture.claimRequests, [{ pilotLauncherBuildId: undefined, pilotPageCap: undefined }]);
+  }
+});
+
+test("a paid pilot claim must echo the exact cap and launcher build with signed acceptance-only evidence", async () => {
+  for (const overrides of [
+    { pilotClaimCap: 150 }, { pilotClaimCap: "500" }, { pilotClaimCap: false },
+    { acknowledgePilot: false }, { acknowledgeCap: false }, { claimMode: "open" }, { invalidClaimProof: true },
+  ]) {
+    const fixture = paidNamedPilot(overrides);
+    const result = await fixture.submit({ published_pilot_page_cap: 500 });
+    assert.equal(result.status, 503, JSON.stringify(result.body));
+    assert.equal(result.body.failure_code, "admission_claim_evidence_invalid");
+    assert.deepEqual(fixture.calls, ["claim"]);
+    assert.deepEqual(fixture.scans, []);
+    assert.deepEqual(fixture.dispatched, []);
+  }
+  const exclusive = namedPilot();
+  assert.equal((await exclusive.submit({ published_pilot_page_cap: 150 })).body.accepted, true);
+  assert.deepEqual(exclusive.claimRequests, [{ pilotLauncherBuildId: FUNCTION_BUILD_ID, pilotPageCap: undefined }]);
+});
+
+test("a paid pilot expiry hold keeps public 150 open and returns exact bound work without another claim", async () => {
+  const fixture = paidNamedPilot();
+  const original = await fixture.submit({ published_pilot_page_cap: 500 });
+  assert.equal(original.body.accepted, true);
+  fixture.settings.SCAN_PUBLIC_PILOT_EXPIRES_AT = "0";
+  assert.equal((await fixture.options()).body.launch, "paused");
+  const replay = await fixture.submit({ published_pilot_page_cap: 500 });
+  assert.equal(replay.body.scan_id, original.body.scan_id);
+  assert.equal(replay.body.replayed, true, JSON.stringify(replay.body));
+  const fresh = await fixture.submit({ request_id: "paid_request_02", published_pilot_page_cap: 500 });
+  assert.notEqual(fresh.body.accepted, true);
+  assert.equal(fixture.scans.length, 1);
+  assert.equal(fixture.dispatched.length, 1);
+  assert.equal(fixture.claimRequests.length, 1);
+  const normal = paidNamedPilot({ pilotOwners: "other_customer", publicPilotExpiresAt: "0", rows: [{ ...paidGrant, page_cap: 150 }] });
+  assert.equal((await normal.submit()).body.accepted, true);
+  assert.equal(normal.dispatched[0].staged_rollout_scope, "paid");
+});
+
+test("malformed or conflicting paid pilot lists fail closed without any claim", async () => {
+  for (const overrides of [
+    { pilotOwners: "*" }, { pilotOwners: "short" }, { pilotOwners: " user_123" },
+    { pilotOwners: "user_123," }, { pilotOwners: "user_123,user_123" },
+    { pilotOwners: "user_001,user_002,user_003,user_004,user_005,user_006" },
+    { entitled500: "true" }, { cohort: "other_customer" }, { rollout: "off" },
+  ]) {
+    const fixture = paidNamedPilot(overrides);
+    const result = await fixture.submit();
+    assert.equal(result.body.failure_code, "scan_staged_rollout_configuration_invalid", JSON.stringify(overrides));
+    assert.deepEqual(fixture.calls, []);
+    assert.deepEqual(fixture.scans, []);
+  }
+  const oldCohort = paidNamedPilot();
+  oldCohort.settings.SCAN_PIPELINE_OWNER_IDS = "other_customer";
+  assert.equal((await oldCohort.submit()).body.failure_code, "scan_staged_rollout_configuration_invalid");
+  assert.deepEqual(oldCohort.calls, []);
+});
+
+test("the real signed claim transport carries only the supplied bounded pilot cap", async () => {
+  const calls = [];
+  const env = name => ({ BETA_SCAN_ADMISSION_ENABLED: "true", SCAN_ADMISSION_COORDINATOR_URL: "https://coordinator.example", SCAN_EVIDENCE_SIGNING_KEY: "test-key" })[name];
+  await admissionClient.claimAdmission({ ownerUserId: paidCustomer.id, requestId: "request_01", requestFingerprint: "f".repeat(64),
+    pilotLauncherBuildId: FUNCTION_BUILD_ID, pilotPageCap: 500, env, fetchImpl: async (_url, options) => {
+      calls.push(JSON.parse(options.body)); return Response.json({ ok: true });
+    } });
+  assert.equal(calls[0].pilot_launcher_build_id, FUNCTION_BUILD_ID);
+  assert.equal(calls[0].pilot_page_cap, 500);
+});
+
+test("paid pilot runtime readback attests a sorted bounded cohort without disclosing account IDs", async () => {
+  const base = { SCAN_PIPELINE_MODE: "staged", SCAN_STAGED_ROLLOUT_SCOPE: "paid", SCAN_PUBLIC_PILOT_EXPIRES_AT: "0" };
+  for (const cohort of [undefined, "", "pilot_user_b,pilot_user_a", "bad,", "duplicate_user,duplicate_user"]) {
+    const settings = { ...base, ...(cohort === undefined ? {} : { SCAN_STAGED_PILOT_OWNER_IDS: cohort }) };
+    const result = await harness({ settings }).post();
+    assert.equal(result.status, 200);
+    assert.equal(result.body.public_pilot_expires_at, 0);
+    const valid = cohort !== "bad," && cohort !== "duplicate_user,duplicate_user";
+    const ids = cohort ? cohort.split(",").sort() : [];
+    assert.equal(result.body.staged_pilot_owner_count, valid ? ids.length : null);
+    assert.equal(result.body.staged_pilot_owner_cohort_sha256,
+      valid ? createHash("sha256").update(JSON.stringify(ids)).digest("hex") : null);
+    assert.equal(result.body.staged_rollout_scope, valid ? "paid" : "invalid");
+    assert.doesNotMatch(JSON.stringify(result.body), /pilot_user|duplicate_user/);
+  }
 });

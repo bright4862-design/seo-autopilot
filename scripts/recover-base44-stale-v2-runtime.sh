@@ -347,6 +347,7 @@ require_owner_session_mode
 require_v2_action_confirmation
 fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$CONFIRM"
 SOURCE_SHA="$FIXLIST_EXACT_SOURCE_SHA"
+fixlist_require_frozen_base44_recovery "$REPO_ROOT"
 node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --check
 node "$REPO_ROOT/scripts/base44_release_manifest.mjs" verify
 

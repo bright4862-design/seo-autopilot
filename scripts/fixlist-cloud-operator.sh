@@ -1269,7 +1269,12 @@ barrier_status_command() {
 }
 
 verify_zero_admission_obligations_command() {
-  require_exact_main_owner_source
+  if [[ "${FIXLIST_DRAIN_READBACK_SOURCE_GUARD:-current}" == pinned && "${GITHUB_ACTIONS:-}" != true ]]; then
+    source "$REPO_ROOT/scripts/lib/release-source-guard.sh"
+    fixlist_require_merged_checkout "$REPO_ROOT" "$SOURCE_SHA"
+  else
+    require_exact_main_owner_source
+  fi
   require_confirmation "VERIFY-ZERO-ADMISSION:${SOURCE_SHA}:${BARRIER_EXPECTED_GENERATION}"
   verify_zero_admission_obligations
 }

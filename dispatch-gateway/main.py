@@ -391,6 +391,7 @@ def validate_dispatch(payload: Any) -> tuple[dict[str, Any] | None, str | None]:
 def health():
     mode, owners = _staged_configuration()
     cohort = json.dumps(sorted(owners), separators=(",", ":")).encode("utf-8")
+    canary_cohort = json.dumps(sorted(CANARY_OWNER_USER_IDS), separators=(",", ":")).encode("utf-8")
     return jsonify({
         "ok": True,
         "service": "fixlist-dispatch-gateway",
@@ -402,6 +403,7 @@ def health():
         "worker_origin": WORKER_ORIGIN,
         "canary_worker_origin": CANARY_WORKER_ORIGIN or None,
         "canary_owner_count": len(CANARY_OWNER_USER_IDS),
+        "canary_owner_cohort_sha256": hashlib.sha256(canary_cohort).hexdigest(),
         "pipeline_mode": mode,
         "staged_rollout_scope": _staged_rollout_scope(),
         "staged_500_entitled_enabled": _staged_500_entitled_enabled(),

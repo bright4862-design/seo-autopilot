@@ -979,8 +979,13 @@ function serverProvidedDetail(value) {
 }
 
 function customerScanAdmissionMessage(code, serverDetail = "", retryAfterSeconds = null) {
-  if (code === "target_cooldown_active") {
-    const reason = "This site has asked automated scanners to wait.";
+  const originPauses = {
+    target_cooldown_active: "This site has asked automated scanners to wait.",
+    target_contact_busy: "FixList is spacing out requests to this website.",
+    target_contact_unconfirmed: "FixList paused requests to this website after an interrupted scan.",
+  };
+  if (Object.hasOwn(originPauses, code)) {
+    const reason = originPauses[code];
     if (!Number.isSafeInteger(retryAfterSeconds) || retryAfterSeconds < 1) {
       return `${reason} Try again later.`;
     }

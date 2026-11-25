@@ -42,6 +42,7 @@ from google.cloud import firestore
 
 import admission
 import control
+import target_contacts
 
 app = Flask(__name__)
 
@@ -57,6 +58,8 @@ AUDIT_COLLECTION = os.environ.get("ADMISSION_AUDIT_COLLECTION", "scan_admission_
 COHORT_COLLECTION = os.environ.get("ADMISSION_COHORT_COLLECTION", "scan_admission_cohorts").strip() or "scan_admission_cohorts"
 RECONCILIATION_COLLECTION = os.environ.get("ADMISSION_RECONCILIATION_COLLECTION", "scan_admission_reconciliation").strip() or "scan_admission_reconciliation"
 TARGET_COOLDOWN_COLLECTION = "scan_target_cooldowns"
+TARGET_CONTACT_GATE_COLLECTION = "scan_target_contact_gates"
+TARGET_CONTACT_DELIVERY_COLLECTION = "scan_target_contact_deliveries"
 CONTROL_DOCUMENT = "global"
 FIRESTORE_PROJECT = os.environ.get("FIRESTORE_PROJECT", "").strip()
 FIRESTORE_DATABASE = os.environ.get("FIRESTORE_DATABASE", "").strip()
@@ -287,6 +290,7 @@ def run_in_transaction(
     owner_user_id: str,
     decide: Callable[[dict[str, Any] | None], dict[str, Any]],
     *,
+    terminal_release: bool = False,
     terminal_cooldown: dict[str, Any] | None = None,
 ):
     """Apply a pure decision function inside one Firestore transaction.
@@ -304,17 +308,24 @@ def run_in_transaction(
         snapshot = ref.get(transaction=transaction)
         document = snapshot.to_dict() if snapshot.exists else None
         decision = decide(document)
-        if terminal_cooldown is not None and not decision.get("error"):
+        if decision.get("error"):
+            return decision
+        moment = int(time.time())
+        cooldown = None
+        if terminal_cooldown is not None:
             # A different owner must never observe the released slot without
             # the origin deadline from the same Firestore commit.
             cooldown_ref = _target_cooldown_ref(client, terminal_cooldown["target_origin"])
             cooldown = admission.decide_target_cooldown(
                 document, _document_value(cooldown_ref.get(transaction=transaction)),
-                terminal_cooldown, now=int(time.time()), clock_skew_seconds=MAX_CLOCK_SKEW_SECONDS,
+                terminal_cooldown, now=moment, clock_skew_seconds=MAX_CLOCK_SKEW_SECONDS,
                 terminal_release_retry=decision["outcome"] == admission.OUTCOME_ALREADY_RELEASED,
             )
             if cooldown.get("error"):
                 return cooldown
+        if terminal_release:
+            decision = target_contacts.terminal_fence(document, decision, now=moment)
+        if cooldown is not None:
             if cooldown.get("write"):
                 transaction.set(cooldown_ref, cooldown["write"])
             decision["target_cooldown_outcome"] = cooldown["outcome"]
@@ -356,14 +367,45 @@ def _live_reconciliation_query(client: firestore.Client):
 
 
 def _target_cooldown_ref(client: firestore.Client, target_origin: str):
-    key = hashlib.sha256(target_origin.encode("ascii")).hexdigest()
+    key = target_contacts.origin_key(target_origin)
     return client.collection(TARGET_COOLDOWN_COLLECTION).document(key)
+
+
+def _target_contact_gate_ref(client: firestore.Client, target_origin: str):
+    return client.collection(TARGET_CONTACT_GATE_COLLECTION).document(target_contacts.origin_key(target_origin))
+
+
+def run_target_contact_transaction(payload: dict[str, Any], decide: Callable):
+    client = _firestore_client()
+    owner_ref = client.collection(COLLECTION).document(payload["owner_user_id"])
+    gate_ref = _target_contact_gate_ref(client, payload["target_origin"])
+    cooldown_ref = _target_cooldown_ref(client, payload["target_origin"])
+    delivery_ref = client.collection(TARGET_CONTACT_DELIVERY_COLLECTION).document(target_contacts.delivery_key(payload))
+
+    @firestore.transactional
+    def _apply(transaction: firestore.Transaction) -> dict[str, Any]:
+        result = decide(
+            _document_value(owner_ref.get(transaction=transaction)),
+            _document_value(delivery_ref.get(transaction=transaction)),
+            _document_value(gate_ref.get(transaction=transaction)),
+            _document_value(cooldown_ref.get(transaction=transaction)),
+            payload, now=int(time.time()),
+        )
+        for key, ref in (
+            ("owner_write", owner_ref), ("delivery_write", delivery_ref),
+            ("gate_write", gate_ref), ("cooldown_write", cooldown_ref),
+        ):
+            if key in result:
+                transaction.set(ref, result[key])
+        return result
+
+    return _apply(client.transaction())
 
 
 def run_claim_transaction(
     owner_user_id: str,
     target_origin: str,
-    decide: Callable[[dict[str, Any] | None, dict[str, Any] | None, Callable[[], int]], dict[str, Any]],
+    decide: Callable[[dict[str, Any] | None, dict[str, Any] | None, Callable[[int], dict[str, Any]]], dict[str, Any]],
 ):
     """Serialize one claim against the global barrier and owner slot.
 
@@ -380,13 +422,17 @@ def run_claim_transaction(
         control_document = _document_value(control_ref.get(transaction=transaction))
         owner_document = _document_value(owner_ref.get(transaction=transaction))
 
-        def read_cooldown_expiry() -> int:
+        def read_origin_wait(now: int) -> dict[str, Any]:
             if not target_origin:
-                return 0
-            ref = _target_cooldown_ref(client, target_origin)
-            return admission.target_cooldown_expires_at(_document_value(ref.get(transaction=transaction)))
+                return {}
+            cooldown_ref = _target_cooldown_ref(client, target_origin)
+            gate_ref = _target_contact_gate_ref(client, target_origin)
+            return target_contacts.origin_wait(
+                _document_value(gate_ref.get(transaction=transaction)),
+                _document_value(cooldown_ref.get(transaction=transaction)), now=now,
+            )
 
-        decision = decide(owner_document, control_document, read_cooldown_expiry)
+        decision = decide(owner_document, control_document, read_origin_wait)
         if decision.get("control_write"):
             transaction.set(control_ref, decision["control_write"])
         if decision.get("write"):
@@ -721,6 +767,7 @@ def claim():
     owner_user_id = str(payload.get("owner_user_id") or "").strip()
     request_id = str(payload.get("request_id") or "").strip()
     fingerprint = str(payload.get("request_fingerprint") or "").strip()
+    queue_if_origin_busy = payload.get("queue_if_origin_busy") is True
     try:
         target_origin = admission.normalize_target_origin(payload["target_origin"]) if "target_origin" in payload else ""
     except admission.AdmissionError as error:
@@ -733,7 +780,7 @@ def claim():
     def decide(
         document: dict[str, Any] | None,
         control_document: dict[str, Any] | None,
-        read_cooldown_expiry: Callable[[], int],
+        read_origin_wait: Callable[[int], dict[str, Any]],
     ) -> dict[str, Any]:
         moment = int(time.time())
         current = admission.normalized_control(control_document)
@@ -775,9 +822,9 @@ def claim():
             return {"outcome": None, "error": reservation.get("error", admission.ERROR_SCAN_INTAKE_PAUSED)}
         # Reservation is a pure decision. Discard it on an origin refusal so
         # the barrier sequence, cohort budget and owner slot are untouched.
-        retry_after = read_cooldown_expiry() - moment
-        if retry_after > 0:
-            return {"error": "target_cooldown_active", "retry_after_seconds": retry_after}
+        origin_wait = read_origin_wait(moment)
+        if origin_wait and not (queue_if_origin_busy and origin_wait["error"] == target_contacts.ORIGIN_BUSY):
+            return origin_wait
         claimed = admission.decide_claim(
             document,
             owner_user_id=owner_user_id,
@@ -803,11 +850,8 @@ def claim():
         return response_error("coordinator_unavailable", 503)
 
     if decision.get("error"):
-        if decision["error"] == "target_cooldown_active":
-            retry_after = decision["retry_after_seconds"]
-            return jsonify({
-                "success": False, "error": "target_cooldown_active", "retry_after_seconds": retry_after,
-            }), 429, {"Retry-After": str(retry_after)}
+        if "retry_after_seconds" in decision:
+            return target_contact_refusal(decision)
         if decision["error"] == admission.ERROR_SCAN_INTAKE_PAUSED:
             return response_error(decision["error"], 423)
         return response_error(decision["error"], 409)
@@ -840,6 +884,48 @@ def claim():
     }
     if document.get("target_origin"):
         result["target_origin"] = document["target_origin"]
+    return jsonify(result)
+
+
+def target_contact_refusal(decision):
+    error = decision["error"]
+    status = 429 if error == "target_cooldown_active" else 409
+    if error == target_contacts.CONTACTS_DRAINING:
+        status = 503
+    retry_after = decision["retry_after_seconds"]
+    fields = {
+        "success": False, "error": error, "retry_after_seconds": retry_after,
+    }
+    if decision.get("expires_source") == "default":
+        fields["expires_source"] = "default"
+    return jsonify(fields), status, {"Retry-After": str(retry_after)}
+
+
+@app.post("/acquire-target-contact")
+@app.post("/settle-target-contact")
+def target_contact():
+    payload, failure = authenticate()
+    if failure:
+        return failure
+    assert payload is not None
+    acquire = request.path == "/acquire-target-contact"
+    try:
+        target_contacts.validate(payload, action=target_contacts.ACQUIRE_ACTION if acquire else target_contacts.SETTLE_ACTION)
+        decision = run_target_contact_transaction(
+            payload, target_contacts.decide_acquire if acquire else target_contacts.decide_settle,
+        )
+    except admission.AdmissionError as error:
+        return response_error(error.code, 400)
+    except Exception:
+        return response_error("coordinator_unavailable", 503)
+    if "retry_after_seconds" in decision:
+        return target_contact_refusal(decision)
+    if decision.get("error"):
+        status = 400 if decision["error"] == target_contacts.INVALID_CONTACT else 409
+        return response_error(decision["error"], status)
+    result = {"success": True, "outcome": decision["outcome"]}
+    if acquire:
+        result["seconds_remaining"] = decision["seconds_remaining"]
     return jsonify(result)
 
 
@@ -968,13 +1054,15 @@ def release():
         return decision
 
     try:
-        decision = run_in_transaction(owner_user_id, decide, terminal_cooldown=terminal_cooldown)
+        decision = run_in_transaction(owner_user_id, decide, terminal_release=True, terminal_cooldown=terminal_cooldown)
     except admission.AdmissionError as error:
         return response_error(error.code, 400)
     except Exception:
         return response_error("coordinator_unavailable", 503)
 
     if decision.get("error"):
+        if "retry_after_seconds" in decision:
+            return target_contact_refusal(decision)
         status = 404 if decision["error"] == admission.ERROR_CLAIM_NOT_FOUND else 409
         return response_error(decision["error"], status)
 

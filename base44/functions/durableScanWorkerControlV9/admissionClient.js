@@ -43,6 +43,14 @@ export const SAFE_COORDINATOR_ERRORS = new Set([
   "admission_busy",
   "target_cooldown_claim_conflict",
   "invalid_target_cooldown_observation",
+  "invalid_target_contact",
+  "target_cooldown_active",
+  "target_contact_busy",
+  "target_contact_unconfirmed",
+  "target_contact_capacity",
+  "target_contact_claim_conflict",
+  "target_contact_closed",
+  "target_contacts_draining",
   "request_conflict",
   "scan_identity_conflict",
   "barrier_generation_conflict",
@@ -150,7 +158,7 @@ async function callCoordinator(path, payload, { coordinatorUrl, signingKey, fetc
   try {
     response = await send(`${baseUrl}${path}`, {
       method: "POST",
-      ...(path === "/release-with-target-cooldown" ? { redirect: "error" } : {}),
+      ...(path === "/release-with-target-cooldown" || path.endsWith("-target-contact") ? { redirect: "error" } : {}),
       headers: {
         "content-type": "application/json",
         "x-fixlist-timestamp": timestamp,
@@ -235,6 +243,13 @@ export async function releaseAdmission({ ownerUserId, scanId, terminalStatus, ta
     scan_id: String(scanId ?? ""),
     terminal_status: String(terminalStatus ?? ""),
     ...(targetCooldown ? { target_cooldown: targetCooldown } : {}),
+  }, options);
+}
+
+export async function relayTargetContact({ action, contact, ...options }) {
+  return callCoordinator(action === "acquire_target_contact" ? "/acquire-target-contact" : "/settle-target-contact", {
+    ...contact,
+    action: `${action}_v1`,
   }, options);
 }
 

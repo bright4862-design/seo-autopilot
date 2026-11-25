@@ -404,7 +404,8 @@ export default async function (req: Request): Promise<Response> {
         robotsPolicy,
       });
       if (!admitted.ok) {
-        const cooldownHeaders = admitted.status === 429 && admitted.code === "target_cooldown_active"
+        const originPause = ["target_cooldown_active", "target_contact_busy", "target_contact_unconfirmed"].includes(admitted.code);
+        const cooldownHeaders = originPause
           ? { "Retry-After": String(admitted.retryAfter), "Access-Control-Expose-Headers": "Retry-After" }
           : {};
         return jsonResponse({
@@ -413,7 +414,7 @@ export default async function (req: Request): Promise<Response> {
           version: VERSION,
           retryable: admitted.retryable === true,
           retry_after: admitted.retryAfter || undefined,
-          ...(admitted.code === "target_cooldown_active" ? { retry_after_seconds: admitted.retryAfter } : {}),
+          ...(originPause ? { retry_after_seconds: admitted.retryAfter } : {}),
           failure_code: admitted.code,
           error: admitted.error,
           ...identity.fields,
@@ -756,6 +757,7 @@ async function admitServerOwnedScan({
       requestId: request.request_id,
       requestFingerprint: request.request_fingerprint,
       targetOrigin,
+      queueIfOriginBusy: scanContract.pipeline_mode === "staged",
       env: mutableScanAdmissionEnv,
     });
   } catch {
@@ -988,14 +990,19 @@ function nonNegativeInteger(value) {
 
 function coordinatorAdmissionFailure(result = {}, fallbackCode = "scan_admission_state_unavailable") {
   const upstream = String(result?.failureCode || fallbackCode);
-  if (upstream === "target_cooldown_active") {
+  const originPauses = {
+    target_cooldown_active: { status: 429, error: "This site has asked automated scanners to wait." },
+    target_contact_busy: { status: 409, error: "FixList is spacing out requests to this website." },
+    target_contact_unconfirmed: { status: 409, error: "FixList has paused requests to this website after an interrupted scan." },
+  };
+  if (Object.hasOwn(originPauses, upstream)) {
+    const pause = originPauses[upstream];
     const seconds = result.retryAfterSeconds;
-    if (result.status === 429 && Number.isSafeInteger(seconds) && seconds > 0) {
+    if (result.status === pause.status && Number.isSafeInteger(seconds) && seconds > 0) {
       return {
         ok: false,
-        status: 429,
-        code: "target_cooldown_active",
-        error: "This site has asked automated scanners to wait. Try again after the requested pause.",
+        ...pause,
+        code: upstream,
         retryable: true,
         retryAfter: seconds,
       };

@@ -11,6 +11,7 @@ import {
   observeTargetCooldown as observeTargetCooldownClient,
   finishReconciliationInvocation as finishReconciliationInvocationClient,
   releaseAdmission as releaseAdmissionClient,
+  relayTargetContact as relayTargetContactClient,
   satisfyUnboundAdmission as satisfyUnboundAdmissionClient,
   startReconciliationInvocation as startReconciliationInvocationClient,
   statusAdmission as statusAdmissionClient,
@@ -86,6 +87,7 @@ const BASE44_HANDLER_RELEASE_FINGERPRINT = "b36ca24b8e0f728e";
 const WORKER_VERSION = "scan_job_worker_v1_cloud_tasks";
 const CONTROL_VERSION = "durable_standard150_control_v1";
 const TERMINAL_STATUSES = new Set(["complete", "limited", "failed", "cancelled"]);
+const CONTACT_ACTIONS = new Set(["acquire_target_contact", "settle_target_contact"]);
 
 class RequestProblem extends Error {
   status: number;
@@ -133,6 +135,7 @@ async function dispatchWorkerRequest(req: Request, body, secret: string, exactRu
       failure: body?.failure,
       ...(body?.action === "progress" ? {progress: body?.progress} : {}),
       ...(body?.action === "observe_target_cooldown" ? {target_cooldown: body?.target_cooldown} : {}),
+      ...(CONTACT_ACTIONS.has(body?.action) ? {target_contact: body?.target_contact} : {}),
     };
     const proof = cleanProof(body?.proof);
     if (!secret) throw new RequestProblem(503, "authority_not_configured", "Server scan authority is not configured.");
@@ -156,12 +159,12 @@ async function dispatchWorkerRequest(req: Request, body, secret: string, exactRu
       return Response.json(await reconcileDurableScans(entities));
     }
 
-    if (!["start", "fail", "progress", "workspace_deleted", "observe_target_cooldown"].includes(action)) {
+    if (!["start", "fail", "progress", "workspace_deleted", "observe_target_cooldown"].includes(action) && !CONTACT_ACTIONS.has(action)) {
       throw new RequestProblem(400, "worker_action_invalid", "The durable worker action is not supported.");
     }
 
-    if (action === "observe_target_cooldown" && !exactRuntime) {
-      throw new RequestProblem(403, "worker_runtime_required", "Target cooldown observation requires the exact worker runtime.");
+    if ((action === "observe_target_cooldown" || CONTACT_ACTIONS.has(action)) && !exactRuntime) {
+      throw new RequestProblem(403, "worker_runtime_required", "Target contact control requires the exact worker runtime.");
     }
     const identity = normalizeIdentity(body?.identity);
     if (
@@ -175,6 +178,19 @@ async function dispatchWorkerRequest(req: Request, body, secret: string, exactRu
       throw new RequestProblem(400, "worker_identity_missing", "The durable worker identity is incomplete.");
     }
 
+    if (CONTACT_ACTIONS.has(action)) {
+      const contact = objectValue(body.target_contact);
+      if (body.scan_id !== identity.scan_id || contact.scan_id !== identity.scan_id
+          || contact.owner_user_id !== identity.owner_user_id || contact.request_id !== identity.request_id
+          || !Number.isSafeInteger(contact.attempt_count) || contact.attempt_count < 1
+          || contact.attempt_count !== body.identity.attempt_count) {
+        throw new RequestProblem(409, "target_contact_claim_conflict", "The contact request does not match the scan.");
+      }
+      // The coordinator verifies a settlement against the historical grant,
+      // including after an attempt changed or its Base44 row was removed.
+      if (action === "settle_target_contact") return await relayContactRequest(action, contact);
+    }
+
     const scan = await entities.ScanRun.get(identity.scan_id).catch(() => null);
     const project = await entities.BusinessProject.get(identity.project_id).catch(() => null);
     if (!scan || !project) throw new RequestProblem(404, "worker_record_not_found", "The durable scan project was not found.");
@@ -186,6 +202,19 @@ async function dispatchWorkerRequest(req: Request, body, secret: string, exactRu
     const rowAttempt = normalizeAttempt(scan.attempt_count);
     if (claimedAttempt !== rowAttempt) {
       throw new RequestProblem(409, "superseded_attempt", "A newer attempt owns this scan.");
+    }
+
+    if (action === "acquire_target_contact") {
+      const contact = body.target_contact;
+      if (!["crawling", "reviewing"].includes(scan.status) || scan.pipeline_mode !== "staged"
+          || scan.attempt_count !== contact.attempt_count
+          || scan.admission_barrier_generation !== contact.barrier_generation
+          || scan.admission_claim_sequence !== contact.claim_sequence
+          || admissionTargetOrigin(scan.website_url) !== contact.scan_target_origin
+          || (scan.admission_target_origin && scan.admission_target_origin !== contact.scan_target_origin)) {
+        throw new RequestProblem(409, "target_contact_claim_conflict", "The contact request does not match the active scan.");
+      }
+      return await relayContactRequest(action, contact);
     }
 
     if (action === "observe_target_cooldown") {
@@ -606,6 +635,23 @@ async function relayTargetCooldown(scan, project, identity, value) {
     throw new RequestProblem(409, "target_cooldown_claim_conflict", "The cooldown observation no longer matches the active scan.");
   }
   throw new RequestProblem(503, "target_cooldown_publish_unavailable", "The target cooldown observation could not be recorded yet.");
+}
+
+async function relayContactRequest(action, contact) {
+  const result = await relayTargetContactClient({ action, contact, env: mutableScanAdmissionEnv });
+  if (!result.ok || result.success !== true) {
+    const status = [400, 409, 429, 503].includes(result.status) ? result.status : 503;
+    return Response.json({
+      success: false,
+      error_code: result.failureCode || "coordinator_unavailable",
+      ...(result.retryAfterSeconds > 0 ? { retry_after_seconds: result.retryAfterSeconds } : {}),
+    }, { status });
+  }
+  return Response.json({
+    success: true,
+    outcome: result.outcome,
+    ...(action === "acquire_target_contact" ? { seconds_remaining: result.seconds_remaining } : {}),
+  });
 }
 
 function normalizeIdentity(value) {

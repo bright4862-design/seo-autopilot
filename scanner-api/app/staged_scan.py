@@ -27,6 +27,7 @@ from .scan_job import (
 from .observability import website_host
 from .scan_limits import standard_scan_contract, task_matches_scan_contract
 from .staged_telemetry import MAX_RECORDED_DELIVERIES, DeliveryReceipt, active_delivery
+from .target_contact import TargetContactRetry, TargetContacts, target_contact_scope
 from .target_cooldown import TargetCooldownPending, TargetCooldownRelay, explicit_http_origin, target_cooldown_scope
 from .workspace import WorkspaceConflict, WorkspaceUnavailable, attempt_prefix
 
@@ -66,6 +67,7 @@ class StageDependencies:
     finalize: Callable
     review: Callable | None = None
     publish_target_cooldown: Callable | None = None
+    request_target_contact: Callable | None = None
 
 
 class StagedScanRuntime:
@@ -131,6 +133,31 @@ class StagedScanRuntime:
             self.store, prefix, origin, lambda observation: publish(client, scan, observation), self.clock,
             optional=stage == "finalize",
         )
+
+    async def _run_site_stage(
+        self, operation, client, scan, job, frontier, cooldown,
+        *, allow_contact=True, contact_deadline=None, **arguments,
+    ):
+        from .robots_policy import owner_robots_override
+
+        contacts = None
+        request = self.dep.request_target_contact
+        if request is not None:
+            cutoff = self.clock() + STAGE_WORK_SECONDS
+            if contact_deadline is not None:
+                cutoff = min(float(contact_deadline), cutoff)
+            contacts = TargetContacts(
+                delivery_id=frontier["lease_owner"], cutoff=int(cutoff), clock=self.clock,
+                send=(lambda action, fields: request(client, scan, action, fields)) if allow_contact else None,
+            )
+        async with target_contact_scope(contacts):
+            with owner_robots_override(bool(job.get("owner_attested_robots_override"))), target_cooldown_scope(cooldown):
+                result = await asyncio.wait_for(operation(**arguments), timeout=STAGE_WORK_SECONDS)
+        if contacts is not None and contacts.failure is not None:
+            # Discovery and optional probes can classify network exceptions.
+            # A denied grant must retry without committing false page evidence.
+            raise contacts.failure
+        return result
 
     @staticmethod
     def _require_contact_ready(cooldown: TargetCooldownRelay | None) -> None:
@@ -353,13 +380,12 @@ class StagedScanRuntime:
                         await self.dep.fail(client, job["scan_id"], "scanner_wall_timeout", "The scan exhausted its time budget before collecting page evidence. Please try again.", attempt_count=job.get("attempt_count"))
                         return {"success": False, "error_code": "scanner_wall_timeout"}
                     self._require_contact_ready(cooldown)
-                    from .robots_policy import owner_robots_override
-                    with owner_robots_override(bool(job.get("owner_attested_robots_override"))), target_cooldown_scope(cooldown):
-                        state = await asyncio.wait_for(self.dep.plan(
-                            website_url=job["website_url"], path_prefix=job.get("path_prefix"),
-                            scan_mode=job["scan_mode"], timeout_seconds=remaining,
-                            job_mode=True, staged=True,
-                        ), timeout=STAGE_WORK_SECONDS)
+                    state = await self._run_site_stage(
+                        self.dep.plan, client, scan, job, frontier, cooldown,
+                        contact_deadline=frontier["wall_deadline"],
+                        website_url=job["website_url"], path_prefix=job.get("path_prefix"),
+                        scan_mode=job["scan_mode"], timeout_seconds=remaining, job_mode=True, staged=True,
+                    )
                     if cooldown is not None:
                         await cooldown.require_acknowledged()
                     plan = {"job": job, "state": state.to_dict(), "wall_deadline": frontier["wall_deadline"]}
@@ -388,9 +414,10 @@ class StagedScanRuntime:
             if stage == "batch":
                 if not deadline_hit:
                     self._require_contact_ready(cooldown)
-                    from .robots_policy import owner_robots_override
-                    with owner_robots_override(bool(job.get("owner_attested_robots_override"))), target_cooldown_scope(cooldown):
-                        await asyncio.wait_for(self.dep.crawl(state, max_pages=BATCH_SIZE), timeout=STAGE_WORK_SECONDS)
+                    await self._run_site_stage(
+                        self.dep.crawl, client, scan, job, frontier, cooldown,
+                        contact_deadline=frontier["wall_deadline"], state=state, max_pages=BATCH_SIZE,
+                    )
                     if cooldown is not None:
                         await cooldown.require_acknowledged()
                 _, stopped = await self._fence(client, job)
@@ -431,14 +458,12 @@ class StagedScanRuntime:
                 result = result_snapshot.value
                 receipt.observe_artifact("result", result_snapshot.generation, produced=False)
             else:
-                from .robots_policy import owner_robots_override
                 if cooldown is not None and cooldown.remaining_hold():
                     allow_optional_probes = False
-                with owner_robots_override(bool(job.get("owner_attested_robots_override"))), target_cooldown_scope(cooldown):
-                    result = await asyncio.wait_for(
-                        self.dep.finalize(state, allow_optional_probes=allow_optional_probes),
-                        timeout=STAGE_WORK_SECONDS,
-                    )
+                result = await self._run_site_stage(
+                    self.dep.finalize, client, scan, job, frontier, cooldown, state=state,
+                    allow_contact=allow_optional_probes, allow_optional_probes=allow_optional_probes,
+                )
                 result.update({
                     "scan_mode": job["scan_mode"], "canonical_mode": job["scan_mode"], "page_cap": job["page_cap"],
                     "advanced_scan_backend": "python_scanner_api", "deno_fallback_used": False,
@@ -535,6 +560,10 @@ class StagedScanRuntime:
                     **({"target_cooldown_publication": frontier["target_cooldown_publication"]["state"]} if "target_cooldown_publication" in frontier else {})}
         except TargetCooldownPending as exc:
             raise StageRetry(str(exc)) from exc
+        except TargetContactRetry as exc:
+            # Cloud Tasks may retry before that window ends. Each delivery must
+            # acquire again, so retries cannot contact a protected origin.
+            raise StageRetry(str(exc), retry_after=exc.retry_after) from exc
         except (WorkspaceConflict, WorkspaceUnavailable, asyncio.TimeoutError) as exc:
             raise StageRetry("The stage did not finish its durable commit") from exc
         finally:

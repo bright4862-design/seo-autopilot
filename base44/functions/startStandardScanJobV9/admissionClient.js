@@ -44,6 +44,8 @@ export const SAFE_COORDINATOR_ERRORS = new Set([
   "invalid_claim_token_format",
   "admission_busy",
   "target_cooldown_active",
+  "target_contact_busy",
+  "target_contact_unconfirmed",
   "request_conflict",
   "scan_identity_conflict",
   "barrier_generation_conflict",
@@ -256,7 +258,7 @@ async function callCoordinator(path, payload, { coordinatorUrl, signingKey, fetc
       // decision, and the decision is always "nothing was written".
       outcomeUnknown: response.status >= 500,
       failureCode,
-      retryAfterSeconds: failureCode === "target_cooldown_active"
+      retryAfterSeconds: ["target_cooldown_active", "target_contact_busy", "target_contact_unconfirmed"].includes(failureCode)
         ? parsed?.retry_after_seconds : Number(parsed?.retry_after_seconds) || 0,
       status: response.status,
     };
@@ -268,7 +270,7 @@ async function callCoordinator(path, payload, { coordinatorUrl, signingKey, fetc
 /**
  * Step 1 of admission. Wins, replays, or is told to wait. Creates nothing.
  */
-export async function claimAdmission({ ownerUserId, requestId, requestFingerprint, targetOrigin, ...options } = {}) {
+export async function claimAdmission({ ownerUserId, requestId, requestFingerprint, targetOrigin, queueIfOriginBusy, ...options } = {}) {
   if (!admissionEnabled(options.env ?? readEnv)) {
     return { ok: false, outcomeUnknown: false, failureCode: "admission_disabled" };
   }
@@ -277,6 +279,7 @@ export async function claimAdmission({ ownerUserId, requestId, requestFingerprin
     request_id: String(requestId ?? ""),
     request_fingerprint: String(requestFingerprint ?? ""),
     ...(targetOrigin ? { target_origin: targetOrigin } : {}),
+    ...(queueIfOriginBusy === true ? { queue_if_origin_busy: true } : {}),
   }, options);
 }
 

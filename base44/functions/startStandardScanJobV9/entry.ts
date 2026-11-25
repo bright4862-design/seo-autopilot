@@ -6,7 +6,7 @@ import {
   enqueueScanDrain,
   enqueueScanJob,
   normalizeAttemptCount,
-  paidDispatchGatewayUrl,
+  stagedDispatchGatewayUrl,
 } from "./cloudTasks.js";
 import { evaluateScanAccess, uniqueAccessRows } from "./entitlement.js";
 import {
@@ -124,7 +124,7 @@ async function stagedRuntimeStatus(user, raw) {
       configured_pipeline_mode: settings.pipelineMode,
       staged_rollout_scope: settings.rolloutScope,
       staged_500_entitled_enabled: settings.entitled500Enabled,
-      paid_dispatch_gateway_origin: paidDispatchGatewayUrl(stagedScanEnv),
+      paid_dispatch_gateway_origin: stagedDispatchGatewayUrl(stagedScanEnv),
       pipeline_mode: enabled ? "staged" : "monolith",
       staged_owner_cohort_state: cohortState,
       staged_owner_count: cohortHash === null ? null : ownerIds.length,
@@ -435,6 +435,7 @@ export default async function (req: Request): Promise<Response> {
     const paidRoutePaused = stagedSettings.rolloutScope !== "paid"
       || (scanContract.page_cap === 500 && !stagedSettings.entitled500Enabled);
     const paidDispatch = context.scan.staged_rollout_scope === "paid";
+    const requireGateway = scanContract.pipeline_mode === "staged" || paidDispatch;
     const readOnlyReplay = context.readOnlyReplay || (paidDispatch && paidRoutePaused);
     const scanRobotsPolicy = readOnlyReplay
       ? robotsPolicyFromScanRun(context.scan)
@@ -515,7 +516,7 @@ export default async function (req: Request): Promise<Response> {
       attemptCount,
       payload: { ...commonPayload, ...frozenTaskContract, drain_after: drainAfter },
       signingKey: dispatchSigningKey,
-      requireGateway: paidDispatch,
+      requireGateway,
     });
     if (!drain.ok) {
       await failOwnedScanRun({
@@ -553,7 +554,7 @@ export default async function (req: Request): Promise<Response> {
         owner_attested_robots_override: scanRobotsPolicy.owner_attested_robots_override,
       },
       signingKey: dispatchSigningKey,
-      requireGateway: paidDispatch,
+      requireGateway,
     });
 
     if (!enqueued.ok && enqueued.outcomeUnknown !== true) {
@@ -740,7 +741,7 @@ async function admitServerOwnedScan({
   identity.fields.request_fingerprint = request.request_fingerprint;
 
   const blockedDispatch = requiresExistingScan ? "scan_staged_500_unavailable"
-    : scanContract.staged_rollout_scope === "paid" && !paidDispatchGatewayUrl() ? "dispatch_gateway_not_configured" : "";
+    : scanContract.pipeline_mode === "staged" && !stagedDispatchGatewayUrl() ? "dispatch_gateway_not_configured" : "";
   if (blockedDispatch) {
     return replayBoundScanWithoutAdmission({
       base44, user, project, request, websiteUrl, robotsPolicy, code: blockedDispatch,

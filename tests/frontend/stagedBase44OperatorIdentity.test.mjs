@@ -89,7 +89,7 @@ if (args[2] === "exec") {
         release_fingerprint: "${fingerprint}", configured_pipeline_mode: "staged", pipeline_mode: "staged",
         staged_owner_cohort_state: "explicit", staged_owner_count: 1, staged_owner_cohort_sha256: "3".repeat(64),
         staged_owner_enabled: true, intake_gate: "enabled", admission_gate: "enabled",
-        staged_rollout_scope: "off", staged_500_entitled_enabled: false,
+        staged_rollout_scope: "off", staged_500_entitled_enabled: false, paid_dispatch_gateway_origin: "${gatewayOrigin}",
         ...JSON.parse(process.env.TEST_V9),
       };
     } },
@@ -214,6 +214,8 @@ for (const [name, user, overrides] of [
   ["workspace API key without the personal CLI session", london, { apiKey: "b44k_mock" }],
   ["ordinary customer as the runtime caller", customer, {}],
   ["stale V9 intake build", london, { v9: { build_id: "0".repeat(64) } }],
+  ["an unavailable V9 gateway", london, { v9: { paid_dispatch_gateway_origin: "" } }],
+  ["a different V9 gateway", london, { v9: { paid_dispatch_gateway_origin: "https://other.example" } }],
 ]) {
   test(`pilot preparation makes zero configuration writes with ${name}`, t => {
     const result = fixture(t)(operator, "prepare-owner", customer.id, user, pilotOptions(london, overrides));

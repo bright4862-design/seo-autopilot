@@ -9,7 +9,7 @@ import * as admission from "../../base44/functions/startStandardScanJobV9/admiss
 import * as entitlement from "../../base44/functions/startStandardScanJobV9/entitlement.js";
 import * as admissionClient from "../../base44/functions/startStandardScanJobV9/admissionClient.js";
 import { admissionClaimEvidenceProof, verifyAdmissionClaimEvidence } from "../../base44/functions/startStandardScanJobV9/admissionClient.js";
-import { enqueueScanDrain, enqueueScanJob, normalizeAttemptCount, paidDispatchGatewayUrl } from "../../base44/functions/startStandardScanJobV9/cloudTasks.js";
+import { enqueueScanDrain, enqueueScanJob, normalizeAttemptCount, stagedDispatchGatewayUrl } from "../../base44/functions/startStandardScanJobV9/cloudTasks.js";
 import * as releaseContract from "../../base44/functions/startStandardScanJobV9/generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "../../base44/functions/startStandardScanJobV9/generatedBuildId.js";
 
@@ -47,7 +47,7 @@ function harness({
   }
   const dependencies = {
     "./scanLimits.js": scanLimits,
-    "./cloudTasks.js": { paidDispatchGatewayUrl },
+    "./cloudTasks.js": { stagedDispatchGatewayUrl },
     ...launch.modules,
     "./runtimeConfig.js": runtimeConfig,
     "./generatedReleaseContract.js": { ...releaseContract, RELEASE_FINGERPRINT: releaseFingerprint },
@@ -358,7 +358,7 @@ function launchHarness({
         },
         "./cloudTasks.js": {
           DRAIN_DELAY_SECONDS: 450, normalizeAttemptCount,
-          paidDispatchGatewayUrl: () => paidDispatchGatewayUrl(name => settings[name]),
+          stagedDispatchGatewayUrl: () => stagedDispatchGatewayUrl(name => settings[name]),
           enqueueScanDrain: async ({ requireGateway }) => {
             taskTransports.push({ stage: "drain", requireGateway });
             return { ok: true };
@@ -508,7 +508,7 @@ test("default-off scope preserves the named pilot and declines a fresh unavailab
   const pilot = launchHarness({ rows: [grant], rollout: null, entitled500: null, cohort: paidCustomer.id });
   assert.equal((await pilot.submit()).body.page_cap, 500);
   assert.equal(pilot.dispatched[0].staged_rollout_scope, undefined);
-  assert.ok(pilot.taskTransports.every(task => !task.requireGateway));
+  assert.deepEqual(pilot.taskTransports, [{ stage: "drain", requireGateway: true }, { stage: "entry", requireGateway: true }]);
   const paused = launchHarness({ rows: [grant], rollout: "off", entitled500: "false" });
   const result = await paused.submit();
   assert.equal(result.status, 503);
@@ -603,31 +603,39 @@ test("duplicate, revoked, and unverified grants fail before the server can choos
   }
 });
 
-test("paid intake never claims without a usable configured signed gateway", async () => {
+test("staged intake never claims without a usable configured signed gateway", async () => {
+  const routes = [
+    {},
+    { rollout: null, entitled500: null, cohort: paidCustomer.id },
+  ];
   for (const gateway of ["", "http://dispatch-gateway.example", "https://dispatch-gateway.example/path", "https://u:p@dispatch-gateway.example", "https://dispatch-gateway.example/?debug=1"]) {
-    for (const cap of [150, 500]) {
-      const fixture = launchHarness({ gateway, rows: [{ ...paidGrant, page_cap: cap }] });
-      const result = await fixture.submit();
-      assert.equal(result.status, 503, JSON.stringify(result.body));
-      assert.equal(result.body.failure_code, "dispatch_gateway_not_configured");
-      assert.deepEqual(fixture.calls, ["status"]);
-      assert.deepEqual(fixture.scans, []);
-      assert.deepEqual(fixture.taskTransports, []);
+    for (const route of routes) {
+      for (const cap of [150, 500]) {
+        const fixture = launchHarness({ ...route, gateway, rows: [{ ...paidGrant, page_cap: cap }] });
+        const result = await fixture.submit();
+        assert.equal(result.status, 503, JSON.stringify(result.body));
+        assert.equal(result.body.failure_code, "dispatch_gateway_not_configured");
+        assert.deepEqual(fixture.calls, ["status"]);
+        assert.deepEqual(fixture.scans, []);
+        assert.deepEqual(fixture.taskTransports, []);
+      }
     }
   }
-  const fixture = launchHarness({ rows: [{ ...paidGrant, page_cap: 500 }] });
-  const original = await fixture.submit();
-  assert.equal(original.status, 200);
-  fixture.settings.SCAN_DISPATCH_GATEWAY_URL = "";
-  const replay = await fixture.submit();
-  assert.equal(replay.status, 200);
-  assert.equal(replay.body.scan_id, original.body.scan_id);
-  assert.equal(replay.body.replayed, true);
-  assert.deepEqual(fixture.calls, ["claim", "create", "bind", "status"]);
-  assert.equal(fixture.taskTransports.length, 2);
+  for (const route of routes) {
+    const fixture = launchHarness({ ...route, rows: [{ ...paidGrant, page_cap: 500 }] });
+    const original = await fixture.submit();
+    assert.equal(original.status, 200);
+    fixture.settings.SCAN_DISPATCH_GATEWAY_URL = "";
+    const replay = await fixture.submit();
+    assert.equal(replay.status, 200);
+    assert.equal(replay.body.scan_id, original.body.scan_id);
+    assert.equal(replay.body.replayed, true);
+    assert.deepEqual(fixture.calls, ["claim", "create", "bind", "status"]);
+    assert.equal(fixture.taskTransports.length, 2);
+  }
 });
 
-test("paid task transport independently prevents direct Cloud Tasks fallback", async t => {
+test("staged task transport independently prevents direct Cloud Tasks fallback", async t => {
   const priorDeno = globalThis.Deno;
   const priorFetch = globalThis.fetch;
   t.after(() => {
@@ -652,14 +660,19 @@ test("paid task transport independently prevents direct Cloud Tasks fallback", a
     scanId: "scan_01", attemptCount: 1, signingKey: "mock gateway signing key",
   };
   const payload = { staged_rollout_scope: "paid", scan_mode: "standard_500", page_cap: 500 };
-  const entry = () => enqueueScanJob({ ...args, payload });
-  const drain = () => enqueueScanDrain({ ...args, payload: {}, requireGateway: true });
-  for (const run of [entry, drain]) assert.equal((await run()).failureCode, "dispatch_gateway_not_configured");
+  const ownerPayload = { pipeline_mode: "staged", scan_mode: "standard_150", page_cap: 150 };
+  const attempts = [
+    () => enqueueScanJob({ ...args, payload }),
+    () => enqueueScanDrain({ ...args, payload: {}, requireGateway: true }),
+    () => enqueueScanJob({ ...args, payload: ownerPayload }),
+    () => enqueueScanDrain({ ...args, payload: ownerPayload }),
+  ];
+  for (const run of attempts) assert.equal((await run()).failureCode, "dispatch_gateway_not_configured");
   assert.deepEqual(requests, []);
   assert.ok(observedEnv.every(name => name === "SCAN_DISPATCH_GATEWAY_URL"));
   gateway = "https://dispatch-gateway.example/";
-  for (const run of [entry, drain]) assert.equal((await run()).failureCode, "dispatch_gateway_invalid_scan_mode");
-  assert.equal(requests.length, 2);
+  for (const run of attempts) assert.equal((await run()).failureCode, "dispatch_gateway_invalid_scan_mode");
+  assert.equal(requests.length, attempts.length);
   for (const [url, init] of requests) {
     assert.equal(url, "https://dispatch-gateway.example/dispatch");
     assert.equal(init.redirect, "error");

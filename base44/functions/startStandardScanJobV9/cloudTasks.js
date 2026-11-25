@@ -220,7 +220,7 @@ async function createTaskViaGateway({ gatewayUrl, signingKey, queuePath, body, t
   };
 }
 
-export function paidDispatchGatewayUrl(env = name => Deno.env.get(name)) {
+export function stagedDispatchGatewayUrl(env = name => Deno.env.get(name)) {
   const raw = String(env("SCAN_DISPATCH_GATEWAY_URL") || "").trim();
   try {
     const url = new URL(raw);
@@ -231,9 +231,10 @@ export function paidDispatchGatewayUrl(env = name => Deno.env.get(name)) {
   }
 }
 
-async function createTask({ queuePath, body, taskName, attemptCount, signingKey, requireGateway }) {
+async function createTask({ queuePath, body, taskName, attemptCount, signingKey, payload, requireGateway: forceGateway }) {
+  const requireGateway = forceGateway === true || payload?.pipeline_mode === "staged" || payload?.staged_rollout_scope === "paid";
   const gatewayUrl = requireGateway
-    ? paidDispatchGatewayUrl()
+    ? stagedDispatchGatewayUrl()
     : String(Deno.env.get("SCAN_DISPATCH_GATEWAY_URL") || "").trim();
   if (requireGateway && !gatewayUrl) {
     return { ok: false, outcomeUnknown: false, failureCode: "dispatch_gateway_not_configured" };
@@ -290,12 +291,10 @@ export async function enqueueScanJob(args) {
     return { ok: false, outcomeUnknown: false, failureCode: "invalid_worker_url" };
   }
   return createTask({
-    queuePath: args.queuePath,
+    ...args,
     body,
     taskName: taskNameForScan(args.queuePath, args.scanId, attempt),
     attemptCount: attempt,
-    signingKey: args.signingKey,
-    requireGateway: args.requireGateway === true || args.payload?.staged_rollout_scope === "paid",
   });
 }
 
@@ -308,11 +307,9 @@ export async function enqueueScanDrain(args) {
     return { ok: false, outcomeUnknown: false, failureCode: "invalid_worker_url" };
   }
   return createTask({
-    queuePath: args.queuePath,
+    ...args,
     body,
     taskName: taskNameForDrain(args.queuePath, args.scanId, attempt),
     attemptCount: attempt,
-    signingKey: args.signingKey,
-    requireGateway: args.requireGateway === true || args.payload?.staged_rollout_scope === "paid",
   });
 }

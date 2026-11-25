@@ -214,6 +214,8 @@ Once the 500 corpus and production checks pass, `paid-500` enables already-entit
 
 ### Named Standard 500 pilot while Standard 150 is open
 
+Pin the first ordinary Standard 150 acceptance to a candidate that already includes this launcher. The production promotion check compares the accepted V9 function packages and generated route names byte for byte. If the 150 acceptance used an earlier launcher, repeat it on the shared candidate before publishing the paid-pilot bundle.
+
 Use this path after Standard 150 passes its public release checks. Both limits use the verified canonical staged worker. Keep the ordinary account's approved server-owned 500 grant, pilot expiry, and named account consistent across the launcher and coordinator. Standard 150 continues through its normal paid admission and preview paths.
 
 1. Publish the accepted V9 frontend with the Base44 release workflow's `paid_500_pilot_bundle` option, or set `FIXLIST_PUBLISHED_PAID_500_PILOT=true` when running the authorized production site publisher. The accepted-source checks still apply. Verify the regular Standard 150 account sees 150 and can use the standard launch button.

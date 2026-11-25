@@ -298,7 +298,7 @@ async def safe_get_once(client, url: str, *, max_decoded_bytes: int | None = Non
     """
     cooldown = active_target_cooldown.get()
     if cooldown is not None:
-        await cooldown.before_request()
+        await cooldown.before_request(url)
     resolved = resolve_public_http_url(url)
     if resolved is None:
         return None

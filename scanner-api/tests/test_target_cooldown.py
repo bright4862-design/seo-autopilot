@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from app import scan_job
+from app import scanner
 from app.finalize_probe_guard import FinalizeProbeSuppressed
 from app.security import safe_get, safe_get_once
 from app.staged_scan import StageRetry, StagedScanRuntime
@@ -21,11 +22,120 @@ from app.target_cooldown import (
 )
 from app.workspace import MemoryWorkspace
 from tests.test_staged_workspace import Harness, State
+from tests import fixtures as fx
 
 
 ORIGIN = "https://example.com:443"
 HOST = "https://example.com"
 NOW = 1_790_000_000
+
+
+@pytest.mark.asyncio
+async def test_real_planner_robots_cooldown_stops_unsent_pages(mock_network):
+    requests = mock_network({"/robots.txt": {"status": 429, "headers": {"Retry-After": "3600"}}})
+    observations = []
+
+    async def publish(observation):
+        observations.append(observation)
+        return True
+
+    relay = TargetCooldownRelay(MemoryWorkspace(), "scans/scan/a1/", ORIGIN, publish, lambda: NOW)
+    with target_cooldown_scope(relay):
+        state = await scanner.plan_scan(HOST + "/", scan_mode="standard_150", job_mode=True, staged=True)
+        await scanner.crawl_batch(state, max_pages=50)
+    await relay.require_acknowledged()
+    assert [request.url.path for request in requests] == ["/robots.txt"]
+    assert len(observations) == 1
+    assert state.limited is True and state.completion_reason == "rate_limit"
+    assert state.pages == [] and state.crawl_state["claimed"] == 0
+    assert state.scan_coverage_counters == {
+        "urls_attempted": 0, "usable_html_pages": 0, "verified_http_failures": 0,
+        "access_unverified_pages": 0, "non_html_resources": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_real_crawl_suppressed_contact_is_not_failed_page(mock_network):
+    requests = mock_network({"/robots.txt": {"status": 404}})
+    state = await scanner.plan_scan(HOST + "/", path_prefix="/", scan_mode="standard_150", job_mode=True, staged=True)
+    requests.clear()
+
+    async def publish(observation):
+        return True
+
+    relay = TargetCooldownRelay(MemoryWorkspace(), "scans/scan/a1/", ORIGIN, publish, lambda: NOW)
+    response = httpx.Response(429, headers={"Retry-After": "3600"})
+    closed = relay.observe_response(httpx.URL(HOST + "/robots.txt"), response)
+    closed.set()
+    await relay.require_acknowledged()
+    with target_cooldown_scope(relay):
+        await scanner.crawl_batch(state, max_pages=50)
+    assert requests == []
+    assert state.pages == [] and state.crawl_state["claimed"] == 0
+    assert state.scan_coverage_counters["urls_attempted"] == 0
+    assert state.limited is True and state.completion_reason == "rate_limit"
+    assert len(state.queue) == 1 and state.seen == set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("short_pause", [False, True])
+async def test_real_planner_keeps_healthy_and_short_recovered_scans(mock_network, monkeypatch, short_pause):
+    routes = {
+        "/robots.txt": {"status": 404},
+        "/": {"body": "<html><title>Home</title><h1>Home</h1></html>"},
+    }
+    if short_pause:
+        routes["/"] = {"status": 429, "headers": {"Retry-After": "1"}}
+    requests = mock_network(routes)
+    elapsed, observations = [], []
+
+    async def advance(seconds):
+        await relay.drain()
+        elapsed.append(seconds)
+        routes["/"] = {"body": "<html><title>Home</title><h1>Home</h1></html>"}
+
+    async def publish(observation):
+        observations.append(observation)
+        return True
+
+    monkeypatch.setattr(scanner.asyncio, "sleep", advance)
+    relay = TargetCooldownRelay(MemoryWorkspace(), "scans/scan/a1/", ORIGIN, publish, lambda: NOW + sum(elapsed))
+    with target_cooldown_scope(relay):
+        state = await scanner.plan_scan(HOST + "/", scan_mode="standard_150", job_mode=True, staged=True)
+    await relay.require_acknowledged()
+    assert state.limited is False and state.initial_rate_limit_blocked is False
+    assert state.initial_rate_limit_retry_count == int(short_pause)
+    assert state.initial_rate_limit_recovered is short_pause
+    assert len(observations) == int(short_pause)
+    assert [request.url.path for request in requests].count("/") == 1 + int(short_pause)
+
+
+@pytest.mark.asyncio
+async def test_suppressed_retry_keeps_actual_429_without_counting_retry(mock_network, monkeypatch):
+    routes = {"/robots.txt": {"status": 404}}
+    requests = mock_network(routes)
+    state = await scanner.plan_scan(HOST + "/", path_prefix="/", scan_mode="standard_150", job_mode=True, staged=True)
+    state.concurrency = 1
+    routes["/"] = {"status": 429, "headers": {"Retry-After": "1"}}
+    requests.clear()
+
+    async def publish(observation):
+        return True
+
+    async def premature_wakeup(seconds):
+        # The transport fence must still enforce Retry-After if a pacer wakes
+        # before the target's independently tracked wall-clock pause expires.
+        return None
+
+    monkeypatch.setattr(scanner.asyncio, "sleep", premature_wakeup)
+    relay = TargetCooldownRelay(MemoryWorkspace(), "scans/scan/a1/", ORIGIN, publish, lambda: NOW)
+    with target_cooldown_scope(relay):
+        await scanner.crawl_batch(state)
+    assert [request.url.path for request in requests] == ["/"]
+    assert len(state.pages) == 1 and state.pages[0]["status_code"] == 429
+    assert state.scan_coverage_counters["urls_attempted"] == 1
+    assert state.rate_limit_pacer.retry_count == 0
+    assert state.rate_limit_pacer.rate_limit_blocked_scan is True
 
 
 @pytest.mark.parametrize(("value", "expected"), [
@@ -98,6 +208,31 @@ async def test_header_observer_uses_validated_logical_hop_and_not_numeric_ip(pub
     assert signals == [{
         "status_code": 429, "target_origin": ORIGIN, "observed_at": NOW, "retry_after_seconds": 3600,
     }]
+
+
+@pytest.mark.asyncio
+async def test_acknowledged_legacy_checkpoint_still_fences_exact_origin(public_dns):
+    store, contacts = MemoryWorkspace(), []
+    await store.write("scans/scan/a1/target-cooldown.json", {
+        "version": "staged_target_cooldown_v1", "pending": False, "hold_until": 0,
+        "observation": {"status_code": 429, "target_origin": ORIGIN, "observed_at": NOW, "retry_after_seconds": 3600},
+    })
+
+    async def publish(observation):
+        pytest.fail("An acknowledged observation must not be republished")
+
+    def target(request):
+        contacts.append(request.headers["host"])
+        return httpx.Response(200, stream=httpx.ByteStream(b"other origin"))
+
+    relay = TargetCooldownRelay(store, "scans/scan/a1/", ORIGIN, publish, lambda: NOW + 1)
+    await relay.resume()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(target)) as client:
+        with target_cooldown_scope(relay):
+            with pytest.raises(FinalizeProbeSuppressed):
+                await safe_get_once(client, HOST + "/suppressed")
+            assert (await safe_get_once(client, "https://www.example.com/allowed")).status_code == 200
+    assert contacts == ["www.example.com"] and relay.remaining_hold() == 3599
 
 
 @pytest.mark.asyncio
@@ -224,6 +359,184 @@ async def test_optional_relay_failure_keeps_complete_report_and_no_repeated_prob
     assert probes == ["/optional"] and len(observations) == 2 and observations[0] == observations[1]
     assert harness.scan["status"] == "complete" and len(harness.results) == 1
     assert harness.results[0]["crawl_timing"]["optional_checks_notice_reason"] == "site_rate_limited"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limited", [False, True])
+@pytest.mark.parametrize("scenario", ["saved", "missing", "replaced", "uncheckpointed", "invalid", "authority_outage", "expired", "precutoff", "recovered_before_cutoff"])
+async def test_prolonged_auxiliary_outage_preserves_cached_report(monkeypatch, public_dns, limited, scenario):
+    harness = Harness(monkeypatch)
+    harness.now = NOW
+    harness.scan["admission_target_origin"] = ORIGIN
+    probes, observations = [], []
+    relay_available = False
+
+    async def publish(client, scan, observation):
+        observations.append(observation)
+        return relay_available
+
+    def target(request):
+        probes.append(request.url.path)
+        return httpx.Response(429, headers={"Retry-After": "3600"}, stream=UnreadableBody())
+
+    async def finalize(state, *, allow_optional_probes):
+        assert allow_optional_probes is True
+        async with httpx.AsyncClient(transport=httpx.MockTransport(target)) as client:
+            assert (await safe_get_once(client, HOST + "/optional", max_decoded_bytes=1024)).status_code == 429
+        return {"success": True, "pages": state.pages, "pages_crawled": len(state.pages),
+                "crawl_timing": {"optional_checks_notice_reason": "site_rate_limited"}}
+
+    async def fail(client, scan_id, code, message, *, attempt_count):
+        harness.scan.update(status="failed", error_code=code)
+        harness.failures.append(code)
+
+    harness.deps.publish_target_cooldown = publish
+    harness.deps.finalize, harness.deps.fail = finalize, fail
+    await harness.run("plan")
+    for batch in range(3):
+        await harness.run("batch", batch=batch)
+    with pytest.raises(StageRetry, match="publication is pending"):
+        await harness.run("finalize", batch=3, limited=limited)
+    cached = (await harness.store.read(harness.prefix + "result.json.gz")).value
+    assert cached["pipeline_limited"] is limited
+    if scenario == "missing":
+        await harness.store.delete_prefix(harness.prefix + "result.json.gz")
+    elif scenario in {"replaced", "invalid"}:
+        snapshot = await harness.store.read(harness.prefix + "result.json.gz")
+        replaced = {**cached, "success": False} if scenario == "invalid" else cached
+        replacement = await harness.store.write(harness.prefix + "result.json.gz", replaced, generation=snapshot.generation)
+        if scenario == "invalid":
+            frontier = await harness.frontier()
+            await harness.store.write(harness.prefix + "frontier.json", {
+                **frontier.value, "target_cooldown_result_generation": replacement,
+            }, generation=frontier.generation)
+    elif scenario == "uncheckpointed":
+        frontier = await harness.frontier()
+        value = dict(frontier.value)
+        value.pop("target_cooldown_result_generation", None)
+        await harness.store.write(harness.prefix + "frontier.json", value, generation=frontier.generation)
+    await harness.runtime.request_partial_finalize(None, harness.job)
+    if scenario in {"precutoff", "recovered_before_cutoff"}:
+        harness.now += 1799
+        cutoff = (await harness.frontier()).value["finalize_recovery_until"]
+        with pytest.raises(StageRetry, match="publication is pending"):
+            await harness.runtime.process(None, "finalize", harness.job, batch=3, recovery_generation=1)
+        frontier = (await harness.frontier()).value
+        assert frontier["finalize_recovery_until"] == cutoff == NOW + 1800
+        assert "finalize_cooldown_fallback_until" not in frontier
+        assert "target_cooldown_publication" not in frontier and not harness.results
+        if scenario == "recovered_before_cutoff":
+            relay_available = True
+            assert (await harness.runtime.process(None, "finalize", harness.job, batch=3, recovery_generation=1))["success"] is True
+            assert len(harness.results) == 1 and not harness.failures and probes == ["/optional"]
+            assert "target_cooldown_publication" not in harness.results[0]["crawl_timing"]
+            assert (await harness.store.read(harness.prefix + "target-cooldown.json")).value["pending"] is False
+            return
+        harness.now -= 1799
+    harness.now += 3601 if scenario == "expired" else 2551
+    harness.runtime = StagedScanRuntime(harness.store, harness.dispatcher, harness.deps, clock=lambda: harness.now)
+    if scenario == "authority_outage":
+        persistence = []
+
+        async def unavailable(*args, **kwargs):
+            persistence.append(True)
+            return {"transient": True}
+
+        harness.deps.complete = unavailable
+        with pytest.raises(StageRetry, match="Authority persistence"):
+            await harness.runtime.request_partial_finalize(None, harness.job)
+        cutoff = (await harness.frontier()).value["finalize_cooldown_fallback_until"]
+        assert cutoff == NOW + 3001
+        harness.now = cutoff
+        with pytest.raises(StageRetry, match="still draining"):
+            await harness.runtime.request_partial_finalize(None, harness.job)
+        assert (await harness.frontier()).value["finalize_cooldown_fallback_until"] == cutoff
+        harness.now += 750
+        assert (await harness.runtime.request_partial_finalize(None, harness.job))["error_code"] == "staged_finalize_timeout"
+        assert persistence == [True] and not harness.results and probes == ["/optional"]
+        return
+    outcome = await harness.runtime.request_partial_finalize(None, harness.job)
+    if scenario in {"missing", "replaced", "uncheckpointed", "invalid"}:
+        assert outcome == {"success": False, "error_code": "staged_finalize_timeout"}
+        assert not harness.results and probes == ["/optional"]
+        return
+    assert outcome["success"] is True and outcome["fix_list_id"] == "list_test"
+    assert not harness.failures and probes == ["/optional"]
+    assert len(harness.results) == 1 and harness.results[0]["pages"] == cached["pages"]
+    assert harness.scan["status"] == ("limited" if limited else "complete")
+    notice = harness.results[0]["crawl_timing"]["target_cooldown_publication"]
+    expected_state = "expired" if scenario == "expired" else "unconfirmed"
+    assert notice["state"] == expected_state
+    assert notice["reason"] == ("observation_expired" if scenario == "expired" else "publication_unavailable")
+    assert outcome["target_cooldown_publication"] == expected_state
+    outbox = await harness.store.read(harness.prefix + "target-cooldown.json")
+    assert outbox.value["pending"] is (scenario != "expired")
+    assert all(observation == outbox.value["observation"] for observation in observations)
+    assert (await harness.runtime.request_partial_finalize(None, harness.job))["skipped"] == "already_terminal"
+    assert len(harness.results) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limited", [False, True])
+async def test_real_optional_canonical_outage_reaches_signed_persistence(mock_network, monkeypatch, limited):
+    harness = Harness(monkeypatch)
+    harness.now = NOW
+    harness.scan["admission_target_origin"] = ORIGIN
+    urls = [HOST + f"/products/{index}" for index in range(60)]
+    routes = {
+        "/robots.txt": {"status": 404},
+        "/sitemap.xml": fx._xml(fx._sitemap(urls)),
+        "/": fx._html(fx._page("Home", canonical=HOST + "/optional")),
+        "/optional": {"status": 429, "headers": {"Retry-After": "3600"}},
+        **{url: fx._html(fx._page("Product", canonical=HOST + "/optional")) for url in urls},
+    }
+    requests = mock_network(routes)
+    persistence, signals = [], []
+
+    async def review(result):
+        return {"success": True, "release_gate_eligible": True, "recommendations": []}
+
+    async def invoke(client, name, envelope, **kwargs):
+        payload = {key: value for key, value in envelope.items() if key != "proof"}
+        assert envelope["proof"] == scan_job.create_authority_seal(payload, "test-only-key")
+        if name == "durableScanWorkerControlV9":
+            assert envelope["action"] == "observe_target_cooldown"
+            assert envelope["identity"]["attempt_count"] == 1
+            signals.append(envelope["target_cooldown"])
+            return {"status_code": 503, "body": {"error_code": "target_cooldown_publish_unavailable"}}
+        assert name == ("persistLimitedScanResultV9" if limited else "persistDurableScanAuthorityV9")
+        assert envelope["scan"]["crawl_timing"]["target_cooldown_publication"]["state"] == "unconfirmed"
+        persistence.append(envelope)
+        harness.scan["status"] = "limited" if limited else "complete"
+        return {"status_code": 200, "body": {
+            "success": True, "fixListId": "list_test", "resultIntegrityVerified": True,
+            "fixListVerified": True, "scanRun": {**harness.scan, "authority_proof": "a" * 64},
+        }}
+
+    monkeypatch.setattr(scan_job, "invoke_function", invoke)
+    monkeypatch.setattr(scan_job, "read_scan_run", harness.read)
+    harness.deps.state_type, harness.deps.plan = scanner.ScanState, scanner.plan_scan
+    harness.deps.crawl, harness.deps.finalize = scanner.crawl_batch, scanner.finalize_scan
+    harness.deps.complete, harness.deps.review = scan_job.complete_authority, review
+    harness.deps.publish_target_cooldown = scan_job.publish_target_cooldown
+    with scan_job.worker_function_generation("V9"):
+        await harness.run("plan")
+        await harness.run("batch", batch=0)
+        if limited:
+            harness.now += 601
+        await harness.run("batch", batch=1)
+        with pytest.raises(StageRetry, match="publication is pending"):
+            await harness.run("finalize", batch=2)
+        assert len([request for request in requests if request.url.path == "/optional"]) == 1
+        contacts = len(requests)
+        await harness.runtime.request_partial_finalize(None, harness.job)
+        harness.now += 2551
+        harness.runtime = StagedScanRuntime(harness.store, harness.dispatcher, harness.deps, clock=lambda: harness.now)
+        assert (await harness.runtime.request_partial_finalize(None, harness.job))["success"] is True
+    assert len(requests) == contacts and len(persistence) == 1
+    assert persistence[0]["scan"]["pages_crawled"] == (50 if limited else 61)
+    assert len(signals) == 2 and signals[0] == signals[1]
+    assert not harness.failures
 
 
 @pytest.mark.asyncio

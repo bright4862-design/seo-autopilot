@@ -67,6 +67,10 @@ class TargetCooldownPending(RuntimeError):
     """The exact observation must be replayed before the stage can progress."""
 
 
+class TargetCooldownActive(FinalizeProbeSuppressed):
+    """A request was not sent because this exact origin is still paused."""
+
+
 class TargetCooldownRelay:
     """A generation-fenced outbox in the existing staged attempt workspace."""
 
@@ -112,7 +116,7 @@ class TargetCooldownRelay:
         self.generation = await self.store.write(self.key, record, generation=self.generation)
         self.record, self.unsaved = record, None
 
-    async def _acknowledge(self, *, replacement: bool) -> None:
+    async def _acknowledge(self) -> None:
         record = self.record
         if record is None or not record["pending"]:
             return
@@ -120,7 +124,7 @@ class TargetCooldownRelay:
         expiry = self._expires(observation)
         if expiry > self.clock() and await self.publish(observation) is not True:
             raise TargetCooldownPending("The target cooldown publication is pending")
-        hold_until = expiry if replacement else record["hold_until"]
+        hold_until = expiry
         await self._write({**record, "pending": False, "hold_until": hold_until})
 
     async def resume(self) -> None:
@@ -130,19 +134,25 @@ class TargetCooldownRelay:
         if not self._valid_record(stored.value):
             raise TargetCooldownPending("The target cooldown checkpoint could not be verified")
         self.generation, self.record = stored.generation, stored.value
-        await self._acknowledge(replacement=True)
+        await self._acknowledge()
 
     def remaining_hold(self) -> int:
-        return max(0, (self.record or {}).get("hold_until", 0) - int(self.clock()))
+        # Earlier acknowledged checkpoints used hold_until=0. The validated
+        # target's original expiry remains binding across those restarts too.
+        return max(0, self._expires(self.record["observation"]) - int(self.clock())) if self.record else 0
 
-    async def before_request(self) -> None:
+    async def before_request(self, logical_url: str | httpx.URL) -> None:
+        if explicit_http_origin(logical_url) != self.origin:
+            return
         # Queue new contacts behind the header observer. In-flight requests
         # might already have been admitted before the 429 reached the worker.
         if self.failed or (self.optional and self.tasks):
-            raise FinalizeProbeSuppressed(FINALIZE_RATE_LIMITED)
+            raise TargetCooldownActive(FINALIZE_RATE_LIMITED)
         await self.drain()
         if self.failed:
-            raise FinalizeProbeSuppressed(FINALIZE_RATE_LIMITED)
+            raise TargetCooldownActive(FINALIZE_RATE_LIMITED)
+        if self.remaining_hold():
+            raise TargetCooldownActive(FINALIZE_RATE_LIMITED)
 
     def observe_response(self, logical_url: httpx.URL, response: httpx.Response) -> asyncio.Event | None:
         if response.status_code != 429 or explicit_http_origin(logical_url) != self.origin:
@@ -175,7 +185,7 @@ class TargetCooldownRelay:
             if prior is None or self._expires(observation) > self._expires(prior["observation"]):
                 pending = {
                     "version": OUTBOX_VERSION, "observation": observation, "pending": True,
-                    "hold_until": prior["hold_until"] if prior else 0,
+                    "hold_until": self._expires(observation),
                 }
                 try:
                     await self._write(pending)
@@ -184,7 +194,7 @@ class TargetCooldownRelay:
             await closed.wait()
             if not self.failed:
                 try:
-                    await self._acknowledge(replacement=False)
+                    await self._acknowledge()
                 except (TargetCooldownPending, WorkspaceConflict, WorkspaceUnavailable):
                     self.failed = True
 

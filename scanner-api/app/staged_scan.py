@@ -137,6 +137,33 @@ class StagedScanRuntime:
         if cooldown is not None and (waiting := cooldown.remaining_hold()):
             raise StageRetry("A replayed target cooldown is still active", retry_after=waiting)
 
+    @staticmethod
+    def _finalize_deadline(frontier: dict) -> float:
+        return float(frontier.get("finalize_cooldown_fallback_until") or frontier["finalize_recovery_until"])
+
+    @staticmethod
+    def _verified_cooldown_result(frontier: dict, snapshot: Any, job: dict) -> bool:
+        # Only the exact result checkpointed by the lease that observed the
+        # auxiliary failure can receive the final bounded persistence window.
+        if (
+            snapshot is None or type(frontier.get("target_cooldown_result_generation")) is not int
+            or frontier["target_cooldown_result_generation"] != snapshot.generation
+        ):
+            return False
+        result = snapshot.value
+        return (
+            isinstance(result, dict) and result.get("success") is True
+            and result.get("scan_id") == job["scan_id"]
+            and result.get("request_id") == job["request_id"]
+            and result.get("pipeline_mode") == "staged"
+            and result.get("scan_mode") == job["scan_mode"]
+            and result.get("page_cap") == job["page_cap"]
+            and type(result.get("pipeline_limited")) is bool
+            and isinstance(result.get("pages"), list)
+            and result.get("pages_crawled") == len(result["pages"])
+            and 0 < len(result["pages"]) <= job["page_cap"]
+        )
+
     async def _lease(self, prefix: str, stage: str, batch: int, recovery_generation: int = 0) -> tuple[dict, int, bool] | None:
         key = prefix + "frontier.json"
         stored = await self.store.read(key)
@@ -243,11 +270,44 @@ class StagedScanRuntime:
                     return {"success": True, "skipped": "superseded_finalize_delivery"}
                 return await self._replay(client, scan, job, stored.value)
             frontier, generation, allow_optional_probes = leased
-            if recovery_generation and self.clock() >= frontier["finalize_recovery_until"]:
+            result_snapshot = await self.store.read(prefix + "result.json.gz") if stage == "finalize" else None
+            cooldown = self._target_cooldown(client, scan, job, prefix, stage)
+            cooldown_pending = False
+            if cooldown is not None:
+                try:
+                    await cooldown.resume()
+                except TargetCooldownPending:
+                    cooldown_pending = True
+            cooldown_result = (
+                cooldown is not None and cooldown.record is not None
+                and self._verified_cooldown_result(frontier, result_snapshot, job)
+            )
+            if (
+                recovery_generation and cooldown_result
+                and self.clock() >= frontier["finalize_recovery_until"]
+                and "target_cooldown_publication" not in frontier
+            ):
+                # No authority write has started on this blocked path. Give
+                # the verified report one bounded lease to save without waiting
+                # forever for this auxiliary service. Never renew this window.
+                if not await self.store.read(prefix + "completion.json"):
+                    if self.clock() >= float(frontier["lease_until"]):
+                        raise StageRetry("The stage lease expired")
+                    expired = cooldown.remaining_hold() == 0
+                    frontier = {**frontier,
+                        "finalize_cooldown_fallback_until": self.clock() + STAGE_LEASE_SECONDS,
+                        "target_cooldown_publication": {
+                            "state": "unconfirmed" if cooldown_pending else "expired" if expired else "acknowledged",
+                            "reason": "publication_unavailable" if cooldown_pending else "observation_expired" if expired else "publication_recovered",
+                            "observation": cooldown.record["observation"],
+                        },
+                    }
+                    generation = await self.store.write(prefix + "frontier.json", frontier, generation=generation)
+            if recovery_generation and self.clock() >= self._finalize_deadline(frontier):
                 # A timed-out persist can outlive its worker's HTTP request.
                 # Fence new finalizers and leave a full lease interval for
                 # previously started writes before attempting terminal failure.
-                safe_after = frontier["finalize_recovery_until"] + FINALIZE_PERSIST_DRAIN_SECONDS
+                safe_after = self._finalize_deadline(frontier) + FINALIZE_PERSIST_DRAIN_SECONDS
                 if self.clock() < safe_after:
                     raise StageRetry("The last finalize delivery is still draining")
                 _, stopped = await self._fence(client, job)
@@ -274,9 +334,10 @@ class StagedScanRuntime:
                 if already_terminal(persisted):
                     return {"success": True, "skipped": "already_terminal", "status": status}
                 raise StageRetry("The finalization timeout was not persisted")
-            cooldown = self._target_cooldown(client, scan, job, prefix, stage)
-            if cooldown is not None:
-                await cooldown.resume()
+            if cooldown_pending and not (
+                recovery_generation and cooldown_result and "target_cooldown_publication" in frontier
+            ):
+                raise TargetCooldownPending("The target cooldown publication is pending")
             receipt = DeliveryReceipt(self.store, prefix, job, stage, batch, frontier["lease_owner"], generation)
             receipt_context = active_delivery.set(receipt)
             receipt.start()
@@ -366,7 +427,6 @@ class StagedScanRuntime:
                 raise ValueError("Invalid staged operation")
             # An authorized watchdog may finalize committed partial evidence.
             limited = limited or bool(frontier.get("limited")) or bool(getattr(state, "limited", False)) or not state.finished
-            result_snapshot = await self.store.read(prefix + "result.json.gz")
             if result_snapshot:
                 result = result_snapshot.value
                 receipt.observe_artifact("result", result_snapshot.generation, produced=False)
@@ -400,7 +460,25 @@ class StagedScanRuntime:
                 # Persist the valid final report before a failed relay asks
                 # Cloud Tasks to retry. Replacement never repeats its probes.
                 if cooldown is not None:
-                    await cooldown.require_acknowledged()
+                    try:
+                        await cooldown.require_acknowledged()
+                    except TargetCooldownPending:
+                        # Bind the cache to the still-owned frontier generation.
+                        # A result left by a lost lease cannot become fallback
+                        # authority merely because its filename exists.
+                        if self.clock() >= float(frontier["lease_until"]):
+                            raise StageRetry("The stage lease expired")
+                        frontier = {**frontier, "target_cooldown_result_generation": result_generation}
+                        generation = await self.store.write(prefix + "frontier.json", frontier, generation=generation)
+                        raise
+            if "target_cooldown_publication" in frontier:
+                # Terminal persistence releases the claim, so this pending
+                # outbox is retained evidence, not a promised post-terminal
+                # replay. Include its unconfirmed state in the signed report.
+                result = {**result, "crawl_timing": {
+                    **(result.get("crawl_timing") or {}),
+                    "target_cooldown_publication": frontier["target_cooldown_publication"],
+                }}
             fresh, stopped = await self._fence(client, job)
             if stopped:
                 return stopped
@@ -437,7 +515,7 @@ class StagedScanRuntime:
                     ready_at = datetime.fromtimestamp(self.clock(), timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
                     await self.store.write(stamp_key, {"result_ready_at": ready_at})
                 result = {**result, "result_ready_at": ready_at}
-            if recovery_generation and self.clock() >= frontier["finalize_recovery_until"]:
+            if recovery_generation and self.clock() >= self._finalize_deadline(frontier):
                 raise StageRetry("The recovery window closed before the result could be saved")
             completion = self.dep.complete(client, fresh, result, signing_key, review=reviewed) if reviewed is not None else self.dep.complete(client, fresh, result, signing_key)
             outcome = await asyncio.wait_for(completion, timeout=90)
@@ -453,7 +531,8 @@ class StagedScanRuntime:
                 pages_crawled=len(state.pages), finalize_receipt_ref=receipt.finished_ref,
             )
             receipt.stage_committed = True
-            return {"success": True, "scan_id": job["scan_id"], "pages_crawled": len(state.pages), "fix_list_id": outcome.get("fix_list_id")}
+            return {"success": True, "scan_id": job["scan_id"], "pages_crawled": len(state.pages), "fix_list_id": outcome.get("fix_list_id"),
+                    **({"target_cooldown_publication": frontier["target_cooldown_publication"]["state"]} if "target_cooldown_publication" in frontier else {})}
         except TargetCooldownPending as exc:
             raise StageRetry(str(exc)) from exc
         except (WorkspaceConflict, WorkspaceUnavailable, asyncio.TimeoutError) as exc:
@@ -506,7 +585,7 @@ class StagedScanRuntime:
             )
             await self.store.write(prefix + "frontier.json", frontier, generation=stored.generation)
         batch = int(frontier["batch"])
-        recovery_until = frontier["finalize_recovery_until"]
+        recovery_until = self._finalize_deadline(frontier)
         if self.clock() >= recovery_until:
             if self.clock() < recovery_until + FINALIZE_PERSIST_DRAIN_SECONDS:
                 raise StageRetry("The last finalize delivery is still draining")

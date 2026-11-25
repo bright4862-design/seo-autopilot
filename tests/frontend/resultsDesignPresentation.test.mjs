@@ -171,7 +171,7 @@ test("limited summary labels the scan and withholds the stored provisional score
   assert.equal(typeof module.exports.CustomerResultsSummary, "function");
   const input = summaryProps({ scanRecord: { status: "limited", created_at: "2026-10-16T10:20:00Z" }, healthScore: 55, scoreUnavailable: true, pagesScanned: 1, pagesFound: 1 });
   const html = render(module.exports.CustomerResultsSummary, input);
-  assert.match(html, /Limited scan/);
+  assert.match(html, /Limited report/);
   assert.match(html, /Site health score unavailable/);
   assert.match(html, /—/);
   assert.doesNotMatch(html, /Site health score 55|>55</);
@@ -286,7 +286,7 @@ test("the actual limited saved-results page preserves the limitation and finding
     health_score: 55, health_score_status: "insufficient_evidence", limitation: "Only one page could be checked in this scan.",
     pages_crawled: 1, pages_found: 1 });
   const html = renderSavedPage(record);
-  assert.match(html, /Limited scan/);
+  assert.match(html, /Limited report/);
   assert.match(html, /Site health score unavailable/);
   assert.doesNotMatch(html, /Site health score 55|>55</);
   assert.match(html, /Only one page could be checked in this scan\./);
@@ -319,7 +319,7 @@ test("a signed rate-limited report explains why it stopped and keeps useful cove
   const header = (value) => renderSavedPage(value).match(/<header\b[\s\S]*?<\/header>/)?.[0] || "";
   const shortlisted = header({ ...record, top_fix_ids: ["alpha"] });
   assert.match(shortlisted, /We evaluated 50 usable HTML pages\. FixList attempted 58 URLs and found 60 pages\./);
-  assert.match(shortlisted, /1 thing is worth fixing first/);
+  assert.match(renderSavedPage({ ...record, top_fix_ids: ["alpha"] }), /Start with this fix/);
   assert.doesNotMatch(shortlisted, /We checked 58 pages|58 of 60 pages checked/);
   for (const historical of [
     { ...record, scan_coverage_verified: undefined },

@@ -62,7 +62,7 @@ test("review phase stays semantically separate from crawl completion", () => {
     pages_crawled: 150,
   });
 
-  assert.equal(model.phaseLabel, "Building your FixList…");
+  assert.equal(model.phaseLabel, "Preparing your report…");
   assert.equal(model.determinate, false);
   assert.equal(model.countLabel, "150 pages checked");
 });

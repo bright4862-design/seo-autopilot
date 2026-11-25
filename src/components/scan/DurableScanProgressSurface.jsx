@@ -23,8 +23,9 @@ export default function DurableScanProgressSurface({
     status: String(durableScan?.status || ""),
     pages_crawled: Math.max(0, Number(durableScan?.pagesCrawled) || 0),
     pages_planned: durableScan?.pagesPlanned,
+    page_cap: durableScan?.pageCap,
     durable_background_execution: backgroundExecutionProven === true,
-  }), [durableScan?.status, durableScan?.pagesCrawled, durableScan?.pagesPlanned, backgroundExecutionProven]);
+  }), [durableScan?.status, durableScan?.pagesCrawled, durableScan?.pagesPlanned, durableScan?.pageCap, backgroundExecutionProven]);
 
   return (
     <TruthfulScanProgress

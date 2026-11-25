@@ -1,3 +1,5 @@
+import { confirmedScanPageLimit } from "./scanPresentation.js";
+
 export const SCAN_PROGRESS_PRESENTATION_VERSION = "scan_progress_presentation_v1_truthful_denominator";
 
 const ACTIVE_STATES = new Set(["queued", "crawling", "reviewing"]);
@@ -63,9 +65,9 @@ function completedTotal(scan = {}, pagesChecked = 0) {
 }
 
 function phaseLabel(status) {
-  if (status === "queued") return "Finding pages…";
+  if (status === "queued") return "Waiting to start…";
   if (status === "crawling") return "Finding and checking pages…";
-  if (status === "reviewing") return "Building your FixList…";
+  if (status === "reviewing") return "Preparing your report…";
   if (status === "complete") return "Scan complete";
   if (status === "limited") return "Scan finished with limited evidence";
   if (status === "failed") return "Scan stopped";
@@ -112,6 +114,7 @@ export function scanProgressModel(scan = {}) {
     terminal,
     phaseLabel: phaseLabel(status),
     pagesChecked,
+    pageLimit: confirmedScanPageLimit(scan),
     totalPages: total,
     determinate,
     percent,

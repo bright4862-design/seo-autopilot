@@ -44,11 +44,22 @@ test("server priorities lead the results and all original fixes remain behind a 
 
 test("a capped inventory never implies that the inventory is the complete site", () => {
   const html = render(CustomerResultsSummary, {
-    scanRecord: { pages_crawled: 450, pages_found: 5000, inventory_capped: true, top_fix_ids: ["a"] },
+    scanRecord: { page_cap: 500, pages_crawled: 450, pages_found: 5000, inventory_capped: true, top_fix_ids: ["a"] },
     pagesScanned: 450, pagesFound: 5000,
   });
   assert.match(html, /We checked 450 pages out of at least 5,000 found/);
-  assert.match(html, /1 thing is worth fixing first/);
+  assert.match(html, /Scan limit/);
+  assert.match(html, /Up to 500 pages/);
+  assert.doesNotMatch(html, /450 of 5,000 pages checked/);
+});
+
+test("a saved 150-page limit and pages checked are separate even when inventory is unavailable", () => {
+  const html = render(CustomerResultsSummary, {
+    scanRecord: { scan_mode: "standard_150" }, pagesScanned: 62,
+  });
+  assert.match(html, /62 pages checked/);
+  assert.match(html, /Up to 150 pages/);
+  assert.doesNotMatch(html, /found/);
 });
 
 test("saved models retain the 500-page count while per-fix lists keep their separate contract", () => {

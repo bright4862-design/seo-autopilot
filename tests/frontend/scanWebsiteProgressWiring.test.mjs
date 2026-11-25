@@ -24,7 +24,7 @@ test("ScanWebsiteForm does not use discovery or the 150-page cap as a progress d
 
 test("leave-page reassurance is not promised before durable acceptance", () => {
   assert.doesNotMatch(source, /You can leave this page — we’ll save your list/);
-  assert.match(source, /FixList will tell you when it’s safe to leave this page/);
+  assert.doesNotMatch(source, /fixed left-1\/2 top-4/, "the scan status is in the form flow");
   assert.match(source, /setWatchedScanId\(scanId\)/);
   assert.ok(source.indexOf("setWatchedScanId(scanId)") > source.indexOf("jobData?.accepted === true"));
 });

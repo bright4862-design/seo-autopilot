@@ -74,9 +74,15 @@ const RECORDED = {
   component_versions: COMPONENTS,
 };
 
-function compare(live, recorded = RECORDED, expectedSha = "") {
-  return withFixtures({ live, recorded }, (paths) =>
-    runPython(COMPARATOR, [paths.live, paths.recorded, expectedSha]),
+function compare(live, recorded = RECORDED, expectedSha = "", expectedRevision = "worker-00054-trs") {
+  // Existing tests predate the executing-revision field; stamp normal fixtures
+  // explicitly, without replacing an intentionally absent/null negative control.
+  const fixture = live && typeof live === "object" && !Array.isArray(live)
+    && !Object.hasOwn(live, "worker_revision")
+    ? { ...live, worker_revision: expectedRevision }
+    : live;
+  return withFixtures({ live: fixture, recorded }, (paths) =>
+    runPython(COMPARATOR, [paths.live, paths.recorded, expectedSha, expectedRevision]),
   );
 }
 
@@ -152,7 +158,7 @@ test("a missing fingerprint is a failure, never a pass by absence", () => {
 test("a non-JSON or non-object body is a failure", () => {
   for (const body of ["<html>403 Forbidden</html>", "", '["5d94e93c54a9efb6"]', '"5d94e93c54a9efb6"']) {
     const result = withFixtures({ live: body, recorded: RECORDED }, (paths) =>
-      runPython(COMPARATOR, [paths.live, paths.recorded, ""]),
+      runPython(COMPARATOR, [paths.live, paths.recorded, "", "worker-00054-trs"]),
     );
     assert.equal(result.status, 1, `${body.slice(0, 20)} must not pass as a revision answer`);
   }
@@ -273,20 +279,31 @@ test("an untagged revision that does not hold all traffic yields no probe URL", 
 // Running the real operation end to end against stubbed gcloud/curl is the only
 // way to prove the refusal paths refuse. Asserting on their prose would pass a
 // guard that printed INDETERMINATE and then fell through to PASS.
-function runGuard({ service, revision = "", body, code = "200", token = "stub-token", audience = "", probeUrl = "", sourceSha = "" }) {
+function runGuard({ service, serviceAfter = service, revision = "", body, code = "200", token = "stub-token", audience = "", probeUrl = "", sourceSha = "" }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-revision-e2e-"));
   const bin = path.join(dir, "bin");
   fs.mkdirSync(bin);
   const servicePath = path.join(dir, "service.json");
+  const afterServicePath = path.join(dir, "service-after.json");
+  const describeCountPath = path.join(dir, "described-once");
   const bodyPath = path.join(dir, "revision.json");
   const curlLog = path.join(dir, "curl.log");
   fs.writeFileSync(servicePath, JSON.stringify(service));
+  fs.writeFileSync(afterServicePath, JSON.stringify(serviceAfter));
   fs.writeFileSync(bodyPath, typeof body === "string" ? body : JSON.stringify(body));
   fs.writeFileSync(
     path.join(bin, "gcloud"),
     `#!/usr/bin/env bash
 if [ "$1 $2" = "config set" ]; then exit 0; fi
-if [ "$1 $2 $3" = "run services describe" ]; then cat "${servicePath}"; exit 0; fi
+if [ "$1 $2 $3" = "run services describe" ]; then
+  if [ -f "${describeCountPath}" ]; then
+    cat "${afterServicePath}"
+  else
+    touch "${describeCountPath}"
+    cat "${servicePath}"
+  fi
+  exit 0
+fi
 echo "unexpected gcloud: $*" >&2; exit 1
 `,
     { mode: 0o755 },
@@ -345,6 +362,7 @@ const LIVE_MATCHING = {
   component_versions: FREEZE.component_versions,
   fingerprint: FREEZE.fingerprint,
   source_sha: PROMOTED_SHA,
+  worker_revision: "worker-00054-trs",
 };
 const serving = (revisionName, extra = {}) => ({
   status: {
@@ -359,6 +377,123 @@ test("end to end: a worker serving the recorded identity passes", () => {
   assert.match(result.stdout, /PASS: the running worker computes/);
   assert.match(result.curl, new RegExp(`${SERVICE_URL}/revision`));
   assert.match(result.curl, /authorization: Bearer stub-token/);
+});
+
+
+test("end to end: a mid-probe serving traffic switch cannot inherit a green identity", () => {
+  // Before: the service URL identifies A. After: the same URL identifies B.
+  // A correct-looking /revision body must not be attributed to A after routing moved.
+  const result = runGuard({
+    service: serving("worker-00054-trs"),
+    serviceAfter: serving("worker-00055-new"),
+    revision: "worker-00054-trs",
+    body: LIVE_MATCHING,
+  });
+  assert.notEqual(result.status, 0, "unstable serving traffic must fail closed");
+  assert.match(result.stdout, /INDETERMINATE: Cloud Run routing/);
+  assert.doesNotMatch(result.stdout, /PASS: the running worker computes/);
+});
+
+test("end to end: a candidate tag reassignment during probing fails closed", () => {
+  const initial = {
+    status: {
+      url: SERVICE_URL,
+      traffic: [
+        { revisionName: "worker-00053-serving", percent: 100 },
+        { revisionName: "worker-00054-trs", percent: 0, tag: "candidate", url: TAG_URL },
+      ],
+    },
+  };
+  const retargeted = {
+    status: {
+      url: SERVICE_URL,
+      traffic: [
+        { revisionName: "worker-00053-serving", percent: 100 },
+        { revisionName: "worker-00054-trs", percent: 0 },
+        { revisionName: "worker-00055-other", percent: 0, tag: "candidate", url: TAG_URL },
+      ],
+    },
+  };
+  const result = runGuard({
+    service: initial, serviceAfter: retargeted,
+    revision: "worker-00054-trs", probeUrl: TAG_URL, body: LIVE_MATCHING,
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /INDETERMINATE: Cloud Run routing/);
+  assert.doesNotMatch(result.stdout, /PASS: the running worker computes/);
+});
+
+test("end to end: a forged zero-percent tag cannot impersonate the canonical service URL", () => {
+  // Even contradictory control-plane metadata must not rescue a serving
+  // revision whose routing weight fell from 100 to zero.
+  const impossibleButHostile = {
+    status: {
+      url: SERVICE_URL,
+      traffic: [
+        { revisionName: "worker-00054-trs", percent: 0, tag: "candidate", url: SERVICE_URL },
+        { revisionName: "worker-00055-new", percent: 100 },
+      ],
+    },
+  };
+  const result = runGuard({
+    service: serving("worker-00054-trs"), serviceAfter: impossibleButHostile,
+    revision: "worker-00054-trs", body: LIVE_MATCHING,
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /INDETERMINATE: Cloud Run routing/);
+});
+
+test("end to end: unrelated zero-traffic tag movement does not invalidate the serving binding", () => {
+  const initial = {
+    status: {
+      url: SERVICE_URL,
+      traffic: [
+        { revisionName: "worker-00054-trs", percent: 100 },
+        { revisionName: "worker-00055-other", percent: 0, tag: "candidate", url: TAG_URL },
+      ],
+    },
+  };
+  const changedOther = {
+    status: {
+      url: SERVICE_URL,
+      traffic: [
+        { revisionName: "worker-00054-trs", percent: 100 },
+        { revisionName: "worker-00056-another", percent: 0, tag: "candidate", url: TAG_URL },
+      ],
+    },
+  };
+  const result = runGuard({
+    service: initial, serviceAfter: changedOther, revision: "worker-00054-trs", body: LIVE_MATCHING,
+  });
+  assert.equal(result.status, 0, result.stdout);
+  assert.match(result.stdout, /PASS: route attribution remained stable/);
+});
+
+test("end to end: identical release markers and SHA cannot disguise a different executing revision", () => {
+  // An A -> B -> A routing excursion could evade two control-plane snapshots.
+  // The response must independently attest which Cloud Run process answered.
+  const result = runGuard({
+    service: serving("worker-00054-trs"),
+    serviceAfter: serving("worker-00054-trs"),
+    revision: "worker-00054-trs",
+    body: { ...LIVE_MATCHING, worker_revision: "worker-00055-other" },
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /responding worker revision is absent or differs/);
+  assert.doesNotMatch(result.stdout, /PASS: the running worker computes/);
+});
+
+test("end to end: an absent K_REVISION cannot be silently accepted", () => {
+  const { worker_revision: omitted, ...missing } = LIVE_MATCHING;
+  for (const body of [missing, { ...LIVE_MATCHING, worker_revision: "" }]) {
+    const result = runGuard({
+      service: serving("worker-00054-trs"),
+      revision: "worker-00054-trs",
+      body,
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stdout, /responding worker revision is absent or differs/);
+  }
 });
 
 test("end to end: a worker serving a different identity fails and is diagnosed", () => {

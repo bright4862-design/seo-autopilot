@@ -27,6 +27,25 @@ command -v node >/dev/null 2>&1 || {
 ROUTE_SELECTION="$(node "$REPO_ROOT/scripts/lib/base44-public-routes.mjs")"
 read -r -a ROUTE_FIELDS <<<"$ROUTE_SELECTION"
 FUNCTION_ROUTES=("${ROUTE_FIELDS[@]:1}")
+# Opt-in owner-only canary diagnostic identity. Public route selection covers
+# exactly six scanner functions; release-functions can deploy this seventh
+# package without the normal verifier observing its executing bytes.
+# Preserve the existing six-route default and require an exact production
+# app/origin when this read-only GET/405 package probe is requested.
+case "${VERIFY_OWNER_DEBUG_RUNTIME:-0}" in
+  0) ;;
+  1)
+    if [[ "$APP_ID" != "6a498732ec779dfaaeab0e53" || "$PROBE_ORIGIN" != "https://base44.app" ]]; then
+      echo 'Refusing owner diagnostic runtime verification: exact FixList app and origin required.' >&2
+      exit 2
+    fi
+    FUNCTION_ROUTES+=(ownerScanDebugControl)
+    ;;
+  *)
+    echo 'Refusing owner diagnostic runtime verification: VERIFY_OWNER_DEBUG_RUNTIME must be 0 or 1.' >&2
+    exit 2
+    ;;
+esac
 if [[ "${ROUTE_FIELDS[0]}" == "v9" ]]; then
   if [[ "$APP_ID" != "6a498732ec779dfaaeab0e53" || "$PROBE_ORIGIN" != "https://base44.app" ]]; then
     echo 'Refusing active V9 verification: the FixList app and Base44 origin must match.' >&2

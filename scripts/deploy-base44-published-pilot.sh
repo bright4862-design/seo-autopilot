@@ -92,10 +92,10 @@ git archive "$PUBLIC_BASELINE_SHA" | tar -x -C "$backup/baseline"
 verify_site "$PUBLIC_BASELINE_SHA"
 verify_v8
 verify_drain
-fixlist_assert_active_v9_intake_closed "$ROOT" "$APP_ID" "$BASE44_EXPECTED_OWNER"
-verify_v9 before
 fixlist_install_base44_cli "$backup/cli"
 fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$backup/auth" "$APP_ID"
+fixlist_assert_active_v9_intake_closed "$ROOT" "$APP_ID" "$BASE44_EXPECTED_OWNER"
+verify_v9 before
 make_capture_project "$backup/restore"
 capture before "$backup/restore"
 

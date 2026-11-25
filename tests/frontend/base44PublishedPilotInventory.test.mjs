@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -48,4 +49,52 @@ test("a missing listed package or link cannot be used for recovery", t => {
   assert.throws(() => captureFunctionInventory(before, "  launcherV8\n  readerV9B0000\n"), /disagree/);
   fs.symlinkSync("entry.ts", path.join(before, "base44/functions/launcherV8/copy.ts"));
   assert.throws(() => captureFunctionInventory(before, "  launcherV8\n"), /Unsupported/);
+});
+
+test("the site pilot authenticates a freshly pinned CLI before probing the V9 launcher", t => {
+  const root = project(t);
+  const scripts = path.join(root, "scripts");
+  fs.mkdirSync(path.join(scripts, "lib"), { recursive: true });
+  fs.mkdirSync(path.join(root, "data"));
+  fs.copyFileSync(new URL("../../scripts/deploy-base44-published-pilot.sh", import.meta.url),
+    path.join(scripts, "deploy-base44-published-pilot.sh"));
+  fs.writeFileSync(path.join(root, "data/base44-function-routes.json"),
+    JSON.stringify({ generation: "v8", candidate_routes: { v9: {} } }));
+  fs.writeFileSync(path.join(root, "data/beta-crawler-revision.json"), JSON.stringify({ status: "candidate" }));
+  fs.writeFileSync(path.join(scripts, "lib/release-source-guard.sh"), "fixlist_require_exact_main() { true; }\n");
+  fs.writeFileSync(path.join(scripts, "lib/base44-public-routes.mjs"), 'console.log("v8 launcherV8");');
+  fs.writeFileSync(path.join(scripts, "generate_release_contracts.mjs"), "");
+  for (const name of ["verify-base44-site.sh", "verify-base44-functions.sh", "fixlist-cloud-operator.sh"]) {
+    fs.writeFileSync(path.join(scripts, name), "exit 0\n");
+  }
+  fs.writeFileSync(path.join(scripts, "lib/base44-pinned-cli.sh"), [
+    "fixlist_install_base44_cli() { export FIXLIST_BASE44_CLI=pinned-cli; echo install; }",
+    'fixlist_require_base44_owner() { [[ "$FIXLIST_BASE44_CLI" == pinned-cli ]] || exit 30; export TEST_AUTHENTICATED=true; echo authenticate; }',
+  ].join("\n"));
+  fs.writeFileSync(path.join(scripts, "deploy-base44-staged-functions.sh"), [
+    "fixlist_assert_active_v9_intake_closed() {",
+    '  [[ "$FIXLIST_BASE44_CLI" == pinned-cli && "$TEST_AUTHENTICATED" == true ]] || exit 31',
+    "  echo probe",
+    "  exit 42",
+    "}",
+  ].join("\n"));
+  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  git("init", "-q");
+  git("add", ".");
+  git("-c", "user.name=Pilot Test", "-c", "user.email=test@example.test", "commit", "-qm", "Seed publisher fixture");
+  const sha = git("rev-parse", "HEAD");
+  for (const inherited of [undefined, "/not/a/pinned/base44"]) {
+    const env = {
+      ...process.env, BASE44_APP_ID: "6a498732ec779dfaaeab0e53", BASE44_API_KEY: "",
+      BASE44_EXPECTED_OWNER: "londonparisbrussels@gmail.com", SOURCE_SHA: sha, PUBLIC_BASELINE_SHA: sha,
+      BARRIER_EXPECTED_GENERATION: "10", CONFIRM: "PUBLISH-BASE44-PILOT:" + sha + ":" + sha,
+    };
+    if (inherited === undefined) delete env.FIXLIST_BASE44_CLI;
+    else env.FIXLIST_BASE44_CLI = inherited;
+    delete env.TEST_AUTHENTICATED;
+    const result = spawnSync("bash", [path.join(scripts, "deploy-base44-published-pilot.sh")],
+      { cwd: root, encoding: "utf8", env, timeout: 8_000 });
+    assert.equal(result.status, 42, result.stderr);
+    assert.equal(result.stdout, "install\nauthenticate\nprobe\n");
+  }
 });

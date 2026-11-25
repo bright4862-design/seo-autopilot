@@ -183,7 +183,21 @@ test("both release paths still rely on the verifier's canonical defaults", () =>
   const publish = fs.readFileSync("scripts/deploy-base44-beta-site.sh", "utf8");
   const operator = fs.readFileSync(".github/workflows/fixlist-cloud-operator.yml", "utf8");
   assert.match(publish, /EXPECTED_SOURCE_SHA="\$SOURCE_SHA" bash "\$REPO_ROOT\/scripts\/verify-base44-site\.sh"/);
-  assert.match(operator, /EXPECTED_SOURCE_SHA: \$\{\{ steps\.command\.outputs\.product_sha \}\}\n\s+shell: bash\n\s+run: bash \.\/scripts\/verify-base44-site\.sh/);
+  const preflightName = "      - name: Verify matching Base44 site and executing scanner/customer routes";
+  const nextStepName = "      - name: Resolve the worker's canonical service URL";
+  assert.equal(operator.split(preflightName).length, 2, "the promotion preflight must be unique");
+  const preflight = operator.split(preflightName)[1].split(nextStepName)[0];
+  assert.ok(preflight.includes('EXPECTED_SOURCE_SHA: ${{ steps.command.outputs.product_sha }}'));
+  assert.match(preflight, /shell: bash\s+run: \|\s+set -euo pipefail/);
+  const siteVerify = "bash ./scripts/verify-base44-site.sh";
+  const routesVerify = "bash ./scripts/verify-base44-functions.sh";
+  assert.ok(preflight.includes(siteVerify), "the canonical published sites must still be verified");
+  assert.ok(preflight.includes("BASE44_APP_ID=6a498732ec779dfaaeab0e53"));
+  assert.ok(preflight.includes("BASE44_FUNCTION_ORIGIN=https://base44.app"));
+  assert.ok(preflight.includes(routesVerify), "the executing V8 functions must also be verified");
+  assert.ok(preflight.indexOf(siteVerify) < preflight.indexOf(routesVerify), "verify sites before functions");
+  assert.doesNotMatch(preflight, /\|\|\s*true/, "preflight failures must not be masked");
+  assert.ok(operator.indexOf(preflightName) < operator.indexOf("      - name: Promote exact candidate with automatic rollback"));
   for (const source of [publish, operator]) {
     assert.doesNotMatch(source, /BASE44_URL|rich-rank-pilot-flow/, "a caller override would bring the stale-alias failure back");
   }

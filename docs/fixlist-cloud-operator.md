@@ -45,7 +45,19 @@ reports the running revision, image identity, Cloud Build provenance including
 `_RELEASE_SHA`, and request timeout. A human must confirm that the reported
 release SHA is a commit that declares both durable routes.
 
-Run this before `activate-beta`.
+The standalone GitHub workflow's `verify-worker-routes` now chooses the one
+100%-serving revision from a reconciled, Ready Cloud Run service. It intentionally
+ignores the generic prefilled `revision` input, since the prefilled value can
+refer to a historical candidate instead of current traffic. If traffic is
+split or not known, the read-only check fails closed rather than certifying
+`latestReadyRevisionName` or a zero-traffic tag. For an explicitly tagged
+zero-traffic candidate, use `verify-staged-worker-release` instead.
+
+This only verifies source-derived route availability for the selected serving
+revision; it is **not** the authenticated executing-process `/revision`
+fingerprint/component/revision proof or the Base44/signing/customer read-back.
+Both the route check and those independent release gates are required before
+considering any activation.
 
 ### `activate-beta` ordering
 

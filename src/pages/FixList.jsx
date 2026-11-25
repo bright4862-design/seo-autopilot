@@ -41,7 +41,7 @@ import { displayPathPrefix, focusedPathSections, focusedSectionOnboardingPath, o
 import { buildPageAccounting } from "@/lib/pageAccounting";
 import { customerSafeLimitationLine, durableScanStatePresentation } from "@/lib/durableScanStatePresentation";
 import { readSiteOwnership, resolveScanOwnership } from "@/lib/siteOwnershipPolicy";
-import { pageCapFromRecord, inventoryCoverageLine, optionalChecksNotice, serverSelectedPriorityCards } from "@/lib/scanPresentation";
+import { confirmedScanPageLimit, pageCapFromRecord, inventoryCoverageLine, optionalChecksNotice, serverSelectedPriorityCards } from "@/lib/scanPresentation";
 import { healthScoreExplanation } from "@/lib/healthScoreExplanation";
 
 const CMS_OPTIONS = [
@@ -483,6 +483,7 @@ export default function FixList() {
     && !String(scanRecord?.path_prefix || scanRecord?.requested_path_prefix || "").trim()
   );
   const fullResultLayout = Boolean(requestedScanId && hasUsefulScan && !locked && !previewComplete);
+  const scanInProgress = ACTIVE_SCAN_RUN_STATUSES.has(scanRecord?.status);
 
   function retryRequestedScan() {
     setRequestedScanFailure(null);
@@ -524,7 +525,7 @@ export default function FixList() {
   return (
     <div className={`min-h-screen text-ink antialiased ${fullResultLayout ? "bg-[#F6F4EF] [&_.text-ink-faint]:text-ink-muted" : "bg-paper"}`}>
       <div className={`mx-auto px-5 pb-24 sm:px-6 ${fullResultLayout ? "max-w-[880px]" : "max-w-[680px]"}`}>
-        {!fullResultLayout ? <div className="flex items-center justify-between pt-7">
+        {!fullResultLayout && !scanInProgress ? <div className="flex items-center justify-between pt-7">
           <div className="text-[15px] font-medium tracking-tight text-ink-muted">{websiteHost || ""}</div>
           <button
             type="button"
@@ -563,6 +564,7 @@ export default function FixList() {
           <PreviewResultState scanRecord={scanRecord} />
         ) : scanRecord && !hasUsefulScan ? (
           <RequestedScanState
+            targetLabel={websiteHost}
             presentation={durableScanStatePresentation(scanRecord, {
               // What the customer told us before the scan decides whether a
               // blocked crawl reads as "open your firewall" or "ask whoever
@@ -607,7 +609,7 @@ export default function FixList() {
                 <button
                   type="button"
                   onClick={() => navigate(focusedRescanTarget || "/onboarding")}
-                  className="min-h-9 rounded-[10px] bg-ink px-4 py-2 text-[13.5px] font-medium text-white transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+                  className="min-h-9 rounded-[10px] border border-hairline bg-white px-4 py-2 text-[13.5px] font-medium text-ink transition-colors hover:bg-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
                 >
                   Scan again
                 </button>
@@ -860,11 +862,6 @@ export default function FixList() {
           <NoScanState onScan={() => navigate("/onboarding")} />
         )}
 
-        <footer className="mt-24 border-t border-hairline-soft pt-5 text-[12px] leading-relaxed text-ink-faint">
-          {hasUsefulScan
-            ? `FixList checked ${pagesScanned} pages of your site this scan. Some checks depend on how your site behaves for Google over time, so a perfect score isn't the goal — a shorter list is.`
-            : "FixList checks the most important pages of your site and turns what it finds into a short, plain-English list."}
-        </footer>
       </div>
     </div>
   );
@@ -884,31 +881,38 @@ export function CustomerResultsSummary({
   pagesScanned = 0, pagesFound = 0, repairCount = 0, children,
 }) {
   const limitedCoverage = verifiedLimitedCoverageLine(scanRecord);
+  const pageLimit = confirmedScanPageLimit(scanRecord);
+  const coverage = limitedCoverage || (pagesFound > 0
+    ? inventoryCoverageLine({ ...scanRecord, pages_crawled: pagesScanned, pages_found: pagesFound })
+    : `${formatCount(pagesScanned)} ${pagesScanned === 1 ? "page" : "pages"} checked.`);
   const hasPriorities = Array.isArray(scanRecord.top_fix_ids);
   return (
     <header className="pt-10 sm:pt-12">
       {scanRecord.status === "limited" ? (
-        <p className="mb-4 inline-flex rounded-full bg-warnink/10 px-3 py-1 text-[12px] font-medium text-ink-muted">Limited scan</p>
+        <p className="mb-4 inline-flex rounded-full bg-warnink/10 px-3 py-1 text-[12px] font-medium text-ink-muted">Limited report</p>
       ) : null}
       <div className="flex items-center gap-4">
         {!hasPriorities ? <ScoreRing score={healthScore} unavailable={scoreUnavailable} size={64} /> : null}
         <div className="min-w-0">
           <h1 className="break-words text-[27px] font-semibold leading-tight tracking-[-0.03em] sm:text-[30px]">{websiteHost || safeHostname(scanRecord.website_url) || "Website scan"}</h1>
-          {limitedCoverage || hasPriorities ? (
-            <p className="mt-2 text-[14px] leading-relaxed text-ink-muted">
-              {limitedCoverage || inventoryCoverageLine(scanRecord)}
-              {hasPriorities ? ` ${scanRecord.top_fix_ids.length} ${scanRecord.top_fix_ids.length === 1 ? "thing is" : "things are"} worth fixing first.` : null}
-            </p>
-          ) : null}
           <p className="mt-2 text-[13px] leading-relaxed text-ink-muted tabular-nums sm:text-[14px]">
             Scanned {scanRecord.created_at ? formatDate(scanRecord.created_at) : "recently"}
-            {!limitedCoverage ? (
-              <>{" · "}{formatCount(pagesScanned)}{pagesFound > 0 ? ` of ${formatCount(pagesFound)}` : ""} {(pagesFound > 0 ? pagesFound : pagesScanned) === 1 ? "page" : "pages"} checked</>
-            ) : null}
             {" · "}{formatCount(repairCount)} {repairCount === 1 ? "recommendation" : "recommendations"}
           </p>
         </div>
       </div>
+      <dl className="mt-5 flex flex-col gap-3 rounded-xl border border-hairline-soft bg-white px-4 py-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
+        <div>
+          <dt className="text-[12px] font-medium text-ink-muted">Scan coverage</dt>
+          <dd className="mt-0.5 text-[14px] leading-relaxed text-ink">{coverage}</dd>
+        </div>
+        {pageLimit !== null ? (
+          <div className="shrink-0 border-t border-hairline-soft pt-3 sm:border-l sm:border-t-0 sm:pl-6 sm:pt-0">
+            <dt className="text-[12px] font-medium text-ink-muted">Scan limit</dt>
+            <dd className="mt-0.5 text-[14px] leading-relaxed text-ink">Up to {formatCount(pageLimit)} pages</dd>
+          </div>
+        ) : null}
+      </dl>
       {children}
     </header>
   );
@@ -1260,7 +1264,9 @@ function CustomerRepairList({ cards = [], websiteUrl = "", explanationForCard, t
   if (shortlist) {
     return (
       <section className="mt-8" aria-labelledby="priority-fixes-heading">
-        <h2 id="priority-fixes-heading" className="text-[19px] font-semibold tracking-tight">Start with these {shortlist.first.length}</h2>
+        <h2 id="priority-fixes-heading" className="text-[19px] font-semibold tracking-tight">
+          {shortlist.first.length === 1 ? "Start with this fix" : `Start with these ${shortlist.first.length} fixes`}
+        </h2>
         <div className="mt-4 space-y-4">
           {shortlist.first.map(card => <PriorityRepairCard key={card.fixId || card.evidence.mergedFromFixIds.join("|")} card={card} websiteUrl={websiteUrl} />)}
         </div>
@@ -1642,7 +1648,7 @@ function ScoreExplanation({ explanation }) {
   );
 }
 
-function RequestedScanState({ title = "", detail = "", presentation = null, limitation = "", reference = "" }) {
+function RequestedScanState({ title = "", detail = "", presentation = null, limitation = "", reference = "", targetLabel = "" }) {
   // Either a plain title/detail pair, for the states that have nothing to
   // explain -- loading, mostly -- or a full presentation, which answers what
   // happened, whether the saved evidence is worth anything, and what to do.
@@ -1659,12 +1665,14 @@ function RequestedScanState({ title = "", detail = "", presentation = null, limi
     );
   }
 
+  const inProgress = presentation.kind === "in_progress";
   return (
-    <div className="mt-16 rounded-2xl border border-hairline-soft bg-white p-6">
+    <div className="mt-10 rounded-2xl border border-hairline-soft bg-white p-5 sm:p-6" role={inProgress ? "status" : undefined} aria-live={inProgress ? "polite" : undefined}>
+      {inProgress && targetLabel ? <p className="mb-2 break-words text-[13px] font-medium text-ink-muted">{targetLabel}</p> : null}
       <h1 className="text-[22px] font-semibold tracking-tight">{presentation.title}</h1>
 
-      <h2 className="mt-5 text-[12px] font-medium uppercase tracking-wide text-ink-faint">What happened</h2>
-      <p className="mt-1.5 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{presentation.detail}</p>
+      {!inProgress ? <h2 className="mt-5 text-[12px] font-medium uppercase tracking-wide text-ink-faint">What happened</h2> : null}
+      <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{presentation.detail}</p>
       {limitation ? (
         <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{limitation}</p>
       ) : null}
@@ -1675,7 +1683,10 @@ function RequestedScanState({ title = "", detail = "", presentation = null, limi
         discovered URLs is not 1% done -- the count is real, the ratio is not.
       */}
       {presentation.countLabel ? (
-        <p className="mt-3 text-[13px] tabular-nums text-ink-muted">{presentation.countLabel}</p>
+        <p className="mt-4 text-[15px] font-medium tabular-nums text-ink">{presentation.countLabel}</p>
+      ) : null}
+      {presentation.pageLimit !== null ? (
+        <p className="mt-1 text-[13px] text-ink-muted">Up to {formatCount(presentation.pageLimit)} pages in this scan</p>
       ) : null}
       {presentation.percent !== null ? (
         <div
@@ -1684,7 +1695,7 @@ function RequestedScanState({ title = "", detail = "", presentation = null, limi
           aria-valuenow={presentation.percent}
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-label="Scan progress"
+          aria-label="Planned pages checked"
         >
           <div className="h-full rounded-full bg-ink/60 transition-[width] duration-500" style={{ width: `${presentation.percent}%` }} />
         </div>
@@ -1693,11 +1704,11 @@ function RequestedScanState({ title = "", detail = "", presentation = null, limi
         <p className="mt-3 max-w-[52ch] text-[13px] leading-relaxed text-ink-faint">{presentation.slowNote}</p>
       ) : null}
 
-      <h2 className="mt-5 text-[12px] font-medium uppercase tracking-wide text-ink-faint">What to do next</h2>
-      <p className="mt-1.5 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{presentation.nextStep}</p>
-      <p className="mt-1.5 max-w-[52ch] text-[13.5px] leading-relaxed text-ink-faint">{presentation.retryAdvice}</p>
+      {!inProgress ? <h2 className="mt-5 text-[12px] font-medium uppercase tracking-wide text-ink-faint">What to do next</h2> : null}
+      <p className="mt-3 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{presentation.nextStep}</p>
+      {!inProgress ? <p className="mt-1.5 max-w-[52ch] text-[13.5px] leading-relaxed text-ink-faint">{presentation.retryAdvice}</p> : null}
 
-      {reference ? <p className="mt-5 text-[12px] text-ink-faint">Scan reference: <span className="font-mono tabular-nums">{reference}</span></p> : null}
+      {reference && !inProgress ? <p className="mt-5 text-[12px] text-ink-faint">Scan reference: <span className="font-mono tabular-nums">{reference}</span></p> : null}
     </div>
   );
 }

@@ -28,9 +28,9 @@ function running(overrides = {}) {
 
 test("each active phase says what is actually happening", () => {
   const phases = [
-    ["queued", "Finding pages…"],
+    ["queued", "Waiting to start…"],
     ["crawling", "Finding and checking pages…"],
-    ["reviewing", "Building your FixList…"],
+    ["reviewing", "Preparing your report…"],
   ];
   for (const [status, label] of phases) {
     const view = durableScanStatePresentation(running({ status }));
@@ -174,6 +174,22 @@ test("the progress model stays the single source of these numbers", () => {
     assert.equal(view.countLabel, model.countLabel);
     assert.equal(view.percent, model.percent);
   }
+});
+
+test("the page limit is shown separately from the selected pages, and review hides crawl progress", () => {
+  for (const pageCap of [150, 500]) {
+    const stagedRun = running({ page_cap: pageCap, pages_crawled: 38, pages_planned: 76 });
+    const runningView = durableScanStatePresentation(stagedRun);
+    assert.equal(runningView.pageLimit, pageCap);
+    assert.equal(runningView.countLabel, "38 of 76 pages checked");
+    assert.equal(runningView.percent, 50);
+
+    const finishingView = durableScanStatePresentation({ ...stagedRun, status: "reviewing" });
+    assert.equal(finishingView.pageLimit, pageCap);
+    assert.equal(finishingView.countLabel, "38 pages checked");
+    assert.equal(finishingView.percent, null);
+  }
+  assert.equal(durableScanStatePresentation(running({ scan_mode: "standard_500", page_cap: undefined })).pageLimit, null);
 });
 
 test("the page renders the phase, the count, and the bar it is entitled to", () => {

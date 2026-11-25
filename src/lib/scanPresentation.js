@@ -6,6 +6,12 @@ export function pageCapFromRecord(record = {}) {
   return LEGACY_PAGE_CAPS[String(record?.scan_mode || "").toLowerCase()] || 150;
 }
 
+export function confirmedScanPageLimit(record = {}) {
+  if (record?.page_cap === 150 || record?.page_cap === 500) return record.page_cap;
+  const legacyCap = LEGACY_PAGE_CAPS[String(record?.scan_mode || "").toLowerCase()];
+  return Number.isInteger(legacyCap) && legacyCap !== 500 ? legacyCap : null;
+}
+
 export function inventoryCoverageLine(record = {}) {
   const checked = Math.max(0, Math.trunc(Number(record.pages_crawled || record.pages_scanned) || 0));
   const found = Math.max(checked, Math.trunc(Number(record.pages_found) || 0));

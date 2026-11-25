@@ -16,8 +16,8 @@ test("required copy is present verbatim", () => {
   // Both spec strings are pinned in siteOwnershipRobotsPolicy.test.mjs.
   assert.match(scanForm, /const scanSpecLine = scanSpecForOwnership\(siteOwnership\);/);
   assert.match(scanForm, /Business or website name \(optional\)/);
-  assert.match(scanForm, /The page budget is set by your account\./);
-  assert.match(scanForm, /Scan time varies by site\. FixList will tell you when it’s safe to leave this page\./);
+  assert.match(scanForm, /FixList confirms your account’s page limit when the scan starts\./);
+  assert.match(scanForm, /New accounts can preview one free scan of up to 150 pages\./);
 });
 
 test("retired copy is gone", () => {
@@ -27,15 +27,14 @@ test("retired copy is gone", () => {
   assert.doesNotMatch(scanForm, /Takes about 2–4 minutes\. You can leave this page — we’ll save your list\./);
 });
 
-test("field order is trust note, heading, subhead, URL, name, spec line, CTA", () => {
+test("the new scan form leads with the site and puts optional inputs after the start action", () => {
   const order = [
-    /Read-only scan · no site changes/,
-    /<h1[^>]*>Create your FixList<\/h1>/,
-    /Enter a website URL and we’ll turn the scan/,
+    /"Scan a section" : "Scan a website"/,
     /id="fixlist-website-url"/,
-    /id="fixlist-business-name"/,
+    /id=\{`fixlist-site-ownership-\$\{answer\}`\}/,
     /\{scanSpecLine\}/,
     /type="submit"/,
+    /id="fixlist-business-name"/,
   ];
   let cursor = -1;
   for (const pattern of order) {
@@ -49,7 +48,7 @@ test("the CTA is not pushed below the fold by optional settings", () => {
   // The personalization section renders after the CTA, so the submit button
   // stays within one iPad-landscape viewport of the URL field.
   assert.ok(
-    scanForm.indexOf('type="submit"') < scanForm.indexOf("Optional: personalize your FixList"),
+    scanForm.indexOf('type="submit"') < scanForm.indexOf("Optional scan settings"),
     "the optional accordion must render after the CTA",
   );
 });
@@ -114,7 +113,7 @@ test("the page is a centred 680px column owned by the form", () => {
 test("the loading state delegates to the truthful durable progress surface", () => {
   assert.match(scanForm, /import DurableScanProgressSurface from "@\/components\/scan\/DurableScanProgressSurface"/);
   assert.match(scanForm, /aria-busy=\{isLoading\}/);
-  assert.match(scanForm, /fixed left-1\/2 top-4 z-\[100\]/);
+  assert.doesNotMatch(scanForm, /fixed left-1\/2 top-4 z-\[100\]/);
   assert.match(scanForm, /<DurableScanProgressSurface/);
   assert.match(scanForm, /durableScan=\{durableScan\}/);
   assert.match(scanForm, /targetLabel=\{scanTargetLabel\}/);

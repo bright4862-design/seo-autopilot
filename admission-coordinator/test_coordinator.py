@@ -753,6 +753,9 @@ class PublishedPilotAcceptance(CoordinatorTestCase):
             ]:
                 self.assertEqual(self.post("/claim", {**pilot_request, **refusal}).status_code, status)
             self.assertEqual(self.claim(owner="public_customer_2").json["admission_mode"], "open")
+            replay_only = {**pilot_request, "pilot_replay_only": True}
+            self.assertEqual(self.post("/claim", replay_only).status_code, 423)
+            self.assertEqual(STORE[key]["published_500_pilot"]["total_claims_used"], 0)
             with patch.object(main, "SOURCE_SHA", "2" * 40):
                 self.assertEqual(self.post("/claim", pilot_request).status_code, 423)
             admitted = self.post("/claim", pilot_request)
@@ -771,10 +774,10 @@ class PublishedPilotAcceptance(CoordinatorTestCase):
             self.assertEqual(held.status_code, 200, held.json)
             self.assertEqual(held.json["barrier"]["mode"], "open")
             self.assertEqual(held.json["drain_snapshot"]["boundary"]["published_500_pilot"]["state"], "held")
-            replay = self.post("/claim", pilot_request)
+            replay = self.post("/claim", replay_only)
             self.assertEqual(replay.json["outcome"], "replayed")
             self.assertEqual(replay.json["pilot_page_cap"], 500)
-            self.assertEqual(self.post("/claim", {**pilot_request, "request_id": "another_500_request"}).status_code, 423)
+            self.assertEqual(self.post("/claim", {**replay_only, "request_id": "another_500_request"}).status_code, 423)
             self.assertEqual(self.claim(owner="public_customer_3").json["admission_mode"], "open")
         bound = self.post("/bind", {
             "owner_user_id": OWNER, "request_id": pilot_request["request_id"],

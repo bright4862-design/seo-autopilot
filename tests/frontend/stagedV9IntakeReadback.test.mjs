@@ -333,12 +333,15 @@ function launchHarness({
         "./admissionClient.js": {
           ...admissionClient,
           verifyAdmissionClaimEvidence,
-          claimAdmission: async ({ ownerUserId, requestId, targetOrigin, pilotLauncherBuildId, pilotPageCap }) => {
-            claimRequests.push({ pilotLauncherBuildId, pilotPageCap });
+          claimAdmission: async ({ ownerUserId, requestId, targetOrigin, pilotLauncherBuildId, pilotPageCap, pilotReplayOnly }) => {
+            claimRequests.push({ pilotLauncherBuildId, pilotPageCap, ...(pilotReplayOnly ? { pilotReplayOnly } : {}) });
             calls.push("claim");
             admittedOrigins.push(targetOrigin);
             if (claimFailure) return claimFailure;
             const replayed = binding?.request_id === requestId;
+            if (pilotReplayOnly && !replayed) {
+              return { ok: false, status: 423, failureCode: "scan_intake_paused" };
+            }
             if (!replayed) {
               claimEvidence = {
                 version: "admission_claim_evidence_v1", owner_user_id: ownerUserId, request_id: requestId,
@@ -868,7 +871,7 @@ test("a paid pilot claim must echo the exact cap and launcher build with signed 
   assert.deepEqual(exclusive.claimRequests, [{ pilotLauncherBuildId: FUNCTION_BUILD_ID, pilotPageCap: undefined }]);
 });
 
-test("a paid pilot expiry hold keeps public 150 open and returns exact bound work without another claim", async () => {
+test("a paid pilot expiry hold keeps public 150 open and only replays previously admitted 500 requests", async () => {
   const fixture = paidNamedPilot();
   const original = await fixture.submit({ published_pilot_page_cap: 500 });
   assert.equal(original.body.accepted, true);
@@ -880,8 +883,12 @@ test("a paid pilot expiry hold keeps public 150 open and returns exact bound wor
   const fresh = await fixture.submit({ request_id: "paid_request_02", published_pilot_page_cap: 500 });
   assert.notEqual(fresh.body.accepted, true);
   assert.equal(fixture.scans.length, 1);
-  assert.equal(fixture.dispatched.length, 1);
-  assert.equal(fixture.claimRequests.length, 1);
+  assert.deepEqual(new Set(fixture.dispatched.map(row => `${row.scan_id}:${row.attempt_count}`)),
+    new Set([`${original.body.scan_id}:1`]));
+  assert.deepEqual(fixture.claimRequests, [
+    { pilotLauncherBuildId: FUNCTION_BUILD_ID, pilotPageCap: 500 },
+    ...Array.from({ length: 2 }, () => ({ pilotLauncherBuildId: FUNCTION_BUILD_ID, pilotPageCap: 500, pilotReplayOnly: true })),
+  ]);
   const normal = paidNamedPilot({ pilotOwners: "other_customer", publicPilotExpiresAt: "0", rows: [{ ...paidGrant, page_cap: 150 }] });
   assert.equal((await normal.submit()).body.accepted, true);
   assert.equal(normal.dispatched[0].staged_rollout_scope, "paid");

@@ -447,10 +447,9 @@ export default async function (req: Request): Promise<Response> {
       const scanContract = resolveServerScanContract({
         access: entitlement.record, ownerUserId: user.id,
         verifiedAccess: entitlement.preview === false, settings: stagedSettings,
-        paidPilot: pilot.paidPilot && pilot.enabled && pilotRequest,
+        paidPilot: pilot.paidPilot && pilotRequest,
       });
-      const heldPaidPilot = pilot.paidPilot && !pilot.enabled && hasLargeScanGrant(entitlement.record);
-      if (pilotRequest && !heldPaidPilot && scanContract.page_cap !== body.published_pilot_page_cap) {
+      if (pilotRequest && scanContract.page_cap !== body.published_pilot_page_cap) {
         return pilotLaunchRefused("scan_limit_changed");
       }
       const requiresExistingScan = hasLargeScanGrant(entitlement.record) && scanContract.page_cap !== 500;
@@ -461,6 +460,7 @@ export default async function (req: Request): Promise<Response> {
         scanContract,
         requiresExistingScan,
         pilotRequest,
+        pilotReplayOnly: pilot.paidPilot && pilotRequest && !pilot.enabled,
         project: project.project,
         body,
         identity,
@@ -500,7 +500,7 @@ export default async function (req: Request): Promise<Response> {
       : frozenTaskContract;
     const paidRoutePaused = stagedSettings.rolloutScope !== "paid"
       || (scanContract.page_cap === 500 && !stagedSettings.entitled500Enabled
-        && !(pilot.paidPilot && pilot.enabled && pilotRequest));
+        && !(pilot.paidPilot && pilotRequest));
     const paidDispatch = context.scan.staged_rollout_scope === "paid";
     const requireGateway = scanContract.pipeline_mode === "staged" || paidDispatch;
     const readOnlyReplay = context.readOnlyReplay || (paidDispatch && paidRoutePaused);
@@ -795,7 +795,7 @@ async function replayBoundScanWithoutAdmission({ base44, user, project, request,
 }
 
 async function admitServerOwnedScan({
-  base44, user, access, scanContract, requiresExistingScan, pilotRequest, project, body, identity, websiteUrl, scope, robotsPolicy,
+  base44, user, access, scanContract, requiresExistingScan, pilotRequest, pilotReplayOnly, project, body, identity, websiteUrl, scope, robotsPolicy,
 }) {
   const request = normalizeAdmissionIdentity({
     request_id: identity.fields.request_id,
@@ -827,6 +827,7 @@ async function admitServerOwnedScan({
       queueIfOriginBusy: scanContract.pipeline_mode === "staged",
       pilotLauncherBuildId: pilotRequest ? FUNCTION_BUILD_ID : undefined,
       pilotPageCap,
+      pilotReplayOnly,
       env: mutableScanAdmissionEnv,
     });
   } catch {
@@ -842,7 +843,8 @@ async function admitServerOwnedScan({
   });
   if (!verifiedEvidence || (claim.target_origin !== undefined && claim.target_origin !== targetOrigin)
       || (pilotRequest && (claim.pilot_launcher_build_id !== FUNCTION_BUILD_ID || verifiedEvidence.admission_mode !== "acceptance_only"))
-      || (pilotPageCap !== undefined && claim.pilot_page_cap !== pilotPageCap)) {
+      || (pilotPageCap !== undefined && claim.pilot_page_cap !== pilotPageCap)
+      || (pilotReplayOnly && claim.outcome !== "replayed")) {
     return {
       ok: false,
       status: 503,

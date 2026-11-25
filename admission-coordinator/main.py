@@ -820,6 +820,9 @@ def claim():
     published_500_pilot = "pilot_page_cap" in payload
     if published_500_pilot and (type(pilot_page_cap) is not int or pilot_page_cap != 500 or not launcher_build):
         return response_error("invalid_pilot_page_cap", 400)
+    pilot_replay_only = "pilot_replay_only" in payload
+    if pilot_replay_only and (payload["pilot_replay_only"] is not True or not published_500_pilot):
+        return response_error("invalid_pilot_replay_only", 400)
     try:
         target_origin = admission.normalize_target_origin(payload["target_origin"]) if "target_origin" in payload else ""
     except admission.AdmissionError as error:
@@ -857,6 +860,8 @@ def claim():
                     or (document or {}).get("pilot_page_cap") != pilot_page_cap):
                 return {"outcome": None, "error": admission.ERROR_SCAN_INTAKE_PAUSED}
             return candidate
+        if pilot_replay_only:
+            return {"outcome": None, "error": admission.ERROR_SCAN_INTAKE_PAUSED}
         acceptance = None
         if published_500_pilot:
             acceptance = current.get(admission.PUBLISHED_500_PILOT)

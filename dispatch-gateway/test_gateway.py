@@ -596,15 +596,11 @@ class PaidStagedRoutingTests(unittest.TestCase):
             ",".join(f"pilot_owner_{number}" for number in range(6)),
         ):
             with self.subTest(owners=owners), patch.dict(os.environ, {**self.PAID, "SCAN_STAGED_PILOT_OWNER_IDS": owners}):
-                with self.assertRaises(RuntimeError):
-                    main._staged_configuration()
-                self.assertEqual(main.validate_dispatch({"queue_path": main.QUEUE_PATH, "task": self.paid_task()}), (None, "invalid_scan_mode"))
-        for config in (
-            {**self.PAID_500, "SCAN_STAGED_PILOT_OWNER_IDS": "pilot_owner_01"},
-            {"SCAN_STAGED_ROLLOUT_SCOPE": "off", "SCAN_PIPELINE_MODE": "monolith", "SCAN_STAGED_PILOT_OWNER_IDS": "pilot_owner_01"},
-        ):
-            with self.subTest(config=config), patch.dict(os.environ, config), self.assertRaises(RuntimeError):
-                main._staged_configuration()
+                pilot = self.paid_task(500, owner_user_id="pilot_owner_01")
+                self.assertEqual(main.validate_dispatch({"queue_path": main.QUEUE_PATH, "task": pilot}), (None, "invalid_scan_mode"))
+        off = {"SCAN_STAGED_ROLLOUT_SCOPE": "off", "SCAN_PIPELINE_MODE": "monolith", "SCAN_STAGED_PILOT_OWNER_IDS": "pilot_owner_01"}
+        with patch.dict(os.environ, off), self.assertRaises(RuntimeError):
+            main._staged_configuration()
         with patch.dict(os.environ, {**self.PAID, "SCAN_STAGED_PILOT_OWNER_IDS": "pilot_owner_01"}), \
                 patch.multiple(main, CANARY_WORKER_ORIGIN=CANARY_ORIGIN, CANARY_OWNER_USER_IDS=frozenset({CANARY_OWNER})), \
                 self.assertRaises(RuntimeError):
@@ -623,6 +619,24 @@ class PaidStagedRoutingTests(unittest.TestCase):
             disabled = main.app.test_client().get("/health").get_json()
         self.assertEqual(disabled["staged_pilot_owner_count"], 0)
         self.assertEqual(disabled["staged_pilot_owner_cohort_sha256"], hashlib.sha256(b'[]').hexdigest())
+
+    def test_invalid_pilot_configuration_preserves_public_paid_150_and_refuses_500(self):
+        for config in (
+            {**self.PAID, "SCAN_STAGED_PILOT_OWNER_IDS": "*"},
+            {**self.PAID_500, "SCAN_STAGED_PILOT_OWNER_IDS": "pilot_owner_01"},
+        ):
+            with self.subTest(config=config), patch.dict(os.environ, config):
+                public = self.paid_task(150)
+                self.assertEqual(main.validate_dispatch({"queue_path": main.QUEUE_PATH, "task": public}), (public, None))
+                for owner in ("pilot_owner_01", "ordinary_customer_01"):
+                    pilot = self.paid_task(500, owner_user_id=owner)
+                    self.assertEqual(main.validate_dispatch({"queue_path": main.QUEUE_PATH, "task": pilot}), (None, "invalid_scan_mode"))
+                response = main.app.test_client().get("/health")
+                self.assertEqual(response.status_code, 200)
+                health = response.get_json()
+                self.assertIs(health["staged_pilot_configuration_valid"], False)
+                self.assertIsNone(health["staged_pilot_owner_count"])
+                self.assertIsNone(health["staged_pilot_owner_cohort_sha256"])
 
     def test_closing_paid_pilot_blocks_new_500_and_keeps_control_tasks_drainable(self):
         config = {**self.PAID, "SCAN_STAGED_PILOT_OWNER_IDS": "pilot_owner_01"}

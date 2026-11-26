@@ -491,12 +491,13 @@ export function renderOrdinaryReadback(config) {
 export async function observeOrdinaryPilotRun(base44, config, now = Date.now,
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms))) {
   const observed = now();
+  const cap = config.ordinaryPageCap ?? 500;
   const operator = config.provenance?.ordinary_pilot?.operator_user_id;
   const emails = {
     "6a498da58ef5cec1f5cd4486": "bright4862@gmail.com",
     "6a498732ec779dfaaeab0e54": "londonparisbrussels@gmail.com",
   };
-  if (!Object.hasOwn(emails, operator) || config.appId !== "6a498732ec779dfaaeab0e53"
+  if (![150, 500].includes(cap) || !Object.hasOwn(emails, operator) || config.appId !== "6a498732ec779dfaaeab0e53"
       || config.ownerId === operator || config.ownerId !== config.provenance.ordinary_pilot.owner_user_id
       || config.sourceSha !== config.provenance.source_sha
       || !(Date.parse(config.provenance.expires_at) > observed)
@@ -511,14 +512,27 @@ export async function observeOrdinaryPilotRun(base44, config, now = Date.now,
     if (run?.id !== config.ordinaryScanId || run.owner_user_id !== config.ownerId
         || run.project_id !== config.projectId || run.request_id !== config.requestId
         || (run.idempotency_key || run.request_id) !== config.requestId
-        || new URL(run.website_url).href !== config.targetUrl || run.scan_mode !== "standard_500"
-        || run.page_cap !== 500 || run.pipeline_mode !== "staged"
+        || new URL(run.website_url).href !== config.targetUrl || run.scan_mode !== `standard_${cap}`
+        || run.page_cap !== cap || run.pipeline_mode !== "staged"
         || run.admission_mode !== "acceptance_only" || run.admission_acceptance_source_sha !== config.sourceSha
         || run.admission_cohort_evidence_version !== "admission_claim_evidence_v1"
         || !/^[a-f0-9]{64}$/.test(run.admission_cohort_evidence_proof || "")) {
       throw new Error("ordinary_operator_scan_identity_mismatch");
     }
     if (["complete", "limited"].includes(run.status)) {
+      if (cap === 150) {
+        if (run.status !== "complete" || run.advanced_scan_backend !== "python_scanner_api"
+            || run.deno_fallback_used !== false || run.ai_review_backend !== "python_review_api"
+            || run.python_review_fallback_used !== false) {
+          throw new Error("ordinary_operator_worker_evidence_missing");
+        }
+        const repeats = await base44.entities.ScanRun.filter({
+          owner_user_id: run.owner_user_id, request_id: run.request_id,
+        }, "-created_date", 2);
+        if (!Array.isArray(repeats) || repeats.length !== 1 || repeats[0]?.id !== run.id) {
+          throw new Error("ordinary_operator_duplicate_request");
+        }
+      }
       const fields = [
         "id", "owner_user_id", "project_id", "request_id", "idempotency_key", "website_url",
         "scan_mode", "page_cap", "pipeline_mode", "admission_mode", "admission_acceptance_source_sha",
@@ -526,12 +540,13 @@ export async function observeOrdinaryPilotRun(base44, config, now = Date.now,
         "started_at", "completed_at", "beta_revision_fingerprint", "authority_seal_version", "result_integrity_version",
       ];
       return {
-        schema_version: "staged_500_ordinary_operator_readback_v1", operator_user_id: operator,
+        schema_version: `staged_${cap}_ordinary_operator_readback_v1`, operator_user_id: operator,
         source_sha: config.sourceSha, prerequisite_sha256: config.provenance.prerequisite_sha256,
         observed_at: new Date(observed).toISOString(), terminal_observed_at: new Date(now()).toISOString(),
         run: {
           ...Object.fromEntries(fields.map(key => [key, run[key]])),
           admission_claim_proof_present: true,
+          ...(cap === 150 ? { canonical_request_count: 1, durable_worker_owned: true } : {}),
           authority_proof_present: /^[a-f0-9]{64}$/.test(run.authority_proof || ""),
           result_integrity_proof_present: /^[a-f0-9]{64}$/.test(run.result_integrity_proof || ""),
           ...(run.crawl_timing?.target_cooldown_publication?.state === "unconfirmed"
@@ -548,17 +563,20 @@ export async function observeOrdinaryPilotRun(base44, config, now = Date.now,
 
 export function renderOrdinaryOperatorReadback(config) {
   if (!id(config.ordinaryScanId)) throw new Error("ordinary_scan_id_invalid");
-  return `const config = ${JSON.stringify(config)};\n${receiptTerminationReasons.toString()}\ntry { console.log('FIXLIST_STAGED_500_ORDINARY_OPERATOR=' + JSON.stringify(await (${observeOrdinaryPilotRun.toString()})(base44, config))); } catch { throw new Error('ordinary_operator_readback_failed'); }\n`;
+  const cap = config.ordinaryPageCap ?? 500;
+  if (![150, 500].includes(cap)) throw new Error("ordinary_page_cap_invalid");
+  return `const config = ${JSON.stringify(config)};\n${receiptTerminationReasons.toString()}\ntry { console.log('FIXLIST_STAGED_${cap}_ORDINARY_OPERATOR=' + JSON.stringify(await (${observeOrdinaryPilotRun.toString()})(base44, config))); } catch { throw new Error('ordinary_operator_readback_failed'); }\n`;
 }
 
-function operatorReadbackFromExec(input) {
-  const prefix = "FIXLIST_STAGED_500_ORDINARY_OPERATOR=";
+export function operatorReadbackFromExec(input, cap = 500) {
+  const prefix = `FIXLIST_STAGED_${cap}_ORDINARY_OPERATOR=`;
   const lines = fs.readFileSync(input, "utf8").split("\n").filter(line => line.startsWith(prefix));
   if (lines.length !== 1) throw new Error("ordinary_operator_readback_missing_or_ambiguous");
   return JSON.parse(lines[0].slice(prefix.length));
 }
 
-function ordinaryReadbackContext(packet, expected, operator, env, { verifyTask = false } = {}) {
+export function ordinaryReadbackContext(packet, expected, operator, env, { verifyTask = false, cap = 500 } = {}) {
+  if (![150, 500].includes(cap)) throw new Error("ordinary_page_cap_invalid");
   if (!ordinaryTerminalWindow(operator, Date.now())) throw new Error("ordinary_operator_window_invalid");
   const observed = persistedTimestamp(operator.observed_at);
   const validation = validatePrerequisites(packet, { ...expected, now: observed, allowDeferredOrdinaryTask: true });
@@ -571,22 +589,24 @@ function ordinaryReadbackContext(packet, expected, operator, env, { verifyTask =
   const batches = Number.isSafeInteger(lastBatch) && lastBatch >= 0 ? lastBatch + 1 : NaN;
   const termination = receiptTerminationReasons(run.termination_reasons);
   const positive = value => Number.isSafeInteger(value) && value > 0;
-  if (operator.schema_version !== "staged_500_ordinary_operator_readback_v1"
+  if (operator.schema_version !== `staged_${cap}_ordinary_operator_readback_v1`
       || operator.operator_user_id !== expected.ordinaryOperatorId || operator.source_sha !== expected.sourceSha
       || operator.prerequisite_sha256 !== provenance.prerequisite_sha256 || observed < Date.parse(provenance.observed_at)
       || !id(env.ORDINARY_SCAN_ID) || run.id !== env.ORDINARY_SCAN_ID || run.owner_user_id !== expected.ownerId
       || !id(env.PROJECT_ID) || run.project_id !== env.PROJECT_ID || !id(env.REQUEST_ID) || run.request_id !== env.REQUEST_ID
       || (run.idempotency_key || run.request_id) !== env.REQUEST_ID
       || !origin(env.TARGET_URL) || origin(run.website_url) !== origin(env.TARGET_URL)
-      || run.scan_mode !== "standard_500" || run.page_cap !== 500 || run.pipeline_mode !== "staged"
+      || run.scan_mode !== `standard_${cap}` || run.page_cap !== cap || run.pipeline_mode !== "staged"
       || run.admission_mode !== "acceptance_only" || run.admission_acceptance_source_sha !== expected.sourceSha
       || run.admission_claim_proof_present !== true || run.beta_revision_fingerprint !== expected.fingerprint
       || (run.target_cooldown_publication !== undefined && run.target_cooldown_publication !== "unconfirmed")
       || !["complete", "limited"].includes(run.status)
       || !positive(run.attempt_count) || run.attempt_count >= 2 ** 31
-      || !positive(run.pages_crawled) || !positive(run.pages_planned) || run.pages_crawled > run.pages_planned || run.pages_planned > 500
+      || !positive(run.pages_crawled) || !positive(run.pages_planned) || run.pages_crawled > run.pages_planned || run.pages_planned > cap
       || !positive(batches) || batches > 254 || run.pages_crawled > batches * 50
       || (complete && run.pages_crawled !== run.pages_planned)
+      || (cap === 150 && (!complete || run.pages_crawled !== 150 || batches !== 3
+        || run.canonical_request_count !== 1 || run.durable_worker_owned !== true))
       || (!complete && (!termination.some(reason => reason.startsWith("staged_")) || termination.length > 6))
       || (complete ? run.authority_proof_present !== true || !/^[a-zA-Z0-9_]{1,120}$/.test(run.authority_seal_version || "")
         : run.result_integrity_proof_present !== true || !/^[a-zA-Z0-9_]{1,120}$/.test(run.result_integrity_version || ""))) {

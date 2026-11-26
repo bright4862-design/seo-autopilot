@@ -285,6 +285,7 @@ def test_published_evidence_body_is_bounded_after_decompression(monkeypatch):
 @pytest.mark.asyncio
 async def test_published_150_proves_three_distinct_batches_and_exact_completion(monkeypatch):
     harness, report, frontier, body = await simulated_canary(monkeypatch, page_cap=150)
+    report["provenance"]["ordinary_task_observation"] = "deferred"
     evidence = await collector.collect(collector.canary_identity(report), Reader(harness.store))
     expected_urls = sorted(f"https://example.com/solutions/{i}.html" for i in range(150))
     expected_digest = hashlib.sha256(json.dumps(expected_urls, separators=(",", ":")).encode()).hexdigest()
@@ -296,6 +297,9 @@ async def test_published_150_proves_three_distinct_batches_and_exact_completion(
     assert evidence["checked_page_set_sha256"] == expected_digest
     assert evidence["completion_request"]["body_sha256"] == hashlib.sha256(body).hexdigest()
     assert "example.com" not in json.dumps(evidence)
+    report["provenance"]["ordinary_stage_task_observation_sha256"] = "not-a-digest"
+    with pytest.raises(collector.EvidenceError, match="^ordinary_stage_task_observation_unverified$"):
+        collector.canary_identity(report)
 
 
 @pytest.mark.asyncio

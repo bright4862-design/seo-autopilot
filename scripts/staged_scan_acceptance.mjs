@@ -546,7 +546,7 @@ export async function observeOrdinaryPilotRun(base44, config, now = Date.now,
         run: {
           ...Object.fromEntries(fields.map(key => [key, run[key]])),
           admission_claim_proof_present: true,
-          ...(cap === 150 ? { canonical_request_count: 1, durable_worker_owned: true } : {}),
+          ...(cap === 150 ? { canonical_request_count: 1, durable_worker_owned: true, fix_list_id: run.fix_list_id } : {}),
           authority_proof_present: /^[a-f0-9]{64}$/.test(run.authority_proof || ""),
           result_integrity_proof_present: /^[a-f0-9]{64}$/.test(run.result_integrity_proof || ""),
           ...(run.crawl_timing?.target_cooldown_publication?.state === "unconfirmed"
@@ -606,7 +606,7 @@ export function ordinaryReadbackContext(packet, expected, operator, env, { verif
       || !positive(batches) || batches > 254 || run.pages_crawled > batches * 50
       || (complete && run.pages_crawled !== run.pages_planned)
       || (cap === 150 && (!complete || run.pages_crawled !== 150 || batches !== 3
-        || run.canonical_request_count !== 1 || run.durable_worker_owned !== true))
+        || run.canonical_request_count !== 1 || run.durable_worker_owned !== true || !id(run.fix_list_id)))
       || (!complete && (!termination.some(reason => reason.startsWith("staged_")) || termination.length > 6))
       || (complete ? run.authority_proof_present !== true || !/^[a-zA-Z0-9_]{1,120}$/.test(run.authority_seal_version || "")
         : run.result_integrity_proof_present !== true || !/^[a-zA-Z0-9_]{1,120}$/.test(run.result_integrity_version || ""))) {
@@ -642,6 +642,7 @@ export function ordinaryReadbackContext(packet, expected, operator, env, { verif
     "status", "pages_crawled", "pages_planned", "last_committed_batch", "attempt_count",
     "started_at", "completed_at", "beta_revision_fingerprint", "admission_claim_proof_present",
     "target_cooldown_publication",
+    ...(cap === 150 ? ["fix_list_id"] : []),
     ...(complete ? ["authority_seal_version", "authority_proof_present"] : ["result_integrity_version", "result_integrity_proof_present"]),
   ];
   const safeOperator = {

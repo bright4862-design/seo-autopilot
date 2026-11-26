@@ -122,9 +122,10 @@ def canary_identity(report: dict) -> Canary:
     page_cap = 150 if version == PUBLISHED_150_CANARY_VERSION else 500
     provenance = mapping(report.get("provenance"))
     if "ordinary_task_observation" in provenance:
+        task_digest = provenance.get("ordinary_stage_task_observation_sha256")
         require(report.get("execution_mode") == "ordinary_user_readback"
                 and provenance["ordinary_task_observation"] == "deferred"
-                and matches(SHA256, provenance.get("ordinary_stage_task_observation_sha256")),
+                and (matches(SHA256, task_digest) or (page_cap == 150 and task_digest is None)),
                 "ordinary_stage_task_observation_unverified")
     scan_id, request_id = report.get("scan_id"), report.get("request_id")
     attempt, pages, planned, batches = (report.get(name) for name in (

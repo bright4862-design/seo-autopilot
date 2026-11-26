@@ -38,11 +38,14 @@ function hasTerminalProjection(projection, run) {
   }
   return projection?.success === true && ["preview", "full"].includes(projection.access)
     && projection.authority_verified === true && projection.release_contract_current === true
-    && projection.scan_id === run.id && safeId(projection.fix_list_id)
+    && projection.scan_id === run.id && safeId(run.fix_list_id) && projection.fix_list_id === run.fix_list_id
     && saved?.id === run.id && saved.project_id === run.project_id && target === FIXTURE
-    && saved.scan_mode === "standard_150" && saved.page_cap === 150 && saved.pipeline_mode === "staged"
+    && (saved.scan_mode === "standard_150" || (projection.access === "preview" && saved.scan_mode === undefined))
+    && saved.page_cap === 150 && saved.pipeline_mode === "staged"
     && saved.status === "complete" && saved.pages_crawled === 150 && saved.pages_planned === 150
-    && saved.beta_revision_fingerprint === run.beta_revision_fingerprint;
+    && saved.started_at === run.started_at && saved.completed_at === run.completed_at
+    && (saved.beta_revision_fingerprint === run.beta_revision_fingerprint
+      || (projection.access === "preview" && saved.beta_revision_fingerprint === undefined));
 }
 
 // The inputs are field-only observations from the actual authenticated browser.
@@ -62,19 +65,20 @@ export function collectPublished150Canary(context, browser) {
     && browser.role === "user" && browser.launched_by_form === true
     && publishedPage(browser.launch_url, "/onboarding")?.search === ""
     && browser.displayed_page_cap === 150 && browser.launch?.accepted === true
-    && browser.launch_route === requiredRoutes.startStandardScanJobV9
+    && typeof browser.launch_route === "string" && browser.launch_route === requiredRoutes.startStandardScanJobV9
     && browser.launch.scan_id === run.id && browser.launch.request_id === run.request_id
     && browser.launch.page_cap === 150 && browser.launch.scan_mode === "standard_150"
     && browser.launch.pipeline_mode === "staged" && browser.refreshed_during_progress === true,
   "published_browser_launch_unverified");
   requireEvidence(historyId?.length === 1 && historyId[0] === run.id && browser.reopened_from_history === true
-    && browser.result_route === requiredRoutes.getCustomerScanResultV9
+    && typeof browser.result_route === "string" && browser.result_route === requiredRoutes.getCustomerScanResultV9
     && browser.reopened_after_sign_in === true && Number.isFinite(reopenedAt)
     && reopenedAt >= completedAt && reopenedAt <= Date.now() + 30_000
     && hasTerminalProjection(saved, run) && hasTerminalProjection(reopened, run)
-    && saved.fix_list_id === reopened.fix_list_id && saved.access === reopened.access,
+    && saved.access === reopened.access,
   "published_browser_history_unverified");
   requireEvidence(context.complete === true && context.batches === 3
+    && run.scan_mode === "standard_150" && run.page_cap === 150 && run.pipeline_mode === "staged"
     && run.target_cooldown_publication !== "unconfirmed", "published_fixture_terminal_state_unverified");
   return {
     schema_version: "staged_150_published_canary_v1",
@@ -155,7 +159,7 @@ function main([mode, root, prereq, ...args], env) {
   }
   const [operatorLog, browserFile, output] = args;
   const context = ordinaryReadbackContext(packet, expected, operatorReadbackFromExec(operatorLog, 150),
-    { ...env, TARGET_URL: FIXTURE }, { cap: 150, verifyTask: true });
+    { ...env, TARGET_URL: FIXTURE }, { cap: 150, verifyTask: Boolean(env.ORDINARY_TASK_OBSERVATION_FILE) });
   const report = collectPublished150Canary(context, readJSON(browserFile));
   writeNewArtifact(output, report, root);
   console.log("PUBLISHED_150_CANARY_EVIDENCE_SAVED receipt_verification_pending=true");

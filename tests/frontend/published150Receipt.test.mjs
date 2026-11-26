@@ -2,16 +2,19 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { collectPublished150Canary } from "../../scripts/collect-published-150-canary.mjs";
 import { APP_ID, observeOrdinaryPilotRun, renderOrdinaryOperatorReadback } from "../../scripts/staged_scan_acceptance.mjs";
+import { buildCustomerPreviewPayload } from "../../base44/functions/persistDurableScanAuthorityV9/customerPreviewSealStage1Legacy.js";
+import { buildCustomerProjection } from "../../base44/functions/getCustomerScanResultV9/projection.js";
+import { RELEASE_FINGERPRINT } from "../../base44/functions/getCustomerScanResultV9/generatedReleaseContract.js";
 
 const source = "a".repeat(40);
 const fixture = "https://fixlist-staged-fixture-919035207432.europe-west1.run.app/";
 const operatorId = "6a498da58ef5cec1f5cd4486";
 const observed = Date.now() - 60_000;
 const run = {
-  id: "scan_fixture_1", project_id: "project_fixture", owner_user_id: "customer_fixture",
+  id: "scan_fixture_1", project_id: "project_fixture", owner_user_id: "customer_fixture", fix_list_id: "fixlist_fixture",
   request_id: "request_fixture_1", website_url: fixture, scan_mode: "standard_150", page_cap: 150,
   pipeline_mode: "staged", status: "complete", pages_crawled: 150, pages_planned: 150,
-  last_committed_batch: 2, attempt_count: 1, beta_revision_fingerprint: "b".repeat(16),
+  last_committed_batch: 2, attempt_count: 1, beta_revision_fingerprint: RELEASE_FINGERPRINT,
   started_at: new Date(observed).toISOString(), completed_at: new Date(observed + 20_000).toISOString(),
   admission_mode: "acceptance_only", admission_acceptance_source_sha: source,
   admission_cohort_evidence_version: "admission_claim_evidence_v1",
@@ -34,8 +37,14 @@ const context = {
 };
 const launch = { accepted: true, scan_id: run.id, request_id: run.request_id, page_cap: 150,
   scan_mode: "standard_150", pipeline_mode: "staged" };
-const projection = { success: true, authority_verified: true, release_contract_current: true,
-  access: "preview", scan_id: run.id, fix_list_id: "fixlist_fixture", run: { ...run } };
+const fixList = { id: run.fix_list_id, scan_run_id: run.id, project_id: run.project_id, website_url: fixture };
+const preview = buildCustomerPreviewPayload({
+  run, fixList, fixItems: [], ownerUserId: run.owner_user_id, fullAuthorityProof: run.authority_proof,
+});
+const projection = buildCustomerProjection({
+  signedPreview: true, authorityVerified: true, previewAccess: true,
+  run: preview.run, fixList: preview.fixList, fixItems: preview.fixItems,
+});
 const browser = {
   schema_version: "published_150_browser_readback_v1", source_sha: source,
   owner_user_id: run.owner_user_id, role: "user", launched_by_form: true,
@@ -49,14 +58,16 @@ const browser = {
 };
 
 test("published 150 readback feeds the receipt verifier for the same preview or full report", () => {
-  for (const access of ["preview", "full"]) {
-    const read = { ...projection, access };
+  assert.equal(Object.hasOwn(projection.run, "scan_mode"), false);
+  assert.equal(Object.hasOwn(projection.run, "beta_revision_fingerprint"), false);
+  const full = buildCustomerProjection({ run, fixList, fixItems: [], authorityVerified: true, fullAccess: true });
+  for (const read of [projection, full]) {
     const report = collectPublished150Canary(context, { ...browser, saved_projection: read, history_projection: read });
     assert.equal(report.schema_version, "staged_150_published_canary_v1");
     assert.equal(report.authority_verified, true);
     assert.equal(report.scan_id, run.id);
     assert.equal(report.committed_batch_count, 3);
-    assert.equal(report.browser.access, access);
+    assert.equal(report.browser.access, read.access);
     assert.equal(report.acceptance_verified, false);
     assert.equal("saved_projection" in report, false);
   }
@@ -72,6 +83,9 @@ test("local preview, administrator, wrong route, stale source and unsigned histo
     { refreshed_during_progress: false },
     { history_url: `https://getfixlist.com/dashboard?scan_id=${run.id}&scan_id=other_scan` },
     { history_projection: { ...projection, authority_verified: false } },
+    { history_projection: { ...projection, run: { ...projection.run, scan_mode: "standard_500" } } },
+    { history_projection: { ...projection, run: { ...projection.run, beta_revision_fingerprint: "f".repeat(16) } } },
+    { history_projection: { ...projection, run: { ...projection.run, completed_at: run.started_at } } },
     { history_projection: { ...projection, fix_list_id: "fixlist_other" } },
     { reopened_after_sign_in: false },
   ]) {

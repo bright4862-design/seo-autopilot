@@ -797,7 +797,7 @@ class PublishedPilotAcceptance(CoordinatorTestCase):
             for refusal, status in [
                 ({"owner_user_id": "unlisted_customer"}, 423),
                 ({"pilot_launcher_build_id": "b" * 64}, 423),
-                ({"pilot_page_cap": 150}, 400),
+                ({"pilot_page_cap": 151}, 400),
             ]:
                 self.assertEqual(self.post("/claim", {**pilot_request, **refusal}).status_code, status)
             self.assertEqual(self.claim(owner="public_customer_2").json["admission_mode"], "open")
@@ -940,12 +940,18 @@ class PublishedPilotAcceptance(CoordinatorTestCase):
 
             pilot = {"owner_user_id": OWNER, "request_id": "pilot_request_1", "request_fingerprint": FINGERPRINT,
                      "pilot_launcher_build_id": launcher, "target_origin": "https://fixture.example:443"}
+            self.assertEqual(self.post("/claim", pilot).status_code, 423)  # historical exclusive 500 wire shape
+            self.assertEqual(self.post("/claim", {**pilot, "pilot_page_cap": 500}).status_code, 423)
+            self.assertEqual(self.post("/claim", {**pilot, "pilot_page_cap": "150"}).status_code, 400)
+            self.assertEqual(STORE[key]["acceptance"]["total_claims_used"], 0)
+            pilot["pilot_page_cap"] = 150
             with patch.object(main, "SOURCE_SHA", "3" * 40):
                 self.assertEqual(self.post("/claim", pilot).status_code, 423)
                 self.assertEqual(self.claim(owner=unused_legacy_owner).status_code, 423)
             self.assertEqual(self.post("/claim", {**pilot, "owner_user_id": legacy_owner}).status_code, 423)
             claimed = self.post("/claim", pilot)
             self.assertEqual(claimed.status_code, 200, claimed.json)
+            self.assertEqual(claimed.json["pilot_page_cap"], 150)
             self.assertEqual(claimed.json["cohort_evidence"]["acceptance_cohort_id"], acceptance["cohort_id"])
             self.assertEqual(STORE[key]["legacy_customer_access"]["total_claims_used"], 1)
 

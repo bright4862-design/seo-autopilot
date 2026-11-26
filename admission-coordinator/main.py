@@ -866,9 +866,9 @@ def claim():
     if not isinstance(launcher_build, str) or (launcher_build and not re.fullmatch(r"[0-9a-f]{64}", launcher_build)):
         return response_error("invalid_pilot_launcher_build_id", 400)
     pilot_page_cap = payload.get("pilot_page_cap")
-    published_500_pilot = "pilot_page_cap" in payload
-    if published_500_pilot and (type(pilot_page_cap) is not int or pilot_page_cap != 500 or not launcher_build):
+    if "pilot_page_cap" in payload and (type(pilot_page_cap) is not int or pilot_page_cap not in (150, 500) or not launcher_build):
         return response_error("invalid_pilot_page_cap", 400)
+    published_500_pilot = pilot_page_cap == 500
     pilot_replay_only = "pilot_replay_only" in payload
     if pilot_replay_only and (payload["pilot_replay_only"] is not True or not published_500_pilot):
         return response_error("invalid_pilot_replay_only", 400)
@@ -923,7 +923,7 @@ def claim():
             if current.get(admission.LEGACY_CUSTOMER_ACCESS) is not None:
                 if not launcher_build:
                     acceptance_key = admission.LEGACY_CUSTOMER_ACCESS
-                elif not isinstance(pilot, dict) or pilot.get("source_sha") != SOURCE_SHA:
+                elif pilot_page_cap != 150 or not isinstance(pilot, dict) or pilot.get("source_sha") != SOURCE_SHA:
                     return {"outcome": None, "error": admission.ERROR_SCAN_INTAKE_PAUSED}
             acceptance = current.get(acceptance_key)
             if acceptance_key == admission.LEGACY_CUSTOMER_ACCESS and (
@@ -973,7 +973,7 @@ def claim():
         )
         if launcher_build:
             claimed["write"]["pilot_launcher_build_id"] = launcher_build
-        if published_500_pilot:
+        if pilot_page_cap is not None:
             claimed["write"]["pilot_page_cap"] = pilot_page_cap
         claimed["control_write"] = reservation["control_write"]
         return claimed

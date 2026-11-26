@@ -805,7 +805,9 @@ async function replayBoundScanWithoutAdmission({ base44, user, project, request,
 async function admitServerOwnedScan({
   base44, user, access, scanContract, requiresExistingScan, pilotRequest, pilotReplayOnly, project, body, identity, websiteUrl, scope, robotsPolicy,
 }) {
-  const pilotPageCap = pilotRequest && scanContract.staged_rollout_scope === "paid" ? 500 : undefined;
+  const pilotPageCap = pilotRequest && (scanContract.page_cap === 150 || scanContract.staged_rollout_scope === "paid")
+    ? scanContract.page_cap
+    : undefined;
   const request = normalizeAdmissionIdentity({
     request_id: identity.fields.request_id,
     idempotency_key: identity.fields.idempotency_key,

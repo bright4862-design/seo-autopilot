@@ -756,6 +756,9 @@ test("active named customer launches at the confirmed cap, and expiry or forged 
     assert.equal(accepted.body.page_cap, cap);
     assert.equal(fixture.scans[0].pipeline_mode, "staged");
     assert.equal(fixture.dispatched[0].page_cap, cap);
+    assert.deepEqual(fixture.claimRequests, [{
+      pilotLauncherBuildId: FUNCTION_BUILD_ID, pilotPageCap: cap === 150 ? 150 : undefined,
+    }]);
   }
   const stale = namedPilot();
   assert.equal((await stale.options()).body.launch, "pilot");
@@ -875,7 +878,7 @@ test("a paid pilot claim must echo the exact cap and launcher build with signed 
   }
   const exclusive = namedPilot();
   assert.equal((await exclusive.submit({ published_pilot_page_cap: 150 })).body.accepted, true);
-  assert.deepEqual(exclusive.claimRequests, [{ pilotLauncherBuildId: FUNCTION_BUILD_ID, pilotPageCap: undefined }]);
+  assert.deepEqual(exclusive.claimRequests, [{ pilotLauncherBuildId: FUNCTION_BUILD_ID, pilotPageCap: 150 }]);
 });
 
 test("a paid pilot expiry hold keeps public 150 open and only replays previously admitted 500 requests", async () => {
@@ -950,12 +953,14 @@ test("malformed or conflicting paid pilot lists stop 500 without interrupting pa
 test("the real signed claim transport carries only the supplied bounded pilot cap", async () => {
   const calls = [];
   const env = name => ({ BETA_SCAN_ADMISSION_ENABLED: "true", SCAN_ADMISSION_COORDINATOR_URL: "https://coordinator.example", SCAN_EVIDENCE_SIGNING_KEY: "test-key" })[name];
-  await admissionClient.claimAdmission({ ownerUserId: paidCustomer.id, requestId: "request_01", requestFingerprint: "f".repeat(64),
-    pilotLauncherBuildId: FUNCTION_BUILD_ID, pilotPageCap: 500, env, fetchImpl: async (_url, options) => {
-      calls.push(JSON.parse(options.body)); return Response.json({ ok: true });
-    } });
-  assert.equal(calls[0].pilot_launcher_build_id, FUNCTION_BUILD_ID);
-  assert.equal(calls[0].pilot_page_cap, 500);
+  for (const cap of [150, 500]) {
+    await admissionClient.claimAdmission({ ownerUserId: paidCustomer.id, requestId: "request_01", requestFingerprint: "f".repeat(64),
+      pilotLauncherBuildId: FUNCTION_BUILD_ID, pilotPageCap: cap, env, fetchImpl: async (_url, options) => {
+        calls.push(JSON.parse(options.body)); return Response.json({ ok: true });
+      } });
+    assert.equal(calls.at(-1).pilot_launcher_build_id, FUNCTION_BUILD_ID);
+    assert.equal(calls.at(-1).pilot_page_cap, cap);
+  }
 });
 
 test("paid pilot runtime readback attests a sorted bounded cohort without disclosing account IDs", async () => {

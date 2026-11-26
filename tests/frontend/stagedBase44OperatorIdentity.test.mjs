@@ -94,7 +94,8 @@ if (args[2] === "exec") {
         release_fingerprint: "${fingerprint}", configured_pipeline_mode: "staged", pipeline_mode: "staged",
         staged_owner_cohort_state: "explicit", staged_owner_count: 1, staged_owner_cohort_sha256: "3".repeat(64),
         staged_owner_enabled: true, intake_gate: "enabled", admission_gate: "enabled",
-        staged_rollout_scope: "off", staged_500_entitled_enabled: false, paid_dispatch_gateway_origin: "${gatewayOrigin}",
+        staged_rollout_scope: "off", staged_500_entitled_enabled: false, legacy_staged_500_entitled_enabled: false,
+        paid_dispatch_gateway_origin: "${gatewayOrigin}",
         ...JSON.parse(process.env.TEST_V9),
         ...(changedPilot ? JSON.parse(process.env.TEST_V9_AFTER_PILOT) : {}),
       };
@@ -220,7 +221,8 @@ for (const [name, admin] of [["London", london], ["Bright", bright]]) {
     assert.ok(intakeReadbacks[0] < mutations[0] && mutations[1] < intakeReadbacks[1]);
     assert.deepEqual(calls[mutations[0]], ["secrets", "set", "BETA_SCAN_INTAKE_ENABLED=false"]);
     assert.deepEqual(calls[mutations[1]], ["secrets", "set", "SCAN_PIPELINE_MODE=staged", `SCAN_STAGED_OWNER_IDS=${customer.id}`,
-      "SCAN_STAGED_ROLLOUT_SCOPE=off", "SCAN_STAGED_500_ENTITLED_ENABLED=false", "SCAN_STAGED_PILOT_OWNER_IDS="]);
+      "SCAN_STAGED_ROLLOUT_SCOPE=off", "SCAN_STAGED_500_ENTITLED_ENABLED=false", "SCAN_STAGED_PILOT_OWNER_IDS=",
+      "SCAN_STAGED_500_ELIGIBLE_ADMISSION_ENABLED=false"]);
     assert.match(result.stdout, /public_intake=closed v9_attested=true pilot_cohort_matches=true/);
     assert.equal((result.stdout + result.stderr).includes(customer.id), false);
     assert.equal((result.stdout + result.stderr).includes(customerDigest), false);
@@ -320,7 +322,8 @@ for (const cap of ["150", "500"]) {
       ["invoke", intakeRoute, "staged_runtime_status"], ["gateway.health"],
       ["secrets", "set", "BETA_SCAN_INTAKE_ENABLED=false"], ["gateway.health"],
       ["secrets", "set", "SCAN_PIPELINE_MODE=staged", "SCAN_STAGED_OWNER_IDS=", "SCAN_PIPELINE_OWNER_IDS=",
-        "SCAN_STAGED_ROLLOUT_SCOPE=paid", `SCAN_STAGED_500_ENTITLED_ENABLED=${cap === "500"}`,
+        "SCAN_STAGED_ROLLOUT_SCOPE=paid", "SCAN_STAGED_500_ENTITLED_ENABLED=false",
+        `SCAN_STAGED_500_ELIGIBLE_ADMISSION_ENABLED=${cap === "500"}`,
         "SCAN_STAGED_PILOT_OWNER_IDS=", "SCAN_PUBLIC_PILOT_EXPIRES_AT=0"],
       ["invoke", intakeRoute, "staged_runtime_status"], ["gateway.health"],
     ]);
@@ -350,6 +353,14 @@ test("paid status cross-checks both runtimes without writing", t => {
   assert.deepEqual(JSON.parse(result.stdout.trim()), {
     base44_v9_attested: true, page_cap: 500, intake_gate: "disabled", admission_gate: "enabled",
   });
+});
+
+test("paid status rejects an enabled legacy 500 launcher even when the current launcher and gateway agree", t => {
+  const options = paidOptions("500");
+  options.v9.legacy_staged_500_entitled_enabled = true;
+  const result = fixture(t)(operator, "status-paid", "", london, options);
+  assert.equal(result.status, 2, result.stderr);
+  assert.equal(result.calls.some(([command]) => command === "secrets"), false);
 });
 
 test("preparing and holding only the 500 pilot leaves the paid 150 intake settings untouched", t => {

@@ -193,7 +193,7 @@ const value = result?.data && typeof result.data === "object" ? result.data : re
 const fields = ["schema_version", "success", "observed_at", "build_id", "runtime_activation_id",
   "release_fingerprint", "configured_pipeline_mode", "pipeline_mode", "staged_owner_cohort_state",
   "staged_owner_count", "staged_owner_cohort_sha256", "staged_owner_enabled", "intake_gate", "admission_gate",
-  "staged_rollout_scope", "staged_500_entitled_enabled", "paid_dispatch_gateway_origin", "public_pilot_expires_at",
+  "staged_rollout_scope", "staged_500_entitled_enabled", "legacy_staged_500_entitled_enabled", "paid_dispatch_gateway_origin", "public_pilot_expires_at",
   "staged_pilot_owner_count", "staged_pilot_owner_cohort_sha256"];
 const safe = Object.fromEntries(fields.map(key => [key, value?.[key]]));
 console.log("FIXLIST_V9_PILOT_READBACK=" + JSON.stringify(safe));
@@ -216,7 +216,9 @@ if (report.success !== true || report.schema_version !== 'fixlist_staged_v9_inta
     || !/^[0-9a-f]{64}$/.test(buildId) || report.build_id !== buildId
     || !activationId || report.runtime_activation_id !== activationId
     || !/^[0-9a-f]{16}$/.test(fingerprint) || report.release_fingerprint !== fingerprint
-    || !Number.isFinite(observationAgeMs) || Math.abs(observationAgeMs) > 60_000) process.exit(1);
+    || !Number.isFinite(observationAgeMs) || Math.abs(observationAgeMs) > 60_000
+    || typeof report.legacy_staged_500_entitled_enabled !== 'boolean') process.exit(1);
+if (!['preflight', 'paid-preflight'].includes(phase) && report.legacy_staged_500_entitled_enabled !== false) process.exit(1);
 if (phase === 'published-pilot-preflight' || phase === 'published-pilot-held') {
   if (report.staged_rollout_scope !== 'off') process.exit(1);
   if (phase === 'published-pilot-held' && report.public_pilot_expires_at !== 0) process.exit(1);
@@ -363,7 +365,8 @@ NODE
     if [[ "$PAID_PAGE_CAP" == 500 ]]; then entitled500=true; fi
     if ! "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" secrets set \
       "SCAN_PIPELINE_MODE=staged" "SCAN_STAGED_OWNER_IDS=" "SCAN_PIPELINE_OWNER_IDS=" \
-      "SCAN_STAGED_ROLLOUT_SCOPE=paid" "SCAN_STAGED_500_ENTITLED_ENABLED=$entitled500" \
+      "SCAN_STAGED_ROLLOUT_SCOPE=paid" "SCAN_STAGED_500_ENTITLED_ENABLED=false" \
+      "SCAN_STAGED_500_ELIGIBLE_ADMISSION_ENABLED=$entitled500" \
       "SCAN_STAGED_PILOT_OWNER_IDS=" "SCAN_PUBLIC_PILOT_EXPIRES_AT=0" > "$TMP/config.log" 2>&1; then
       refuse "paid configuration write failed after intake was closed; state must be re-read"
     fi
@@ -418,6 +421,7 @@ NODE
       if ! "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" secrets set \
         "SCAN_PIPELINE_MODE=staged" "SCAN_STAGED_OWNER_IDS=$OWNER_ID" \
         "SCAN_STAGED_ROLLOUT_SCOPE=off" "SCAN_STAGED_500_ENTITLED_ENABLED=false" "SCAN_STAGED_PILOT_OWNER_IDS=" \
+        "SCAN_STAGED_500_ELIGIBLE_ADMISSION_ENABLED=false" \
         ${pilot_expiry_setting[@]+"${pilot_expiry_setting[@]}"} > "$TMP/config.log" 2>&1; then
         refuse "staged config write failed after intake was closed; state must be re-read"
       fi
@@ -425,7 +429,8 @@ NODE
       # Does NOT remove a worker tag/queue or disable task execution.
       if ! "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" secrets set \
         "SCAN_PIPELINE_MODE=monolith" "SCAN_STAGED_OWNER_IDS=" \
-        "SCAN_STAGED_ROLLOUT_SCOPE=off" "SCAN_STAGED_500_ENTITLED_ENABLED=false" "SCAN_STAGED_PILOT_OWNER_IDS=" > "$TMP/config.log" 2>&1; then
+        "SCAN_STAGED_ROLLOUT_SCOPE=off" "SCAN_STAGED_500_ENTITLED_ENABLED=false" "SCAN_STAGED_PILOT_OWNER_IDS=" \
+        "SCAN_STAGED_500_ELIGIBLE_ADMISSION_ENABLED=false" > "$TMP/config.log" 2>&1; then
         refuse "disable write failed after intake was closed; state must be re-read"
       fi
     fi

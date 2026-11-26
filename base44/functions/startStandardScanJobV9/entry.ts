@@ -83,6 +83,11 @@ function stagedScanEnv(name: string) {
 }
 
 function paidPilotScanEnv(name: string) {
+  if (name === "SCAN_STAGED_500_ENTITLED_ENABLED") {
+    // Live older launcher aliases know only the retired switch. Enabling this
+    // version's typed cohort must never authorize their untyped claims.
+    return mutableScanAdmissionSecret("SCAN_STAGED_500_ELIGIBLE_ADMISSION_ENABLED");
+  }
   return name === "SCAN_STAGED_PILOT_OWNER_IDS" ? mutableScanAdmissionSecret(name) : stagedScanEnv(name);
 }
 
@@ -140,6 +145,7 @@ async function stagedRuntimeStatus(user, raw) {
       configured_pipeline_mode: settings.pipelineMode,
       staged_rollout_scope: settings.rolloutScope,
       staged_500_entitled_enabled: settings.entitled500Enabled,
+      legacy_staged_500_entitled_enabled: stagedScanEnv("SCAN_STAGED_500_ENTITLED_ENABLED") === "true",
       staged_pilot_owner_count: pilotCohortHash === null ? null : settings.pilotOwnerIds.length,
       staged_pilot_owner_cohort_sha256: pilotCohortHash,
       paid_dispatch_gateway_origin: stagedDispatchGatewayUrl(stagedScanEnv),
@@ -461,7 +467,9 @@ export default async function (req: Request): Promise<Response> {
       if (pilotRequest && scanContract.page_cap !== body.published_pilot_page_cap) {
         return pilotLaunchRefused("scan_limit_changed");
       }
-      const requiresExistingScan = hasLargeScanGrant(entitlement.record) && scanContract.page_cap !== 500;
+      const broad500 = !pilotRequest && scanContract.staged_rollout_scope === "paid" && scanContract.page_cap === 500;
+      const requiresExistingScan = hasLargeScanGrant(entitlement.record)
+        && (scanContract.page_cap !== 500 || (broad500 && user.role !== "user"));
       const admitted = await admitServerOwnedScan({
         base44,
         user,
@@ -495,6 +503,7 @@ export default async function (req: Request): Promise<Response> {
         }, admitted.status, cooldownHeaders);
       }
       context = admitted.context;
+      if (admitted.requestFingerprint) identity.fields.request_fingerprint = admitted.requestFingerprint;
       identity.fields.scan_id = String(context.scan.id);
       identity.fields.scan_run_id = String(context.scan.id);
       admissionMeta = {
@@ -762,7 +771,7 @@ async function loadExactOwnedProject({ base44, user, projectId, websiteUrl }) {
   return { ok: true, project };
 }
 
-async function replayBoundScanWithoutAdmission({ base44, user, project, request, websiteUrl, robotsPolicy, code }) {
+async function replayBoundScanWithoutAdmission({ base44, user, project, request, websiteUrl, scope, robotsPolicy, code }) {
   const paused = { ok: false, status: 503, code, error: customerStatusDetail(code), retryable: true };
   const ownerUserId = String(user.id);
   // A read-only lookup cannot consume a new admission slot when dispatch is
@@ -795,10 +804,18 @@ async function replayBoundScanWithoutAdmission({ base44, user, project, request,
     signingKey: String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || ""),
   });
   if (!admissionEvidence) return paused;
-  const validation = validateServerScanContext({ scan, user, project, request, websiteUrl, admissionEvidence, robotsPolicy });
+  // A hold can make the current launch resolve to 150. For an authenticated
+  // bound 500 run, recover its frozen fingerprint without admitting new work.
+  if (scan.page_cap === 500 && scan.request_fingerprint !== request.request_fingerprint) {
+    request = { ...request, request_fingerprint: await buildAdmissionFingerprint(websiteUrl, scope?.pathPrefix, robotsPolicy, 500) };
+  }
+  const validation = validateServerScanContext({
+    scan, user, project, request, websiteUrl, admissionEvidence, robotsPolicy,
+    scope: scan.page_cap === 500 ? scope : undefined,
+  });
   if (!validation.ok) return validation;
   return {
-    ok: true, replayed: true, replayReason: "request_replay",
+    ok: true, replayed: true, replayReason: "request_replay", requestFingerprint: request.request_fingerprint,
     context: { ok: true, scan, project, expectedDomain: authorityDomain(websiteUrl), readOnlyReplay: true },
   };
 }
@@ -813,10 +830,14 @@ async function admitServerOwnedScan({
   // A broad entitled 500 launch has no Standard 150 or named-pilot authority.
   const standard150LauncherBuildId = user.role === "user" && !pilotRequest && scanContract.page_cap === 150
     && scanContract.staged_rollout_scope === "paid" ? FUNCTION_BUILD_ID : undefined;
+  const standard500LauncherBuildId = user.role === "user" && !pilotRequest && scanContract.page_cap === 500
+    && scanContract.staged_rollout_scope === "paid" ? FUNCTION_BUILD_ID : undefined;
+  const pathPrefix = scope?.pathPrefix || "";
   const request = normalizeAdmissionIdentity({
     request_id: identity.fields.request_id,
     idempotency_key: identity.fields.idempotency_key,
-    request_fingerprint: await buildAdmissionFingerprint(websiteUrl, scope?.pathPrefix || "", robotsPolicy, pilotPageCap),
+    request_fingerprint: await buildAdmissionFingerprint(websiteUrl, pathPrefix, robotsPolicy,
+      standard500LauncherBuildId ? 500 : pilotPageCap),
   });
   if (!request.ok) {
     return { ok: false, status: 409, code: request.code, error: "The scan request identity is invalid." };
@@ -827,7 +848,7 @@ async function admitServerOwnedScan({
     : scanContract.pipeline_mode === "staged" && !stagedDispatchGatewayUrl() ? "dispatch_gateway_not_configured" : "";
   if (blockedDispatch) {
     return replayBoundScanWithoutAdmission({
-      base44, user, project, request, websiteUrl, robotsPolicy, code: blockedDispatch,
+      base44, user, project, request, websiteUrl, scope, robotsPolicy, code: blockedDispatch,
     });
   }
 
@@ -844,12 +865,18 @@ async function admitServerOwnedScan({
       pilotPageCap,
       pilotReplayOnly,
       standard150LauncherBuildId,
+      standard500LauncherBuildId,
       env: mutableScanAdmissionEnv,
     });
   } catch {
     claim = { ok: false, outcomeUnknown: true, failureCode: "admission_unreachable" };
   }
-  if (!claim?.ok) return coordinatorAdmissionFailure(claim);
+  if (!claim?.ok) {
+    if (standard500LauncherBuildId && claim?.failureCode === "scan_intake_paused") {
+      return coordinatorAdmissionFailure({ ...claim, failureCode: "scan_staged_500_unavailable" });
+    }
+    return coordinatorAdmissionFailure(claim);
+  }
 
   const verifiedEvidence = await verifiedAdmissionClaim({
     claim,
@@ -859,6 +886,8 @@ async function admitServerOwnedScan({
   });
   if (!verifiedEvidence || (claim.target_origin !== undefined && claim.target_origin !== targetOrigin)
       || (pilotRequest && (claim.pilot_launcher_build_id !== FUNCTION_BUILD_ID || verifiedEvidence.admission_mode !== "acceptance_only"))
+      || (standard500LauncherBuildId && (claim.standard_500_launcher_build_id !== standard500LauncherBuildId
+        || verifiedEvidence.admission_mode !== "acceptance_only"))
       || (pilotPageCap !== undefined && claim.pilot_page_cap !== pilotPageCap)
       || (pilotReplayOnly && claim.outcome !== "replayed")) {
     return {
@@ -1121,14 +1150,14 @@ function coordinatorAdmissionFailure(result = {}, fallbackCode = "scan_admission
   };
 }
 
-async function buildAdmissionFingerprint(websiteUrl, pathPrefix = "", robotsPolicy = {}, pilotPageCap?: number) {
+async function buildAdmissionFingerprint(websiteUrl, pathPrefix = "", robotsPolicy = {}, pageCap?: number) {
   const normalizedPrefix = normalizeFocusedPathPrefix(pathPrefix);
   const pathSuffix = normalizedPrefix ? `|path:${normalizedPrefix}` : "";
   const policySuffix = robotsPolicy.owner_attested_robots_override === true
     ? "|robots:owner_override"
     : "|robots:respect";
-  const pilotSuffix = pilotPageCap === 500 ? "|cap:500" : "";
-  const canonical = `${PUBLIC_SCAN_MODE}|${normalizeWebsiteUrl(websiteUrl)}${pathSuffix}${policySuffix}${pilotSuffix}`;
+  const capSuffix = pageCap === 500 ? "|cap:500" : "";
+  const canonical = `${PUBLIC_SCAN_MODE}|${normalizeWebsiteUrl(websiteUrl)}${pathSuffix}${policySuffix}${capSuffix}`;
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical)));
   return `standard150:${Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
@@ -1271,7 +1300,7 @@ async function normalizeRecoveredServerScan({ scans, scan }) {
   return { ...scan, ...(updated || {}), ...fields, id, scan_id: id };
 }
 
-function validateServerScanContext({ scan, user, project, request, websiteUrl, admissionEvidence, robotsPolicy }) {
+function validateServerScanContext({ scan, user, project, request, websiteUrl, admissionEvidence, robotsPolicy, scope }) {
   if (!scan || String(scan.owner_user_id || "") !== String(user.id)) {
     return { ok: false, status: 404, code: "scan_not_found", error: "This scan is not available to this account." };
   }
@@ -1283,6 +1312,9 @@ function validateServerScanContext({ scan, user, project, request, websiteUrl, a
     || storedFingerprint !== request.request_fingerprint
     || String(scan.project_id || "") !== String(project.id)
     || authorityDomain(scan.website_url || scan.submitted_url) !== authorityDomain(websiteUrl)
+    || (scope && (normalizeWebsiteUrl(scan.website_url || scan.submitted_url) !== normalizeWebsiteUrl(websiteUrl)
+      || !scanMatchesRequestedScope(scan, scope)
+      || String(scan.parent_scan_id || "") !== scope.parentScanId))
     || !matchesPersistedAdmissionEvidence(scan, admissionEvidence)
     || (admissionEvidence.admission_target_origin && scan.admission_target_origin !== admissionEvidence.admission_target_origin)
     || !sameRobotsPolicy(scan, robotsPolicy)

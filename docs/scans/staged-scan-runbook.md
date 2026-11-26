@@ -188,6 +188,9 @@ The verifier matches each saved plan to its scan attempt and verified receipt. I
 
 Review a corpus with sitemap inventories on all 50 sites so each can contribute to the coverage comparison. A crawl based on internal links can still produce a valid scan. If it has no sitemap inventory, preserve its terminal result and report the corpus comparison as unverified. Include a throttling case where the crawl can capture its sitemap inventory before the throttle forces a limited result.
 
+For the separate paired 20-site review, collect [one real-site receipt per
+150 or 500 row](real-site-qa-receipt.md) after the approved customer run.
+
 Phase 7 (5,000-page scans), adaptive sampling, weekly monitoring and the separate signed targeted-verification product are future extensions. The 30-day lifecycle must be revisited before introducing a longer-lived monitoring baseline.
 
 ## Pilot on getfixlist.com
@@ -220,7 +223,7 @@ After draining all three queues and verifying the staged-capable canonical worke
 
 A named non-administrator pilot can exercise 500 with an approved, active 500-page grant. Verify the full scan and saved result on the existing staged pilot path. If an approved site lacks enough pages, `scanner-api/scripts/export_staged_500_fixture.py` prepares a 640-page synthetic site with a sitemap and robots file. It takes the controlled host's final HTTPS `--origin` and a new absolute `--output` directory. Host those files on the approved test origin to prove full-cap execution. The representative site corpus measures coverage and quality separately.
 
-Once the 500 corpus and production checks pass, `paid-500` enables already-entitled 500 launches. Run `prepare-paid` for cap 500 after the gateway verifies its matching flag. New requests from a verified 500 holder receive a clear pause response if the 500 tier is disabled. Existing grants and in-flight attempts keep their original cap.
+Once the 500 corpus and production checks pass, prepare the `paid-500` gateway and run `prepare-paid` for cap 500 during the closed and drained cutover. Those steps configure 500 capability. Restore the approved Standard 150 policy and use [the signed eligible 500 operation](../fixlist-cloud-operator.md#eligible-standard-500-rollout-and-hold) to admit new requests from verified 500 holders. A scoped hold stops fresh 500 admission while the Standard 150 policy, saved reports, grants and already admitted attempts remain available.
 
 ### Named Standard 500 pilot while Standard 150 is open
 

@@ -46,10 +46,39 @@ inputs.
 
 The scoped open admits ordinary paid customers through the published staged
 Standard 150 launcher and treats named Standard 500 launches separately.
-Broad entitled 500 launches stay paused while this cohort is configured.
+Eligible Standard 500 launches require their own active rollout.
 Before replacing the pinned launcher or downgrading the coordinator, close the
 global barrier on a version that can read the scoped state and verify the drain.
 This keeps admitted retries on their original launcher until they settle.
+
+### Eligible Standard 500 rollout and hold
+
+After both tier checks, the named 500 pilot, and the approved real-site QA are
+recorded, prepare the accepted paid 500 gateway and Base44 settings during the
+closed and drained cutover. The gateway's 500 capability stays enabled during
+later scoped holds. On Base44, keep the older 500 setting disabled and verify
+the current launcher's paid-500 readback. Open or restore the approved scoped
+Standard 150 policy before starting the eligible 500 rollout.
+
+Use `start-eligible-500` with the exact public source, open generation,
+rollout ID, release ID, expiry, claim budgets, and current V9 launcher build.
+Leave the owner roster empty. The launcher checks each customer's active
+500-page grant and sends the typed claim. The confirmation is
+`START-ELIGIBLE-500:<source-sha>:<open-generation>:<rollout-id>:<launcher-build-id>`.
+Record the signed snapshot ID and verify new customer launches at both caps
+and the reopening of their saved reports.
+
+Use `hold-eligible-500` with the latest signed open generation and
+`HOLD-ELIGIBLE-500:<source-sha>:<open-generation>:<rollout-id>`. Read back the
+signed held state and surviving Standard 150 policy. Verify that a fresh 500
+claim is refused, a previously admitted 500 attempt can finish, and approved
+150 customers can still launch and reopen reports. Preserve the current
+worker, gateway, and grant settings during the scoped hold.
+
+If main has advanced beyond the serving coordinator, run the hold locally
+with the authenticated operator credentials and a clean checkout of the
+merged source that the coordinator and policy still report. The hold checks
+that exact source and the current generation without requiring a new deploy.
 
 ### Why traffic operations name a revision
 

@@ -600,6 +600,7 @@ test("turning off paid scope preserves exact bound replay without another claim 
   assert.equal(replay.status, 200, JSON.stringify(replay.body));
   assert.equal(replay.body.scan_id, original.body.scan_id);
   assert.equal(replay.body.page_cap, 500);
+  assert.equal(replay.body.request_fingerprint, original.body.request_fingerprint);
   assert.equal(replay.body.replayed, true);
   assert.deepEqual(fixture.calls, ["claim", "create", "bind", "status"]);
   assert.equal(fixture.dispatched.length, 1);
@@ -608,6 +609,24 @@ test("turning off paid scope preserves exact bound replay without another claim 
   assert.equal(fixture.dispatched.length, 1);
   fixture.scans[0].admission_cohort_evidence_proof = "0".repeat(64);
   assert.equal((await fixture.submit()).body.failure_code, "scan_staged_500_unavailable");
+});
+
+test("broad 500 uses the cap suffix without changing the Standard 150 fingerprint", async () => {
+  const standard = launchHarness();
+  const broad = launchHarness({ rows: [{ ...paidGrant, page_cap: 500 }] });
+  for (const [fixture, capSuffix] of [[standard, ""], [broad, "|cap:500"]]) {
+    const launched = await fixture.submit();
+    assert.equal(launched.status, 200, JSON.stringify(launched.body));
+    const digest = createHash("sha256")
+      .update(`standard_150|https://example.com/|robots:respect${capSuffix}`)
+      .digest("hex");
+    assert.equal(launched.body.request_fingerprint, `standard150:${digest}`);
+    assert.equal(fixture.scans[0].request_fingerprint, launched.body.request_fingerprint);
+  }
+  const exact = await broad.submit();
+  assert.equal(exact.body.replayed, true);
+  assert.equal(exact.body.request_fingerprint, broad.scans[0].request_fingerprint);
+  assert.equal(broad.scans.length, 1);
 });
 
 test("broad 500 only sends and accepts typed admission on the new mutable entitlement switch", async () => {

@@ -862,6 +862,47 @@ class EligibleStandard500Policy(CoordinatorTestCase):
                     self.assertEqual(started.status_code, 200, started.json)
                     self.assertEqual(started.json["eligible_500_snapshot"]["boundary"]["public_150"]["state"], state)
 
+    def test_broad_500_cannot_reclaim_released_or_expired_request_ids(self):
+        source, launcher = "1" * 40, "a" * 64
+        now = int(time.time())
+        key = f"{main.CONTROL_COLLECTION}/{main.CONTROL_DOCUMENT}"
+        owner_key = f"{main.COLLECTION}/{OWNER}"
+        base = {
+            "page_cap": 500, "cohort_id": "eligible_500", "release_id": "accepted_release", "source_sha": source,
+            "expires_at": now + 1200, "total_claim_budget": 3, "per_owner_claim_budget": 2,
+            "required_launcher_build_id": launcher, "total_claims_used": 0, "owner_claims_used": {},
+        }
+        request = {"owner_user_id": OWNER, "request_id": "fixed_request_id", "request_fingerprint": FINGERPRINT}
+        ordinary_150 = {**request, "standard_150_launcher_build_id": launcher}
+        eligible_500 = {**request, "standard_500_launcher_build_id": launcher, "request_fingerprint": "b" * 64}
+        with patch.object(main, "SOURCE_SHA", source):
+            for initial, retry in [(ordinary_150, eligible_500), (eligible_500, eligible_500), (eligible_500, ordinary_150)]:
+                for state in ("expired", "released"):
+                    with self.subTest(initial=initial, retry=retry, state=state):
+                        STORE.clear()
+                        STORE[key] = {
+                            "mode": admission.STORED_BARRIER_PUBLIC_500, "generation": 6, "claim_sequence": 0,
+                            "public_500": base,
+                            "public_150": {**base, "page_cap": 150, "cohort_id": "public_150_wave", "owner_allowlist": [OWNER]},
+                        }
+                        first = self.post("/claim", initial)
+                        self.assertEqual(first.status_code, 200, first.json)
+                        exact = self.post("/claim", initial)
+                        self.assertEqual(exact.json["outcome"], "replayed")
+                        self.assertEqual(exact.json["claim_token"], first.json["claim_token"])
+                        STORE[owner_key] = {
+                            **STORE[owner_key], "lease_expires_at": now - 1,
+                            **({"state": admission.STATE_RELEASED, "released_at": now} if state == "released" else {}),
+                        }
+                        before = json.loads(json.dumps(STORE))
+                        stale = self.post("/claim", retry)
+                        self.assertEqual(stale.status_code, 409, stale.json)
+                        self.assertEqual(stale.json["error"], "request_conflict")
+                        self.assertEqual(STORE, before)
+                        fresh = self.post("/claim", {**retry, "request_id": "brand_new_request"})
+                        self.assertEqual(fresh.status_code, 200, fresh.json)
+                        self.assertEqual(fresh.json["outcome"], "claimed")
+
     def test_independent_broad_500_start_hold_and_restart_with_bounded_public_150(self):
         source, launcher = "1" * 40, "a" * 64
         key = f"{main.CONTROL_COLLECTION}/{main.CONTROL_DOCUMENT}"

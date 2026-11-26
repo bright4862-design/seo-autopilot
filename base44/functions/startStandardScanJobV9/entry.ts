@@ -503,6 +503,7 @@ export default async function (req: Request): Promise<Response> {
         }, admitted.status, cooldownHeaders);
       }
       context = admitted.context;
+      if (admitted.requestFingerprint) identity.fields.request_fingerprint = admitted.requestFingerprint;
       identity.fields.scan_id = String(context.scan.id);
       identity.fields.scan_run_id = String(context.scan.id);
       admissionMeta = {
@@ -770,7 +771,7 @@ async function loadExactOwnedProject({ base44, user, projectId, websiteUrl }) {
   return { ok: true, project };
 }
 
-async function replayBoundScanWithoutAdmission({ base44, user, project, request, websiteUrl, robotsPolicy, code }) {
+async function replayBoundScanWithoutAdmission({ base44, user, project, request, websiteUrl, pathPrefix, robotsPolicy, code }) {
   const paused = { ok: false, status: 503, code, error: customerStatusDetail(code), retryable: true };
   const ownerUserId = String(user.id);
   // A read-only lookup cannot consume a new admission slot when dispatch is
@@ -803,10 +804,15 @@ async function replayBoundScanWithoutAdmission({ base44, user, project, request,
     signingKey: String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || ""),
   });
   if (!admissionEvidence) return paused;
+  // A hold can make the current launch resolve to 150. For an authenticated
+  // bound 500 run, recover its frozen fingerprint without admitting new work.
+  if (scan.page_cap === 500 && scan.request_fingerprint !== request.request_fingerprint) {
+    request = { ...request, request_fingerprint: await buildAdmissionFingerprint(websiteUrl, pathPrefix, robotsPolicy, 500) };
+  }
   const validation = validateServerScanContext({ scan, user, project, request, websiteUrl, admissionEvidence, robotsPolicy });
   if (!validation.ok) return validation;
   return {
-    ok: true, replayed: true, replayReason: "request_replay",
+    ok: true, replayed: true, replayReason: "request_replay", requestFingerprint: request.request_fingerprint,
     context: { ok: true, scan, project, expectedDomain: authorityDomain(websiteUrl), readOnlyReplay: true },
   };
 }
@@ -823,10 +829,12 @@ async function admitServerOwnedScan({
     && scanContract.staged_rollout_scope === "paid" ? FUNCTION_BUILD_ID : undefined;
   const standard500LauncherBuildId = user.role === "user" && !pilotRequest && scanContract.page_cap === 500
     && scanContract.staged_rollout_scope === "paid" ? FUNCTION_BUILD_ID : undefined;
+  const pathPrefix = scope?.pathPrefix || "";
   const request = normalizeAdmissionIdentity({
     request_id: identity.fields.request_id,
     idempotency_key: identity.fields.idempotency_key,
-    request_fingerprint: await buildAdmissionFingerprint(websiteUrl, scope?.pathPrefix || "", robotsPolicy, pilotPageCap),
+    request_fingerprint: await buildAdmissionFingerprint(websiteUrl, pathPrefix, robotsPolicy,
+      standard500LauncherBuildId ? 500 : pilotPageCap),
   });
   if (!request.ok) {
     return { ok: false, status: 409, code: request.code, error: "The scan request identity is invalid." };
@@ -837,7 +845,7 @@ async function admitServerOwnedScan({
     : scanContract.pipeline_mode === "staged" && !stagedDispatchGatewayUrl() ? "dispatch_gateway_not_configured" : "";
   if (blockedDispatch) {
     return replayBoundScanWithoutAdmission({
-      base44, user, project, request, websiteUrl, robotsPolicy, code: blockedDispatch,
+      base44, user, project, request, websiteUrl, pathPrefix, robotsPolicy, code: blockedDispatch,
     });
   }
 
@@ -1139,14 +1147,14 @@ function coordinatorAdmissionFailure(result = {}, fallbackCode = "scan_admission
   };
 }
 
-async function buildAdmissionFingerprint(websiteUrl, pathPrefix = "", robotsPolicy = {}, pilotPageCap?: number) {
+async function buildAdmissionFingerprint(websiteUrl, pathPrefix = "", robotsPolicy = {}, pageCap?: number) {
   const normalizedPrefix = normalizeFocusedPathPrefix(pathPrefix);
   const pathSuffix = normalizedPrefix ? `|path:${normalizedPrefix}` : "";
   const policySuffix = robotsPolicy.owner_attested_robots_override === true
     ? "|robots:owner_override"
     : "|robots:respect";
-  const pilotSuffix = pilotPageCap === 500 ? "|cap:500" : "";
-  const canonical = `${PUBLIC_SCAN_MODE}|${normalizeWebsiteUrl(websiteUrl)}${pathSuffix}${policySuffix}${pilotSuffix}`;
+  const capSuffix = pageCap === 500 ? "|cap:500" : "";
+  const canonical = `${PUBLIC_SCAN_MODE}|${normalizeWebsiteUrl(websiteUrl)}${pathSuffix}${policySuffix}${capSuffix}`;
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical)));
   return `standard150:${Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }

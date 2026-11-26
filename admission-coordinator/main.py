@@ -1003,6 +1003,13 @@ def claim():
                     or admitted_500_launcher != standard_500_launcher):
                 return {"outcome": None, "error": admission.ERROR_SCAN_INTAKE_PAUSED}
             return candidate
+        # Rule A can release an expired or terminal slot for a new request.
+        # A broad 500 transition must not recycle the same stored request ID,
+        # since its existing ScanRun and admission proof keep their original cap.
+        if (candidate.get("outcome") == admission.OUTCOME_CLAIMED and isinstance(document, dict)
+                and document.get("request_id") == request_id
+                and (standard_500_launcher or document.get("standard_500_launcher_build_id"))):
+            return {"outcome": None, "error": admission.ERROR_REQUEST_CONFLICT}
         if pilot_replay_only:
             return {"outcome": None, "error": admission.ERROR_SCAN_INTAKE_PAUSED}
         acceptance_key = admission.PUBLIC_500 if standard_500_launcher else admission.claim_cohort_key(current)

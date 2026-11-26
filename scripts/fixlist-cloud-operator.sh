@@ -952,9 +952,9 @@ if operation == "status":
     payload["expected_generation"] = int(generation)
 else:
     payload["intended_prior"] = {"mode": prior_mode, "generation": int(generation)}
-if operation in {"hold_150_pilot", "hold_500_pilot", "hold_public_150"}:
+if operation in {"hold_150_pilot", "hold_500_pilot", "hold_public_150", "hold_eligible_500"}:
     payload["cohort_id"] = cohort
-if operation == "hold_150_pilot":
+if operation in {"hold_150_pilot", "hold_eligible_500"}:
     payload["source_sha"] = source_sha
 with open(destination, "w", encoding="utf-8") as handle:
     json.dump(payload, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -980,7 +980,10 @@ if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
     raise SystemExit("Acceptance source SHA must be exact lowercase Git SHA")
 if launcher_build_id and not re.fullmatch(r"[0-9a-f]{64}", launcher_build_id):
     raise SystemExit("Acceptance launcher build ID must be a 64-character SHA256")
-if not owners or len(owners) != len(set(owners)) or not all(safe_id.fullmatch(item) for item in owners):
+eligible_500 = operation == "start_eligible_500"
+if eligible_500 and owners:
+    raise SystemExit("Eligible Standard 500 does not accept a named owner roster")
+if not eligible_500 and (not owners or len(owners) != len(set(owners)) or not all(safe_id.fullmatch(item) for item in owners)):
     raise SystemExit("Acceptance owner allowlist is invalid")
 # Older coordinators reject this operation before they can open the barrier.
 if operation == "acceptance_only" and launcher_build_id:
@@ -989,12 +992,12 @@ payload = {
     "operation": operation,
     "reason": reason,
     "change_ticket": ticket,
-    "intended_prior": {"mode": "open" if operation == "start_500_pilot" else "closed", "generation": int(generation)},
-    ("public_150" if operation == "open_public_150" else "acceptance"): {
+    "intended_prior": {"mode": "open" if operation in {"start_500_pilot", "start_eligible_500"} else "closed", "generation": int(generation)},
+    {"open_public_150": "public_150", "start_eligible_500": "public_500"}.get(operation, "acceptance"): {
         "cohort_id": cohort_id,
         "release_id": release_id,
         "source_sha": source_sha,
-        "owner_user_ids": owners,
+        **({} if eligible_500 else {"owner_user_ids": owners}),
         "expires_at": int(expires_at),
         "total_claim_budget": int(total_budget),
         "per_owner_claim_budget": int(owner_budget),
@@ -1017,7 +1020,7 @@ call_barrier_operator() {
   set +x
   body="$OPERATOR_TMP/${operation}-body.json"
   response="$OPERATOR_TMP/${operation}-response.json"
-  if [[ "$operation" == "acceptance_only" || "$operation" == "start_500_pilot" || "$operation" == "open_public_150" ]]; then
+  if [[ "$operation" == "acceptance_only" || "$operation" == "start_500_pilot" || "$operation" == "open_public_150" || "$operation" == "start_eligible_500" ]]; then
     write_acceptance_payload "$body" "$operation"
   else
     write_barrier_payload "$operation" "$body"
@@ -1070,9 +1073,9 @@ PY
 
 parse_barrier_response() {
   local expected_operation="$1" expected_fields=9
-  if [[ "$expected_operation" == start_500_pilot || "$expected_operation" == hold_500_pilot || "$expected_operation" == hold_150_pilot || "$expected_operation" == hold_public_150 ]]; then
-    expected_fields=4
-  fi
+  case "$expected_operation" in
+    start_500_pilot|hold_500_pilot|hold_150_pilot|hold_public_150|start_eligible_500|hold_eligible_500) expected_fields=4 ;;
+  esac
   mapfile -t _barrier_values < <(python3 - "$BARRIER_RESPONSE_FILE" "$expected_operation" \
     "$OPERATOR_TMP/operator-key" "$ADMISSION_DRAIN_SNAPSHOT_DERIVATION_LABEL" "$ACCEPTANCE_LAUNCHER_BUILD_ID" \
     "$ACCEPTANCE_COHORT_ID" "$SOURCE_SHA" "$ACCEPTANCE_OWNER_USER_IDS" "$ACCEPTANCE_EXPIRES_AT" \
@@ -1087,10 +1090,14 @@ if value.get("success") is not True or value.get("operation") != expected:
     raise SystemExit("Unexpected operator response")
 barrier = value.get("barrier") or {}
 pilot_500_operation = expected in {"start_500_pilot", "hold_500_pilot"}
+eligible_500_operation = expected in {"start_eligible_500", "hold_eligible_500"}
 pilot_operation = pilot_500_operation or expected == "hold_150_pilot"
 public_hold = expected == "hold_public_150"
-scoped_operation = pilot_operation or public_hold
-snapshot_field = "pilot_snapshot" if pilot_operation else "public_150_snapshot" if public_hold else "drain_snapshot"
+scoped_operation = pilot_operation or public_hold or eligible_500_operation
+snapshot_field = {
+    "start_eligible_500": "eligible_500_snapshot",
+    "hold_eligible_500": "eligible_500_snapshot",
+}.get(expected, "pilot_snapshot" if pilot_operation else "public_150_snapshot" if public_hold else "drain_snapshot")
 snapshot = value.get(snapshot_field) or {}
 counts = snapshot.get("counts") or {}
 mode = str(barrier.get("mode") or "")
@@ -1118,8 +1125,10 @@ expected_version = {
     "hold_500_pilot": "admission_published_500_pilot_snapshot_v1",
     "hold_150_pilot": "admission_published_150_pilot_snapshot_v1",
     "hold_public_150": "admission_public_150_hold_snapshot_v1",
+    "start_eligible_500": "admission_eligible_500_snapshot_v1",
+    "hold_eligible_500": "admission_eligible_500_snapshot_v1",
 }.get(expected, "admission_drain_snapshot_v1")
-snapshot_kind = "pilot" if pilot_operation else "scope" if public_hold else "drain"
+snapshot_kind = "pilot" if pilot_operation else "scope" if scoped_operation else "drain"
 if version != expected_version or not snapshot_id:
     raise SystemExit(f"Invalid {snapshot_kind} snapshot identity")
 if not re.fullmatch(r"[0-9a-f]{64}", proof):
@@ -1152,22 +1161,31 @@ if expected == "hold_150_pilot" or (expected == "acceptance_only" and legacy_dig
             or legacy["verified_at"] != json.loads(legacy_preflight)["verified_at"]
             or boundary.get("cohort_id") != cohort_id or boundary.get("source_sha") != source_sha):
         raise SystemExit("Named Standard 150 pilot or approved legacy configuration mismatch")
-if pilot_500_operation:
-    pilot = boundary.get("published_500_pilot") or {}
+if pilot_500_operation or eligible_500_operation:
+    scope = boundary.get("public_500" if eligible_500_operation else "published_500_pilot") or {}
     signed_barrier = snapshot.get("barrier") or {}
-    state = "configured" if expected == "start_500_pilot" else "held"
+    state = "configured" if expected in {"start_500_pilot", "start_eligible_500"} else "held"
     if (mode != "open" or signed_barrier.get("mode") != mode or signed_barrier.get("generation") != generation
             or generation != int(prior_generation) + 1
             or signed_barrier.get("current_snapshot_id") != snapshot_id or barrier.get("current_snapshot_id") != snapshot_id
             or snapshot.get("drain_ready") is not False or "counts" in snapshot
-            or pilot.get("state") != state or pilot.get("page_cap") != 500 or pilot.get("cohort_id") != cohort_id):
-        raise SystemExit("The signed snapshot does not establish this Standard 500 pilot change")
-    if state == "configured":
+            or scope.get("state") != state or scope.get("page_cap") != 500 or scope.get("cohort_id") != cohort_id):
+        raise SystemExit("The signed snapshot does not establish this Standard 500 change")
+    if eligible_500_operation and (scope.get("source_sha") != source_sha
+            or signed_barrier.get("claim_sequence") != barrier.get("claim_sequence")):
+        raise SystemExit("Eligible Standard 500 source or claim sequence mismatch")
+    if eligible_500_operation and state == "configured":
+        if (scope.get("source_sha") != source_sha or scope.get("required_launcher_build_id") != launcher_build_id
+                or scope.get("expires_at") != int(expires_at) or scope.get("release_id") != release_id
+                or scope.get("total_claim_budget") != int(total_budget)
+                or scope.get("per_owner_claim_budget") != int(owner_budget)):
+            raise SystemExit("Eligible Standard 500 source, launcher, release, expiry or budget mismatch")
+    elif state == "configured":
         owners = sorted(item.strip() for item in owners_raw.split(",") if item.strip())
         digest = hashlib.sha256(json.dumps(owners, separators=(",", ":")).encode("utf-8")).hexdigest()
-        if (pilot.get("source_sha") != source_sha or pilot.get("required_launcher_build_id") != launcher_build_id
-                or pilot.get("owner_count") != len(owners) or pilot.get("owner_cohort_sha256") != digest
-                or pilot.get("expires_at") != int(expires_at)):
+        if (scope.get("source_sha") != source_sha or scope.get("required_launcher_build_id") != launcher_build_id
+                or scope.get("owner_count") != len(owners) or scope.get("owner_cohort_sha256") != digest
+                or scope.get("expires_at") != int(expires_at)):
             raise SystemExit("Standard 500 pilot source, launcher, account set or expiry mismatch")
 if expected in {"open_public_150", "hold_public_150"}:
     public_150 = (snapshot.get("boundary") or {}).get("public_150") or {}
@@ -1595,6 +1613,27 @@ operate_published_500_pilot() {
   echo "STANDARD500_PILOT action=$action generation=$BARRIER_GENERATION cohort=$ACCEPTANCE_COHORT_ID public_mode=$BARRIER_MODE snapshot=$BARRIER_SNAPSHOT_ID"
 }
 
+operate_eligible_500() {
+  local action="$1"
+  require_exact_main_owner_source
+  require_barrier_inputs
+  [[ "$BARRIER_EXPECTED_PRIOR_MODE" == open && "$ACCEPTANCE_COHORT_ID" =~ ^[A-Za-z0-9_-]{6,128}$ && -z "$ACCEPTANCE_OWNER_USER_IDS" ]] \
+    || { echo 'Eligible Standard 500 requires the exact open generation and rollout ID with no owner roster.' >&2; return 1; }
+  if [[ "$action" == start ]]; then
+    require_pilot_launcher_build
+    [[ "$ACCEPTANCE_SOURCE_SHA" == "$SOURCE_SHA" ]] || return 1
+    require_confirmation "START-ELIGIBLE-500:$SOURCE_SHA:$BARRIER_EXPECTED_GENERATION:$ACCEPTANCE_COHORT_ID:$ACCEPTANCE_LAUNCHER_BUILD_ID"
+    python3 "$REPO_ROOT/scripts/assert_standard150_promotion_record.py" --source-sha "$SOURCE_SHA" --base44-v9 scanner-functions --worker
+    EXPECTED_SOURCE_SHA="$SOURCE_SHA" bash "$REPO_ROOT/scripts/verify-base44-site.sh"
+    require_drain_plane_live
+  else
+    require_confirmation "HOLD-ELIGIBLE-500:$SOURCE_SHA:$BARRIER_EXPECTED_GENERATION:$ACCEPTANCE_COHORT_ID"
+  fi
+  call_barrier_operator "${action}_eligible_500" "/ops/barrier/eligible-500/$action"
+  parse_barrier_response "${action}_eligible_500"
+  echo "STANDARD500_ELIGIBLE action=$action generation=$BARRIER_GENERATION rollout=$ACCEPTANCE_COHORT_ID public_mode=$BARRIER_MODE snapshot=$BARRIER_SNAPSHOT_ID"
+}
+
 case "$OPERATION" in
   status)
     show_status
@@ -1669,6 +1708,14 @@ case "$OPERATION" in
 
   hold-published-500-pilot)
     operate_published_500_pilot hold
+    ;;
+
+  start-eligible-500)
+    operate_eligible_500 start
+    ;;
+
+  hold-eligible-500)
+    operate_eligible_500 hold
     ;;
 
   pause-queue|resume-queue|activate-beta)

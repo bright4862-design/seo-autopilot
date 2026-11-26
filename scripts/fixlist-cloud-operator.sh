@@ -38,6 +38,8 @@ ACCEPTANCE_OWNER_USER_IDS="${ACCEPTANCE_OWNER_USER_IDS:-}"
 ACCEPTANCE_EXPIRES_AT="${ACCEPTANCE_EXPIRES_AT:-}"
 ACCEPTANCE_TOTAL_CLAIM_BUDGET="${ACCEPTANCE_TOTAL_CLAIM_BUDGET:-}"
 ACCEPTANCE_PER_OWNER_CLAIM_BUDGET="${ACCEPTANCE_PER_OWNER_CLAIM_BUDGET:-}"
+LEGACY_ACCESS="${LEGACY_ACCESS:-}"
+LEGACY_ACCESS_SHA256=""
 FIXLIST_RELEASE_OWNER="${FIXLIST_RELEASE_OWNER:-bright4862-design}"
 FIXLIST_WORKER_ID_TOKEN="${FIXLIST_WORKER_ID_TOKEN:-}"
 FIXLIST_WORKER_TOKEN_AUDIENCE="${FIXLIST_WORKER_TOKEN_AUDIENCE:-}"
@@ -59,6 +61,11 @@ ADMISSION_DRAIN_POLL_SECONDS="${ADMISSION_DRAIN_POLL_SECONDS:-5}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OPERATOR_TMP=""
 RUNTIME_PROBE_TMP=""
+
+if [[ -n "$LEGACY_ACCESS" && "$OPERATION" != acceptance-only ]]; then
+  echo "Legacy access configuration is only accepted when opening the named pilot." >&2
+  exit 2
+fi
 
 cleanup_operator_tmp() {
   if [[ -n "$OPERATOR_TMP" && -d "$OPERATOR_TMP" ]]; then
@@ -927,10 +934,10 @@ PY
 write_barrier_payload() {
   local operation="$1" destination="$2"
   python3 - "$operation" "$destination" "$BARRIER_EXPECTED_PRIOR_MODE" \
-    "$BARRIER_EXPECTED_GENERATION" "$CUTOVER_REASON" "$CHANGE_TICKET" "$ACCEPTANCE_COHORT_ID" <<'PY'
+    "$BARRIER_EXPECTED_GENERATION" "$CUTOVER_REASON" "$CHANGE_TICKET" "$ACCEPTANCE_COHORT_ID" "$SOURCE_SHA" <<'PY'
 import json, sys
 
-operation, destination, prior_mode, generation, reason, ticket, cohort = sys.argv[1:]
+operation, destination, prior_mode, generation, reason, ticket, cohort, source_sha = sys.argv[1:]
 payload = {
     "operation": operation,
     "reason": reason,
@@ -940,8 +947,10 @@ if operation == "status":
     payload["expected_generation"] = int(generation)
 else:
     payload["intended_prior"] = {"mode": prior_mode, "generation": int(generation)}
-if operation == "hold_500_pilot":
+if operation in {"hold_150_pilot", "hold_500_pilot"}:
     payload["cohort_id"] = cohort
+if operation == "hold_150_pilot":
+    payload["source_sha"] = source_sha
 with open(destination, "w", encoding="utf-8") as handle:
     json.dump(payload, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 PY
@@ -952,11 +961,11 @@ write_acceptance_payload() {
   python3 - "$destination" "$operation" "$BARRIER_EXPECTED_GENERATION" "$CUTOVER_REASON" "$CHANGE_TICKET" \
     "$ACCEPTANCE_COHORT_ID" "$ACCEPTANCE_RELEASE_ID" "$ACCEPTANCE_SOURCE_SHA" \
     "$ACCEPTANCE_OWNER_USER_IDS" "$ACCEPTANCE_EXPIRES_AT" \
-    "$ACCEPTANCE_TOTAL_CLAIM_BUDGET" "$ACCEPTANCE_PER_OWNER_CLAIM_BUDGET" "$ACCEPTANCE_LAUNCHER_BUILD_ID" <<'PY'
+    "$ACCEPTANCE_TOTAL_CLAIM_BUDGET" "$ACCEPTANCE_PER_OWNER_CLAIM_BUDGET" "$ACCEPTANCE_LAUNCHER_BUILD_ID" "$LEGACY_ACCESS" <<'PY'
 import json, re, sys
 
 (destination, operation, generation, reason, ticket, cohort_id, release_id, source_sha,
- owners_raw, expires_at, total_budget, owner_budget, launcher_build_id) = sys.argv[1:]
+ owners_raw, expires_at, total_budget, owner_budget, launcher_build_id, legacy_access) = sys.argv[1:]
 owners = [item.strip() for item in owners_raw.split(",") if item.strip()]
 safe_id = re.compile(r"^[A-Za-z0-9_-]{6,160}$")
 if not safe_id.fullmatch(cohort_id) or not safe_id.fullmatch(release_id):
@@ -969,7 +978,7 @@ if not owners or len(owners) != len(set(owners)) or not all(safe_id.fullmatch(it
     raise SystemExit("Acceptance owner allowlist is invalid")
 # Older coordinators reject this operation before they can open the barrier.
 if operation == "acceptance_only" and launcher_build_id:
-    operation = "published_pilot_acceptance"
+    operation = "published_pilot_with_legacy" if legacy_access else "published_pilot_acceptance"
 payload = {
     "operation": operation,
     "reason": reason,
@@ -986,6 +995,8 @@ payload = {
         **({"required_launcher_build_id": launcher_build_id} if launcher_build_id else {}),
     },
 }
+if legacy_access:
+    payload["legacy_access"] = json.loads(legacy_access)
 with open(destination, "w", encoding="utf-8") as handle:
     json.dump(payload, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 PY
@@ -1052,22 +1063,23 @@ PY
 
 parse_barrier_response() {
   local expected_operation="$1" expected_fields=9
-  if [[ "$expected_operation" == start_500_pilot || "$expected_operation" == hold_500_pilot ]]; then
+  if [[ "$expected_operation" == start_500_pilot || "$expected_operation" == hold_500_pilot || "$expected_operation" == hold_150_pilot ]]; then
     expected_fields=4
   fi
   mapfile -t _barrier_values < <(python3 - "$BARRIER_RESPONSE_FILE" "$expected_operation" \
     "$OPERATOR_TMP/operator-key" "$ADMISSION_DRAIN_SNAPSHOT_DERIVATION_LABEL" "$ACCEPTANCE_LAUNCHER_BUILD_ID" \
     "$ACCEPTANCE_COHORT_ID" "$SOURCE_SHA" "$ACCEPTANCE_OWNER_USER_IDS" "$ACCEPTANCE_EXPIRES_AT" \
-    "$BARRIER_EXPECTED_GENERATION" <<'PY'
+    "$BARRIER_EXPECTED_GENERATION" "$LEGACY_ACCESS_SHA256" <<'PY'
 import hashlib, hmac, json, re, sys
 
 (path, expected, key_path, snapshot_label, launcher_build_id, cohort_id, source_sha,
- owners_raw, expires_at, prior_generation) = sys.argv[1:]
+ owners_raw, expires_at, prior_generation, legacy_digest) = sys.argv[1:]
 value = json.load(open(path, encoding="utf-8"))
 if value.get("success") is not True or value.get("operation") != expected:
     raise SystemExit("Unexpected operator response")
 barrier = value.get("barrier") or {}
-pilot_operation = expected in {"start_500_pilot", "hold_500_pilot"}
+pilot_500_operation = expected in {"start_500_pilot", "hold_500_pilot"}
+pilot_operation = pilot_500_operation or expected == "hold_150_pilot"
 snapshot = value.get("pilot_snapshot" if pilot_operation else "drain_snapshot") or {}
 counts = snapshot.get("counts") or {}
 mode = str(barrier.get("mode") or "")
@@ -1090,7 +1102,11 @@ if mode not in {"open", "closed", "acceptance_only"}:
     raise SystemExit("Invalid barrier mode")
 if not isinstance(generation, int) or generation < 0:
     raise SystemExit("Invalid barrier generation")
-expected_version = "admission_published_500_pilot_snapshot_v1" if pilot_operation else "admission_drain_snapshot_v1"
+expected_version = {
+    "start_500_pilot": "admission_published_500_pilot_snapshot_v1",
+    "hold_500_pilot": "admission_published_500_pilot_snapshot_v1",
+    "hold_150_pilot": "admission_published_150_pilot_snapshot_v1",
+}.get(expected, "admission_drain_snapshot_v1")
 snapshot_kind = "pilot" if pilot_operation else "drain"
 if version != expected_version or not snapshot_id:
     raise SystemExit(f"Invalid {snapshot_kind} snapshot identity")
@@ -1098,11 +1114,32 @@ if not re.fullmatch(r"[0-9a-f]{64}", proof):
     raise SystemExit(f"Invalid {snapshot_kind} snapshot proof")
 if not hmac.compare_digest(proof, expected_proof):
     raise SystemExit(f"{snapshot_kind.capitalize()} snapshot signature mismatch")
+boundary = snapshot.get("boundary") or {}
 if expected == "acceptance_only" and launcher_build_id:
-    if (snapshot.get("boundary") or {}).get("required_launcher_build_id") != launcher_build_id:
+    if boundary.get("required_launcher_build_id") != launcher_build_id:
         raise SystemExit("Published pilot launcher binding is missing from the signed snapshot")
-if pilot_operation:
-    pilot = (snapshot.get("boundary") or {}).get("published_500_pilot") or {}
+if expected == "hold_150_pilot" or (expected == "acceptance_only" and legacy_digest):
+    legacy = boundary.get("legacy_customer_access") or {}
+    signed_barrier = snapshot.get("barrier") or {}
+    if (mode != "acceptance_only" or signed_barrier.get("mode") != mode or signed_barrier.get("generation") != generation
+            or generation != int(prior_generation) + 1
+            or signed_barrier.get("current_snapshot_id") != snapshot_id or barrier.get("current_snapshot_id") != snapshot_id
+            or legacy.get("coordinator_source_sha") != source_sha or legacy.get("page_cap") != 150
+            or not re.fullmatch(r"[0-9a-f]{40}", str(legacy.get("source_sha") or ""))
+            or not re.fullmatch(r"[0-9a-f]{64}", str(legacy.get("configuration_sha256") or ""))
+            or type(legacy.get("owner_count")) is not int or legacy["owner_count"] < 1
+            or legacy.get("state") not in {"configured", "expired"}):
+        raise SystemExit("The signed snapshot does not establish the approved legacy access lane")
+    if expected == "hold_150_pilot":
+        pilot = boundary.get("published_150_pilot") or {}
+        if (pilot != {"state": "held", "cohort_id": cohort_id, "source_sha": source_sha}
+                or snapshot.get("drain_ready") is not False or "counts" in snapshot):
+            raise SystemExit("The signed snapshot does not establish the named Standard 150 pilot hold")
+    elif (legacy.get("configuration_sha256") != legacy_digest or legacy.get("state") != "configured"
+            or boundary.get("cohort_id") != cohort_id or boundary.get("source_sha") != source_sha):
+        raise SystemExit("Named Standard 150 pilot or approved legacy configuration mismatch")
+if pilot_500_operation:
+    pilot = boundary.get("published_500_pilot") or {}
     signed_barrier = snapshot.get("barrier") or {}
     state = "configured" if expected == "start_500_pilot" else "held"
     if (mode != "open" or signed_barrier.get("mode") != mode or signed_barrier.get("generation") != generation
@@ -1344,6 +1381,30 @@ activate_acceptance_only() {
     require_pilot_launcher_build
     expected_confirmation+=":$ACCEPTANCE_LAUNCHER_BUILD_ID"
   fi
+  if [[ -n "$LEGACY_ACCESS" ]]; then
+    [[ -n "$ACCEPTANCE_LAUNCHER_BUILD_ID" ]] || {
+      echo "Approved legacy access requires a build-bound named pilot." >&2
+      return 1
+    }
+    LEGACY_ACCESS_SHA256="$(PYTHONPATH="$REPO_ROOT/admission-coordinator" python3 - \
+      "$LEGACY_ACCESS" "$ACCEPTANCE_COHORT_ID" "$ACCEPTANCE_OWNER_USER_IDS" "$SOURCE_SHA" <<'PY'
+import json, sys, time
+
+from control import legacy_access_definition
+
+raw, cohort_id, owners, source_sha = sys.argv[1:]
+try:
+    value = json.loads(raw)
+    pilot = {"cohort_id": cohort_id, "owner_allowlist": [owner.strip() for owner in owners.split(",") if owner.strip()],
+             "source_sha": source_sha}
+    definition = legacy_access_definition(value, pilot, now=int(time.time()), operator_id="workflow")
+except ValueError:
+    raise SystemExit("Approved legacy access is invalid or overlaps the named pilot.")
+print(definition["configuration_sha256"])
+PY
+)"
+    expected_confirmation+=":LEGACY:$LEGACY_ACCESS_SHA256"
+  fi
   require_confirmation "$expected_confirmation"
   [[ "$ACCEPTANCE_SOURCE_SHA" == "$SOURCE_SHA" ]] \
     || { echo "Acceptance cohort must bind the exact main source SHA." >&2; return 1; }
@@ -1354,7 +1415,23 @@ activate_acceptance_only() {
   parse_barrier_response acceptance_only
   [[ "$BARRIER_MODE" == "acceptance_only" ]] \
     || { echo "Coordinator did not enter acceptance-only mode." >&2; return 1; }
-  echo "STANDARD150_ACCEPTANCE_ONLY generation=$BARRIER_GENERATION cohort=$ACCEPTANCE_COHORT_ID"
+  echo "STANDARD150_ACCEPTANCE_ONLY generation=$BARRIER_GENERATION cohort=$ACCEPTANCE_COHORT_ID${LEGACY_ACCESS_SHA256:+ legacy_configuration_sha256=$LEGACY_ACCESS_SHA256}"
+}
+
+hold_published_150_pilot() {
+  if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
+    require_exact_main_owner_source
+  else
+    source "$REPO_ROOT/scripts/lib/release-source-guard.sh"
+    fixlist_require_merged_checkout "$REPO_ROOT" "$SOURCE_SHA"
+  fi
+  require_barrier_inputs
+  [[ "$BARRIER_EXPECTED_PRIOR_MODE" == acceptance_only && "$ACCEPTANCE_COHORT_ID" =~ ^[A-Za-z0-9_-]{6,128}$ ]] \
+    || { echo 'The Standard 150 pilot hold requires the exact acceptance generation and cohort.' >&2; return 1; }
+  require_confirmation "HOLD-PUBLISHED-150-PILOT:$SOURCE_SHA:$BARRIER_EXPECTED_GENERATION:$ACCEPTANCE_COHORT_ID"
+  call_barrier_operator hold_150_pilot /ops/barrier/pilot-150/hold
+  parse_barrier_response hold_150_pilot
+  echo "STANDARD150_PILOT_HELD generation=$BARRIER_GENERATION cohort=$ACCEPTANCE_COHORT_ID legacy_access=preserved"
 }
 
 operate_published_500_pilot() {
@@ -1434,6 +1511,10 @@ case "$OPERATION" in
 
   acceptance-only)
     activate_acceptance_only
+    ;;
+
+  hold-published-150-pilot)
+    hold_published_150_pilot
     ;;
 
   start-published-500-pilot)

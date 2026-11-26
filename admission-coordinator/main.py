@@ -513,7 +513,11 @@ def _operator_error_status(code: str) -> int:
 
 def _barrier_response(operation: str, payload: dict[str, Any]) -> dict[str, Any]:
     context = control.validate_operator_context(payload)
-    published_500_pilot_only = operation in {"start_500_pilot", "hold_500_pilot"}
+    scoped_pilot_version = {
+        "start_500_pilot": control.PUBLISHED_500_PILOT_SNAPSHOT_VERSION,
+        "hold_500_pilot": control.PUBLISHED_500_PILOT_SNAPSHOT_VERSION,
+        "hold_150_pilot": control.PUBLISHED_150_PILOT_SNAPSHOT_VERSION,
+    }.get(operation)
     now = int(time.time())
     snapshot_id = _new_record_id("snapshot")
     audit_event_id = _new_record_id("audit")
@@ -528,17 +532,19 @@ def _barrier_response(operation: str, payload: dict[str, Any]) -> dict[str, Any]
             _document_value(control_ref.get(transaction=transaction))
         )
         admissions, invocations = [], []
-        if not published_500_pilot_only:
+        if not scoped_pilot_version:
             admissions = _transaction_documents(transaction, _active_admission_query(client))
             invocations = _transaction_documents(transaction, _live_reconciliation_query(client))
 
-        def record_cohort(definition: dict[str, Any]) -> None:
-            cohort_ref = client.collection(COHORT_COLLECTION).document(definition["cohort_id"])
-            if _document_value(cohort_ref.get(transaction=transaction)) is not None:
+        def record_cohorts(*definitions: dict[str, Any]) -> None:
+            refs = [client.collection(COHORT_COLLECTION).document(item["cohort_id"]) for item in definitions]
+            if any(_document_value(ref.get(transaction=transaction)) is not None for ref in refs):
                 raise control.ControlError("acceptance_cohort_exists")
-            transaction.create(cohort_ref, control.signed_acceptance_definition(definition, OPERATOR_SIGNING_ROOT))
+            for ref, definition in zip(refs, definitions, strict=True):
+                transaction.create(ref, control.signed_acceptance_definition(definition, OPERATOR_SIGNING_ROOT))
 
         published_500_pilot = current.get(admission.PUBLISHED_500_PILOT)
+        legacy_access = current.get(admission.LEGACY_CUSTOMER_ACCESS)
         if operation == "status":
             try:
                 expected_generation = admission.normalize_barrier_generation(payload.get("expected_generation"))
@@ -555,6 +561,8 @@ def _barrier_response(operation: str, payload: dict[str, Any]) -> dict[str, Any]
             if isinstance(published_500_pilot, dict):
                 state = "configured" if published_500_pilot["expires_at"] > now else "expired"
                 boundary[admission.PUBLISHED_500_PILOT] = control.published_500_pilot_boundary(published_500_pilot, state=state)
+            if isinstance(legacy_access, dict):
+                boundary[admission.LEGACY_CUSTOMER_ACCESS] = control.legacy_access_boundary(legacy_access, now=now)
         else:
             close_replay = operation == "close" and control.is_exact_close_replay(
                 current,
@@ -642,15 +650,22 @@ def _barrier_response(operation: str, payload: dict[str, Any]) -> dict[str, Any]
                     now=now,
                     operator_id=OPERATOR_ID,
                 )
+                legacy = control.legacy_access_definition(
+                    payload["legacy_access"], definition, now=now, operator_id=OPERATOR_ID,
+                ) if "legacy_access" in payload else None
                 result = control.acceptance_control(
                     current,
                     definition,
                     snapshot_id=snapshot_id,
                     operator_id=OPERATOR_ID,
                     now=now,
+                    legacy_access=legacy,
                     **context,
                 )
-                record_cohort(definition)
+                if legacy:
+                    record_cohorts(definition, legacy)
+                else:
+                    record_cohorts(definition)
                 boundary = {
                     "prior_mode": prior["mode"],
                     "prior_generation": prior["generation"],
@@ -662,6 +677,23 @@ def _barrier_response(operation: str, payload: dict[str, Any]) -> dict[str, Any]
                 }
                 if definition.get("required_launcher_build_id"):
                     boundary["required_launcher_build_id"] = definition["required_launcher_build_id"]
+                if legacy:
+                    boundary[admission.LEGACY_CUSTOMER_ACCESS] = control.legacy_access_boundary(legacy, now=now)
+            elif operation == "hold_150_pilot":
+                pilot = current.get("acceptance")
+                if (current["mode"] != admission.BARRIER_ACCEPTANCE_ONLY
+                        or not isinstance(legacy_access, dict) or not isinstance(pilot, dict)
+                        or pilot.get("cohort_id") != payload.get("cohort_id")
+                        or not pilot.get("required_launcher_build_id") or pilot.get("source_sha") != SOURCE_SHA):
+                    raise control.ControlError("published_150_pilot_scope_mismatch")
+                result = {**current, "acceptance": None, "generation": int(current["generation"]) + 1,
+                          "current_snapshot_id": snapshot_id}
+                boundary = {
+                    "published_150_pilot": {
+                        "state": "held", "cohort_id": pilot["cohort_id"], "source_sha": pilot["source_sha"],
+                    },
+                    admission.LEGACY_CUSTOMER_ACCESS: control.legacy_access_boundary(legacy_access, now=now),
+                }
             elif operation == "start_500_pilot":
                 if published_500_pilot is not None:
                     raise control.ControlError("published_500_pilot_already_configured")
@@ -670,7 +702,7 @@ def _barrier_response(operation: str, payload: dict[str, Any]) -> dict[str, Any]
                     raise control.ControlError("invalid_acceptance_owner_allowlist")
                 definition["page_cap"] = 500
                 result = control.update_published_500_pilot(current, snapshot_id=snapshot_id, definition=definition)
-                record_cohort(definition)
+                record_cohorts(definition)
                 boundary = {
                     admission.PUBLISHED_500_PILOT: control.published_500_pilot_boundary(definition, state="configured"),
                 }
@@ -700,7 +732,7 @@ def _barrier_response(operation: str, payload: dict[str, Any]) -> dict[str, Any]
             operator_id=OPERATOR_ID,
             signing_root=OPERATOR_SIGNING_ROOT,
             boundary=boundary,
-            published_500_pilot_only=published_500_pilot_only,
+            scoped_pilot_version=scoped_pilot_version,
             **context,
         )
         audit = control.build_audit_event(
@@ -725,7 +757,7 @@ def _barrier_response(operation: str, payload: dict[str, Any]) -> dict[str, Any]
                 "claim_sequence": result["claim_sequence"],
                 "current_snapshot_id": snapshot_id,
             },
-            ("pilot_snapshot" if published_500_pilot_only else "drain_snapshot"): control.public_snapshot(snapshot),
+            ("pilot_snapshot" if scoped_pilot_version else "drain_snapshot"): control.public_snapshot(snapshot),
             "audit_event_id": audit_event_id,
         }
 
@@ -738,16 +770,23 @@ def _handle_barrier_operation(operation: str):
         return failure
     assert payload is not None
     supplied_operation = str(payload.get("operation") or operation).strip().replace("-", "_")
-    exclusive_published_pilot = operation == "acceptance_only" and supplied_operation == "published_pilot_acceptance"
-    if supplied_operation != operation and not exclusive_published_pilot:
+    published_pilot = operation == "acceptance_only" and supplied_operation in {
+        "published_pilot_acceptance", "published_pilot_with_legacy",
+    }
+    if supplied_operation != operation and not published_pilot:
         return response_error("barrier_operation_conflict", 409)
-    if exclusive_published_pilot or operation == "start_500_pilot":
+    if ("legacy_access" in payload) != (published_pilot and supplied_operation == "published_pilot_with_legacy"):
+        return response_error("invalid_legacy_access_operation", 400)
+    if published_pilot or operation == "start_500_pilot":
         acceptance = payload.get("acceptance")
         launcher = acceptance.get("required_launcher_build_id") if isinstance(acceptance, dict) else None
         if not isinstance(launcher, str) or not re.fullmatch(r"[0-9a-f]{64}", launcher):
             return response_error("invalid_acceptance_launcher_build_id", 400)
         if not re.fullmatch(r"[0-9a-f]{40}", SOURCE_SHA) or acceptance.get("source_sha") != SOURCE_SHA:
             return response_error("acceptance_source_mismatch", 409)
+    if operation == "hold_150_pilot" and (not re.fullmatch(r"[0-9a-f]{40}", SOURCE_SHA)
+                                           or payload.get("source_sha") != SOURCE_SHA):
+        return response_error("acceptance_source_mismatch", 409)
     try:
         return jsonify(_barrier_response(operation, payload))
     except (control.ControlError, admission.AdmissionError) as error:
@@ -786,6 +825,11 @@ def barrier_hold_500_pilot():
     return _handle_barrier_operation("hold_500_pilot")
 
 
+@app.post("/ops/barrier/pilot-150/hold")
+def barrier_hold_150_pilot():
+    return _handle_barrier_operation("hold_150_pilot")
+
+
 @app.get("/health")
 def health():
     return jsonify({
@@ -797,6 +841,7 @@ def health():
         "barrier_modes": sorted(admission.BARRIER_MODES),
         "claim_evidence_version": CLAIM_EVIDENCE_VERSION,
         "published_pilot_launcher_binding": True,
+        "published_pilot_legacy_access": True,
         "published_500_pilot_admission": True,
         "claim_evidence_proof_label": CLAIM_EVIDENCE_LABEL.decode("ascii"),
         "drain_snapshot_version": control.DRAIN_SNAPSHOT_VERSION,
@@ -866,14 +911,26 @@ def claim():
             return candidate
         if pilot_replay_only:
             return {"outcome": None, "error": admission.ERROR_SCAN_INTAKE_PAUSED}
-        acceptance = None
+        acceptance, acceptance_key = None, "acceptance"
         if published_500_pilot:
-            acceptance = current.get(admission.PUBLISHED_500_PILOT)
+            acceptance_key = admission.PUBLISHED_500_PILOT
+            acceptance = current.get(acceptance_key)
             if (not isinstance(acceptance, dict) or acceptance.get("source_sha") != SOURCE_SHA
                     or acceptance.get("page_cap") != pilot_page_cap):
                 return {"outcome": None, "error": admission.ERROR_SCAN_INTAKE_PAUSED}
         elif current["mode"] == admission.BARRIER_ACCEPTANCE_ONLY:
-            acceptance = current.get("acceptance")
+            pilot = current.get("acceptance")
+            if current.get(admission.LEGACY_CUSTOMER_ACCESS) is not None:
+                if not launcher_build:
+                    acceptance_key = admission.LEGACY_CUSTOMER_ACCESS
+                elif not isinstance(pilot, dict) or pilot.get("source_sha") != SOURCE_SHA:
+                    return {"outcome": None, "error": admission.ERROR_SCAN_INTAKE_PAUSED}
+            acceptance = current.get(acceptance_key)
+            if acceptance_key == admission.LEGACY_CUSTOMER_ACCESS and (
+                    not isinstance(acceptance, dict) or acceptance.get("coordinator_source_sha") != SOURCE_SHA
+                    or acceptance.get("page_cap") != 150
+                    or (isinstance(pilot, dict) and owner_user_id in pilot.get("owner_allowlist", ()))):
+                return {"outcome": None, "error": admission.ERROR_SCAN_INTAKE_PAUSED}
         required_launcher = acceptance.get("required_launcher_build_id", "") if isinstance(acceptance, dict) else ""
         if launcher_build != required_launcher:
             return {"outcome": None, "error": admission.ERROR_SCAN_INTAKE_PAUSED}
@@ -881,7 +938,7 @@ def claim():
             control_document,
             owner_user_id=owner_user_id,
             now=moment,
-            published_500_pilot=published_500_pilot,
+            acceptance_key=acceptance_key,
         )
         if not policy.get("allowed"):
             return {"outcome": None, "error": policy.get("error", admission.ERROR_SCAN_INTAKE_PAUSED)}
@@ -891,7 +948,7 @@ def claim():
             control_document,
             owner_user_id=owner_user_id,
             now=moment,
-            published_500_pilot=published_500_pilot,
+            acceptance_key=acceptance_key,
         )
         if not reservation.get("allowed"):
             return {"outcome": None, "error": reservation.get("error", admission.ERROR_SCAN_INTAKE_PAUSED)}

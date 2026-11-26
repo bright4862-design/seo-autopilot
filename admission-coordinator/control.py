@@ -18,6 +18,7 @@ import admission
 
 DRAIN_SNAPSHOT_VERSION = "admission_drain_snapshot_v1"
 PUBLISHED_500_PILOT_SNAPSHOT_VERSION = "admission_published_500_pilot_snapshot_v1"
+PUBLISHED_150_PILOT_SNAPSHOT_VERSION = "admission_published_150_pilot_snapshot_v1"
 AUDIT_EVENT_VERSION = "admission_operator_audit_v1"
 ACCEPTANCE_COHORT_VERSION = "admission_acceptance_cohort_v1"
 RECONCILIATION_INVOCATION_VERSION = "admission_reconciliation_invocation_v1"
@@ -131,6 +132,7 @@ def close_control(
         # A closed barrier never carries live acceptance authority. The
         # immutable cohort record and audit retain the prior definition.
         "acceptance": None,
+        admission.LEGACY_CUSTOMER_ACCESS: None,
         admission.PUBLISHED_500_PILOT: None,
     }
 
@@ -186,6 +188,7 @@ def open_control(
         "intended_prior_mode": current["mode"],
         "intended_prior_generation": int(current["generation"]),
         "acceptance": None,
+        admission.LEGACY_CUSTOMER_ACCESS: None,
     }
 
 
@@ -247,6 +250,7 @@ def acceptance_control(
     reason: str,
     change_ticket: str,
     now: int,
+    legacy_access: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if current["mode"] != admission.BARRIER_CLOSED:
         raise ControlError("barrier_not_closed")
@@ -267,6 +271,50 @@ def acceptance_control(
         "intended_prior_mode": current["mode"],
         "intended_prior_generation": int(current["generation"]),
         "acceptance": acceptance,
+        admission.LEGACY_CUSTOMER_ACCESS: (
+            {**legacy_access, "total_claims_used": 0, "owner_claims_used": {}} if legacy_access else None
+        ),
+    }
+
+
+def legacy_access_definition(value: Any, pilot: dict[str, Any], *, now: int, operator_id: str) -> dict[str, Any]:
+    fields = {
+        "cohort_id", "release_id", "source_sha", "owner_user_ids", "expires_at",
+        "total_claim_budget", "per_owner_claim_budget",
+    }
+    if (not isinstance(value, dict) or value.keys() != fields
+            or any(type(value[key]) is not int for key in ("expires_at", "total_claim_budget", "per_owner_claim_budget"))
+            or any(not isinstance(value[key], str) or not _ID_RE.fullmatch(value[key])
+                   for key in ("cohort_id", "release_id"))
+            or not isinstance(value["source_sha"], str) or not _SHA_RE.fullmatch(value["source_sha"])
+            or not isinstance(value["owner_user_ids"], list)
+            or not all(isinstance(owner, str) and _ID_RE.fullmatch(owner) for owner in value["owner_user_ids"])):
+        raise ControlError("invalid_legacy_access_definition")
+    legacy = acceptance_definition(value, now=now, operator_id=operator_id)
+    if len(pilot["owner_allowlist"]) != 1:
+        raise ControlError("invalid_named_legacy_pilot_owner_count")
+    if (legacy["cohort_id"] == pilot["cohort_id"]
+            or set(legacy["owner_allowlist"]).intersection(pilot["owner_allowlist"])):
+        raise ControlError("invalid_legacy_access_overlap")
+    # The baseline source identifies the V8 evidence. The independent coordinator
+    # source fences fresh legacy claims if a later coordinator is deployed.
+    return {**legacy, "page_cap": 150, "coordinator_source_sha": pilot["source_sha"],
+            "configuration_sha256": hashlib.sha256(stable_serialize(
+                {**value, "owner_user_ids": legacy["owner_allowlist"]}
+            ).encode("utf-8")).hexdigest()}
+
+
+def legacy_access_boundary(legacy: dict[str, Any], *, now: int) -> dict[str, Any]:
+    return {
+        "state": "configured" if legacy["expires_at"] > now else "expired",
+        "cohort_id": legacy["cohort_id"],
+        "release_id": legacy["release_id"],
+        "source_sha": legacy["source_sha"],
+        "coordinator_source_sha": legacy["coordinator_source_sha"],
+        "page_cap": legacy["page_cap"],
+        "expires_at": legacy["expires_at"],
+        "owner_count": len(legacy["owner_allowlist"]),
+        "configuration_sha256": legacy["configuration_sha256"],
     }
 
 
@@ -356,10 +404,10 @@ def build_snapshot(
     change_ticket: str,
     signing_root: str,
     boundary: dict[str, Any] | None = None,
-    published_500_pilot_only: bool = False,
+    scoped_pilot_version: str | None = None,
 ) -> dict[str, Any]:
     unsigned = {
-        "version": PUBLISHED_500_PILOT_SNAPSHOT_VERSION if published_500_pilot_only else DRAIN_SNAPSHOT_VERSION,
+        "version": scoped_pilot_version or DRAIN_SNAPSHOT_VERSION,
         "snapshot_id": _id(snapshot_id, "invalid_snapshot_id"),
         "created_at": int(now),
         "operator_id": _id(operator_id, "invalid_operator_id"),
@@ -376,8 +424,8 @@ def build_snapshot(
         },
         "boundary": boundary or {},
     }
-    if published_500_pilot_only:
-        # Start and hold fence only fresh 500 admissions. Neither establishes
+    if scoped_pilot_version:
+        # Scoped operations fence only fresh pilot admissions. Neither establishes
         # a global drain, so no obligation counts or digests are collected.
         unsigned["drain_ready"] = False
         return {**unsigned, "proof": sign_record(signing_root, SNAPSHOT_LABEL, unsigned)}

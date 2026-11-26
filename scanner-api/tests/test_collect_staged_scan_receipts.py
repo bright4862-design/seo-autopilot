@@ -7,6 +7,7 @@ import json
 import stat
 import sys
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -31,14 +32,17 @@ class Reader:
         generation = self.workspace.objects.get(key, (None, None))[1]
         return str(generation) if generation is not None else None
 
+    async def read_evidence(self, key):
+        return await self.read(key)
 
-async def simulated_canary(monkeypatch, *, limited=False, fail_first_finalize=False):
-    from app import staged_telemetry
+
+async def simulated_canary(monkeypatch, *, limited=False, fail_first_finalize=False, page_cap=500):
+    from app import beta_revision, staged_telemetry
 
     started = datetime.now(timezone.utc) - timedelta(seconds=1)
     harness = Harness(monkeypatch)
-    harness.scan.update(scan_mode="standard_500", page_cap=500)
-    harness.job.update(scan_mode="standard_500", page_cap=500)
+    harness.scan.update(scan_mode=f"standard_{page_cap}", page_cap=page_cap)
+    harness.job.update(scan_mode=f"standard_{page_cap}", page_cap=page_cap)
     owner = harness.scan["owner_user_id"]
     source, config, fingerprint = "a" * 40, "b" * 64, "a" * 16
     revision = collector.WORKER_SERVICE + "-00100-abc"
@@ -49,6 +53,7 @@ async def simulated_canary(monkeypatch, *, limited=False, fail_first_finalize=Fa
     }.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(staged_telemetry, "live_revision", lambda: {"fingerprint": fingerprint})
+    monkeypatch.setattr(beta_revision, "live_revision", lambda: {"fingerprint": fingerprint})
     monkeypatch.setattr(staged_telemetry, "measure_worker_peak_memory_bytes", lambda: 140_000_000)
     monkeypatch.setattr(staged_telemetry, "_kernel_memory_bound", lambda: {
         "scope": "cgroup_lifetime", "peak_bytes": 480_000_000, "limit_bytes": 1_073_741_824,
@@ -70,6 +75,19 @@ async def simulated_canary(monkeypatch, *, limited=False, fail_first_finalize=Fa
             return {"ok": False, "transient": True}
         delivery.observe_completion_response(200)
         return await harness.complete(client, scan, result, key)
+
+    if page_cap == 150:
+        async def plan(**kwargs):
+            state = await harness.plan(**kwargs)
+            state.queue = list(range(page_cap))
+            return state
+
+        async def crawl(state, *, max_pages):
+            for _ in range(min(max_pages, len(state.queue))):
+                url = f"https://example.com/solutions/{state.queue.pop(0)}.html"
+                state.pages.append({"url": url, "canonical": url, "status_code": 200})
+
+        harness.deps.plan, harness.deps.crawl = plan, crawl
 
     harness.deps.review, harness.deps.complete = review, complete
     await harness.run("plan")
@@ -95,6 +113,12 @@ async def simulated_canary(monkeypatch, *, limited=False, fail_first_finalize=Fa
             "staged_owner_cohort_sha256": hashlib.sha256(json.dumps([owner]).encode()).hexdigest(),
         },
     }
+    if page_cap == 150:
+        report.update(
+            schema_version="staged_150_published_canary_v1", execution_mode="ordinary_user_readback",
+            authority_verified=True, page_cap=150, pages_crawled=150, pages_planned=150,
+            project_id=harness.scan["project_id"], target_url=harness.scan["website_url"],
+        )
     return harness, report, frontier, body
 
 
@@ -235,6 +259,120 @@ def test_transport_pins_generation_and_reads_artifacts_only_as_metadata():
     assert [operation for operation, _ in calls] == ["reload", "download", "reload"]
     assert calls[1][1]["if_generation_match"] == 9876543210123456
     assert all(arguments["retry"] is None for _, arguments in calls)
+
+
+def test_published_evidence_body_is_bounded_after_decompression(monkeypatch):
+    body = gzip.compress(json.dumps({"large": "x" * 8_192}).encode())
+    monkeypatch.setattr(collector, "MAX_PUBLISHED_150_EVIDENCE_BYTES", 1_024)
+    assert len(body) < collector.MAX_PUBLISHED_150_EVIDENCE_BYTES
+
+    class Blob:
+        generation = "9876543210123456"
+        size = len(body)
+
+        def reload(self, **_kwargs):
+            pass
+
+        def download_as_bytes(self, *, if_generation_match, **_kwargs):
+            assert if_generation_match == int(self.generation)
+            return body
+
+    store = collector.ReceiptStorage(SimpleNamespace(blob=lambda _key: Blob()))
+    with pytest.raises(collector.EvidenceError, match="^workspace_evidence_object_too_large$"):
+        asyncio.run(store.read_evidence("fixture-manifest"))
+
+
+@pytest.mark.asyncio
+async def test_published_150_proves_three_distinct_batches_and_exact_completion(monkeypatch):
+    harness, report, frontier, body = await simulated_canary(monkeypatch, page_cap=150)
+    evidence = await collector.collect(collector.canary_identity(report), Reader(harness.store))
+    expected_urls = sorted(f"https://example.com/solutions/{i}.html" for i in range(150))
+    expected_digest = hashlib.sha256(json.dumps(expected_urls, separators=(",", ":")).encode()).hexdigest()
+    assert evidence["worker_runtime_verified"] is True
+    assert evidence["receipt_evidence_verified"] is True
+    assert evidence["frontier_generation"] == str(frontier.generation)
+    assert evidence["committed_delivery_count"] == 5
+    assert evidence["checked_distinct_page_count"] == 150
+    assert evidence["checked_page_set_sha256"] == expected_digest
+    assert evidence["completion_request"]["body_sha256"] == hashlib.sha256(body).hexdigest()
+    assert "example.com" not in json.dumps(evidence)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("changed_field", "value"), [
+    ("execution_mode", "admin_canary"), ("authority_verified", False), ("terminal_status", "limited"),
+    ("committed_batch_count", 4), ("target_url", "https://example.com/solutions/"),
+])
+async def test_published_150_rejects_inputs_outside_full_ordinary_fixture(monkeypatch, changed_field, value):
+    _, report, _, _ = await simulated_canary(monkeypatch, page_cap=150)
+    report[changed_field] = value
+    with pytest.raises(collector.EvidenceError, match="^published_150_fixture_identity_missing$"):
+        collector.canary_identity(report)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("artifact", "change", "error"), [
+    ("batch", "duplicate", "published_150_duplicate_page"),
+    ("batch", "replace_previous", "published_150_batch_pages_changed"),
+    ("batch", "wrong_length", "published_150_page_count_mismatch"),
+    ("batch", "wrong_canonical", "published_150_fixture_page_unverified"),
+    ("batch", "other_generation", "published_150_artifact_generation_mismatch"),
+    ("plan", "other_project", "published_150_plan_identity_mismatch"),
+    ("result", "wrong_result_set", "published_150_result_pages_mismatch"),
+])
+async def test_published_150_rejects_unbound_or_inconsistent_page_artifacts(monkeypatch, artifact, change, error):
+    harness, report, frontier, _ = await simulated_canary(monkeypatch, page_cap=150)
+    target = harness.prefix + {
+        "batch": frontier.value["committed_batches"][1]["pages"],
+        "plan": "plan.json",
+        "result": "result.json.gz",
+    }[artifact]
+    storage = Reader(harness.store)
+    read_evidence = storage.read_evidence
+
+    async def read_with_fault(key):
+        observed = await read_evidence(key)
+        if key != target:
+            return observed
+        data = observed.value
+        if change == "duplicate":
+            data["pages"][-1] = dict(data["pages"][0])
+        elif change in {"replace_previous", "wrong_result_set"}:
+            replacement = "https://example.com/stores/159.html"
+            data["pages"][0] = {"url": replacement, "canonical": replacement, "status_code": 200}
+        elif change == "wrong_length":
+            data["pages"].pop()
+        elif change == "wrong_canonical":
+            data["pages"][-1]["canonical"] = "https://example.com/stores/159.html"
+        elif change == "other_generation":
+            return WorkspaceObject(data, observed.generation + 1)
+        else:
+            data["job"]["project_id"] = "wrong_project"
+        return observed
+
+    monkeypatch.setattr(storage, "read_evidence", read_with_fault)
+    with pytest.raises(collector.EvidenceError, match=f"^{error}$"):
+        await collector.collect(collector.canary_identity(report), storage)
+
+
+@pytest.mark.asyncio
+async def test_cli_saves_published_150_under_separate_schema(monkeypatch, tmp_path):
+    from google.cloud import storage
+
+    harness, report, _, _ = await simulated_canary(monkeypatch, page_cap=150)
+    source = tmp_path.resolve() / "canary.json"
+    source.write_text(json.dumps(report))
+    output = source.with_name("evidence.json")
+    monkeypatch.setattr(storage, "Client", lambda: SimpleNamespace(bucket=lambda _: None))
+    monkeypatch.setattr(collector, "ReceiptStorage", lambda _: Reader(harness.store))
+    monkeypatch.setattr(sys, "argv", ["collect", "--canary-report", str(source), "--output", str(output)])
+    assert await asyncio.to_thread(collector._main) == 0
+    evidence = json.loads(output.read_text())
+    assert evidence["schema_version"] == "staged_150_published_receipt_evidence_v1"
+    assert evidence["receipt_evidence_verified"] is True
+    assert evidence["page_cap"] == evidence["checked_distinct_page_count"] == 150
+    assert evidence["committed_batch_count"] == 3
+    assert stat.S_IMODE(output.stat().st_mode) == 0o600
 
 
 @pytest.mark.asyncio

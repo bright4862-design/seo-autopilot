@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Read the private receipts of one already completed owner canary.
+"""Read the private receipts of one already completed staged canary.
 
 The input is the authenticated canary report handed to this operator by the
-500-page runner. This tool neither runs a scan nor grants release approval.
+500-page runner or the published Standard 150 readback. This tool neither
+runs a scan nor observes a browser.
 """
 
 from __future__ import annotations
@@ -29,13 +30,17 @@ if __name__ == "__main__":
 
 from app.staged_telemetry import MAX_RECORDED_DELIVERIES, RECEIPT_VERSION
 from app.workspace import WorkspaceObject, attempt_prefix
+from scripts.export_staged_500_fixture import HTTPS_ORIGIN, PAGES_PER_SECTION, SECTIONS
 
 BUCKET = "fixlist-scan-workspaces-seo-autopilot-501517"
 WORKER_SERVICE = "fixlist-standard150-worker"
 CANARY_REPORT_VERSION = "staged_500_canary_v1"
 EVIDENCE_VERSION = "staged_500_receipt_evidence_v1"
+PUBLISHED_150_CANARY_VERSION = "staged_150_published_canary_v1"
+PUBLISHED_150_EVIDENCE_VERSION = "staged_150_published_receipt_evidence_v1"
 MEMORY_LIMIT_BYTES = 1_073_741_824
 MAX_RECEIPT_BYTES = 64 * 1024
+MAX_PUBLISHED_150_EVIDENCE_BYTES = 16 * 1024 * 1024
 MAX_CANARY_BYTES = 1024 * 1024
 READ_TIMEOUT_SECONDS = 10
 COLLECTION_TIMEOUT_SECONDS = 120
@@ -104,10 +109,17 @@ class Canary:
     started_ms: int
     completed_ms: int
     runtime: dict
+    page_cap: int
+    owner_user_id: str
+    project_id: str | None
+    target_url: str | None
 
 
 def canary_identity(report: dict) -> Canary:
     require(isinstance(report, dict), "canary_report_invalid")
+    version = report.get("schema_version")
+    require(version in (CANARY_REPORT_VERSION, PUBLISHED_150_CANARY_VERSION), "terminal_canary_identity_missing")
+    page_cap = 150 if version == PUBLISHED_150_CANARY_VERSION else 500
     provenance = mapping(report.get("provenance"))
     if "ordinary_task_observation" in provenance:
         require(report.get("execution_mode") == "ordinary_user_readback"
@@ -119,17 +131,25 @@ def canary_identity(report: dict) -> Canary:
         "attempt_count", "pages_crawled", "pages_planned", "committed_batch_count",
     ))
     status = report.get("terminal_status")
-    require(report.get("schema_version") == CANARY_REPORT_VERSION
-            and report.get("production_freeze") is False
+    require(report.get("production_freeze") is False
             and report.get("terminal_outcome_verified") is True
             and (report.get("durable_worker_owned") is True
                  or (status == "limited" and report.get("durable_worker_receipt_required") is True))
-            and isinstance(status, str) and status in COMPLETION and report.get("page_cap") == 500
+            and isinstance(status, str) and status in COMPLETION and report.get("page_cap") == page_cap
             and matches(ID, scan_id) and matches(ID, request_id)
             and positive(attempt) and attempt < 2**31, "terminal_canary_identity_missing")
-    require(positive(pages) and positive(planned) and 0 < pages <= planned <= 500
+    require(positive(pages) and positive(planned) and 0 < pages <= planned <= page_cap
             and positive(batches) and batches <= MAX_RECORDED_DELIVERIES - 2
             and pages <= batches * 50, "terminal_canary_progress_invalid")
+    project_id, target_url = None, None
+    if page_cap == 150:
+        project_id, target_url = report.get("project_id"), report.get("target_url")
+        require(report.get("execution_mode") == "ordinary_user_readback"
+                and report.get("authority_verified") is True and status == "complete"
+                and type(report.get("page_cap")) is int and pages == planned == 150 and batches == 3
+                and matches(ID, project_id) and matches(HTTPS_ORIGIN, target_url),
+                "published_150_fixture_identity_missing")
+        target_url = target_url.rstrip("/") + "/"
     source, fingerprint = report.get("source_sha"), report.get("release_fingerprint")
     revision = provenance.get("worker_revision")
     staged_digest = provenance.get("worker_config_sha256")
@@ -153,7 +173,7 @@ def canary_identity(report: dict) -> Canary:
         "pipeline_mode": "staged", "staged_owner_cohort_sha256": cohort,
     }
     return Canary(scan_id, attempt, hashlib.sha256(request_id.encode()).hexdigest(), status,
-                  pages, planned, batches, observed, started, completed, runtime)
+                  pages, planned, batches, observed, started, completed, runtime, page_cap, owner, project_id, target_url)
 
 
 def finished_id(ref: Any) -> str:
@@ -207,7 +227,7 @@ def verify_receipt_pairs(canary: Canary, ids: list[str], pairs: dict) -> dict[st
                 and right["schema_version"] == RECEIPT_VERSION and right["delivery_id"] == delivery
                 and right["scan_id"] == canary.scan_id
                 and positive(right["attempt"]) and right["attempt"] == canary.attempt
-                and right["scan_mode"] == "standard_500" and right["page_cap"] == 500
+                and right["scan_mode"] == f"standard_{canary.page_cap}" and right["page_cap"] == canary.page_cap
                 and right["request_id_sha256"] == canary.request_digest, "delivery_receipt_identity_mismatch")
         require(right["runtime"] == canary.runtime, "delivery_runtime_mismatch")
         lease, stage, batch = right["lease_generation"], right["stage"], right["batch"]
@@ -356,14 +376,73 @@ def verify_evidence(canary: Canary, frontier: WorkspaceObject, pairs: dict, gene
     }
 
 
+async def verify_published_150_pages(
+    canary: Canary, storage: Any, prefix: str, artifacts: list[tuple[str, str]], generations: dict[str, str | None],
+) -> dict:
+    from app.scanner import final_url_identity
+
+    async def read_artifact(path: str) -> dict:
+        observed = await storage.read_evidence(prefix + path)
+        require(isinstance(observed, WorkspaceObject) and str(observed.generation) == generations[path],
+                "published_150_artifact_generation_mismatch")
+        return mapping(observed.value)
+
+    allowed_urls = {canary.target_url} | {
+        f"{canary.target_url}{section}/{number}.html"
+        for section in SECTIONS for number in range(PAGES_PER_SECTION)
+    }
+
+    def checked_urls(document: dict, count: int) -> set[str]:
+        pages = document.get("pages")
+        require(isinstance(pages, list) and len(pages) == count, "published_150_page_count_mismatch")
+        urls = set()
+        for raw_page in pages:
+            page = mapping(raw_page)
+            url = final_url_identity(page.get("final_url") or page.get("url"))
+            require(url in allowed_urls and page.get("status_code") == 200
+                    and final_url_identity(page.get("canonical")) == url, "published_150_fixture_page_unverified")
+            require(url not in urls, "published_150_duplicate_page")
+            urls.add(url)
+        return urls
+
+    plan = await read_artifact("plan.json")
+    job = mapping(plan.get("job"))
+    request_id = job.get("request_id")
+    require(matches(ID, request_id) and hashlib.sha256(request_id.encode()).hexdigest() == canary.request_digest
+            and job.get("idempotency_key") == request_id and job.get("scan_id") == canary.scan_id
+            and job.get("attempt_count") == canary.attempt and job.get("owner_user_id") == canary.owner_user_id
+            and job.get("project_id") == canary.project_id and job.get("scan_mode") == "standard_150"
+            and job.get("page_cap") == 150 and job.get("pipeline_mode") == "staged"
+            and isinstance(job.get("website_url"), str) and job["website_url"].rstrip("/") + "/" == canary.target_url
+            and mapping(plan.get("state")).get("pages") == [], "published_150_plan_identity_mismatch")
+    previous: set[str] = set()
+    for batch, (_, pages_path) in enumerate(artifacts, start=1):
+        current = checked_urls(await read_artifact(pages_path), batch * 50)
+        require(previous < current, "published_150_batch_pages_changed")
+        previous = current
+    result = await read_artifact("result.json.gz")
+    require(result.get("success") is True and result.get("scan_id") == canary.scan_id
+            and result.get("request_id") == request_id and result.get("idempotency_key") == request_id
+            and result.get("submitted_url") == job["website_url"] and result.get("scan_mode") == "standard_150"
+            and result.get("pipeline_mode") == "staged" and result.get("pipeline_limited") is False
+            and result.get("page_cap") == 150 and result.get("pages_crawled") == 150
+            and result.get("beta_revision_fingerprint") == canary.runtime["release_fingerprint"],
+            "published_150_result_identity_mismatch")
+    require(checked_urls(result, canary.pages) == previous, "published_150_result_pages_mismatch")
+    return {
+        "checked_distinct_page_count": len(previous),
+        "checked_page_set_sha256": hashlib.sha256(json.dumps(sorted(previous), separators=(",", ":")).encode()).hexdigest(),
+    }
+
+
 class ReceiptStorage:
-    """Read bounded control objects and generation-only metadata through ADC."""
+    """Read bounded objects and generation-only metadata through ADC."""
 
     def __init__(self, bucket: Any):
         self.bucket = bucket
         self.requests = asyncio.Semaphore(PARALLEL_READS)
 
-    def _read(self, key: str, metadata_only: bool) -> WorkspaceObject | str | None:
+    def _read(self, key: str, metadata_only: bool, limit: int = MAX_RECEIPT_BYTES) -> WorkspaceObject | str | None:
         from google.api_core.exceptions import NotFound, PreconditionFailed
 
         blob = self.bucket.blob(key)
@@ -373,13 +452,14 @@ class ReceiptStorage:
             require(matches(GENERATION, generation), "workspace_generation_invalid")
             if metadata_only:
                 return generation
-            require(positive(blob.size) and blob.size <= MAX_RECEIPT_BYTES, "workspace_control_object_too_large")
+            too_large = "workspace_control_object_too_large" if limit == MAX_RECEIPT_BYTES else "workspace_evidence_object_too_large"
+            require(positive(blob.size) and blob.size <= limit, too_large)
             raw = blob.download_as_bytes(if_generation_match=int(generation), timeout=READ_TIMEOUT_SECONDS,
                                          retry=None, raw_download=True)
-            require(len(raw) <= MAX_RECEIPT_BYTES, "workspace_control_object_too_large")
+            require(len(raw) <= limit, too_large)
             with gzip.GzipFile(fileobj=io.BytesIO(raw)) as compressed:
-                document = compressed.read(MAX_RECEIPT_BYTES + 1)
-            require(len(document) <= MAX_RECEIPT_BYTES, "workspace_control_object_too_large")
+                document = compressed.read(limit + 1)
+            require(len(document) <= limit, too_large)
             value = json.loads(document)
             require(isinstance(value, dict), "workspace_control_document_invalid")
             return WorkspaceObject(value, int(generation))
@@ -395,6 +475,10 @@ class ReceiptStorage:
     async def read(self, key: str) -> WorkspaceObject | None:
         async with self.requests:
             return await asyncio.to_thread(self._read, key, False)
+
+    async def read_evidence(self, key: str) -> WorkspaceObject | None:
+        async with self.requests:
+            return await asyncio.to_thread(self._read, key, False, MAX_PUBLISHED_150_EVIDENCE_BYTES)
 
     async def generation(self, key: str) -> str | None:
         async with self.requests:
@@ -432,11 +516,15 @@ async def collect(canary: Canary, storage: Any) -> dict:
         await asyncio.sleep(0.5)
         pairs.update(zip(pending, await asyncio.gather(*(read_pair(delivery) for delivery in pending)), strict=True))
         pending = [delivery for delivery in pending if None in pairs[delivery]]
+    generations = dict(zip(paths, metadata, strict=True))
+    published_pages = {}
+    if canary.page_cap == 150:
+        published_pages = await verify_published_150_pages(canary, storage, prefix, artifacts, generations)
     final_frontier, deletion = await asyncio.gather(storage.read(key), storage.read(tombstone))
     require(deletion is None, "workspace_deleted")
     require(final_frontier is not None and final_frontier.generation == frontier.generation,
             "workspace_changed_during_collection")
-    return verify_evidence(canary, frontier, pairs, dict(zip(paths, metadata, strict=True)))
+    return {**verify_evidence(canary, frontier, pairs, generations), **published_pages}
 
 
 def _main() -> int:
@@ -444,6 +532,7 @@ def _main() -> int:
     parser.add_argument("--canary-report", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    page_cap = 500
     try:
         report_path, output = args.canary_report, args.output
         require(report_path.is_absolute() and report_path.resolve(strict=True) == report_path,
@@ -457,10 +546,13 @@ def _main() -> int:
         require(len(raw_report) <= MAX_CANARY_BYTES, "canary_report_too_large")
         report = json.loads(raw_report)
         require(isinstance(report, dict), "canary_report_invalid")
+        if report.get("schema_version") == PUBLISHED_150_CANARY_VERSION:
+            page_cap = 150
         canary = canary_identity(report)
+        evidence_version = PUBLISHED_150_EVIDENCE_VERSION if canary.page_cap == 150 else EVIDENCE_VERSION
         with os.fdopen(os.open(output, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "w") as report_file:
             evidence = {
-                "schema_version": EVIDENCE_VERSION, "production_freeze": False,
+                "schema_version": evidence_version, "production_freeze": False,
                 "canary_report_sha256": hashlib.sha256(raw_report).hexdigest(),
                 "scan_id": canary.scan_id, "attempt_count": canary.attempt,
                 "source_sha": canary.runtime["source_sha"], "release_fingerprint": canary.runtime["release_fingerprint"],
@@ -469,6 +561,8 @@ def _main() -> int:
                 "terminal_status": canary.terminal_status, "worker_runtime_verified": False,
                 "receipt_evidence_verified": False, "completion_request": None, "memory": None,
             }
+            if canary.page_cap == 150:
+                evidence.update(page_cap=canary.page_cap, committed_batch_count=canary.batches)
             try:
                 require(not os.getenv("STORAGE_EMULATOR_HOST"), "workspace_emulator_refused")
                 from google.cloud import storage
@@ -483,12 +577,12 @@ def _main() -> int:
                 evidence["unverified"] = ["receipt_collection_failed"]
             json.dump(evidence, report_file, indent=2, allow_nan=False)
             report_file.write("\n")
-        print(f"STAGED_500_RECEIPT_EVIDENCE_SAVED verified={str(evidence['receipt_evidence_verified']).lower()}")
+        print(f"STAGED_{page_cap}_RECEIPT_EVIDENCE_SAVED verified={str(evidence['receipt_evidence_verified']).lower()}")
         return 0 if evidence["receipt_evidence_verified"] else 1
     except EvidenceError as exc:
-        print(f"STAGED_500_RECEIPT_EVIDENCE_BLOCKED: {exc}", file=sys.stderr)
+        print(f"STAGED_{page_cap}_RECEIPT_EVIDENCE_BLOCKED: {exc}", file=sys.stderr)
     except (OSError, TypeError, ValueError):
-        print("STAGED_500_RECEIPT_EVIDENCE_BLOCKED: input_or_output_unavailable", file=sys.stderr)
+        print(f"STAGED_{page_cap}_RECEIPT_EVIDENCE_BLOCKED: input_or_output_unavailable", file=sys.stderr)
     return 2
 
 

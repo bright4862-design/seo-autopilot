@@ -64,3 +64,69 @@ this receipt. Record the critical and high finding reviews, lower-priority
 and passed-page samples, seeded controls, duplicate checks, and the
 independent review separately. Apply the existing owned-fixture and 50-site
 gates in their documented release sequence.
+
+## Verify the paired register
+
+Use the read-only register check after recording the technical evidence and
+the human review for each row. It reads the approved candidate from local
+Git history, so you can run it from a separate evidence checkout.
+
+```bash
+python scanner-api/scripts/verify_real_site_qa_register.py \
+  --register "$private_register_csv" \
+  --evidence-dir "$private_evidence_directory" \
+  --source-sha "$approved_candidate_sha" \
+  --tier 150
+```
+
+Use `--tier 150` for the first Standard 150 decision and `--tier 500` for
+the combined Standard 150 and 500 decision. Keep both planned rows for all
+20 distinct sites in the CSV. The command checks 20 completed rows for 150
+and all 40 rows for 500. It prints counts and the first blocking reason for each
+missing or mismatched row. The combined check requires the same submitted URL,
+scan path and allowed host-and-path scope at both caps. Each cap can use a
+separately reviewed authorization window and account.
+
+Use these existing register references for locally readable files in the
+private evidence directory.
+
+- Put the actual permission record in `current_authorization_ref`. Its
+  bytes must match both the collector input and the receipt. Use the
+  permission's end time in `current_authorization_expires_at`.
+- Put the exact original collector input in
+  `actual_owner_project_binding_evidence_ref` and its verified output in
+  `stage_receipt_evidence_ref`. The input and receipt must match the same
+  owner, project, attempt, candidate, cap, saved report, and reviewed scope.
+- Use a JSON array of the normalized distinct checked URLs in
+  `checked_url_manifest_ref`. The count and digest must match the receipt.
+  Keep the discovered URL manifest, technical class evidence, findings
+  review, sampling method, and seeded-control evidence in their respective
+  existing file references. Mark the measured inventory and each
+  independently established technical class as `verified` in its status
+  field. The checker reports min/max observed discovered inventory and the
+  four recorded class flags per cap.
+- Record the primary reviewer and the second reviewer, enter the reviewed
+  counts, and use `complete` for completed review statuses and `pass` for
+  accepted verdicts. Fill only from the actual review. The checker verifies
+  that every recorded critical and high group was reviewed. Sample counts
+  are recorded without a minimum threshold.
+
+In `independent_audit_evidence_ref`, retain the second reviewer's JSON
+attestation with `schema_version: "real_site_qa_review_attestation_v1"`,
+`row_id`, `scan_id`, `source_sha`, `primary_reviewer`,
+`independent_auditor`, and `verdict`. Record the SHA-256 of the exact
+receipt and permission files in `receipt_sha256` and
+`authorization_sha256`. In `review_evidence_sha256` map the six existing
+evidence-reference field names to the SHA-256 of each physical file.
+In `reviewed_register_fields` copy the exact CSV strings for the
+critical/high group and disposition counts, lower-priority and passed-page
+sample counts, missed seeded defects, the four technical-class statuses,
+verified inventory, and review statuses and verdicts. The contract lists
+these keys in `REVIEW_FILES` and `REVIEWED_FIELDS` in the verifier.
+
+A verified result establishes completeness and integrity of the supplied
+records for the selected tier. The release owner reviews consent, the
+reviewers' independence, inventory diversity, and finding accuracy using
+those records. The verification digest identifies the exact register,
+candidate, tier and matched evidence for that decision. The checker writes
+only its report to standard output.

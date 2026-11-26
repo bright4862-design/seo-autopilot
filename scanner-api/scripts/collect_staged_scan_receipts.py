@@ -486,7 +486,7 @@ class ReceiptStorage:
             return await asyncio.to_thread(self._read, key, True)
 
 
-async def collect(canary: Canary, storage: Any) -> dict:
+async def collect(canary: Canary, storage: Any, *, verify_pages=None) -> dict:
     prefix = attempt_prefix(canary.scan_id, canary.attempt)
     key = prefix + "frontier.json"
     tombstone = "deleted/" + "/".join(prefix.split("/")[:2]) + "/"
@@ -518,14 +518,16 @@ async def collect(canary: Canary, storage: Any) -> dict:
         pairs.update(zip(pending, await asyncio.gather(*(read_pair(delivery) for delivery in pending)), strict=True))
         pending = [delivery for delivery in pending if None in pairs[delivery]]
     generations = dict(zip(paths, metadata, strict=True))
-    published_pages = {}
-    if canary.page_cap == 150:
-        published_pages = await verify_published_150_pages(canary, storage, prefix, artifacts, generations)
+    page_evidence = {}
+    if verify_pages is not None:
+        page_evidence = await verify_pages(canary, storage, prefix, artifacts, generations)
+    elif canary.page_cap == 150:
+        page_evidence = await verify_published_150_pages(canary, storage, prefix, artifacts, generations)
     final_frontier, deletion = await asyncio.gather(storage.read(key), storage.read(tombstone))
     require(deletion is None, "workspace_deleted")
     require(final_frontier is not None and final_frontier.generation == frontier.generation,
             "workspace_changed_during_collection")
-    return {**verify_evidence(canary, frontier, pairs, generations), **published_pages}
+    return {**verify_evidence(canary, frontier, pairs, generations), **page_evidence}
 
 
 def _main() -> int:

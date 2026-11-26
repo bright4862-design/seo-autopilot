@@ -188,6 +188,9 @@ The verifier matches each saved plan to its scan attempt and verified receipt. I
 
 Review a corpus with sitemap inventories on all 50 sites so each can contribute to the coverage comparison. A crawl based on internal links can still produce a valid scan. If it has no sitemap inventory, preserve its terminal result and report the corpus comparison as unverified. Include a throttling case where the crawl can capture its sitemap inventory before the throttle forces a limited result.
 
+For the separate paired 20-site review, collect [one real-site receipt per
+150 or 500 row](real-site-qa-receipt.md) after the approved customer run.
+
 Phase 7 (5,000-page scans), adaptive sampling, weekly monitoring and the separate signed targeted-verification product are future extensions. The 30-day lifecycle must be revisited before introducing a longer-lived monitoring baseline.
 
 ## Pilot on getfixlist.com

@@ -57,8 +57,8 @@ After both tier checks, the named 500 pilot, and the approved real-site QA are
 recorded, prepare the accepted paid 500 gateway and Base44 settings during the
 closed and drained cutover. The gateway's 500 capability stays enabled during
 later scoped holds. On Base44, keep the older 500 setting disabled and verify
-the current launcher's paid-500 readback. Open or restore the approved Standard
-150 policy before starting the eligible 500 rollout.
+the current launcher's paid-500 readback. Open or restore the approved scoped
+Standard 150 policy before starting the eligible 500 rollout.
 
 Use `start-eligible-500` with the exact public source, open generation,
 rollout ID, release ID, expiry, claim budgets, and current V9 launcher build.
@@ -74,6 +74,11 @@ signed held state and surviving Standard 150 policy. Verify that a fresh 500
 claim is refused, a previously admitted 500 attempt can finish, and approved
 150 customers can still launch and reopen reports. Preserve the current
 worker, gateway, and grant settings during the scoped hold.
+
+If main has advanced beyond the serving coordinator, run the hold locally
+with the authenticated operator credentials and a clean checkout of the
+merged source that the coordinator and policy still report. The hold checks
+that exact source and the current generation without requiring a new deploy.
 
 ### Why traffic operations name a revision
 

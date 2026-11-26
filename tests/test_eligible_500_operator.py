@@ -18,7 +18,7 @@ TEST_KEY = b"offline operator fixture key"
 
 def _operator_function(name, args, directory):
     definition = re.split(
-        r"\n}\n(?=\n[a-z][a-z0-9_]+\(\) \{)", OPERATOR.split(f"{name}() {{", 1)[1], maxsplit=1,
+        r"\n}\n(?=\n(?:[a-z][a-z0-9_]+\(\) \{|case ))", OPERATOR.split(f"{name}() {{", 1)[1], maxsplit=1,
     )[0]
     script = f"set -euo pipefail\n{name}() {{{definition}\n}}\n" + args
     return subprocess.run(["bash", "-c", script], cwd=directory, capture_output=True, text=True, timeout=10)
@@ -64,22 +64,46 @@ write_barrier_payload hold_eligible_500 body.json
     }
 
 
+def test_local_hold_works_from_the_clean_merged_serving_source(tmp_path):
+    guard = tmp_path / "scripts/lib/release-source-guard.sh"
+    guard.parent.mkdir(parents=True)
+    guard.write_text('fixlist_require_merged_checkout() { [[ "$1" == "." && "$2" == "$SOURCE_SHA" ]]; }\n')
+    outcome = _operator_function("operate_eligible_500", _setting_values() + """
+REPO_ROOT=. GITHUB_ACTIONS=false
+require_exact_main_owner_source() { return 99; }
+require_barrier_inputs() { :; }
+require_confirmation() { [[ "$1" == "HOLD-ELIGIBLE-500:$SOURCE_SHA:15:eligible-first" ]]; }
+call_barrier_operator() { [[ "$1" == "hold_eligible_500" && "$2" == "/ops/barrier/eligible-500/hold" ]]; }
+parse_barrier_response() {
+  [[ "$1" == "hold_eligible_500" ]]
+  BARRIER_GENERATION=16 BARRIER_MODE=open BARRIER_SNAPSHOT_ID=snapshot_held
+}
+operate_eligible_500 hold
+""", tmp_path)
+    assert outcome.returncode == 0, outcome.stderr
+    assert "action=hold generation=16" in outcome.stdout
+    assert "snapshot=snapshot_held" in outcome.stdout
+
+
 @pytest.mark.parametrize("action", ["start", "hold"])
-@pytest.mark.parametrize("wrong_binding", [False, True])
+@pytest.mark.parametrize("wrong_binding", [None, "500", "150"])
 def test_eligible_500_requires_the_exact_signed_boundary(tmp_path, action, wrong_binding):
     operation = f"{action}_eligible_500"
     starting = action == "start"
     barrier = {"mode": "open", "generation": 16, "current_snapshot_id": "snapshot_example", "claim_sequence": 3}
     boundary = {
         "state": "configured" if starting else "held", "page_cap": 500, "cohort_id": "eligible-first",
-        "release_id": "paid-500-release", "source_sha": ("c" * 40) if wrong_binding and not starting else SOURCE,
-        "required_launcher_build_id": ("c" * 64) if wrong_binding and starting else BUILD,
+        "release_id": "paid-500-release", "source_sha": ("c" * 40) if wrong_binding == "500" and not starting else SOURCE,
+        "required_launcher_build_id": ("c" * 64) if wrong_binding == "500" and starting else BUILD,
         "expires_at": 1900000000, "total_claim_budget": 10, "per_owner_claim_budget": 2,
         "total_claims_used": 0,
     }
+    boundaries = {"public_500": boundary}
+    if wrong_binding != "150":
+        boundaries["public_150"] = {"state": "configured", "page_cap": 150, "cohort_id": "public-first"}
     snapshot = {
         "version": "admission_eligible_500_snapshot_v1", "snapshot_id": "snapshot_example",
-        "barrier": barrier, "boundary": {"public_500": boundary}, "drain_ready": False,
+        "barrier": barrier, "boundary": boundaries, "drain_ready": False,
     }
     key = hmac.new(TEST_KEY, SNAPSHOT_LABEL.encode(), hashlib.sha256).digest()
     canonical = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
@@ -97,7 +121,8 @@ printf '%s %s\\n' "$BARRIER_MODE" "$BARRIER_GENERATION"
 """, tmp_path)
     if wrong_binding:
         assert outcome.returncode != 0
-        assert ("launcher" if starting else "source") in outcome.stderr
+        expected = "Standard 150 boundary" if wrong_binding == "150" else ("launcher" if starting else "source")
+        assert expected in outcome.stderr
     else:
         assert outcome.returncode == 0, outcome.stderr
         assert outcome.stdout.strip() == "open 16"

@@ -1174,6 +1174,11 @@ if pilot_500_operation or eligible_500_operation:
     if eligible_500_operation and (scope.get("source_sha") != source_sha
             or signed_barrier.get("claim_sequence") != barrier.get("claim_sequence")):
         raise SystemExit("Eligible Standard 500 source or claim sequence mismatch")
+    if eligible_500_operation:
+        public_150 = boundary.get("public_150") or {}
+        if (public_150.get("page_cap") != 150 or not public_150.get("cohort_id")
+                or public_150.get("state") not in {"configured", "held", "expired"}):
+            raise SystemExit("Eligible Standard 500 requires a signed Standard 150 boundary")
     if eligible_500_operation and state == "configured":
         if (scope.get("source_sha") != source_sha or scope.get("required_launcher_build_id") != launcher_build_id
                 or scope.get("expires_at") != int(expires_at) or scope.get("release_id") != release_id
@@ -1615,7 +1620,12 @@ operate_published_500_pilot() {
 
 operate_eligible_500() {
   local action="$1"
-  require_exact_main_owner_source
+  if [[ "$action" == hold && "${GITHUB_ACTIONS:-}" != true ]]; then
+    source "$REPO_ROOT/scripts/lib/release-source-guard.sh"
+    fixlist_require_merged_checkout "$REPO_ROOT" "$SOURCE_SHA"
+  else
+    require_exact_main_owner_source
+  fi
   require_barrier_inputs
   [[ "$BARRIER_EXPECTED_PRIOR_MODE" == open && "$ACCEPTANCE_COHORT_ID" =~ ^[A-Za-z0-9_-]{6,128}$ && -z "$ACCEPTANCE_OWNER_USER_IDS" ]] \
     || { echo 'Eligible Standard 500 requires the exact open generation and rollout ID with no owner roster.' >&2; return 1; }

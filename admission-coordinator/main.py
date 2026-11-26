@@ -742,6 +742,11 @@ def _barrier_response(operation: str, payload: dict[str, Any]) -> dict[str, Any]
                 }
             else:
                 raise control.ControlError("invalid_barrier_operation")
+            if operation in {"start_500_pilot", "hold_500_pilot"} and isinstance(public_150, dict):
+                boundary[admission.PUBLIC_150] = control.public_150_boundary(public_150, now=now)
+            if operation == "hold_public_150" and isinstance(published_500_pilot, dict):
+                state = "configured" if published_500_pilot["expires_at"] > now else "expired"
+                boundary[admission.PUBLISHED_500_PILOT] = control.published_500_pilot_boundary(published_500_pilot, state=state)
             transaction.set(control_ref, admission.durable_control(result))
 
         # Status is an audited observation rather than a pure GET. Persisting

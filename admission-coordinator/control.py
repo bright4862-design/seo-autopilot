@@ -419,6 +419,7 @@ def public_150_boundary(definition: dict[str, Any], *, now: int) -> dict[str, An
         "page_cap": 150,
         "total_claim_budget": definition["total_claim_budget"],
         "per_owner_claim_budget": definition["per_owner_claim_budget"],
+        "total_claims_used": definition.get("total_claims_used", 0),
     }
 
 

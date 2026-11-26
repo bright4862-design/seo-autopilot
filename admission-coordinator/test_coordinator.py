@@ -778,6 +778,8 @@ class PublicStandard150Cohort(CoordinatorTestCase):
                 "acceptance": {**definition, "cohort_id": "named_500_wave", "owner_user_ids": ["named500_customer"]},
             })
             self.assertEqual(started.status_code, 200, started.json)
+            public_boundary = started.json["pilot_snapshot"]["boundary"]["public_150"]
+            self.assertEqual(public_boundary, {**snapshot["boundary"]["public_150"], "total_claims_used": 1})
             hold = {
                 **context, "operation": "hold_public_150", "intended_prior": {"mode": "open", "generation": 6},
                 "cohort_id": "standard150_wave",
@@ -790,7 +792,9 @@ class PublicStandard150Cohort(CoordinatorTestCase):
             self.assertEqual(stale.status_code, 409, stale.json)
             held = self.operator_post("/ops/barrier/public-150/hold", hold)
             self.assertEqual(held.status_code, 200, held.json)
-            self.assertEqual(held.json["public_150_snapshot"]["boundary"]["public_150"]["state"], "held")
+            held_boundary = held.json["public_150_snapshot"]["boundary"]
+            self.assertEqual(held_boundary["public_150"], {**public_boundary, "state": "held"})
+            self.assertEqual(held_boundary["published_500_pilot"], started.json["pilot_snapshot"]["boundary"]["published_500_pilot"])
             self.assertEqual(self.post("/claim", second).status_code, 423)
             self.assertEqual(self.post("/claim", claim150).json["claim_token"], first.json["claim_token"])
             bound = self.post("/bind", {
@@ -804,6 +808,16 @@ class PublicStandard150Cohort(CoordinatorTestCase):
             self.assertEqual(STORE[control_key]["public_150"]["total_claims_used"], 1)
             self.assertEqual(STORE[control_key]["published_500_pilot"]["total_claims_used"], 1)
             self.assertEqual(STORE[control_key]["mode"], "open_public_150")
+            paid_held = self.operator_post("/ops/barrier/pilot-500/hold", {
+                **context, "operation": "hold_500_pilot", "intended_prior": {"mode": "open", "generation": 7},
+                "cohort_id": "named_500_wave",
+            })
+            self.assertEqual(paid_held.status_code, 200, paid_held.json)
+            paid_snapshot = paid_held.json["pilot_snapshot"]
+            proof = paid_snapshot.pop("proof")
+            self.assertTrue(control.verify_record(OPERATOR_SIGNING_ROOT, control.SNAPSHOT_LABEL, paid_snapshot, proof))
+            self.assertEqual(paid_snapshot["barrier"]["generation"], 8)
+            self.assertEqual(paid_snapshot["boundary"]["public_150"], held_boundary["public_150"])
 
 
 class PublishedPilotAcceptance(CoordinatorTestCase):

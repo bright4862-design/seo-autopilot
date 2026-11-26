@@ -1592,7 +1592,7 @@ operate_published_500_pilot() {
   fi
   call_barrier_operator "${action}_500_pilot" "/ops/barrier/pilot-500/$action"
   parse_barrier_response "${action}_500_pilot"
-  echo "STANDARD500_PILOT action=$action generation=$BARRIER_GENERATION cohort=$ACCEPTANCE_COHORT_ID public_mode=$BARRIER_MODE"
+  echo "STANDARD500_PILOT action=$action generation=$BARRIER_GENERATION cohort=$ACCEPTANCE_COHORT_ID public_mode=$BARRIER_MODE snapshot=$BARRIER_SNAPSHOT_ID"
 }
 
 case "$OPERATION" in

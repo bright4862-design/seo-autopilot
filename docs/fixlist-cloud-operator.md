@@ -32,6 +32,9 @@ claims and 24 hours. The confirmation is
 `OPEN-PUBLIC-150-COHORT:<source-sha>:<closed-generation>:<cohort-id>:<launcher-build-id>`.
 The scope and the open transition commit together. The signed response binds
 the deployed source, launcher, cohort, account-set digest, expiry and budgets.
+The named 500 pilot's start and hold snapshots carry the public 150 state
+and claim usage when a bounded cohort is configured. A public 150 hold
+snapshot also records the named 500 state when present.
 
 Use `hold-public-150` with the current open generation and exact cohort ID.
 The confirmation is `HOLD-PUBLIC-150-COHORT:<source-sha>:<open-generation>:<cohort-id>`.

@@ -272,7 +272,7 @@ async function callCoordinator(path, payload, { coordinatorUrl, signingKey, fetc
  */
 export async function claimAdmission({
   ownerUserId, requestId, requestFingerprint, targetOrigin, queueIfOriginBusy,
-  pilotLauncherBuildId, pilotPageCap, pilotReplayOnly, standard150LauncherBuildId, ...options
+  pilotLauncherBuildId, pilotPageCap, pilotReplayOnly, standard150LauncherBuildId, standard500LauncherBuildId, ...options
 } = {}) {
   if (!admissionEnabled(options.env ?? readEnv)) {
     return { ok: false, outcomeUnknown: false, failureCode: "admission_disabled" };
@@ -287,6 +287,7 @@ export async function claimAdmission({
     ...(pilotPageCap !== undefined ? { pilot_page_cap: pilotPageCap } : {}),
     ...(pilotReplayOnly === true ? { pilot_replay_only: true } : {}),
     ...(standard150LauncherBuildId ? { standard_150_launcher_build_id: standard150LauncherBuildId } : {}),
+    ...(standard500LauncherBuildId ? { standard_500_launcher_build_id: standard500LauncherBuildId } : {}),
   }, options);
 }
 

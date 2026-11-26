@@ -63,7 +63,8 @@ function harness({
     "base44:runtime": { secrets: { get: name => {
       secretReads.push(name);
       if (operator && ["SCAN_PIPELINE_MODE", "SCAN_STAGED_OWNER_IDS"].includes(name)) return settings[name];
-      if (["SCAN_STAGED_PILOT_OWNER_IDS", "SCAN_PUBLIC_PILOT_EXPIRES_AT"].includes(name)) return gates[name];
+      if (["SCAN_STAGED_PILOT_OWNER_IDS", "SCAN_PUBLIC_PILOT_EXPIRES_AT",
+        "SCAN_STAGED_500_ELIGIBLE_ADMISSION_ENABLED"].includes(name)) return gates[name];
       if (launch.entities && Object.hasOwn(gates, name)) return gates[name];
       if (name !== "BETA_SCAN_INTAKE_ENABLED" && name !== "BETA_SCAN_ADMISSION_ENABLED") {
         return sideEffect(`secrets.get:${name}`);
@@ -115,6 +116,7 @@ test("actual V9 intake returns a closed, no-store owner-only settings and releas
     configured_pipeline_mode: "staged",
     staged_rollout_scope: "off",
     staged_500_entitled_enabled: false,
+    legacy_staged_500_entitled_enabled: false,
     staged_pilot_owner_count: 0,
     staged_pilot_owner_cohort_sha256: createHash("sha256").update("[]").digest("hex"),
     paid_dispatch_gateway_origin: gatewayOrigin,
@@ -130,7 +132,7 @@ test("actual V9 intake returns a closed, no-store owner-only settings and releas
     "SCAN_DISPATCH_GATEWAY_URL", "SCAN_PIPELINE_MODE", "SCAN_PUBLIC_PILOT_EXPIRES_AT",
     "SCAN_STAGED_500_ENTITLED_ENABLED", "SCAN_STAGED_OWNER_IDS", "SCAN_STAGED_ROLLOUT_SCOPE",
   ]);
-  assert.deepEqual(fixture.secretReads, ["SCAN_STAGED_PILOT_OWNER_IDS", "BETA_SCAN_INTAKE_ENABLED", "BETA_SCAN_ADMISSION_ENABLED"]);
+  assert.deepEqual(fixture.secretReads, ["SCAN_STAGED_500_ELIGIBLE_ADMISSION_ENABLED", "SCAN_STAGED_PILOT_OWNER_IDS", "BETA_SCAN_INTAKE_ENABLED", "BETA_SCAN_ADMISSION_ENABLED"]);
   assert.deepEqual(fixture.sideEffects, []);
 });
 
@@ -281,10 +283,11 @@ function launchHarness({
   gateway = "https://dispatch-gateway.example", claimFailure, echoClaimOrigin = false, omitPersistedOrigin = false,
   publicPilotExpiresAt, acknowledgePilot = true, pilotOwners, pilotClaimCap, claimMode, user = paidCustomer,
   acknowledgeCap = true, invalidClaimProof = false, interruptBeforeDrain = false,
+  acknowledgeEligible500 = true, legacyEntitled500 = "false",
 } = {}) {
   const settings = {
     ...(rollout === null ? {} : { SCAN_STAGED_ROLLOUT_SCOPE: rollout }),
-    ...(entitled500 === null ? {} : { SCAN_STAGED_500_ENTITLED_ENABLED: entitled500 }),
+    SCAN_STAGED_500_ENTITLED_ENABLED: legacyEntitled500,
     SCAN_PIPELINE_MODE: mode, SCAN_STAGED_OWNER_IDS: cohort,
     SCAN_TASKS_QUEUE_PATH: "projects/test/locations/europe-west1/queues/scan",
     SCAN_DRAIN_QUEUE_PATH: "projects/test/locations/europe-west1/queues/drain",
@@ -299,6 +302,7 @@ function launchHarness({
     BETA_SCAN_INTAKE_ENABLED: "true", BETA_SCAN_ADMISSION_ENABLED: "true",
     SCAN_ADMISSION_COORDINATOR_URL: "https://coordinator.example", SCAN_EVIDENCE_SIGNING_KEY: signingKey,
     SCAN_STAGED_PILOT_OWNER_IDS: pilotOwners, SCAN_PUBLIC_PILOT_EXPIRES_AT: publicPilotExpiresAt,
+    SCAN_STAGED_500_ELIGIBLE_ADMISSION_ENABLED: entitled500,
   };
   const scans = [];
   const dispatched = [];
@@ -343,10 +347,14 @@ function launchHarness({
         "./admissionClient.js": {
           ...admissionClient,
           verifyAdmissionClaimEvidence,
-          claimAdmission: async ({ ownerUserId, requestId, targetOrigin, pilotLauncherBuildId, pilotPageCap, pilotReplayOnly, standard150LauncherBuildId }) => {
+          claimAdmission: async ({
+            ownerUserId, requestId, targetOrigin, pilotLauncherBuildId, pilotPageCap, pilotReplayOnly,
+            standard150LauncherBuildId, standard500LauncherBuildId,
+          }) => {
             claimRequests.push({
               pilotLauncherBuildId, pilotPageCap, ...(pilotReplayOnly ? { pilotReplayOnly } : {}),
               ...(standard150LauncherBuildId ? { standard150LauncherBuildId } : {}),
+              ...(standard500LauncherBuildId ? { standard500LauncherBuildId } : {}),
             });
             calls.push("claim");
             admittedOrigins.push(targetOrigin);
@@ -356,18 +364,22 @@ function launchHarness({
               return { ok: false, status: 423, failureCode: "scan_intake_paused" };
             }
             if (!replayed) {
+              const mode = claimMode ?? (pilotLauncherBuildId || standard500LauncherBuildId ? "acceptance_only" : "open");
+              const cohortKind = mode === "acceptance_only" ? (pilotLauncherBuildId ? "pilot" : "eligible500") : "";
               claimEvidence = {
                 version: "admission_claim_evidence_v1", owner_user_id: ownerUserId, request_id: requestId,
-                barrier_generation: 4, claim_sequence: 23, admission_mode: claimMode ?? (pilotLauncherBuildId ? "acceptance_only" : "open"),
-                acceptance_cohort_id: pilotLauncherBuildId ? "pilot_cohort" : "",
-                acceptance_release_id: pilotLauncherBuildId ? "pilot_release" : "",
-                acceptance_source_sha: pilotLauncherBuildId ? "a".repeat(40) : "",
-                acceptance_expires_at: pilotLauncherBuildId ? Number(publicPilotExpiresAt) : null,
+                barrier_generation: 4, claim_sequence: 23, admission_mode: mode,
+                acceptance_cohort_id: cohortKind ? `${cohortKind}_cohort` : "",
+                acceptance_release_id: cohortKind ? `${cohortKind}_release` : "",
+                acceptance_source_sha: cohortKind ? "a".repeat(40) : "",
+                acceptance_expires_at: cohortKind ? Number(publicPilotExpiresAt ?? 1800000000) : null,
               };
               binding = {
                 ...claimEvidence, scan_id: "",
                 ...(echoClaimOrigin ? { target_origin: targetOrigin } : {}),
                 ...(acknowledgePilot && pilotLauncherBuildId ? { pilot_launcher_build_id: pilotLauncherBuildId } : {}),
+                ...(acknowledgeEligible500 && standard500LauncherBuildId
+                  ? { standard_500_launcher_build_id: standard500LauncherBuildId } : {}),
                 ...(acknowledgeCap && (pilotClaimCap ?? pilotPageCap) !== undefined ? { pilot_page_cap: pilotClaimCap ?? pilotPageCap } : {}),
               };
             }
@@ -560,19 +572,20 @@ test("default-off scope preserves the named pilot and declines a fresh unavailab
 
 test("paid 500 uses an independent strict switch and keeps verified 150 available while off", async () => {
   for (const flag of [null, "False", "false", "TRUE"]) {
-    const { settings, calls, submit } = launchHarness({ entitled500: flag, rows: [{ ...paidGrant, page_cap: 500 }] });
+    const { settings, gates, calls, submit } = launchHarness({ entitled500: flag, rows: [{ ...paidGrant, page_cap: 500 }] });
     const paused = await submit();
     assert.equal(paused.status, 503);
     assert.equal(paused.body.failure_code, "scan_staged_500_unavailable");
     assert.deepEqual(calls, ["status"]);
-    const readback = await harness({ settings }).post();
+    const readback = await harness({ settings, gates }).post();
     assert.equal(readback.body.staged_rollout_scope, "paid");
     assert.equal(readback.body.staged_500_entitled_enabled, false);
   }
   const standard = launchHarness({ entitled500: null });
   assert.equal((await standard.submit()).body.page_cap, 150);
   assert.equal(standard.dispatched[0].staged_rollout_scope, "paid");
-  const readback = await harness({ settings: launchHarness().settings }).post();
+  const { settings, gates } = launchHarness();
+  const readback = await harness({ settings, gates }).post();
   assert.equal(readback.body.staged_500_entitled_enabled, true);
 });
 
@@ -582,7 +595,7 @@ test("turning off paid scope preserves exact bound replay without another claim 
   assert.equal(original.status, 200, JSON.stringify(original.body));
   fixture.settings.SCAN_STAGED_ROLLOUT_SCOPE = "off";
   fixture.settings.SCAN_PIPELINE_MODE = "monolith";
-  fixture.settings.SCAN_STAGED_500_ENTITLED_ENABLED = "false";
+  fixture.gates.SCAN_STAGED_500_ELIGIBLE_ADMISSION_ENABLED = "false";
   const replay = await fixture.submit();
   assert.equal(replay.status, 200, JSON.stringify(replay.body));
   assert.equal(replay.body.scan_id, original.body.scan_id);
@@ -597,13 +610,46 @@ test("turning off paid scope preserves exact bound replay without another claim 
   assert.equal((await fixture.submit()).body.failure_code, "scan_staged_500_unavailable");
 });
 
+test("broad 500 only sends and accepts typed admission on the new mutable entitlement switch", async () => {
+  const access = [{ ...paidGrant, page_cap: 500 }];
+  const legacy = launchHarness({ rows: access, entitled500: null, legacyEntitled500: "true" });
+  assert.equal((await legacy.submit()).body.failure_code, "scan_staged_500_unavailable");
+  assert.equal(legacy.claimRequests.length, 0);
+
+  for (const config of [{ acknowledgeEligible500: false }, { claimMode: "open" }]) {
+    const unsupported = launchHarness({ rows: access, ...config });
+    assert.equal((await unsupported.submit()).body.failure_code, "admission_claim_evidence_invalid");
+    assert.equal(unsupported.scans.length, 0);
+    assert.equal(unsupported.dispatched.length, 0);
+  }
+
+  const enabled = launchHarness({ rows: access });
+  assert.equal((await enabled.submit()).body.page_cap, 500);
+  assert.deepEqual(enabled.claimRequests[0], {
+    pilotLauncherBuildId: undefined, pilotPageCap: undefined, standard500LauncherBuildId: FUNCTION_BUILD_ID,
+  });
+
+  const held = launchHarness({
+    rows: access, claimFailure: { ok: false, status: 423, failureCode: "scan_intake_paused" },
+  });
+  assert.equal((await held.submit()).body.failure_code, "scan_staged_500_unavailable");
+  assert.equal(held.scans.length, 0);
+  assert.equal(held.dispatched.length, 0);
+
+  const elevated = { ...paidCustomer, role: "admin" };
+  const admin = launchHarness({ rows: access, user: elevated });
+  assert.equal((await admin.submit()).body.failure_code, "scan_staged_500_unavailable");
+  assert.equal(admin.claimRequests.length, 0);
+});
+
+
 test("turning off paid scope preserves admitted paid 150 without redispatching to an off route", async () => {
   const fixture = launchHarness();
   const original = await fixture.submit();
   assert.equal(original.status, 200, JSON.stringify(original.body));
   fixture.settings.SCAN_STAGED_ROLLOUT_SCOPE = "off";
   fixture.settings.SCAN_PIPELINE_MODE = "monolith";
-  fixture.settings.SCAN_STAGED_500_ENTITLED_ENABLED = "false";
+  fixture.gates.SCAN_STAGED_500_ELIGIBLE_ADMISSION_ENABLED = "false";
   const replay = await fixture.submit();
   assert.equal(replay.status, 200, JSON.stringify(replay.body));
   assert.equal(replay.body.scan_id, original.body.scan_id);
@@ -620,7 +666,7 @@ test("unknown or inconsistent paid rollout is read back as invalid and blocks be
     assert.equal(result.status, 503);
     assert.equal(result.body.failure_code, "scan_staged_rollout_configuration_invalid");
     assert.deepEqual(fixture.calls, []);
-    const status = await harness({ settings: fixture.settings }).post();
+    const status = await harness({ settings: fixture.settings, gates: fixture.gates }).post();
     assert.equal(status.body.staged_rollout_scope, "invalid");
     assert.equal(status.body.staged_owner_enabled, false);
     assert.equal(status.body.pipeline_mode, "monolith");
@@ -912,7 +958,9 @@ test("broad entitled 500 cannot pass an ordinary Standard 150 launcher attestati
   const result = await fixture.submit({ standard_150_launcher_build_id: FUNCTION_BUILD_ID });
   assert.equal(result.body.accepted, true, JSON.stringify(result.body));
   assert.equal(result.body.page_cap, 500);
-  assert.deepEqual(fixture.claimRequests, [{ pilotLauncherBuildId: undefined, pilotPageCap: undefined }]);
+  assert.deepEqual(fixture.claimRequests, [{
+    pilotLauncherBuildId: undefined, pilotPageCap: undefined, standard500LauncherBuildId: FUNCTION_BUILD_ID,
+  }]);
 });
 
 test("an administrator's 150 launch carries no ordinary Standard 150 attestation", async () => {

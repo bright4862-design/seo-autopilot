@@ -518,9 +518,12 @@ def _barrier_response(operation: str, payload: dict[str, Any]) -> dict[str, Any]
         "hold_500_pilot": control.PUBLISHED_500_PILOT_SNAPSHOT_VERSION,
         "hold_150_pilot": control.PUBLISHED_150_PILOT_SNAPSHOT_VERSION,
         "hold_public_150": control.PUBLIC_150_HOLD_SNAPSHOT_VERSION,
+        "start_eligible_500": control.ELIGIBLE_500_SNAPSHOT_VERSION,
+        "hold_eligible_500": control.ELIGIBLE_500_SNAPSHOT_VERSION,
     }.get(operation)
     snapshot_field = (
-        "public_150_snapshot" if operation == "hold_public_150"
+        "eligible_500_snapshot" if scoped_pilot_version == control.ELIGIBLE_500_SNAPSHOT_VERSION
+        else "public_150_snapshot" if operation == "hold_public_150"
         else "pilot_snapshot" if scoped_pilot_version else "drain_snapshot"
     )
     now = int(time.time())
@@ -551,6 +554,7 @@ def _barrier_response(operation: str, payload: dict[str, Any]) -> dict[str, Any]
         published_500_pilot = current.get(admission.PUBLISHED_500_PILOT)
         legacy_access = current.get(admission.LEGACY_CUSTOMER_ACCESS)
         public_150 = current.get(admission.PUBLIC_150)
+        public_500 = current.get(admission.PUBLIC_500)
         if operation == "status":
             try:
                 expected_generation = admission.normalize_barrier_generation(payload.get("expected_generation"))
@@ -571,6 +575,8 @@ def _barrier_response(operation: str, payload: dict[str, Any]) -> dict[str, Any]
                 boundary[admission.LEGACY_CUSTOMER_ACCESS] = control.legacy_access_boundary(legacy_access, now=now)
             if isinstance(public_150, dict):
                 boundary[admission.PUBLIC_150] = control.public_150_boundary(public_150, now=now)
+            if isinstance(public_500, dict):
+                boundary[admission.PUBLIC_500] = control.eligible_500_boundary(public_500, now=now)
         else:
             close_replay = operation == "close" and control.is_exact_close_replay(
                 current,
@@ -715,7 +721,7 @@ def _barrier_response(operation: str, payload: dict[str, Any]) -> dict[str, Any]
                     admission.LEGACY_CUSTOMER_ACCESS: control.legacy_access_boundary(legacy_access, now=now),
                 }
             elif operation == "start_500_pilot":
-                if published_500_pilot is not None:
+                if published_500_pilot is not None or control.eligible_500_active(public_500, now=now):
                     raise control.ControlError("published_500_pilot_already_configured")
                 definition = control.acceptance_definition(payload.get("acceptance"), now=now, operator_id=OPERATOR_ID)
                 if len(definition["owner_allowlist"]) > control.MAX_PUBLISHED_500_PILOT_OWNERS:
@@ -733,6 +739,19 @@ def _barrier_response(operation: str, payload: dict[str, Any]) -> dict[str, Any]
                 boundary = {
                     admission.PUBLISHED_500_PILOT: control.published_500_pilot_boundary(published_500_pilot, state="held"),
                 }
+            elif operation in {"start_eligible_500", "hold_eligible_500"}:
+                definition = (control.eligible_500_definition(payload.get(admission.PUBLIC_500), now=now, operator_id=OPERATOR_ID)
+                              if operation == "start_eligible_500" else None)
+                if definition is None and isinstance(public_500, dict) and public_500["source_sha"] != SOURCE_SHA:
+                    raise control.ControlError("acceptance_source_mismatch")
+                result = control.update_eligible_500(
+                    current, snapshot_id=snapshot_id, now=now, definition=definition, cohort_id=payload.get("cohort_id"),
+                )
+                if definition is not None:
+                    record_cohorts(definition)
+                boundary = {admission.PUBLIC_500: control.eligible_500_boundary(result[admission.PUBLIC_500], now=now)}
+                if isinstance(public_150, dict):
+                    boundary[admission.PUBLIC_150] = control.public_150_boundary(public_150, now=now)
             elif operation == "hold_public_150":
                 result = control.hold_public_150(
                     current, snapshot_id=snapshot_id, cohort_id=payload.get("cohort_id"), now=now,
@@ -744,6 +763,8 @@ def _barrier_response(operation: str, payload: dict[str, Any]) -> dict[str, Any]
                 raise control.ControlError("invalid_barrier_operation")
             if operation in {"start_500_pilot", "hold_500_pilot"} and isinstance(public_150, dict):
                 boundary[admission.PUBLIC_150] = control.public_150_boundary(public_150, now=now)
+            if operation == "hold_public_150" and isinstance(public_500, dict):
+                boundary[admission.PUBLIC_500] = control.eligible_500_boundary(public_500, now=now)
             if operation == "hold_public_150" and isinstance(published_500_pilot, dict):
                 state = "configured" if published_500_pilot["expires_at"] > now else "expired"
                 boundary[admission.PUBLISHED_500_PILOT] = control.published_500_pilot_boundary(published_500_pilot, state=state)
@@ -813,14 +834,18 @@ def _handle_barrier_operation(operation: str):
         return response_error("invalid_legacy_access_operation", 400)
     if not scoped_public_open and admission.PUBLIC_150 in payload:
         return response_error("barrier_operation_conflict", 409)
-    if published_pilot or operation == "start_500_pilot" or scoped_public_open:
-        acceptance = payload.get(admission.PUBLIC_150 if scoped_public_open else "acceptance")
+    if (admission.PUBLIC_500 in payload) != (operation == "start_eligible_500"):
+        return response_error("barrier_operation_conflict", 409)
+    if published_pilot or operation in {"start_500_pilot", "start_eligible_500"} or scoped_public_open:
+        policy_key = (admission.PUBLIC_150 if scoped_public_open else admission.PUBLIC_500
+                      if operation == "start_eligible_500" else "acceptance")
+        acceptance = payload.get(policy_key)
         launcher = acceptance.get("required_launcher_build_id") if isinstance(acceptance, dict) else None
         if not isinstance(launcher, str) or not re.fullmatch(r"[0-9a-f]{64}", launcher):
             return response_error("invalid_acceptance_launcher_build_id", 400)
         if not re.fullmatch(r"[0-9a-f]{40}", SOURCE_SHA) or acceptance.get("source_sha") != SOURCE_SHA:
             return response_error("acceptance_source_mismatch", 409)
-    if operation == "hold_150_pilot" and (not re.fullmatch(r"[0-9a-f]{40}", SOURCE_SHA)
+    if operation in {"hold_150_pilot", "hold_eligible_500"} and (not re.fullmatch(r"[0-9a-f]{40}", SOURCE_SHA)
                                            or payload.get("source_sha") != SOURCE_SHA):
         return response_error("acceptance_source_mismatch", 409)
     try:
@@ -866,6 +891,16 @@ def barrier_hold_150_pilot():
     return _handle_barrier_operation("hold_150_pilot")
 
 
+@app.post("/ops/barrier/eligible-500/start")
+def barrier_start_eligible_500():
+    return _handle_barrier_operation("start_eligible_500")
+
+
+@app.post("/ops/barrier/eligible-500/hold")
+def barrier_hold_eligible_500():
+    return _handle_barrier_operation("hold_eligible_500")
+
+
 @app.post("/ops/barrier/public-150/hold")
 def barrier_hold_public_150():
     return _handle_barrier_operation("hold_public_150")
@@ -885,6 +920,7 @@ def health():
         "published_pilot_legacy_access": True,
         "published_500_pilot_admission": True,
         "public_standard_150_cohort_admission": True,
+        "eligible_500_admission": True,
         "claim_evidence_proof_label": CLAIM_EVIDENCE_LABEL.decode("ascii"),
         "drain_snapshot_version": control.DRAIN_SNAPSHOT_VERSION,
         "drain_snapshot_proof_label": control.SNAPSHOT_LABEL.decode("ascii"),
@@ -917,6 +953,12 @@ def claim():
         or published_500_pilot or launcher_build
     ):
         return response_error("invalid_standard_150_launcher_build_id", 400)
+    standard_500_launcher = payload.get("standard_500_launcher_build_id", "")
+    if "standard_500_launcher_build_id" in payload and (
+        not isinstance(standard_500_launcher, str) or not re.fullmatch(r"[a-f0-9]{64}", standard_500_launcher)
+        or launcher_build or standard_150_launcher
+    ):
+        return response_error("invalid_standard_500_launcher_build_id", 400)
     pilot_replay_only = "pilot_replay_only" in payload
     if pilot_replay_only and (payload["pilot_replay_only"] is not True or pilot_page_cap is None):
         return response_error("invalid_pilot_replay_only", 400)
@@ -954,16 +996,20 @@ def claim():
         )
         if candidate.get("outcome") == admission.OUTCOME_REPLAYED:
             admitted_150_launcher = (document or {}).get("standard_150_launcher_build_id")
+            admitted_500_launcher = (document or {}).get("standard_500_launcher_build_id", "")
             if ((document or {}).get("pilot_launcher_build_id", "") != launcher_build
                     or (document or {}).get("pilot_page_cap") != pilot_page_cap
-                    or (admitted_150_launcher is not None and admitted_150_launcher != standard_150_launcher)):
+                    or (admitted_150_launcher is not None and admitted_150_launcher != standard_150_launcher)
+                    or admitted_500_launcher != standard_500_launcher):
                 return {"outcome": None, "error": admission.ERROR_SCAN_INTAKE_PAUSED}
             return candidate
         if pilot_replay_only:
             return {"outcome": None, "error": admission.ERROR_SCAN_INTAKE_PAUSED}
-        acceptance_key = admission.PUBLISHED_500_PILOT if published_500_pilot else admission.claim_cohort_key(current)
+        acceptance_key = admission.PUBLIC_500 if standard_500_launcher else admission.claim_cohort_key(current)
+        if published_500_pilot:
+            acceptance_key = admission.PUBLISHED_500_PILOT
         acceptance = current.get(acceptance_key)
-        if acceptance_key in {admission.PUBLIC_150, admission.PUBLISHED_500_PILOT}:
+        if acceptance_key in {admission.PUBLIC_150, admission.PUBLISHED_500_PILOT, admission.PUBLIC_500}:
             expected_cap = 150 if acceptance_key == admission.PUBLIC_150 else 500
             if (not isinstance(acceptance, dict) or acceptance.get("source_sha") != SOURCE_SHA
                     or acceptance.get("page_cap") != expected_cap):
@@ -984,7 +1030,8 @@ def claim():
                     or (isinstance(pilot, dict) and owner_user_id in pilot.get("owner_allowlist", ()))):
                 return {"outcome": None, "error": admission.ERROR_SCAN_INTAKE_PAUSED}
         required_launcher = acceptance.get("required_launcher_build_id", "") if isinstance(acceptance, dict) else ""
-        actual_launcher = standard_150_launcher if acceptance_key == admission.PUBLIC_150 else launcher_build
+        actual_launcher = (standard_150_launcher if acceptance_key == admission.PUBLIC_150
+                           else standard_500_launcher if acceptance_key == admission.PUBLIC_500 else launcher_build)
         if actual_launcher != required_launcher or (acceptance_key == admission.PUBLIC_150 and not actual_launcher):
             return {"outcome": None, "error": admission.ERROR_SCAN_INTAKE_PAUSED}
         policy = admission.decide_claim_policy(
@@ -1030,6 +1077,8 @@ def claim():
             claimed["write"]["pilot_page_cap"] = pilot_page_cap
         if acceptance_key == admission.PUBLIC_150:
             claimed["write"]["standard_150_launcher_build_id"] = standard_150_launcher
+        if acceptance_key == admission.PUBLIC_500:
+            claimed["write"]["standard_500_launcher_build_id"] = standard_500_launcher
         claimed["control_write"] = reservation["control_write"]
         return claimed
 
@@ -1079,6 +1128,8 @@ def claim():
         result["pilot_launcher_build_id"] = document["pilot_launcher_build_id"]
     if "pilot_page_cap" in document:
         result["pilot_page_cap"] = document["pilot_page_cap"]
+    if document.get("standard_500_launcher_build_id"):
+        result["standard_500_launcher_build_id"] = document["standard_500_launcher_build_id"]
     return jsonify(result)
 
 

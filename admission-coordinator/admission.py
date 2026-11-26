@@ -34,9 +34,11 @@ BARRIER_CLOSED = "closed"
 BARRIER_ACCEPTANCE_ONLY = "acceptance_only"
 BARRIER_MODES = frozenset({BARRIER_OPEN, BARRIER_CLOSED, BARRIER_ACCEPTANCE_ONLY})
 STORED_BARRIER_PUBLIC_150 = "open_public_150"
+STORED_BARRIER_PUBLIC_500 = "open_eligible_500"
 PUBLISHED_500_PILOT = "published_500_pilot"
 LEGACY_CUSTOMER_ACCESS = "legacy_customer_access"
 PUBLIC_150 = "public_150"
+PUBLIC_500 = "public_500"
 
 # A scan reaches exactly one of these, and only the durable worker or the
 # server-side watchdog may declare it. The browser has no vote.
@@ -116,6 +118,10 @@ def normalized_control(document: dict[str, Any] | None) -> dict[str, Any]:
     """
     source = document if isinstance(document, dict) else {}
     mode = str(source.get("mode") or BARRIER_OPEN).strip().lower()
+    if mode == STORED_BARRIER_PUBLIC_500:
+        if not isinstance(source.get(PUBLIC_500), dict):
+            raise AdmissionError("invalid_public_500_control")
+        mode = BARRIER_OPEN
     if mode == STORED_BARRIER_PUBLIC_150:
         if not isinstance(source.get(PUBLIC_150), dict):
             raise AdmissionError("invalid_public_150_control")
@@ -136,6 +142,8 @@ def normalized_control(document: dict[str, Any] | None) -> dict[str, Any]:
 def durable_control(control: dict[str, Any]) -> dict[str, Any]:
     # A pre-cohort coordinator rejects this stored mode. Its ordinary open
     # fallback cannot silently discard an active or held cohort on downgrade.
+    if control["mode"] == BARRIER_OPEN and control.get(PUBLIC_500) is not None:
+        return {**control, "mode": STORED_BARRIER_PUBLIC_500}
     if control["mode"] == BARRIER_OPEN and control.get(PUBLIC_150) is not None:
         return {**control, "mode": STORED_BARRIER_PUBLIC_150}
     return control
@@ -168,7 +176,7 @@ def decide_claim_policy(
     if mode == BARRIER_OPEN and acceptance_key == "acceptance":
         return {"allowed": True, "mode": mode, "control": current, "acceptance": None}
     if (mode == BARRIER_CLOSED
-            or (acceptance_key == PUBLISHED_500_PILOT and mode != BARRIER_OPEN)
+            or (acceptance_key in {PUBLISHED_500_PILOT, PUBLIC_500} and mode != BARRIER_OPEN)
             or (acceptance_key == LEGACY_CUSTOMER_ACCESS and mode != BARRIER_ACCEPTANCE_ONLY)):
         return {
             "allowed": False,
@@ -199,7 +207,7 @@ def decide_claim_policy(
     except (TypeError, ValueError, AttributeError):
         expires_at = total_budget = per_owner_budget = total_used = owner_used = 0
     membership_allowed = bool(
-        owner in owner_allowlist
+        (acceptance_key == PUBLIC_500 or owner in owner_allowlist)
         and expires_at > int(now)
         and total_budget > 0
         and per_owner_budget > 0

@@ -83,6 +83,11 @@ function stagedScanEnv(name: string) {
 }
 
 function paidPilotScanEnv(name: string) {
+  if (name === "SCAN_STAGED_500_ENTITLED_ENABLED") {
+    // Live older launcher aliases know only the retired switch. Enabling this
+    // version's typed cohort must never authorize their untyped claims.
+    return mutableScanAdmissionSecret("SCAN_STAGED_500_ELIGIBLE_ADMISSION_ENABLED");
+  }
   return name === "SCAN_STAGED_PILOT_OWNER_IDS" ? mutableScanAdmissionSecret(name) : stagedScanEnv(name);
 }
 
@@ -140,6 +145,7 @@ async function stagedRuntimeStatus(user, raw) {
       configured_pipeline_mode: settings.pipelineMode,
       staged_rollout_scope: settings.rolloutScope,
       staged_500_entitled_enabled: settings.entitled500Enabled,
+      legacy_staged_500_entitled_enabled: stagedScanEnv("SCAN_STAGED_500_ENTITLED_ENABLED") === "true",
       staged_pilot_owner_count: pilotCohortHash === null ? null : settings.pilotOwnerIds.length,
       staged_pilot_owner_cohort_sha256: pilotCohortHash,
       paid_dispatch_gateway_origin: stagedDispatchGatewayUrl(stagedScanEnv),
@@ -461,7 +467,9 @@ export default async function (req: Request): Promise<Response> {
       if (pilotRequest && scanContract.page_cap !== body.published_pilot_page_cap) {
         return pilotLaunchRefused("scan_limit_changed");
       }
-      const requiresExistingScan = hasLargeScanGrant(entitlement.record) && scanContract.page_cap !== 500;
+      const broad500 = !pilotRequest && scanContract.staged_rollout_scope === "paid" && scanContract.page_cap === 500;
+      const requiresExistingScan = hasLargeScanGrant(entitlement.record)
+        && (scanContract.page_cap !== 500 || (broad500 && user.role !== "user"));
       const admitted = await admitServerOwnedScan({
         base44,
         user,
@@ -813,6 +821,8 @@ async function admitServerOwnedScan({
   // A broad entitled 500 launch has no Standard 150 or named-pilot authority.
   const standard150LauncherBuildId = user.role === "user" && !pilotRequest && scanContract.page_cap === 150
     && scanContract.staged_rollout_scope === "paid" ? FUNCTION_BUILD_ID : undefined;
+  const standard500LauncherBuildId = user.role === "user" && !pilotRequest && scanContract.page_cap === 500
+    && scanContract.staged_rollout_scope === "paid" ? FUNCTION_BUILD_ID : undefined;
   const request = normalizeAdmissionIdentity({
     request_id: identity.fields.request_id,
     idempotency_key: identity.fields.idempotency_key,
@@ -844,12 +854,18 @@ async function admitServerOwnedScan({
       pilotPageCap,
       pilotReplayOnly,
       standard150LauncherBuildId,
+      standard500LauncherBuildId,
       env: mutableScanAdmissionEnv,
     });
   } catch {
     claim = { ok: false, outcomeUnknown: true, failureCode: "admission_unreachable" };
   }
-  if (!claim?.ok) return coordinatorAdmissionFailure(claim);
+  if (!claim?.ok) {
+    if (standard500LauncherBuildId && claim?.failureCode === "scan_intake_paused") {
+      return coordinatorAdmissionFailure({ ...claim, failureCode: "scan_staged_500_unavailable" });
+    }
+    return coordinatorAdmissionFailure(claim);
+  }
 
   const verifiedEvidence = await verifiedAdmissionClaim({
     claim,
@@ -859,6 +875,8 @@ async function admitServerOwnedScan({
   });
   if (!verifiedEvidence || (claim.target_origin !== undefined && claim.target_origin !== targetOrigin)
       || (pilotRequest && (claim.pilot_launcher_build_id !== FUNCTION_BUILD_ID || verifiedEvidence.admission_mode !== "acceptance_only"))
+      || (standard500LauncherBuildId && (claim.standard_500_launcher_build_id !== standard500LauncherBuildId
+        || verifiedEvidence.admission_mode !== "acceptance_only"))
       || (pilotPageCap !== undefined && claim.pilot_page_cap !== pilotPageCap)
       || (pilotReplayOnly && claim.outcome !== "replayed")) {
     return {

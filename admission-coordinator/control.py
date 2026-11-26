@@ -20,6 +20,7 @@ DRAIN_SNAPSHOT_VERSION = "admission_drain_snapshot_v1"
 PUBLISHED_500_PILOT_SNAPSHOT_VERSION = "admission_published_500_pilot_snapshot_v1"
 PUBLISHED_150_PILOT_SNAPSHOT_VERSION = "admission_published_150_pilot_snapshot_v1"
 PUBLIC_150_HOLD_SNAPSHOT_VERSION = "admission_public_150_hold_snapshot_v1"
+ELIGIBLE_500_SNAPSHOT_VERSION = "admission_eligible_500_snapshot_v1"
 AUDIT_EVENT_VERSION = "admission_operator_audit_v1"
 ACCEPTANCE_COHORT_VERSION = "admission_acceptance_cohort_v1"
 RECONCILIATION_INVOCATION_VERSION = "admission_reconciliation_invocation_v1"
@@ -139,6 +140,7 @@ def close_control(
         admission.LEGACY_CUSTOMER_ACCESS: None,
         admission.PUBLISHED_500_PILOT: None,
         admission.PUBLIC_150: None,
+        admission.PUBLIC_500: None,
     }
 
 
@@ -201,7 +203,7 @@ def open_control(
     }
 
 
-def acceptance_definition(value: Any, *, now: int, operator_id: str) -> dict[str, Any]:
+def acceptance_definition(value: Any, *, now: int, operator_id: str, eligible_500: bool = False) -> dict[str, Any]:
     source = value if isinstance(value, dict) else {}
     cohort_id = _id(source.get("cohort_id"), "invalid_acceptance_cohort_id")
     release_id = _id(source.get("release_id"), "invalid_acceptance_release_id")
@@ -209,11 +211,16 @@ def acceptance_definition(value: Any, *, now: int, operator_id: str) -> dict[str
     if not _SHA_RE.fullmatch(source_sha):
         raise ControlError("invalid_acceptance_source_sha")
     owners_source = source.get("owner_user_ids")
-    if not isinstance(owners_source, list):
-        raise ControlError("invalid_acceptance_owner_allowlist")
-    owners = sorted({_id(item, "invalid_acceptance_owner_id") for item in owners_source})
-    if not owners or len(owners) != len(owners_source) or len(owners) > MAX_ACCEPTANCE_OWNERS:
-        raise ControlError("invalid_acceptance_owner_allowlist")
+    if eligible_500:
+        if "owner_user_ids" in source:
+            raise ControlError("invalid_eligible_500_owner_allowlist")
+        owners = []
+    else:
+        if not isinstance(owners_source, list):
+            raise ControlError("invalid_acceptance_owner_allowlist")
+        owners = sorted({_id(item, "invalid_acceptance_owner_id") for item in owners_source})
+        if not owners or len(owners) != len(owners_source) or len(owners) > MAX_ACCEPTANCE_OWNERS:
+            raise ControlError("invalid_acceptance_owner_allowlist")
     expires_at = _integer(
         source.get("expires_at"),
         minimum=int(now) + 1,
@@ -248,6 +255,49 @@ def acceptance_definition(value: Any, *, now: int, operator_id: str) -> dict[str
         "created_by": _id(operator_id, "invalid_operator_id"),
         **({"required_launcher_build_id": launcher_build_id} if launcher_build_id else {}),
     }
+
+
+def eligible_500_definition(value: Any, *, now: int, operator_id: str) -> dict[str, Any]:
+    definition = acceptance_definition(value, now=now, operator_id=operator_id, eligible_500=True)
+    return {**definition, "page_cap": 500}
+
+
+def update_eligible_500(
+    current: dict[str, Any], *, snapshot_id: str, now: int,
+    definition: dict[str, Any] | None = None, cohort_id: Any = None,
+) -> dict[str, Any]:
+    if current["mode"] != admission.BARRIER_OPEN:
+        raise ControlError("barrier_not_open")
+    existing = current.get(admission.PUBLIC_500)
+    if definition is None:
+        if not isinstance(existing, dict) or existing["cohort_id"] != cohort_id:
+            raise ControlError("eligible_500_scope_mismatch")
+        if existing.get("held_at") is not None:
+            raise ControlError("eligible_500_already_held")
+        policy = {**existing, "held_at": int(now)}
+    else:
+        if eligible_500_active(existing, now=now) or current.get(admission.PUBLISHED_500_PILOT) is not None:
+            raise ControlError("standard_500_already_configured")
+        policy = {**definition, "total_claims_used": 0, "owner_claims_used": {}}
+    return {
+        **current,
+        "generation": int(current["generation"]) + 1,
+        "current_snapshot_id": _id(snapshot_id, "invalid_snapshot_id"),
+        admission.PUBLIC_500: policy,
+    }
+
+
+def eligible_500_active(definition: Any, *, now: int) -> bool:
+    return isinstance(definition, dict) and definition.get("held_at") is None and definition["expires_at"] > now
+
+
+def eligible_500_boundary(definition: dict[str, Any], *, now: int) -> dict[str, Any]:
+    state = "configured" if eligible_500_active(definition, now=now) else "expired"
+    if definition.get("held_at") is not None:
+        state = "held"
+    identity = ("page_cap", "cohort_id", "release_id", "source_sha", "expires_at",
+                "required_launcher_build_id", "total_claim_budget", "per_owner_claim_budget", "total_claims_used")
+    return {"state": state, **{key: definition[key] for key in identity}}
 
 
 def public_150_definition(value: Any, *, now: int, operator_id: str) -> dict[str, Any]:

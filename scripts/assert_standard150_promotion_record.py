@@ -25,11 +25,28 @@ SCANNER_FUNCTIONS = (
     "persistLimitedScanResult", "getCustomerScanResult", "deleteCustomerScanData",
 )
 WORKER_RUNTIME_INPUTS = (
-    "Dockerfile",
-    "cloudbuild.durable-worker.yaml",
-    "data/cross-runtime-release-components.json",
+    # Worker image inputs and the scripts/workflow that authorize its promotion.
+    # The accepted commit may precede its report/manifest commit; subsequent
+    # runtime OR release-control changes require fresh acceptance. This is
+    # defense in depth: a trusted, reviewed runner must still invoke this gate.
     "scanner-api/app",
+    "Dockerfile",  # Actual Dockerfile copied by the Cloud Build verified context.
+    "scanner-api/Dockerfile",
     "scanner-api/requirements.txt",
+    "data/cross-runtime-release-components.json",
+    "scripts/staged_candidate_cloudbuild.py",
+    "scripts/verify-fixlist-static-egress-canary.sh",
+    "cloudbuild.durable-worker.yaml",
+    "cloudbuild.durable-worker-static-egress-canary.yaml",
+    "scripts/build-worker-candidate.sh",
+    # Post-acceptance edits to the promotion command, its own predicate, the
+    # exact-main guard or its Actions launcher must not reuse old acceptance.
+    "scripts/assert_standard150_promotion_record.py",
+    "scripts/assert_standard150_rollback_readback.py",
+    "scripts/assert_standard150_rollback_ownership.py",
+    "scripts/fixlist-cloud-operator.sh",
+    "scripts/lib/release-source-guard.sh",
+    ".github/workflows/fixlist-cloud-operator.yml",
 )
 
 
@@ -157,7 +174,8 @@ def main() -> int:
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--repo-root", type=Path, default=ROOT)
     parser.add_argument("--base44-v9", choices=("scanner-functions", "release-functions", "site-and-functions", "recover-functions"))
-    parser.add_argument("--worker", action="store_true", help="Require the accepted worker runtime inputs.")
+    parser.add_argument("--worker", "--worker-promotion", action="store_true",
+                        help="Require accepted worker image, build and promotion-control inputs.")
     args = parser.parse_args()
     try:
         fingerprint = verify_promotion_record(args.repo_root, args.source_sha, args.base44_v9, worker=args.worker)

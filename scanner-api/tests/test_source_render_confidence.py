@@ -6,6 +6,7 @@ from app.missing_h1_contract import build_missing_h1_comparison_evidence
 from app.repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
 from app.scan_job import build_local_review
 from app.scan_limits import scan_page_limit
+from app.scanner import build_findings, group_findings
 
 ORIGIN = "https://example.org"
 
@@ -63,6 +64,58 @@ def test_distinguishes_static_placeholders_embeds_and_source_directives(body, he
     if "noindex" in head:
         assert "noindex" in p["robots"]
     assert bool(r[0].get("non_scoring")) == (expected == "rendered_template_review")
+
+
+@pytest.mark.parametrize("cap", [150, 500])
+@pytest.mark.parametrize("placement", ["title", "meta"])
+@pytest.mark.parametrize("token_count", [1, 6])
+def test_source_tokens_do_not_confirm_javascript_body_defects(cap, placement, token_count):
+    url = ORIGIN + "/locations/new-mexico"
+    tokens = " ".join(["#location#"] * token_count)
+    title = tokens if placement == "title" else "New Mexico lending"
+    description = tokens if placement == "meta" else "Find out about lending in New Mexico."
+    document = f"""<!doctype html><html><head><title>{title}</title>
+        <meta name="description" content="{description}"></head><body>
+        <main><h1 id="location">{tokens}</h1><p>Explore local lending services.</p></main>
+        <script>document.getElementById('location').textContent = 'New Mexico';</script>
+        </body></html>"""
+    page = extract_page(document, url, url, 200, "text/html", {})
+    findings = build_findings([page], scan_origin=ORIGIN, identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
+    result = {"website_url": ORIGIN, "pages": [page], "pages_crawled": 1, "pages_found": 1,
+              "scan_mode": f"standard_{cap}", "raw_findings": group_findings(findings)}
+    with scan_page_limit(cap):
+        report = build_local_review(result)
+
+    confirmed = next(fix for fix in report["top_recommended_actions"] if fix["rule"] == "visible_template_content")
+    assert confirmed["verification_state"] == "confirmed"
+    assert confirmed["repair_observation_count"] == token_count
+    assert len(confirmed["repair_observation_samples"]) == min(4, token_count)
+    assert all(item["excerpt"].startswith(placement + ": ") for item in confirmed["repair_observation_samples"])
+
+    pending = next(fix for fix in report["canonical_repairs"] if fix["rule"] == "rendered_template_review")
+    assert pending["verification_state"] == "needs_verification"
+    assert pending["non_scoring"] and pending["score_impact"] == 0
+    assert pending["action_priority"] == "review"
+    assert pending["repair_observation_count"] == token_count
+    assert len(pending["repair_observation_samples"]) == min(4, token_count)
+    assert all(item["excerpt"].startswith("h1: ") for item in pending["repair_observation_samples"])
+    assert pending["rule"] not in {fix["rule"] for fix in report["top_recommended_actions"]}
+
+
+def test_mixed_template_keeps_wrong_location_body_copy_out_of_confirmed_metadata():
+    page = visit(
+        "/locations/new-mexico",
+        "<main><h1 id='location'>Florida Hard Money Lender #location#</h1></main>"
+        "<script>document.getElementById('location').textContent = 'New Mexico lender';</script>",
+        "<meta name='description' content='#location#'>",
+    )
+    assert "wrong_location_copy" in page["template_content_issue_types"]
+
+    cards = {fix["rule"]: fix for fix in content_evidence_findings([page])}
+    confirmed = cards["visible_template_content"]["repair_observation_samples"]
+    assert len(confirmed) == 1 and confirmed[0]["excerpt"].startswith("meta: ")
+    pending = cards["rendered_template_review"]["repair_observation_samples"]
+    assert any(item["issue_type"] == "wrong_location_copy" and "Florida" in item["excerpt"] for item in pending)
 
 
 def test_image_named_heading_and_decorative_image_heading():

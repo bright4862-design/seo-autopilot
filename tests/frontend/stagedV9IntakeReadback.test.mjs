@@ -343,8 +343,11 @@ function launchHarness({
         "./admissionClient.js": {
           ...admissionClient,
           verifyAdmissionClaimEvidence,
-          claimAdmission: async ({ ownerUserId, requestId, targetOrigin, pilotLauncherBuildId, pilotPageCap, pilotReplayOnly }) => {
-            claimRequests.push({ pilotLauncherBuildId, pilotPageCap, ...(pilotReplayOnly ? { pilotReplayOnly } : {}) });
+          claimAdmission: async ({ ownerUserId, requestId, targetOrigin, pilotLauncherBuildId, pilotPageCap, pilotReplayOnly, standard150LauncherBuildId }) => {
+            claimRequests.push({
+              pilotLauncherBuildId, pilotPageCap, ...(pilotReplayOnly ? { pilotReplayOnly } : {}),
+              ...(standard150LauncherBuildId ? { standard150LauncherBuildId } : {}),
+            });
             calls.push("claim");
             admittedOrigins.push(targetOrigin);
             if (claimFailure) return claimFailure;
@@ -473,7 +476,7 @@ test("V9 target cooldown never dispatches a new-era row missing its confirmed or
   assert.deepEqual(fixture.taskTransports, []);
 });
 
-test("V9 sends the target cooldown key through the signed claim transport", async () => {
+test("V9 sends the target cooldown key and exact 150 launcher through the signed claim transport", async () => {
   const signingKey = "claim test key";
   const options = {
     ownerUserId: "owner_123", requestId: "request_123", requestFingerprint: "fingerprint",
@@ -490,12 +493,16 @@ test("V9 sends the target cooldown key through the signed claim transport", asyn
     requests.push(JSON.parse(request.body));
     return Response.json({ success: false, error: "target_cooldown_active", retry_after_seconds: 19 }, { status: 429, headers: { "Retry-After": "19" } });
   };
-  const result = await admissionClient.claimAdmission({ ...options, targetOrigin: "https://example.com:443", fetchImpl });
+  const result = await admissionClient.claimAdmission({
+    ...options, targetOrigin: "https://example.com:443", standard150LauncherBuildId: FUNCTION_BUILD_ID, fetchImpl,
+  });
   assert.equal(requests[0].target_origin, "https://example.com:443");
+  assert.equal(requests[0].standard_150_launcher_build_id, FUNCTION_BUILD_ID);
   assert.equal(result.failureCode, "target_cooldown_active");
   assert.equal(result.retryAfterSeconds, 19);
   await admissionClient.claimAdmission({ ...options, fetchImpl });
   assert.equal(Object.hasOwn(requests[1], "target_origin"), false);
+  assert.equal(Object.hasOwn(requests[1], "standard_150_launcher_build_id"), false);
 });
 
 test("paid rollout persists and dispatches the verified cap for a regular Stripe customer", async () => {
@@ -856,7 +863,9 @@ test("a named paid 500 pilot and public paid 150 share the canonical staged disp
   assert.equal(normal.dispatched[0].pipeline_mode, "staged");
   assert.equal(normal.dispatched[0].page_cap, 150);
   assert.notEqual(normal.scans[0].request_fingerprint, pilot.scans[0].request_fingerprint);
-  assert.deepEqual(normal.claimRequests, [{ pilotLauncherBuildId: undefined, pilotPageCap: undefined }]);
+  assert.deepEqual(normal.claimRequests, [
+    { pilotLauncherBuildId: undefined, pilotPageCap: undefined, standard150LauncherBuildId: FUNCTION_BUILD_ID },
+  ]);
 });
 
 test("paid pilot permission requires an ordinary named customer, an active verified 500 grant and exact browser marker", async () => {
@@ -892,8 +901,26 @@ test("named 150 customers retain their existing staged paid path and never see a
     assert.equal((await fixture.options()).body.page_cap, 150);
     assert.equal((await fixture.submit()).body.accepted, true);
     assert.equal(fixture.dispatched[0].staged_rollout_scope, "paid");
-    assert.deepEqual(fixture.claimRequests, [{ pilotLauncherBuildId: undefined, pilotPageCap: undefined }]);
+    assert.deepEqual(fixture.claimRequests, [
+      { pilotLauncherBuildId: undefined, pilotPageCap: undefined, standard150LauncherBuildId: FUNCTION_BUILD_ID },
+    ]);
   }
+});
+
+test("broad entitled 500 cannot pass an ordinary Standard 150 launcher attestation", async () => {
+  const fixture = launchHarness({ rows: [{ ...paidGrant, page_cap: 500 }] });
+  const result = await fixture.submit({ standard_150_launcher_build_id: FUNCTION_BUILD_ID });
+  assert.equal(result.body.accepted, true, JSON.stringify(result.body));
+  assert.equal(result.body.page_cap, 500);
+  assert.deepEqual(fixture.claimRequests, [{ pilotLauncherBuildId: undefined, pilotPageCap: undefined }]);
+});
+
+test("an administrator's 150 launch carries no ordinary Standard 150 attestation", async () => {
+  const fixture = launchHarness({ user: { ...paidCustomer, role: "admin" } });
+  const result = await fixture.submit();
+  assert.equal(result.body.accepted, true, JSON.stringify(result.body));
+  assert.equal(result.body.page_cap, 150);
+  assert.deepEqual(fixture.claimRequests, [{ pilotLauncherBuildId: undefined, pilotPageCap: undefined }]);
 });
 
 test("a paid pilot claim must echo the exact cap and launcher build with signed acceptance-only evidence", async () => {

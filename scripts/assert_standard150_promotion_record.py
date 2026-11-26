@@ -24,6 +24,13 @@ SCANNER_FUNCTIONS = (
     "startStandardScanJob", "durableScanWorkerControl", "persistDurableScanAuthority",
     "persistLimitedScanResult", "getCustomerScanResult", "deleteCustomerScanData",
 )
+WORKER_RUNTIME_INPUTS = (
+    "Dockerfile",
+    "cloudbuild.durable-worker.yaml",
+    "data/cross-runtime-release-components.json",
+    "scanner-api/app",
+    "scanner-api/requirements.txt",
+)
 
 
 class PromotionRecordError(ValueError):
@@ -74,7 +81,9 @@ def verify_active_v9_packages(root: Path, accepted_sha: str, source_sha: str, de
         raise PromotionRecordError("active_v9_accepted_packages_or_history_unverified") from exc
 
 
-def verify_promotion_record(root: Path, source_sha: str, base44_v9: str | None = None) -> str:
+def verify_promotion_record(
+    root: Path, source_sha: str, base44_v9: str | None = None, *, worker: bool = False,
+) -> str:
     """Check frozen metadata and ancestry, without trusting runtime claims."""
     if not SHA40.fullmatch(source_sha):
         raise PromotionRecordError("source_sha_invalid")
@@ -127,6 +136,19 @@ def verify_promotion_record(root: Path, source_sha: str, base44_v9: str | None =
         raise PromotionRecordError("release_fingerprint_inconsistent")
     if base44_v9:
         verify_active_v9_packages(root, accepted_sha, source_sha, base44_v9)
+    if worker:
+        try:
+            comparison = subprocess.run(
+                ["git", "-C", str(root), "diff", "--no-ext-diff", "--quiet",
+                 accepted_sha, source_sha, "--", *WORKER_RUNTIME_INPUTS],
+                capture_output=True, text=True, timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise PromotionRecordError("worker_accepted_packages_unverified") from exc
+        if comparison.returncode == 1:
+            raise PromotionRecordError("worker_packages_differ_from_accepted_source")
+        if comparison.returncode != 0:
+            raise PromotionRecordError("worker_accepted_packages_unverified")
     return fingerprint
 
 
@@ -135,9 +157,10 @@ def main() -> int:
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--repo-root", type=Path, default=ROOT)
     parser.add_argument("--base44-v9", choices=("scanner-functions", "release-functions", "site-and-functions", "recover-functions"))
+    parser.add_argument("--worker", action="store_true", help="Require the accepted worker runtime inputs.")
     args = parser.parse_args()
     try:
-        fingerprint = verify_promotion_record(args.repo_root, args.source_sha, args.base44_v9)
+        fingerprint = verify_promotion_record(args.repo_root, args.source_sha, args.base44_v9, worker=args.worker)
     except (PromotionRecordError, UnicodeError, OSError) as exc:
         print(f"PROMOTION_RECORD_BLOCKED: {exc}", file=sys.stderr)
         return 2

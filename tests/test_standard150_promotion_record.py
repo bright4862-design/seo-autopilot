@@ -196,10 +196,67 @@ def test_restart_recovery_binds_independent_probe_package_to_accepted_source(v9_
         gate.verify_promotion_record(root, commit(), "recover-functions")
 
 
+@pytest.mark.parametrize("path", [
+    "scanner-api/app/review_calibration.py",
+    "Dockerfile",
+    "scanner-api/requirements.txt",
+    "cloudbuild.durable-worker.yaml",
+    "data/cross-runtime-release-components.json",
+])
+def test_worker_promotion_refuses_changed_runtime_inputs(v9_release_history, path):
+    root, files, commit, _, accept = v9_release_history
+    files(path, "Accepted input\n")
+    accepted = commit()
+    accept(accepted)
+    frozen = commit()
+    cli = [sys.executable, str(Path(gate.__file__)), "--repo-root", str(root), "--worker"]
+    good = subprocess.run([*cli, "--source-sha", frozen], capture_output=True, text=True)
+    assert good.returncode == 0, good.stderr
+
+    files(path, "Changed after acceptance\n")
+    drift = subprocess.run([*cli, "--source-sha", commit()], capture_output=True, text=True)
+    assert drift.returncode == 2
+    assert "worker_packages_differ_from_accepted_source" in drift.stderr
+
+
+def test_worker_operator_checks_source_before_updating_traffic(v9_release_history):
+    root, files, commit, _, accept = v9_release_history
+    worker_file = "scanner-api/app/review_calibration.py"
+    files(worker_file, "Accepted input\n")
+    accepted = commit()
+    accept(accepted)
+    frozen = commit()
+    files(worker_file, "Unaccepted input\n")
+    drift = commit()
+    files("scripts/assert_standard150_promotion_record.py", Path(gate.__file__).read_text())
+
+    operator = (ROOT / "scripts/fixlist-cloud-operator.sh").read_text()
+    implementation = operator.split("promote_revision() {", 1)[1].split("\n}", 1)[0]
+    script = """
+set -eu
+REPO_ROOT=$1 SOURCE_SHA=$2 OPERATION=promote-worker
+TARGET_REVISION=fixture-revision CLOUD_RUN_SERVICE=fixture-service GCP_REGION=fixture-region GCP_PROJECT=fixture-project
+refuse_unaccepted_direct_vpc_promotion() { :; }
+gcloud() { printf 'MOCK_TRAFFIC_UPDATE\\n'; }
+promote_revision() {
+""" + implementation + """
+}
+promote_revision
+"""
+    accepted_promotion = subprocess.run(["bash", "-c", script, "fixture", str(root), frozen], capture_output=True, text=True)
+    assert accepted_promotion.returncode == 0, accepted_promotion.stderr
+    assert "MOCK_TRAFFIC_UPDATE" in accepted_promotion.stdout
+
+    rejected_promotion = subprocess.run(["bash", "-c", script, "fixture", str(root), drift], capture_output=True, text=True)
+    assert "MOCK_TRAFFIC_UPDATE" not in rejected_promotion.stdout
+    assert rejected_promotion.returncode == 2
+    assert "worker_packages_differ_from_accepted_source" in rejected_promotion.stderr
+
+
 def test_promotion_guard_scoped_to_new_promotion_not_rollback():
     operator = (ROOT / "scripts/fixlist-cloud-operator.sh").read_text()
     assert 'if [[ "$OPERATION" == "promote-worker" ]]; then' in operator
-    assert 'assert_standard150_promotion_record.py" --source-sha "$SOURCE_SHA"' in operator
+    assert 'assert_standard150_promotion_record.py" --source-sha "$SOURCE_SHA" --worker' in operator
     assert "rollback-worker)" in operator
     assert "promote_revision()" in operator
 

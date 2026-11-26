@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 from .accepted_content_evidence import (
     IMAGE_APPLICABILITY_VERSION, SUPPORTED_TEMPLATE_VERSIONS, missing_heading_needs_browser, raw_content_needs_browser,
+    template_basis_observations,
 )
 from .page_evidence_gate import page_has_usable_html
 from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
@@ -34,6 +35,45 @@ def _fix(page, rule, category, title, explanation, recommendation, observations,
         **({'score_impact':0, 'evidence_class':'opportunity'} if uncertain else {}),
         'repair_observation_count':count, 'repair_observation_samples':observations[:20],
     }
+
+
+def _template_fixes(page, url, status, template):
+    groups = template.get("observations_by_basis")
+    if not isinstance(groups, dict):
+        location_basis = "browser_review" if raw_content_needs_browser(page) else "source_confirmed"
+        groups = {location_basis: {"count": template.get("issue_count"), "samples": template.get("samples", [])}}
+    else:
+        # Legacy wrong-location observations combine source title, heading and body.
+        # Keep them pending when the same page has browser-dependent observations.
+        browser_count, _ = template_basis_observations(groups, "browser_review")
+        location_basis = "browser_review" if browser_count else "source_confirmed"
+
+    for basis in ("source_confirmed", "browser_review"):
+        count, samples = template_basis_observations(groups, basis)
+        if not count:
+            continue
+        observations = [
+            {"page_url": url, "status": status, "issue_type": item["kind"],
+             "excerpt": f"{item['placement']}: {item['snippet']}"}
+            for item in samples
+        ]
+        if basis == location_basis and "wrong_location_copy" in (page.get("template_content_issue_types") or []):
+            location_observations = [
+                {"page_url": url, "status": status, "issue_type": "wrong_location_copy", "excerpt": value[:500]}
+                for value in (page.get("template_content_issue_evidence") or [])[:4]
+            ]
+            observations.extend(location_observations)
+            count += len(location_observations)
+        if basis == "browser_review":
+            yield _fix(page, "rendered_template_review", "web_dev", "Check this content after the page loads",
+                "The source HTML contains a placeholder or an empty content area. The visitor-visible result needs a browser check.",
+                "Open an affected page, wait for its content to load, and check any embedded form or frame.",
+                observations, count, uncertain=True)
+        else:
+            yield _fix(page, "visible_template_content", "web_dev", "Fix unfinished visible page content",
+                "Accepted HTML contains unresolved template output, placeholder copy or an unfinished page shell. Review the recorded placement and excerpts.",
+                "Correct the source field or template responsible for the shown output. Verify the page content in its intended context after publication.",
+                observations, count)
 
 
 def content_evidence_findings(pages):
@@ -85,23 +125,7 @@ def content_evidence_findings(pages):
                   'excerpt': 'No named H1 in the source HTML.'}], 1, uncertain=True))
         template=page.get('visible_template_evidence') or {}
         if template.get('version') in SUPPORTED_TEMPLATE_VERSIONS and template.get('accepted') is True and template.get('state')=='fail':
-            observations=[{'page_url':url,'status':status,'issue_type':o['kind'],
-                           'excerpt':f"{o['placement']}: {o['snippet']}"} for o in template.get('samples',[])]
-            count=template.get('issue_count') or len(observations)
-            if 'wrong_location_copy' in (page.get('template_content_issue_types') or []):
-                observations += [{'page_url':url,'status':status,'issue_type':'wrong_location_copy','excerpt':text[:500]}
-                                 for text in (page.get('template_content_issue_evidence') or [])[:4]]
-                count += len(observations)-len(template.get('samples',[]))
-            if raw_content_needs_browser(page):
-                output.append(_fix(page, 'rendered_template_review', 'web_dev', 'Check this content after the page loads',
-                    'The source HTML contains a placeholder or an empty content area. The visitor-visible result needs a browser check.',
-                    'Open an affected page, wait for its content to load, and check any embedded form or frame.',
-                    observations, count, uncertain=True))
-                continue
-            output.append(_fix(page,'visible_template_content','web_dev','Fix unfinished visible page content',
-                'Accepted HTML contains unresolved template output, placeholder copy or an unfinished page shell. Review the recorded placement and excerpts.',
-                'Correct the source field or template responsible for the shown output. Verify the page content in its intended context after publication.',
-                observations,count))
+            output.extend(_template_fixes(page, url, status, template))
     groups={}
     for fix in output:
         groups.setdefault((fix['rule'],fix['page_template_family']),[]).append(fix)

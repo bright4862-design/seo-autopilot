@@ -715,6 +715,111 @@ class TargetCooldown(CoordinatorTestCase):
                 self.assertFalse(STORE)
 
 
+class PublicStandard150Cohort(CoordinatorTestCase):
+    def test_atomic_open_and_exact_150_hold_preserve_both_lanes(self):
+        source, launcher = "1" * 40, "a" * 64
+        control_key = f"{main.CONTROL_COLLECTION}/{main.CONTROL_DOCUMENT}"
+        STORE[control_key] = {"mode": "closed", "generation": 4, "claim_sequence": 0}
+        context = {"reason": "Test bounded public 150 rollout", "change_ticket": "test-public-150"}
+        definition = {
+            "cohort_id": "standard150_wave", "release_id": "public_candidate", "source_sha": source,
+            "owner_user_ids": [OWNER, "second_150_customer"], "expires_at": int(time.time()) + 900,
+            "total_claim_budget": 2, "per_owner_claim_budget": 1,
+            "required_launcher_build_id": launcher,
+        }
+        open_payload = {
+            **context, "operation": "open_public_150", "intended_prior": {"mode": "closed", "generation": 4},
+            "public_150": definition,
+        }
+        claim150 = {
+            "owner_user_id": OWNER, "request_id": "standard150_one", "request_fingerprint": FINGERPRINT,
+            "standard_150_launcher_build_id": launcher,
+        }
+        claim500 = {
+            "owner_user_id": "named500_customer", "request_id": "standard500_one",
+            "request_fingerprint": FINGERPRINT, "pilot_page_cap": 500, "pilot_launcher_build_id": launcher,
+        }
+        second = {**claim150, "owner_user_id": "second_150_customer"}
+        with patch.object(main, "SOURCE_SHA", source):
+            invalid = self.operator_post("/ops/barrier/open", {**open_payload, "operation": "open"})
+            self.assertEqual(invalid.status_code, 409, invalid.json)
+            too_many = self.operator_post("/ops/barrier/open", {
+                **open_payload, "public_150": {**definition, "total_claim_budget": 11},
+            })
+            self.assertEqual(too_many.status_code, 400, too_many.json)
+            self.assertEqual(STORE[control_key]["mode"], "closed")
+            opened = self.operator_post("/ops/barrier/open", open_payload)
+            self.assertEqual(opened.status_code, 200, opened.json)
+            self.assertEqual(opened.json["barrier"]["generation"], 5)
+            self.assertEqual(STORE[control_key]["mode"], "open_public_150")
+            snapshot = opened.json["drain_snapshot"]
+            proof = snapshot.pop("proof")
+            self.assertTrue(control.verify_record(OPERATOR_SIGNING_ROOT, control.SNAPSHOT_LABEL, snapshot, proof))
+            self.assertEqual(snapshot["boundary"]["public_150"]["cohort_id"], "standard150_wave")
+            self.assertEqual(snapshot["boundary"]["public_150"]["total_claim_budget"], 2)
+            self.assertEqual(self.claim().status_code, 423)
+            for refused in [
+                {**claim150, "owner_user_id": "outside_the_cohort"},
+                {**claim150, "standard_150_launcher_build_id": "b" * 64},
+            ]:
+                self.assertEqual(self.post("/claim", refused).status_code, 423)
+            with patch.object(main, "SOURCE_SHA", "2" * 40):
+                self.assertEqual(self.post("/claim", claim150).status_code, 423)
+            with patch.object(main.time, "time", return_value=definition["expires_at"]):
+                self.assertEqual(self.post("/claim", second).status_code, 423)
+            first = self.post("/claim", claim150)
+            self.assertEqual(first.status_code, 200, first.json)
+            self.assertEqual(first.json["cohort_evidence"]["acceptance_cohort_id"], "standard150_wave")
+            self.assertEqual(self.post("/claim", claim150).json["outcome"], "replayed")
+            changed_build = self.post("/claim", {**claim150, "standard_150_launcher_build_id": "b" * 64})
+            self.assertEqual(changed_build.status_code, 423, changed_build.json)
+            started = self.operator_post("/ops/barrier/pilot-500/start", {
+                **context, "operation": "start_500_pilot", "intended_prior": {"mode": "open", "generation": 5},
+                "acceptance": {**definition, "cohort_id": "named_500_wave", "owner_user_ids": ["named500_customer"]},
+            })
+            self.assertEqual(started.status_code, 200, started.json)
+            public_boundary = started.json["pilot_snapshot"]["boundary"]["public_150"]
+            self.assertEqual(public_boundary, {**snapshot["boundary"]["public_150"], "total_claims_used": 1})
+            hold = {
+                **context, "operation": "hold_public_150", "intended_prior": {"mode": "open", "generation": 6},
+                "cohort_id": "standard150_wave",
+            }
+            wrong = self.operator_post("/ops/barrier/public-150/hold", {**hold, "cohort_id": "named_500_wave"})
+            self.assertEqual(wrong.status_code, 409, wrong.json)
+            stale = self.operator_post("/ops/barrier/public-150/hold", {
+                **hold, "intended_prior": {"mode": "open", "generation": 5},
+            })
+            self.assertEqual(stale.status_code, 409, stale.json)
+            held = self.operator_post("/ops/barrier/public-150/hold", hold)
+            self.assertEqual(held.status_code, 200, held.json)
+            held_boundary = held.json["public_150_snapshot"]["boundary"]
+            self.assertEqual(held_boundary["public_150"], {**public_boundary, "state": "held"})
+            self.assertEqual(held_boundary["published_500_pilot"], started.json["pilot_snapshot"]["boundary"]["published_500_pilot"])
+            self.assertEqual(self.post("/claim", second).status_code, 423)
+            self.assertEqual(self.post("/claim", claim150).json["claim_token"], first.json["claim_token"])
+            bound = self.post("/bind", {
+                **claim150, "claim_token": first.json["claim_token"], "scan_id": SCAN_ID,
+            })
+            self.assertEqual(bound.status_code, 200, bound.json)
+            self.assertEqual(self.post("/claim", claim150).json["scan_id"], SCAN_ID)
+            paid = self.post("/claim", claim500)
+            self.assertEqual(paid.status_code, 200, paid.json)
+            self.assertEqual(paid.json["pilot_page_cap"], 500)
+            self.assertEqual(STORE[control_key]["public_150"]["total_claims_used"], 1)
+            self.assertEqual(STORE[control_key]["published_500_pilot"]["total_claims_used"], 1)
+            self.assertEqual(STORE[control_key]["mode"], "open_public_150")
+            paid_held = self.operator_post("/ops/barrier/pilot-500/hold", {
+                **context, "operation": "hold_500_pilot", "intended_prior": {"mode": "open", "generation": 7},
+                "cohort_id": "named_500_wave",
+            })
+            self.assertEqual(paid_held.status_code, 200, paid_held.json)
+            paid_snapshot = paid_held.json["pilot_snapshot"]
+            proof = paid_snapshot.pop("proof")
+            self.assertTrue(control.verify_record(OPERATOR_SIGNING_ROOT, control.SNAPSHOT_LABEL, paid_snapshot, proof))
+            self.assertEqual(paid_snapshot["barrier"]["generation"], 8)
+            self.assertEqual(paid_snapshot["boundary"]["public_150"], held_boundary["public_150"])
+
+
 class PublishedPilotAcceptance(CoordinatorTestCase):
     def test_named_500_transitions_do_not_need_a_global_drain_snapshot(self):
         source = "1" * 40

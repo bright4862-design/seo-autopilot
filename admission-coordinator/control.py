@@ -19,6 +19,7 @@ import admission
 DRAIN_SNAPSHOT_VERSION = "admission_drain_snapshot_v1"
 PUBLISHED_500_PILOT_SNAPSHOT_VERSION = "admission_published_500_pilot_snapshot_v1"
 PUBLISHED_150_PILOT_SNAPSHOT_VERSION = "admission_published_150_pilot_snapshot_v1"
+PUBLIC_150_HOLD_SNAPSHOT_VERSION = "admission_public_150_hold_snapshot_v1"
 AUDIT_EVENT_VERSION = "admission_operator_audit_v1"
 ACCEPTANCE_COHORT_VERSION = "admission_acceptance_cohort_v1"
 RECONCILIATION_INVOCATION_VERSION = "admission_reconciliation_invocation_v1"
@@ -29,6 +30,9 @@ COHORT_LABEL = b"fixlist-admission-acceptance-cohort-v1"
 
 MAX_ACCEPTANCE_OWNERS = 100
 MAX_PUBLISHED_500_PILOT_OWNERS = 5
+MAX_PUBLIC_150_OWNERS = 5
+MAX_PUBLIC_150_TOTAL_CLAIMS = 10
+MAX_PUBLIC_150_LIFETIME_SECONDS = 24 * 60 * 60
 MAX_ACCEPTANCE_TOTAL_CLAIMS = 500
 MAX_ACCEPTANCE_LIFETIME_SECONDS = 14 * 24 * 60 * 60
 MAX_SNAPSHOT_SAMPLE = 64
@@ -134,6 +138,7 @@ def close_control(
         "acceptance": None,
         admission.LEGACY_CUSTOMER_ACCESS: None,
         admission.PUBLISHED_500_PILOT: None,
+        admission.PUBLIC_150: None,
     }
 
 
@@ -173,6 +178,7 @@ def open_control(
     reason: str,
     change_ticket: str,
     now: int,
+    public_150: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if current["mode"] != admission.BARRIER_CLOSED:
         raise ControlError("barrier_not_closed")
@@ -189,6 +195,9 @@ def open_control(
         "intended_prior_generation": int(current["generation"]),
         "acceptance": None,
         admission.LEGACY_CUSTOMER_ACCESS: None,
+        admission.PUBLIC_150: (None if public_150 is None else {
+            **public_150, "total_claims_used": 0, "owner_claims_used": {},
+        }),
     }
 
 
@@ -238,6 +247,35 @@ def acceptance_definition(value: Any, *, now: int, operator_id: str) -> dict[str
         "created_at": int(now),
         "created_by": _id(operator_id, "invalid_operator_id"),
         **({"required_launcher_build_id": launcher_build_id} if launcher_build_id else {}),
+    }
+
+
+def public_150_definition(value: Any, *, now: int, operator_id: str) -> dict[str, Any]:
+    definition = acceptance_definition(value, now=now, operator_id=operator_id)
+    if len(definition["owner_allowlist"]) > MAX_PUBLIC_150_OWNERS:
+        raise ControlError("invalid_public_150_owner_allowlist")
+    if definition["total_claim_budget"] > MAX_PUBLIC_150_TOTAL_CLAIMS:
+        raise ControlError("invalid_public_150_total_budget")
+    if definition["expires_at"] > now + MAX_PUBLIC_150_LIFETIME_SECONDS:
+        raise ControlError("invalid_public_150_expiry")
+    return {**definition, "page_cap": 150}
+
+
+def hold_public_150(
+    current: dict[str, Any], *, snapshot_id: str, cohort_id: Any, now: int,
+) -> dict[str, Any]:
+    if current["mode"] != admission.BARRIER_OPEN:
+        raise ControlError("barrier_not_open")
+    public_150 = current.get(admission.PUBLIC_150)
+    if not isinstance(public_150, dict) or public_150["cohort_id"] != cohort_id:
+        raise ControlError("public_150_scope_mismatch")
+    if public_150.get("held_at") is not None:
+        raise ControlError("public_150_already_held")
+    return {
+        **current,
+        "generation": int(current["generation"]) + 1,
+        "current_snapshot_id": _id(snapshot_id, "invalid_snapshot_id"),
+        admission.PUBLIC_150: {**public_150, "held_at": int(now)},
     }
 
 
@@ -372,6 +410,19 @@ def published_500_pilot_boundary(definition: dict[str, Any], *, state: str) -> d
     }
 
 
+def public_150_boundary(definition: dict[str, Any], *, now: int) -> dict[str, Any]:
+    state = "configured" if definition["expires_at"] > now else "expired"
+    if definition.get("held_at") is not None:
+        state = "held"
+    return {
+        **published_500_pilot_boundary(definition, state=state),
+        "page_cap": 150,
+        "total_claim_budget": definition["total_claim_budget"],
+        "per_owner_claim_budget": definition["per_owner_claim_budget"],
+        "total_claims_used": definition.get("total_claims_used", 0),
+    }
+
+
 def _admission_obligation(document: dict[str, Any]) -> dict[str, Any] | None:
     state = str(document.get("state") or "").strip().lower()
     if state not in {admission.STATE_CLAIMED, admission.STATE_BOUND}:
@@ -446,8 +497,7 @@ def build_snapshot(
         "boundary": boundary or {},
     }
     if scoped_pilot_version:
-        # Scoped operations fence only fresh pilot admissions. Neither establishes
-        # a global drain, so no obligation counts or digests are collected.
+        # A tier-specific transition does not establish a global drain.
         unsigned["drain_ready"] = False
         return {**unsigned, "proof": sign_record(signing_root, SNAPSHOT_LABEL, unsigned)}
 

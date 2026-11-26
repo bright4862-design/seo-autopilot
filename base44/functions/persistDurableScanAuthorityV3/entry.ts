@@ -40,7 +40,7 @@ function releaseAdmission(options = {}) {
 // a compiled worker when entry.ts stayed byte-identical while an imported
 // handler changed. Keeping the active release fingerprint in the entry module
 // guarantees every release-fingerprint move changes the deployed entry bytes.
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "cd3f3a5ef7dd6787";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "22526f0da5f2fbac";
 
 function normalizeAttempt(value) {
   const parsed = Number(value);

@@ -835,7 +835,7 @@ promote_revision() {
   # Staging remains 0%-traffic and rollback remains available. New promotions
   # cannot send customers to a source that is still explicitly a candidate.
   if [[ "$OPERATION" == "promote-worker" ]]; then
-    python3 "$REPO_ROOT/scripts/assert_standard150_promotion_record.py" --source-sha "$SOURCE_SHA"
+    python3 "$REPO_ROOT/scripts/assert_standard150_promotion_record.py" --source-sha "$SOURCE_SHA" --worker
   fi
   gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
     --region="$GCP_REGION" \
@@ -952,7 +952,7 @@ if operation == "status":
     payload["expected_generation"] = int(generation)
 else:
     payload["intended_prior"] = {"mode": prior_mode, "generation": int(generation)}
-if operation in {"hold_150_pilot", "hold_500_pilot"}:
+if operation in {"hold_150_pilot", "hold_500_pilot", "hold_public_150"}:
     payload["cohort_id"] = cohort
 if operation == "hold_150_pilot":
     payload["source_sha"] = source_sha
@@ -990,7 +990,7 @@ payload = {
     "reason": reason,
     "change_ticket": ticket,
     "intended_prior": {"mode": "open" if operation == "start_500_pilot" else "closed", "generation": int(generation)},
-    "acceptance": {
+    ("public_150" if operation == "open_public_150" else "acceptance"): {
         "cohort_id": cohort_id,
         "release_id": release_id,
         "source_sha": source_sha,
@@ -1017,7 +1017,7 @@ call_barrier_operator() {
   set +x
   body="$OPERATOR_TMP/${operation}-body.json"
   response="$OPERATOR_TMP/${operation}-response.json"
-  if [[ "$operation" == "acceptance_only" || "$operation" == "start_500_pilot" ]]; then
+  if [[ "$operation" == "acceptance_only" || "$operation" == "start_500_pilot" || "$operation" == "open_public_150" ]]; then
     write_acceptance_payload "$body" "$operation"
   else
     write_barrier_payload "$operation" "$body"
@@ -1070,24 +1070,28 @@ PY
 
 parse_barrier_response() {
   local expected_operation="$1" expected_fields=9
-  if [[ "$expected_operation" == start_500_pilot || "$expected_operation" == hold_500_pilot || "$expected_operation" == hold_150_pilot ]]; then
+  if [[ "$expected_operation" == start_500_pilot || "$expected_operation" == hold_500_pilot || "$expected_operation" == hold_150_pilot || "$expected_operation" == hold_public_150 ]]; then
     expected_fields=4
   fi
   mapfile -t _barrier_values < <(python3 - "$BARRIER_RESPONSE_FILE" "$expected_operation" \
     "$OPERATOR_TMP/operator-key" "$ADMISSION_DRAIN_SNAPSHOT_DERIVATION_LABEL" "$ACCEPTANCE_LAUNCHER_BUILD_ID" \
     "$ACCEPTANCE_COHORT_ID" "$SOURCE_SHA" "$ACCEPTANCE_OWNER_USER_IDS" "$ACCEPTANCE_EXPIRES_AT" \
-    "$BARRIER_EXPECTED_GENERATION" "$LEGACY_ACCESS_SHA256" "$LEGACY_ACCESS_PREFLIGHT" <<'PY'
+    "$BARRIER_EXPECTED_GENERATION" "$LEGACY_ACCESS_SHA256" "$LEGACY_ACCESS_PREFLIGHT" \
+    "$ACCEPTANCE_RELEASE_ID" "$ACCEPTANCE_TOTAL_CLAIM_BUDGET" "$ACCEPTANCE_PER_OWNER_CLAIM_BUDGET" <<'PY'
 import hashlib, hmac, json, re, sys
 
 (path, expected, key_path, snapshot_label, launcher_build_id, cohort_id, source_sha,
- owners_raw, expires_at, prior_generation, legacy_digest, legacy_preflight) = sys.argv[1:]
+ owners_raw, expires_at, prior_generation, legacy_digest, legacy_preflight, release_id, total_budget, owner_budget) = sys.argv[1:]
 value = json.load(open(path, encoding="utf-8"))
 if value.get("success") is not True or value.get("operation") != expected:
     raise SystemExit("Unexpected operator response")
 barrier = value.get("barrier") or {}
 pilot_500_operation = expected in {"start_500_pilot", "hold_500_pilot"}
 pilot_operation = pilot_500_operation or expected == "hold_150_pilot"
-snapshot = value.get("pilot_snapshot" if pilot_operation else "drain_snapshot") or {}
+public_hold = expected == "hold_public_150"
+scoped_operation = pilot_operation or public_hold
+snapshot_field = "pilot_snapshot" if pilot_operation else "public_150_snapshot" if public_hold else "drain_snapshot"
+snapshot = value.get(snapshot_field) or {}
 counts = snapshot.get("counts") or {}
 mode = str(barrier.get("mode") or "")
 generation = barrier.get("generation")
@@ -1113,8 +1117,9 @@ expected_version = {
     "start_500_pilot": "admission_published_500_pilot_snapshot_v1",
     "hold_500_pilot": "admission_published_500_pilot_snapshot_v1",
     "hold_150_pilot": "admission_published_150_pilot_snapshot_v1",
+    "hold_public_150": "admission_public_150_hold_snapshot_v1",
 }.get(expected, "admission_drain_snapshot_v1")
-snapshot_kind = "pilot" if pilot_operation else "drain"
+snapshot_kind = "pilot" if pilot_operation else "scope" if public_hold else "drain"
 if version != expected_version or not snapshot_id:
     raise SystemExit(f"Invalid {snapshot_kind} snapshot identity")
 if not re.fullmatch(r"[0-9a-f]{64}", proof):
@@ -1164,13 +1169,34 @@ if pilot_500_operation:
                 or pilot.get("owner_count") != len(owners) or pilot.get("owner_cohort_sha256") != digest
                 or pilot.get("expires_at") != int(expires_at)):
             raise SystemExit("Standard 500 pilot source, launcher, account set or expiry mismatch")
-if not pilot_operation and any(not isinstance(item, int) or item < 0 for item in (total, live, active, expired, bound)):
+if expected in {"open_public_150", "hold_public_150"}:
+    public_150 = (snapshot.get("boundary") or {}).get("public_150") or {}
+    signed_barrier = snapshot.get("barrier") or {}
+    if (mode != "open" or signed_barrier.get("mode") != mode or signed_barrier.get("generation") != generation
+            or generation != int(prior_generation) + 1 or signed_barrier.get("claim_sequence") != barrier.get("claim_sequence")
+            or signed_barrier.get("current_snapshot_id") != snapshot_id or barrier.get("current_snapshot_id") != snapshot_id
+            or public_150.get("page_cap") != 150 or public_150.get("cohort_id") != cohort_id):
+        raise SystemExit("The signed snapshot does not establish this public Standard 150 cohort change")
+    if public_hold:
+        if public_150.get("state") != "held" or snapshot.get("drain_ready") is not False or "counts" in snapshot:
+            raise SystemExit("The signed snapshot does not establish a scoped hold")
+    else:
+        owners = sorted(item.strip() for item in owners_raw.split(",") if item.strip())
+        digest = hashlib.sha256(json.dumps(owners, separators=(",", ":")).encode("utf-8")).hexdigest()
+        if (public_150.get("state") != "configured" or snapshot.get("drain_ready") is not True
+                or public_150.get("source_sha") != source_sha or public_150.get("required_launcher_build_id") != launcher_build_id
+                or public_150.get("owner_count") != len(owners) or public_150.get("owner_cohort_sha256") != digest
+                or public_150.get("release_id") != release_id or public_150.get("expires_at") != int(expires_at)
+                or public_150.get("total_claim_budget") != int(total_budget)
+                or public_150.get("per_owner_claim_budget") != int(owner_budget)):
+            raise SystemExit("Public Standard 150 source, launcher, account set or budget mismatch")
+if not scoped_operation and any(not isinstance(item, int) or item < 0 for item in (total, live, active, expired, bound)):
     raise SystemExit("Invalid drain counts")
 print(mode)
 print(generation)
 print(snapshot_id)
 print("true" if ready else "false")
-if not pilot_operation:
+if not scoped_operation:
     print(total)
     print(live)
     print(active)
@@ -1362,14 +1388,37 @@ verify_zero_admission_obligations_command() {
 open_claim_barrier() {
   require_exact_main_owner_source
   require_barrier_inputs
-  require_confirmation "OPEN-STANDARD150-CLAIMS:${SOURCE_SHA}:${BARRIER_EXPECTED_GENERATION}"
+  local operation=open
+  if [[ -n "${ACCEPTANCE_COHORT_ID}${ACCEPTANCE_RELEASE_ID}${ACCEPTANCE_OWNER_USER_IDS}${ACCEPTANCE_EXPIRES_AT}${ACCEPTANCE_TOTAL_CLAIM_BUDGET}${ACCEPTANCE_PER_OWNER_CLAIM_BUDGET}${ACCEPTANCE_LAUNCHER_BUILD_ID}" ]]; then
+    operation=open_public_150
+    require_pilot_launcher_build
+    [[ "$ACCEPTANCE_SOURCE_SHA" == "$SOURCE_SHA" ]] || return 1
+    require_confirmation "OPEN-PUBLIC-150-COHORT:${SOURCE_SHA}:${BARRIER_EXPECTED_GENERATION}:${ACCEPTANCE_COHORT_ID}:${ACCEPTANCE_LAUNCHER_BUILD_ID}"
+  else
+    require_confirmation "OPEN-STANDARD150-CLAIMS:${SOURCE_SHA}:${BARRIER_EXPECTED_GENERATION}"
+  fi
   require_closed_drained_barrier
   require_drain_plane_live
   BARRIER_EXPECTED_PRIOR_MODE="closed"
-  call_barrier_operator open "$ADMISSION_BARRIER_OPEN_PATH"
-  parse_barrier_response open
+  call_barrier_operator "$operation" "$ADMISSION_BARRIER_OPEN_PATH"
+  parse_barrier_response "$operation"
   [[ "$BARRIER_MODE" == "open" ]] || { echo "Coordinator did not open the claim barrier." >&2; return 1; }
-  echo "STANDARD150_CLAIM_BARRIER_OPEN generation=$BARRIER_GENERATION"
+  if [[ "$operation" == open_public_150 ]]; then
+    echo "STANDARD150_PUBLIC_COHORT_OPEN generation=$BARRIER_GENERATION cohort=$ACCEPTANCE_COHORT_ID snapshot=$BARRIER_SNAPSHOT_ID"
+  else
+    echo "STANDARD150_CLAIM_BARRIER_OPEN generation=$BARRIER_GENERATION"
+  fi
+}
+
+hold_public_150() {
+  require_exact_main_owner_source
+  require_barrier_inputs
+  [[ "$BARRIER_EXPECTED_PRIOR_MODE" == open && "$ACCEPTANCE_COHORT_ID" =~ ^[A-Za-z0-9_-]{6,128}$ ]] \
+    || { echo "Public Standard 150 hold requires an open barrier and exact cohort ID." >&2; return 1; }
+  require_confirmation "HOLD-PUBLIC-150-COHORT:${SOURCE_SHA}:${BARRIER_EXPECTED_GENERATION}:${ACCEPTANCE_COHORT_ID}"
+  call_barrier_operator hold_public_150 "/ops/barrier/public-150/hold"
+  parse_barrier_response hold_public_150
+  echo "STANDARD150_PUBLIC_COHORT_HELD generation=$BARRIER_GENERATION cohort=$ACCEPTANCE_COHORT_ID snapshot=$BARRIER_SNAPSHOT_ID"
 }
 
 require_pilot_launcher_build() {
@@ -1543,7 +1592,7 @@ operate_published_500_pilot() {
   fi
   call_barrier_operator "${action}_500_pilot" "/ops/barrier/pilot-500/$action"
   parse_barrier_response "${action}_500_pilot"
-  echo "STANDARD500_PILOT action=$action generation=$BARRIER_GENERATION cohort=$ACCEPTANCE_COHORT_ID public_mode=$BARRIER_MODE"
+  echo "STANDARD500_PILOT action=$action generation=$BARRIER_GENERATION cohort=$ACCEPTANCE_COHORT_ID public_mode=$BARRIER_MODE snapshot=$BARRIER_SNAPSHOT_ID"
 }
 
 case "$OPERATION" in
@@ -1600,6 +1649,10 @@ case "$OPERATION" in
 
   open-claim-barrier)
     open_claim_barrier
+    ;;
+
+  hold-public-150)
+    hold_public_150
     ;;
 
   acceptance-only)

@@ -18,8 +18,10 @@ from .stage2_local_entity_producer import LOCAL_ENTITY_PRODUCER_VERSION, extract
 
 
 IMAGE_APPLICABILITY_VERSION = "image_alt_applicability_v1"
-VISIBLE_TEMPLATE_VERSION = "visible_template_evidence_v2_source_context"
-SUPPORTED_TEMPLATE_VERSIONS = {"visible_template_evidence_v1", VISIBLE_TEMPLATE_VERSION}
+VISIBLE_TEMPLATE_VERSION = "visible_template_evidence_v3_observation_basis"
+SUPPORTED_TEMPLATE_VERSIONS = {
+    "visible_template_evidence_v1", "visible_template_evidence_v2_source_context", VISIBLE_TEMPLATE_VERSION,
+}
 MAX_HTML = 2_000_000
 MAX_IMAGE_SAMPLES = 40
 MAX_TEMPLATE_SAMPLES = 4
@@ -44,6 +46,8 @@ EXPLANATORY = re.compile(
 RUNTIME_LABEL = re.compile(r"(?:\b(?:price|total|cost|amount|quantity|count|rating|name|product|address|welcome|hello)\b\s*[:=,]?\s*[$€£]?\s*)$", re.I)
 SHELL_COPY = re.compile(r"\b(?:coming soon|stay tuned|under construction|check back soon|work in progress)\b", re.I)
 SUBJECT_TYPES = re.compile(r"^https?://schema\.org/(?:Product|Person|Organization|LocalBusiness|Article|NewsArticle|BlogPosting|Place|Event)$")
+SOURCE_TEMPLATE_PLACEMENTS = {"title", "meta"}
+RENDER_DEPENDENT_TEMPLATE_ISSUES = {"empty_shell", "unresolved_template", "runtime_value"}
 
 
 def _text(value: Any) -> str:
@@ -218,17 +222,35 @@ def _snippet(text: str, start: int, end: int) -> str:
     return (("…" if left else "") + text[left:right] + ("…" if right < len(text) else ""))[:260]
 
 
+def template_basis_observations(groups: dict, basis: str) -> tuple[int, list[dict[str, str]]]:
+    group = groups.get(basis)
+    if not isinstance(group, dict):
+        return 0, []
+    samples = group.get("samples")
+    samples = [
+        item for item in samples
+        if isinstance(item, dict) and all(isinstance(item.get(key), str) for key in ("kind", "placement", "snippet"))
+    ] if isinstance(samples, list) else []
+    count = group.get("count")
+    return (count if type(count) is int and count >= len(samples) else len(samples)), samples
+
+
 def raw_content_needs_browser(page: dict[str, Any]) -> bool:
-    """An observed source problem can need a separate check of visitor-visible content."""
+    """Whether the page has only template observations that need a browser."""
     evidence = page.get("visible_template_evidence") or {}
     if evidence.get("accepted") is not True or evidence.get("state") != "fail":
         return False
+    groups = evidence.get("observations_by_basis")
+    if isinstance(groups, dict):
+        browser_count, _ = template_basis_observations(groups, "browser_review")
+        source_count, _ = template_basis_observations(groups, "source_confirmed")
+        return browser_count > 0 and source_count == 0
     # Tokens in title or metadata are defects in the HTML we actually received.
-    if any(sample.get("placement") in {"title", "meta"} for sample in evidence.get("samples", [])):
+    if any(sample.get("placement") in SOURCE_TEMPLATE_PLACEMENTS for sample in evidence.get("samples", [])):
         return False
     # Specific placeholder copy or a static announcement is still a source
     # defect in a document which also happens to load analytics.
-    if not {"empty_shell", "unresolved_template", "runtime_value"}.intersection(evidence.get("issue_types") or []):
+    if not RENDER_DEPENDENT_TEMPLATE_ISSUES.intersection(evidence.get("issue_types") or []):
         return False
     if "has_executable_script" in evidence:
         return evidence["has_executable_script"] is True or evidence.get("embedded_surface") is True
@@ -238,23 +260,39 @@ def raw_content_needs_browser(page: dict[str, Any]) -> bool:
 
 
 def missing_heading_needs_browser(page: dict[str, Any]) -> bool:
+    template = page.get("visible_template_evidence") or {}
+    groups = template.get("observations_by_basis")
+    browser_observation = (
+        template_basis_observations(groups, "browser_review")[0] > 0
+        if isinstance(groups, dict) else raw_content_needs_browser(page)
+    )
     return page.get("h1_count") == 0 and (
-        raw_content_needs_browser(page) or page.get("client_rendering_suspected") is True
+        browser_observation or page.get("client_rendering_suspected") is True
     )
 
 
-def _template_evidence(soup: BeautifulSoup) -> dict[str, Any]:
+def _template_evidence(soup: BeautifulSoup, *, may_render: bool) -> dict[str, Any]:
+    groups = {basis: {"count": 0, "samples": []} for basis in ("source_confirmed", "browser_review")}
     evidence: dict[str, Any] = {
         "version": VISIBLE_TEMPLATE_VERSION, "accepted": True, "state": "pass", "reason": "accepted_html",
         "issue_types": [], "issue_count": 0, "samples": [], "samples_truncated": False,
+        "observations_by_basis": groups,
     }
 
     def record(kind: str, placement: str, snippet: str) -> None:
         evidence["issue_count"] += 1
         if kind not in evidence["issue_types"]:
             evidence["issue_types"].append(kind)
+        observation = {"kind": kind, "placement": placement, "snippet": snippet[:260]}
         if len(evidence["samples"]) < MAX_TEMPLATE_SAMPLES:
-            evidence["samples"].append({"kind": kind, "placement": placement, "snippet": snippet[:260]})
+            evidence["samples"].append(observation)
+        needs_browser = (
+            may_render and placement not in SOURCE_TEMPLATE_PLACEMENTS and kind in RENDER_DEPENDENT_TEMPLATE_ISSUES
+        )
+        group = groups["browser_review" if needs_browser else "source_confirmed"]
+        group["count"] += 1
+        if len(group["samples"]) < MAX_TEMPLATE_SAMPLES:
+            group["samples"].append(observation)
 
     for placement, text in _fragments(soup):
         if EXPLANATORY.search(text):
@@ -379,11 +417,12 @@ def extract_accepted_content_evidence(html: str, evidence_class: str) -> dict[st
         images["state"] = "fail"
     elif images["uncertain_missing_alt_count"]:
         images["state"] = "not_verified"
+    embedded_surface = soup.find("iframe", src=True) is not None
     result["visible_template_evidence"] = {
-        **_template_evidence(soup),
+        **_template_evidence(soup, may_render=has_executable_script or embedded_surface),
         "evidence_basis": "source_html",
         "has_executable_script": has_executable_script,
-        "embedded_surface": soup.find("iframe", src=True) is not None,
+        "embedded_surface": embedded_surface,
     }
     result.update(_main_text_evidence(soup))
     h1 = soup.find("h1")

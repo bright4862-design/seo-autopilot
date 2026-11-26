@@ -314,7 +314,15 @@ function launchHarness({
     user, settings, gates,
     launch: {
       entities: {
-        Access: { filter: async query => rows.filter(row => matches(row, query)) },
+        Access: {
+          filter: async query => rows.filter(row => matches(row, query)),
+          create: async row => {
+            calls.push("create_preview_access");
+            const created = { id: "new_preview_access", ...row };
+            rows.push(created);
+            return created;
+          },
+        },
         BusinessProject: { get: async id => id === project.id ? project : null },
         ScanRun: {
           filter: async query => scans.filter(row => matches(row, query)),
@@ -756,25 +764,53 @@ test("active named customer launches at the confirmed cap, and expiry or forged 
     assert.equal(accepted.body.page_cap, cap);
     assert.equal(fixture.scans[0].pipeline_mode, "staged");
     assert.equal(fixture.dispatched[0].page_cap, cap);
+    assert.deepEqual(fixture.claimRequests, [{
+      pilotLauncherBuildId: FUNCTION_BUILD_ID, pilotPageCap: cap === 150 ? 150 : undefined,
+    }]);
   }
   const stale = namedPilot();
   assert.equal((await stale.options()).body.launch, "pilot");
   stale.settings.SCAN_PUBLIC_PILOT_EXPIRES_AT = "0";
-  assert.equal((await stale.submit({ published_pilot_page_cap: 150 })).status, 409);
-  assert.deepEqual(stale.calls, []);
+  assert.notEqual((await stale.submit({ published_pilot_page_cap: 150 })).body.accepted, true);
+  assert.deepEqual(stale.claimRequests, [{ pilotLauncherBuildId: FUNCTION_BUILD_ID, pilotPageCap: 150, pilotReplayOnly: true }]);
+  assert.deepEqual(stale.scans, []);
+  const freshPreview = namedPilot({ rows: [], publicPilotExpiresAt: "0" });
+  assert.notEqual((await freshPreview.submit({ published_pilot_page_cap: 150 })).body.accepted, true);
+  assert.deepEqual(freshPreview.calls, ["claim"]);
+  assert.deepEqual(freshPreview.scans, []);
   const legacyRow = namedPilot();
   assert.equal((await legacyRow.submit({ published_pilot_page_cap: 150, scan_id: "legacy_01" })).status, 409);
   assert.deepEqual(legacyRow.calls, []);
 });
 
-test("a coordinator that has not verified the pilot build cannot start a new scan", async () => {
-  const fixture = namedPilot({ acknowledgePilot: false });
-  const result = await fixture.submit({ published_pilot_page_cap: 150 });
-  assert.equal(result.status, 503);
-  assert.equal(result.body.failure_code, "admission_claim_evidence_invalid");
-  assert.deepEqual(fixture.calls, ["claim"]);
-  assert.deepEqual(fixture.scans, []);
+test("a held named 150 launch can recover the same bound request interrupted before enqueue", async () => {
+  const fixture = namedPilot({ interruptBeforeDrain: true });
+  const original = await fixture.submit({ published_pilot_page_cap: 150 });
+  assert.equal(original.status, 500);
+  assert.deepEqual(fixture.calls, ["claim", "create", "bind"]);
   assert.deepEqual(fixture.dispatched, []);
+  fixture.settings.SCAN_PUBLIC_PILOT_EXPIRES_AT = "0";
+  assert.equal((await fixture.options()).body.launch, "paused");
+  const replay = await fixture.submit({ published_pilot_page_cap: 150 });
+  assert.equal(replay.body.accepted, true);
+  assert.equal(replay.body.replayed, true);
+  assert.equal(replay.body.scan_id, fixture.scans[0].id);
+  assert.equal(fixture.scans.length, 1);
+  assert.equal(fixture.dispatched[0].attempt_count, 1);
+  assert.deepEqual(fixture.claimRequests.at(-1),
+    { pilotLauncherBuildId: FUNCTION_BUILD_ID, pilotPageCap: 150, pilotReplayOnly: true });
+});
+
+test("a coordinator must confirm the current build and typed 150 pilot cap", async () => {
+  for (const overrides of [{ acknowledgePilot: false }, { acknowledgeCap: false }, { pilotClaimCap: "150" }, { pilotClaimCap: 500 }]) {
+    const fixture = namedPilot(overrides);
+    const result = await fixture.submit({ published_pilot_page_cap: 150 });
+    assert.equal(result.status, 503);
+    assert.equal(result.body.failure_code, "admission_claim_evidence_invalid");
+    assert.deepEqual(fixture.calls, ["claim"]);
+    assert.deepEqual(fixture.scans, []);
+    assert.deepEqual(fixture.dispatched, []);
+  }
 });
 
 test("the authenticated operator can read the exact pilot expiry or verify a hold", async () => {
@@ -875,7 +911,7 @@ test("a paid pilot claim must echo the exact cap and launcher build with signed 
   }
   const exclusive = namedPilot();
   assert.equal((await exclusive.submit({ published_pilot_page_cap: 150 })).body.accepted, true);
-  assert.deepEqual(exclusive.claimRequests, [{ pilotLauncherBuildId: FUNCTION_BUILD_ID, pilotPageCap: undefined }]);
+  assert.deepEqual(exclusive.claimRequests, [{ pilotLauncherBuildId: FUNCTION_BUILD_ID, pilotPageCap: 150 }]);
 });
 
 test("a paid pilot expiry hold keeps public 150 open and only replays previously admitted 500 requests", async () => {
@@ -950,12 +986,14 @@ test("malformed or conflicting paid pilot lists stop 500 without interrupting pa
 test("the real signed claim transport carries only the supplied bounded pilot cap", async () => {
   const calls = [];
   const env = name => ({ BETA_SCAN_ADMISSION_ENABLED: "true", SCAN_ADMISSION_COORDINATOR_URL: "https://coordinator.example", SCAN_EVIDENCE_SIGNING_KEY: "test-key" })[name];
-  await admissionClient.claimAdmission({ ownerUserId: paidCustomer.id, requestId: "request_01", requestFingerprint: "f".repeat(64),
-    pilotLauncherBuildId: FUNCTION_BUILD_ID, pilotPageCap: 500, env, fetchImpl: async (_url, options) => {
-      calls.push(JSON.parse(options.body)); return Response.json({ ok: true });
-    } });
-  assert.equal(calls[0].pilot_launcher_build_id, FUNCTION_BUILD_ID);
-  assert.equal(calls[0].pilot_page_cap, 500);
+  for (const cap of [150, 500]) {
+    await admissionClient.claimAdmission({ ownerUserId: paidCustomer.id, requestId: "request_01", requestFingerprint: "f".repeat(64),
+      pilotLauncherBuildId: FUNCTION_BUILD_ID, pilotPageCap: cap, env, fetchImpl: async (_url, options) => {
+        calls.push(JSON.parse(options.body)); return Response.json({ ok: true });
+      } });
+    assert.equal(calls.at(-1).pilot_launcher_build_id, FUNCTION_BUILD_ID);
+    assert.equal(calls.at(-1).pilot_page_cap, cap);
+  }
 });
 
 test("paid pilot runtime readback attests a sorted bounded cohort without disclosing account IDs", async () => {

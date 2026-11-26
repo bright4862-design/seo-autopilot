@@ -797,7 +797,7 @@ class PublishedPilotAcceptance(CoordinatorTestCase):
             for refusal, status in [
                 ({"owner_user_id": "unlisted_customer"}, 423),
                 ({"pilot_launcher_build_id": "b" * 64}, 423),
-                ({"pilot_page_cap": 150}, 400),
+                ({"pilot_page_cap": 151}, 400),
             ]:
                 self.assertEqual(self.post("/claim", {**pilot_request, **refusal}).status_code, status)
             self.assertEqual(self.claim(owner="public_customer_2").json["admission_mode"], "open")
@@ -879,6 +879,124 @@ class PublishedPilotAcceptance(CoordinatorTestCase):
         proof = snapshot.pop("proof")
         self.assertEqual(snapshot["boundary"]["required_launcher_build_id"], launcher)
         self.assertTrue(control.verify_record(OPERATOR_SIGNING_ROOT, control.SNAPSHOT_LABEL, snapshot, proof))
+
+    def test_published_pilot_and_approved_v8_access_keep_separate_authority(self):
+        source, baseline, launcher = "1" * 40, "2" * 40, "a" * 64
+        key = f"{main.CONTROL_COLLECTION}/{main.CONTROL_DOCUMENT}"
+        STORE[key] = {"mode": "closed", "generation": 4, "claim_sequence": 0}
+        legacy_owner, another_legacy_owner = "existing_customer_2", "existing_customer_3"
+        unused_legacy_owner = "existing_customer_4"
+        acceptance = {
+            "cohort_id": "public_pilot_150", "release_id": "public_candidate",
+            "source_sha": source, "owner_user_ids": [OWNER],
+            "expires_at": int(time.time()) + 900, "total_claim_budget": 1,
+            "per_owner_claim_budget": 1, "required_launcher_build_id": launcher,
+        }
+        legacy = {
+            "cohort_id": "approved_legacy_150", "release_id": "published_v8",
+            "source_sha": baseline, "owner_user_ids": [another_legacy_owner, legacy_owner, unused_legacy_owner],
+            "expires_at": int(time.time()) + 1800, "total_claim_budget": 3, "per_owner_claim_budget": 1,
+        }
+        canonical = json.dumps({**legacy, "owner_user_ids": sorted(legacy["owner_user_ids"])},
+                               sort_keys=True, separators=(",", ":"))
+        preflight = {
+            "version": "published_legacy_access_preflight_v1", "pilot_source_sha": source,
+            "legacy_source_sha": baseline, "configuration_sha256": hashlib.sha256(canonical.encode()).hexdigest(),
+            "verified_owner_count": 3, "verified_at": int(time.time()),
+        }
+        context = {"reason": "test approved published V8 and pilot lanes", "change_ticket": "test-dual-150"}
+        payload = {
+            **context, "operation": "published_pilot_with_legacy",
+            "intended_prior": {"mode": "closed", "generation": 4},
+            "acceptance": acceptance, "legacy_access": legacy, "legacy_preflight": preflight,
+        }
+        path = "/ops/barrier/acceptance-only"
+        with patch.object(main, "SOURCE_SHA", source):
+            for bad in [
+                {**legacy, "owner_user_ids": [OWNER, legacy_owner]},
+                {**legacy, "cohort_id": acceptance["cohort_id"]},
+                {**legacy, "expires_at": True},
+            ]:
+                response = self.operator_post(path, {**payload, "legacy_access": bad})
+                self.assertEqual(response.status_code, 400, response.json)
+                self.assertEqual(STORE[key]["mode"], "closed")
+            short_legacy = self.operator_post(path, {
+                **payload, "legacy_access": {**legacy, "expires_at": acceptance["expires_at"] - 1},
+            })
+            self.assertEqual(short_legacy.status_code, 400, short_legacy.json)
+            self.assertEqual(short_legacy.json["error"], "invalid_legacy_access_expiry")
+            self.assertEqual(STORE[key]["mode"], "closed")
+            self.assertEqual(self.operator_post(path, {**payload, "operation": "published_pilot_acceptance"}).status_code, 400)
+            for missing_or_invalid in [
+                {key: value for key, value in payload.items() if key != "legacy_preflight"},
+                {**payload, "legacy_preflight": {**preflight, "verified_at": preflight["verified_at"] - 301}},
+                {**payload, "legacy_preflight": {**preflight, "legacy_source_sha": "3" * 40}},
+                {**payload, "legacy_preflight": {**preflight, "verified_owner_count": 2}},
+                {**payload, "legacy_preflight": {**preflight, "configuration_sha256": "0" * 64}},
+            ]:
+                self.assertEqual(self.operator_post(path, missing_or_invalid).status_code, 400)
+                self.assertEqual(STORE[key]["mode"], "closed")
+            response = self.operator_post(path, payload)
+            self.assertEqual(response.status_code, 200, response.json)
+            snapshot = response.json["drain_snapshot"]
+            legacy_boundary = snapshot["boundary"]["legacy_customer_access"]
+            self.assertEqual(legacy_boundary["source_sha"], baseline)
+            self.assertEqual(legacy_boundary["page_cap"], 150)
+            self.assertEqual(legacy_boundary["configuration_sha256"], preflight["configuration_sha256"])
+            self.assertEqual(legacy_boundary["verified_at"], preflight["verified_at"])
+            self.assertTrue(control.verify_record(OPERATOR_SIGNING_ROOT, control.SNAPSHOT_LABEL,
+                                                {k: v for k, v in snapshot.items() if k != "proof"}, snapshot["proof"]))
+            signed_legacy = STORE[f"{main.COHORT_COLLECTION}/{legacy['cohort_id']}"]
+            self.assertTrue(control.verify_record(OPERATOR_SIGNING_ROOT, control.COHORT_LABEL,
+                                                {k: v for k, v in signed_legacy.items() if k != "proof"}, signed_legacy["proof"]))
+
+            # V8 signs only owner, request and fingerprint before /claim.
+            self.assertEqual(self.claim().status_code, 423)
+            self.assertEqual(self.claim(owner="outside_customer").status_code, 423)
+            v8 = self.claim(owner=legacy_owner)
+            self.assertEqual(v8.status_code, 200, v8.json)
+            self.assertNotIn("pilot_launcher_build_id", v8.json)
+            self.assertEqual(v8.json["cohort_evidence"]["acceptance_cohort_id"], legacy["cohort_id"])
+            self.assertEqual(STORE[key]["acceptance"]["total_claims_used"], 0)
+
+            pilot = {"owner_user_id": OWNER, "request_id": "pilot_request_1", "request_fingerprint": FINGERPRINT,
+                     "pilot_launcher_build_id": launcher, "target_origin": "https://fixture.example:443"}
+            self.assertEqual(self.post("/claim", pilot).status_code, 423)  # historical exclusive 500 wire shape
+            self.assertEqual(self.post("/claim", {**pilot, "pilot_page_cap": 500}).status_code, 423)
+            self.assertEqual(self.post("/claim", {**pilot, "pilot_page_cap": "150"}).status_code, 400)
+            self.assertEqual(STORE[key]["acceptance"]["total_claims_used"], 0)
+            pilot["pilot_page_cap"] = 150
+            with patch.object(main, "SOURCE_SHA", "3" * 40):
+                self.assertEqual(self.post("/claim", pilot).status_code, 423)
+                self.assertEqual(self.claim(owner=unused_legacy_owner).status_code, 423)
+            self.assertEqual(self.post("/claim", {**pilot, "owner_user_id": legacy_owner}).status_code, 423)
+            claimed = self.post("/claim", pilot)
+            self.assertEqual(claimed.status_code, 200, claimed.json)
+            self.assertEqual(claimed.json["pilot_page_cap"], 150)
+            self.assertEqual(claimed.json["cohort_evidence"]["acceptance_cohort_id"], acceptance["cohort_id"])
+            self.assertEqual(STORE[key]["legacy_customer_access"]["total_claims_used"], 1)
+
+            hold = {
+                **context, "operation": "hold_150_pilot", "cohort_id": acceptance["cohort_id"],
+                "source_sha": source, "intended_prior": {"mode": "acceptance_only", "generation": 5},
+            }
+            self.assertEqual(self.operator_post("/ops/barrier/pilot-150/hold", {
+                **hold, "cohort_id": legacy["cohort_id"],
+            }).status_code, 409)
+            held = self.operator_post("/ops/barrier/pilot-150/hold", hold)
+            self.assertEqual(held.status_code, 200, held.json)
+            self.assertEqual(held.json["barrier"]["mode"], "acceptance_only")
+            self.assertEqual(held.json["pilot_snapshot"]["boundary"]["legacy_customer_access"], legacy_boundary)
+            replay_only = {**pilot, "pilot_replay_only": True}
+            response = self.post("/claim", replay_only)
+            self.assertEqual(response.json["outcome"], "replayed")
+            self.assertEqual(response.json["claim_token"], claimed.json["claim_token"])
+            self.assertEqual(self.post("/claim", {**replay_only, "request_id": "replay_only_fresh"}).status_code, 423)
+            self.assertEqual(self.post("/claim", {**pilot, "request_id": "fresh_after_hold"}).status_code, 423)
+            self.assertEqual(self.claim(owner=another_legacy_owner).status_code, 200)
+            self.assertEqual(self.claim(owner="outside_customer").status_code, 423)
+            with patch.object(main.time, "time", return_value=legacy["expires_at"]):
+                self.assertEqual(self.claim(owner=unused_legacy_owner).status_code, 423)
 
 
 class StatusSurface(CoordinatorTestCase):

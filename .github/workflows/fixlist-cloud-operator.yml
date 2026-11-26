@@ -39,6 +39,7 @@ on:
           - cutover-resume
           - open-claim-barrier
           - acceptance-only
+          - hold-published-150-pilot
           - start-published-500-pilot
           - hold-published-500-pilot
           - sync-base44-signing-key
@@ -234,7 +235,7 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT }}
           workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
-          service_account: ${{ contains(fromJSON('["status","barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only","start-published-500-pilot","hold-published-500-pilot"]'), inputs.operation) && env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT || env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+          service_account: ${{ contains(fromJSON('["status","barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only","hold-published-150-pilot","start-published-500-pilot","hold-published-500-pilot"]'), inputs.operation) && env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT || env.GCP_OPERATOR_SERVICE_ACCOUNT }}
 
       # gcloud cannot mint an audience-scoped identity token from the
       # external_account credential written above, so the coordinator's operator
@@ -242,7 +243,7 @@ jobs:
       # step exists only to produce the token and must not replace the
       # credentials the gcloud steps below authenticate with.
       - name: Mint coordinator operator identity token
-        if: contains(fromJSON('["barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only","start-published-500-pilot","hold-published-500-pilot","staged-queue-activate","staged-queue-drain-pause","staged-queue-recover"]'), inputs.operation) || (inputs.operation == 'deploy-dispatch-gateway' && startsWith(inputs.gateway_staged_config, 'paid'))
+        if: contains(fromJSON('["barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only","hold-published-150-pilot","start-published-500-pilot","hold-published-500-pilot","staged-queue-activate","staged-queue-drain-pause","staged-queue-recover"]'), inputs.operation) || (inputs.operation == 'deploy-dispatch-gateway' && startsWith(inputs.gateway_staged_config, 'paid'))
         id: operator-id-token
         uses: google-github-actions/auth@v3
         with:
@@ -448,7 +449,7 @@ jobs:
           ACCEPTANCE_TOTAL_CLAIM_BUDGET: ${{ inputs.acceptance_total_claim_budget }}
           ACCEPTANCE_PER_OWNER_CLAIM_BUDGET: ${{ inputs.acceptance_per_owner_claim_budget }}
           ACCEPTANCE_LAUNCHER_BUILD_ID: ${{ inputs.acceptance_launcher_build_id }}
-          GCP_OPERATOR_SERVICE_ACCOUNT: ${{ contains(fromJSON('["status","barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only","start-published-500-pilot","hold-published-500-pilot"]'), inputs.operation) && env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT || env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+          GCP_OPERATOR_SERVICE_ACCOUNT: ${{ contains(fromJSON('["status","barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only","hold-published-150-pilot","start-published-500-pilot","hold-published-500-pilot"]'), inputs.operation) && env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT || env.GCP_OPERATOR_SERVICE_ACCOUNT }}
           FIXLIST_OPERATOR_ID_TOKEN: ${{ steps.operator-id-token.outputs.id_token }}
           FIXLIST_OPERATOR_TOKEN_AUDIENCE: ${{ env.ADMISSION_OPERATOR_AUDIENCE }}
         shell: bash

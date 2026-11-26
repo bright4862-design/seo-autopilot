@@ -280,7 +280,8 @@ export default async function (req: Request): Promise<Response> {
     const pilot = publishedPilotLaunchPolicy({ settings: stagedSettings, user, expiresAt: publishedPilotExpiry(stagedSettings) });
     if (optionsRequest) return publishedScanOptions(base44, user, stagedSettings, pilot, body);
     const pilotRequest = (!pilot.paidPilot && pilot.configured) || Object.hasOwn(body, "published_pilot_page_cap");
-    if (pilotRequest && (!pilot.namedCustomer || (!pilot.paidPilot && !pilot.enabled))) {
+    const typedPilotRequest = pilot.paidPilot || body.published_pilot_page_cap === 150;
+    if (pilotRequest && (!pilot.namedCustomer || (!typedPilotRequest && !pilot.enabled))) {
       return pilotLaunchRefused("scan_pilot_unavailable");
     }
     if (pilotRequest && identity.fields.scan_id) return pilotLaunchRefused("scan_pilot_saved_request");
@@ -438,7 +439,7 @@ export default async function (req: Request): Promise<Response> {
       }
 
       entitlement = await loadScanEntitlement(base44, user, {
-        createPreviewAccess: !pilotRequest || body.published_pilot_page_cap === 150,
+        createPreviewAccess: !pilotRequest || (pilot.enabled && body.published_pilot_page_cap === 150),
       });
       if (!entitlement.ok) {
         return jsonResponse({
@@ -468,7 +469,7 @@ export default async function (req: Request): Promise<Response> {
         scanContract,
         requiresExistingScan,
         pilotRequest,
-        pilotReplayOnly: pilot.paidPilot && pilotRequest && !pilot.enabled,
+        pilotReplayOnly: typedPilotRequest && pilotRequest && !pilot.enabled,
         project: project.project,
         body,
         identity,
@@ -805,7 +806,9 @@ async function replayBoundScanWithoutAdmission({ base44, user, project, request,
 async function admitServerOwnedScan({
   base44, user, access, scanContract, requiresExistingScan, pilotRequest, pilotReplayOnly, project, body, identity, websiteUrl, scope, robotsPolicy,
 }) {
-  const pilotPageCap = pilotRequest && scanContract.staged_rollout_scope === "paid" ? 500 : undefined;
+  const pilotPageCap = pilotRequest && (scanContract.page_cap === 150 || scanContract.staged_rollout_scope === "paid")
+    ? scanContract.page_cap
+    : undefined;
   const request = normalizeAdmissionIdentity({
     request_id: identity.fields.request_id,
     idempotency_key: identity.fields.idempotency_key,

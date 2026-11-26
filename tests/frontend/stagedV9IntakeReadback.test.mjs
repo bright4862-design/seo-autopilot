@@ -629,6 +629,21 @@ test("broad 500 uses the cap suffix without changing the Standard 150 fingerprin
   assert.equal(broad.scans.length, 1);
 });
 
+test("500 hold recovery requires the saved URL and scan scope as well as its request fingerprint", async () => {
+  const fixture = launchHarness({ rows: [{ ...paidGrant, page_cap: 500 }] });
+  assert.equal((await fixture.submit()).status, 200);
+  fixture.gates.SCAN_STAGED_500_ELIGIBLE_ADMISSION_ENABLED = "false";
+  const saved = fixture.scans[0];
+  for (const field of [
+    { website_url: "https://example.com/another-page" },
+    { scope_type: "path_prefix", requested_path_prefix: "/another-page", parent_scan_id: "different_parent" },
+  ]) {
+    fixture.scans[0] = { ...saved, ...field };
+    assert.equal((await fixture.submit()).body.failure_code, "scan_request_identity_conflict");
+  }
+  assert.equal(fixture.dispatched.length, 1);
+});
+
 test("broad 500 only sends and accepts typed admission on the new mutable entitlement switch", async () => {
   const access = [{ ...paidGrant, page_cap: 500 }];
   const legacy = launchHarness({ rows: access, entitled500: null, legacyEntitled500: "true" });

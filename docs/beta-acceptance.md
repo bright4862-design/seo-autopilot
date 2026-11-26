@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `cd3f3a5ef7dd6787` |
+| Candidate fingerprint | `22526f0da5f2fbac` |
 | Classifier | `archetype_classifier_v12_locale_normalized_structural_routes` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,12 +15,12 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `cd3f3a5ef7dd6787` with classifier
+fingerprint `22526f0da5f2fbac` with classifier
 `archetype_classifier_v12_locale_normalized_structural_routes`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v8_source_render_confidence`.
 
-The candidate preserves the declared canonical request path, including its final slash. Source-only content and heading checks on dynamic pages carry zero score impact. The candidate also recognizes named image headings and verified homepage redirects to sampled language markets. Public browser acceptance remains pending.
+The candidate preserves the declared canonical request path, including its final slash. On pages with a confirmed source title or metadata defect, browser-dependent heading and template observations still carry zero score impact. The candidate also recognizes named image headings and verified homepage redirects to sampled language markets. Public browser acceptance remains pending.
 
 The historical `b36ca24b8e0f728e` candidate prevents optional finalization requests during a crawl rate-limit stop or an outstanding 429 cooldown. Reports can still use evidence the crawl already saved. Verified limited reports explain throttling and distinguish usable pages from attempted URLs. Fresh live acceptance for this candidate remains pending.
 

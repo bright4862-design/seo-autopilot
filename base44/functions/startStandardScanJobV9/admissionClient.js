@@ -270,7 +270,10 @@ async function callCoordinator(path, payload, { coordinatorUrl, signingKey, fetc
 /**
  * Step 1 of admission. Wins, replays, or is told to wait. Creates nothing.
  */
-export async function claimAdmission({ ownerUserId, requestId, requestFingerprint, targetOrigin, queueIfOriginBusy, pilotLauncherBuildId, pilotPageCap, pilotReplayOnly, ...options } = {}) {
+export async function claimAdmission({
+  ownerUserId, requestId, requestFingerprint, targetOrigin, queueIfOriginBusy,
+  pilotLauncherBuildId, pilotPageCap, pilotReplayOnly, standard150LauncherBuildId, ...options
+} = {}) {
   if (!admissionEnabled(options.env ?? readEnv)) {
     return { ok: false, outcomeUnknown: false, failureCode: "admission_disabled" };
   }
@@ -283,6 +286,7 @@ export async function claimAdmission({ ownerUserId, requestId, requestFingerprin
     ...(pilotLauncherBuildId ? { pilot_launcher_build_id: pilotLauncherBuildId } : {}),
     ...(pilotPageCap !== undefined ? { pilot_page_cap: pilotPageCap } : {}),
     ...(pilotReplayOnly === true ? { pilot_replay_only: true } : {}),
+    ...(standard150LauncherBuildId ? { standard_150_launcher_build_id: standard150LauncherBuildId } : {}),
   }, options);
 }
 

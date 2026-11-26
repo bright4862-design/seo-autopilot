@@ -21,6 +21,33 @@ or printed.
 | `resume-queue` | yes | `RESUME` |
 | `activate-beta` | yes | exact revision name |
 
+### Bounded public Standard 150 rollout
+
+Use `open-claim-barrier` from a verified closed and drained generation after
+the accepted source and exact V9 launcher are published. Supply the cohort ID,
+release ID, ordinary customer owner IDs, expiry in epoch seconds, total and
+per-owner claim limits, and the launcher build ID from
+`data/generated-staged-v9-routes.json`. The limits are five owners, ten total
+claims and 24 hours. The confirmation is
+`OPEN-PUBLIC-150-COHORT:<source-sha>:<closed-generation>:<cohort-id>:<launcher-build-id>`.
+The scope and the open transition commit together. The signed response binds
+the deployed source, launcher, cohort, account-set digest, expiry and budgets.
+
+Use `hold-public-150` with the current open generation and exact cohort ID.
+The confirmation is `HOLD-PUBLIC-150-COHORT:<source-sha>:<open-generation>:<cohort-id>`.
+The hold stops new Standard 150 claims, keeps already admitted attempts
+recoverable, and leaves the named 500 pilot and saved reports available.
+An expired or spent cohort also stops new claims in its tier. The ordinary
+`OPEN-STANDARD150-CLAIMS` confirmation continues to work with empty cohort
+inputs.
+
+The scoped open admits ordinary paid customers through the published staged
+Standard 150 launcher and treats named Standard 500 launches separately.
+Broad entitled 500 launches stay paused while this cohort is configured.
+Before replacing the pinned launcher or downgrading the coordinator, close the
+global barrier on a version that can read the scoped state and verify the drain.
+This keeps admitted retries on their original launcher until they settle.
+
 ### Why traffic operations name a revision
 
 `--to-latest` resolves at execution time. If anything deployed between

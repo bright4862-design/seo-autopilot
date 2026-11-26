@@ -809,6 +809,10 @@ async function admitServerOwnedScan({
   const pilotPageCap = pilotRequest && (scanContract.page_cap === 150 || scanContract.staged_rollout_scope === "paid")
     ? scanContract.page_cap
     : undefined;
+  // Attest a server-resolved Standard 150 contract before signing the claim.
+  // A broad entitled 500 launch has no Standard 150 or named-pilot authority.
+  const standard150LauncherBuildId = user.role === "user" && !pilotRequest && scanContract.page_cap === 150
+    && scanContract.staged_rollout_scope === "paid" ? FUNCTION_BUILD_ID : undefined;
   const request = normalizeAdmissionIdentity({
     request_id: identity.fields.request_id,
     idempotency_key: identity.fields.idempotency_key,
@@ -839,6 +843,7 @@ async function admitServerOwnedScan({
       pilotLauncherBuildId: pilotRequest ? FUNCTION_BUILD_ID : undefined,
       pilotPageCap,
       pilotReplayOnly,
+      standard150LauncherBuildId,
       env: mutableScanAdmissionEnv,
     });
   } catch {

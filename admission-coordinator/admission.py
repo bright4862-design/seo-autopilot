@@ -33,8 +33,10 @@ BARRIER_OPEN = "open"
 BARRIER_CLOSED = "closed"
 BARRIER_ACCEPTANCE_ONLY = "acceptance_only"
 BARRIER_MODES = frozenset({BARRIER_OPEN, BARRIER_CLOSED, BARRIER_ACCEPTANCE_ONLY})
+STORED_BARRIER_PUBLIC_150 = "open_public_150"
 PUBLISHED_500_PILOT = "published_500_pilot"
 LEGACY_CUSTOMER_ACCESS = "legacy_customer_access"
+PUBLIC_150 = "public_150"
 
 # A scan reaches exactly one of these, and only the durable worker or the
 # server-side watchdog may declare it. The browser has no vote.
@@ -114,6 +116,10 @@ def normalized_control(document: dict[str, Any] | None) -> dict[str, Any]:
     """
     source = document if isinstance(document, dict) else {}
     mode = str(source.get("mode") or BARRIER_OPEN).strip().lower()
+    if mode == STORED_BARRIER_PUBLIC_150:
+        if not isinstance(source.get(PUBLIC_150), dict):
+            raise AdmissionError("invalid_public_150_control")
+        mode = BARRIER_OPEN
     if mode not in BARRIER_MODES:
         raise AdmissionError("invalid_barrier_mode")
     return {
@@ -125,6 +131,20 @@ def normalized_control(document: dict[str, Any] | None) -> dict[str, Any]:
             source.get("reconciliation_sequence", 0)
         ),
     }
+
+
+def durable_control(control: dict[str, Any]) -> dict[str, Any]:
+    # A pre-cohort coordinator rejects this stored mode. Its ordinary open
+    # fallback cannot silently discard an active or held cohort on downgrade.
+    if control["mode"] == BARRIER_OPEN and control.get(PUBLIC_150) is not None:
+        return {**control, "mode": STORED_BARRIER_PUBLIC_150}
+    return control
+
+
+def claim_cohort_key(current: dict[str, Any], *, acceptance_key: str = "acceptance") -> str:
+    if acceptance_key == "acceptance" and current["mode"] == BARRIER_OPEN and current.get(PUBLIC_150) is not None:
+        return PUBLIC_150
+    return acceptance_key
 
 
 def decide_claim_policy(
@@ -144,6 +164,7 @@ def decide_claim_policy(
     owner = _require_id(owner_user_id, "invalid_owner_user_id")
     current = normalized_control(control)
     mode = current["mode"]
+    acceptance_key = claim_cohort_key(current, acceptance_key=acceptance_key)
     if mode == BARRIER_OPEN and acceptance_key == "acceptance":
         return {"allowed": True, "mode": mode, "control": current, "acceptance": None}
     if (mode == BARRIER_CLOSED
@@ -157,7 +178,7 @@ def decide_claim_policy(
         }
 
     acceptance = current.get(acceptance_key)
-    if not isinstance(acceptance, dict):
+    if not isinstance(acceptance, dict) or acceptance.get("held_at") is not None:
         return {
             "allowed": False,
             "mode": mode,
@@ -225,6 +246,7 @@ def reserve_fresh_claim(
         }
     write = {**current, "claim_sequence": int(current["claim_sequence"]) + 1}
     if policy["mode"] == BARRIER_ACCEPTANCE_ONLY:
+        acceptance_key = claim_cohort_key(current, acceptance_key=acceptance_key)
         acceptance = dict(current.get(acceptance_key) or {})
         used = dict(acceptance.get("owner_claims_used") or {})
         acceptance["total_claims_used"] = int(acceptance.get("total_claims_used") or 0) + 1

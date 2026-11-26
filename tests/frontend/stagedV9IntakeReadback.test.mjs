@@ -770,14 +770,16 @@ test("active named customer launches at the confirmed cap, and expiry or forged 
   assert.deepEqual(legacyRow.calls, []);
 });
 
-test("a coordinator that has not verified the pilot build cannot start a new scan", async () => {
-  const fixture = namedPilot({ acknowledgePilot: false });
-  const result = await fixture.submit({ published_pilot_page_cap: 150 });
-  assert.equal(result.status, 503);
-  assert.equal(result.body.failure_code, "admission_claim_evidence_invalid");
-  assert.deepEqual(fixture.calls, ["claim"]);
-  assert.deepEqual(fixture.scans, []);
-  assert.deepEqual(fixture.dispatched, []);
+test("a coordinator must confirm the current build and typed 150 pilot cap", async () => {
+  for (const overrides of [{ acknowledgePilot: false }, { acknowledgeCap: false }, { pilotClaimCap: "150" }, { pilotClaimCap: 500 }]) {
+    const fixture = namedPilot(overrides);
+    const result = await fixture.submit({ published_pilot_page_cap: 150 });
+    assert.equal(result.status, 503);
+    assert.equal(result.body.failure_code, "admission_claim_evidence_invalid");
+    assert.deepEqual(fixture.calls, ["claim"]);
+    assert.deepEqual(fixture.scans, []);
+    assert.deepEqual(fixture.dispatched, []);
+  }
 });
 
 test("the authenticated operator can read the exact pilot expiry or verify a hold", async () => {

@@ -40,6 +40,7 @@ ACCEPTANCE_TOTAL_CLAIM_BUDGET="${ACCEPTANCE_TOTAL_CLAIM_BUDGET:-}"
 ACCEPTANCE_PER_OWNER_CLAIM_BUDGET="${ACCEPTANCE_PER_OWNER_CLAIM_BUDGET:-}"
 LEGACY_ACCESS="${LEGACY_ACCESS:-}"
 LEGACY_ACCESS_SHA256=""
+LEGACY_ACCESS_PREFLIGHT=""
 FIXLIST_RELEASE_OWNER="${FIXLIST_RELEASE_OWNER:-bright4862-design}"
 FIXLIST_WORKER_ID_TOKEN="${FIXLIST_WORKER_ID_TOKEN:-}"
 FIXLIST_WORKER_TOKEN_AUDIENCE="${FIXLIST_WORKER_TOKEN_AUDIENCE:-}"
@@ -64,6 +65,10 @@ RUNTIME_PROBE_TMP=""
 
 if [[ -n "$LEGACY_ACCESS" && "$OPERATION" != acceptance-only ]]; then
   echo "Legacy access configuration is only accepted when opening the named pilot." >&2
+  exit 2
+fi
+if [[ -n "$LEGACY_ACCESS" && "${GITHUB_ACTIONS:-}" == true ]]; then
+  echo "Approved legacy access requires the local authenticated Base44 owner preflight." >&2
   exit 2
 fi
 
@@ -961,11 +966,12 @@ write_acceptance_payload() {
   python3 - "$destination" "$operation" "$BARRIER_EXPECTED_GENERATION" "$CUTOVER_REASON" "$CHANGE_TICKET" \
     "$ACCEPTANCE_COHORT_ID" "$ACCEPTANCE_RELEASE_ID" "$ACCEPTANCE_SOURCE_SHA" \
     "$ACCEPTANCE_OWNER_USER_IDS" "$ACCEPTANCE_EXPIRES_AT" \
-    "$ACCEPTANCE_TOTAL_CLAIM_BUDGET" "$ACCEPTANCE_PER_OWNER_CLAIM_BUDGET" "$ACCEPTANCE_LAUNCHER_BUILD_ID" "$LEGACY_ACCESS" <<'PY'
+    "$ACCEPTANCE_TOTAL_CLAIM_BUDGET" "$ACCEPTANCE_PER_OWNER_CLAIM_BUDGET" \
+    "$ACCEPTANCE_LAUNCHER_BUILD_ID" "$LEGACY_ACCESS" "$LEGACY_ACCESS_PREFLIGHT" <<'PY'
 import json, re, sys
 
 (destination, operation, generation, reason, ticket, cohort_id, release_id, source_sha,
- owners_raw, expires_at, total_budget, owner_budget, launcher_build_id, legacy_access) = sys.argv[1:]
+ owners_raw, expires_at, total_budget, owner_budget, launcher_build_id, legacy_access, legacy_preflight) = sys.argv[1:]
 owners = [item.strip() for item in owners_raw.split(",") if item.strip()]
 safe_id = re.compile(r"^[A-Za-z0-9_-]{6,160}$")
 if not safe_id.fullmatch(cohort_id) or not safe_id.fullmatch(release_id):
@@ -997,6 +1003,7 @@ payload = {
 }
 if legacy_access:
     payload["legacy_access"] = json.loads(legacy_access)
+    payload["legacy_preflight"] = json.loads(legacy_preflight)
 with open(destination, "w", encoding="utf-8") as handle:
     json.dump(payload, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 PY
@@ -1069,11 +1076,11 @@ parse_barrier_response() {
   mapfile -t _barrier_values < <(python3 - "$BARRIER_RESPONSE_FILE" "$expected_operation" \
     "$OPERATOR_TMP/operator-key" "$ADMISSION_DRAIN_SNAPSHOT_DERIVATION_LABEL" "$ACCEPTANCE_LAUNCHER_BUILD_ID" \
     "$ACCEPTANCE_COHORT_ID" "$SOURCE_SHA" "$ACCEPTANCE_OWNER_USER_IDS" "$ACCEPTANCE_EXPIRES_AT" \
-    "$BARRIER_EXPECTED_GENERATION" "$LEGACY_ACCESS_SHA256" <<'PY'
+    "$BARRIER_EXPECTED_GENERATION" "$LEGACY_ACCESS_SHA256" "$LEGACY_ACCESS_PREFLIGHT" <<'PY'
 import hashlib, hmac, json, re, sys
 
 (path, expected, key_path, snapshot_label, launcher_build_id, cohort_id, source_sha,
- owners_raw, expires_at, prior_generation, legacy_digest) = sys.argv[1:]
+ owners_raw, expires_at, prior_generation, legacy_digest, legacy_preflight) = sys.argv[1:]
 value = json.load(open(path, encoding="utf-8"))
 if value.get("success") is not True or value.get("operation") != expected:
     raise SystemExit("Unexpected operator response")
@@ -1128,6 +1135,7 @@ if expected == "hold_150_pilot" or (expected == "acceptance_only" and legacy_dig
             or not re.fullmatch(r"[0-9a-f]{40}", str(legacy.get("source_sha") or ""))
             or not re.fullmatch(r"[0-9a-f]{64}", str(legacy.get("configuration_sha256") or ""))
             or type(legacy.get("owner_count")) is not int or legacy["owner_count"] < 1
+            or type(legacy.get("verified_at")) is not int or legacy["verified_at"] < 1
             or legacy.get("state") not in {"configured", "expired"}):
         raise SystemExit("The signed snapshot does not establish the approved legacy access lane")
     if expected == "hold_150_pilot":
@@ -1136,6 +1144,7 @@ if expected == "hold_150_pilot" or (expected == "acceptance_only" and legacy_dig
                 or snapshot.get("drain_ready") is not False or "counts" in snapshot):
             raise SystemExit("The signed snapshot does not establish the named Standard 150 pilot hold")
     elif (legacy.get("configuration_sha256") != legacy_digest or legacy.get("state") != "configured"
+            or legacy["verified_at"] != json.loads(legacy_preflight)["verified_at"]
             or boundary.get("cohort_id") != cohort_id or boundary.get("source_sha") != source_sha):
         raise SystemExit("Named Standard 150 pilot or approved legacy configuration mismatch")
 if pilot_500_operation:
@@ -1373,6 +1382,87 @@ require_pilot_launcher_build() {
   fi
 }
 
+verify_approved_legacy_access() (
+  set -euo pipefail
+  local app_id="6a498732ec779dfaaeab0e53" baseline_sha view route_selection expected_owner expected_operator
+  baseline_sha="$(python3 -c 'import json, sys; print(json.loads(sys.argv[1])["source_sha"])' "$LEGACY_ACCESS")"
+  git -C "$REPO_ROOT" merge-base --is-ancestor "$baseline_sha" "$SOURCE_SHA" || {
+    echo "Approved V8 source is outside the candidate's merged history." >&2
+    return 1
+  }
+  expected_owner="${BASE44_EXPECTED_OWNER:-}"
+  case "$expected_owner" in
+    bright4862@gmail.com) expected_operator="6a498da58ef5cec1f5cd4486" ;;
+    londonparisbrussels@gmail.com) expected_operator="6a498732ec779dfaaeab0e54" ;;
+    *) echo "The configured Base44 app owner is required for the legacy access preflight." >&2; return 1 ;;
+  esac
+  [[ -z "${BASE44_API_KEY:-}" ]] || { echo "The legacy roster requires an authenticated owner session." >&2; return 1; }
+  view="$(mktemp -d)"
+  trap 'rm -rf "$view"' EXIT
+  chmod 700 "$view"
+  mkdir "$view/baseline"
+  git -C "$REPO_ROOT" archive "$baseline_sha" | tar -x -C "$view/baseline" || return 1
+  route_selection="$(node "$view/baseline/scripts/lib/base44-public-routes.mjs")"
+  [[ "$route_selection" == v8\ * ]] || { echo "Approved baseline is not the V8 publisher source." >&2; return 1; }
+  PUBLIC_URL=https://getfixlist.com/ BASE44_URL=https://getfixlist.base44.app/ EXPECTED_SOURCE_SHA="$SOURCE_SHA" \
+    bash "$REPO_ROOT/scripts/verify-base44-site.sh" >&2 || return 1
+  BASE44_APP_ID="$app_id" BASE44_FUNCTION_ORIGIN=https://base44.app \
+    bash "$view/baseline/scripts/verify-base44-functions.sh" > "$view/runtime.out" || return 1
+  [[ "$(grep -c '^FUNCTION_RUNTIME_VERIFIED ' "$view/runtime.out")" == 6 ]] || {
+    echo "The six retained V8 function identities were not verified." >&2
+    return 1
+  }
+  source "$REPO_ROOT/scripts/lib/base44-pinned-cli.sh" || return 1
+  fixlist_install_base44_cli "$view/base44" >&2 || return 1
+  fixlist_require_base44_owner "$expected_owner" "$view/whoami" "$app_id" >&2 || return 1
+
+  python3 - "$LEGACY_ACCESS" "$expected_owner" "$expected_operator" > "$view/readback.js" <<'PY'
+import json, sys
+raw, email, operator_id = sys.argv[1:]
+print("const ownerIds = " + json.dumps(json.loads(raw)["owner_user_ids"]) + ";")
+print("const operatorEmail = " + json.dumps(email) + ";")
+print("const operatorId = " + json.dumps(operator_id) + ";")
+PY
+  sed 's/^export //' "$view/baseline/base44/functions/startStandardScanJobV8/entitlement.js" >> "$view/readback.js"
+  cat >> "$view/readback.js" <<'JS'
+
+const actor = await base44.auth.me();
+if (actor?.id !== operatorId || actor.role !== "admin" || normalizeEmail(actor.email) !== operatorEmail) {
+  throw new Error("owner_identity_mismatch");
+}
+for (const id of ownerIds) {
+  const user = await base44.entities.User.get(id);
+  if (user?.id !== id || user.role !== "user" || !normalizeEmail(user.email)) throw new Error("ordinary_user_unverified");
+  const byOwner = await base44.entities.Access.filter({owner_user_id:id}, "-created_date", 2);
+  const byEmail = await base44.entities.Access.filter({user_email:normalizeEmail(user.email)}, "-created_date", 2);
+  if (![byOwner, byEmail].every(rows => Array.isArray(rows) && rows.length === 1 && rows[0]?.id
+        && evaluatePaidAccess({rows, user}).ok && (rows[0].page_cap ?? 150) === 150)
+      || byOwner[0].id !== byEmail[0].id) throw new Error("active_standard_150_entitlement_unverified");
+}
+console.log("APPROVED_V8_OWNERS_VERIFIED=" + ownerIds.length);
+JS
+  if ! timeout --signal=TERM --kill-after=5s 180 "$FIXLIST_BASE44_CLI" --app-id "$app_id" exec --data-env prod \
+    < "$view/readback.js" > "$view/access.out" 2> "$view/access.err"; then
+    echo "The approved ordinary users' active Standard 150 grants could not be verified." >&2
+    return 1
+  fi
+  PUBLIC_URL=https://getfixlist.com/ BASE44_URL=https://getfixlist.base44.app/ EXPECTED_SOURCE_SHA="$SOURCE_SHA" \
+    bash "$REPO_ROOT/scripts/verify-base44-site.sh" >&2 || return 1
+  python3 - "$LEGACY_ACCESS" "$LEGACY_ACCESS_SHA256" "$SOURCE_SHA" "$view/access.out" <<'PY'
+import json, sys, time
+raw, digest, candidate, access_report = sys.argv[1:]
+legacy = json.loads(raw)
+count = len(legacy["owner_user_ids"])
+with open(access_report, encoding="utf-8") as handle:
+    markers = [line.strip() for line in handle if line.startswith("APPROVED_V8_OWNERS_VERIFIED=")]
+if markers != [f"APPROVED_V8_OWNERS_VERIFIED={count}"]:
+    raise SystemExit("The owner readback did not verify the complete approved roster.")
+print(json.dumps({"version": "published_legacy_access_preflight_v1", "pilot_source_sha": candidate,
+                  "legacy_source_sha": legacy["source_sha"], "configuration_sha256": digest,
+                  "verified_owner_count": count, "verified_at": int(time.time())}))
+PY
+)
+
 activate_acceptance_only() {
   require_exact_main_owner_source
   require_barrier_inputs
@@ -1387,19 +1477,19 @@ activate_acceptance_only() {
       return 1
     }
     LEGACY_ACCESS_SHA256="$(PYTHONPATH="$REPO_ROOT/admission-coordinator" python3 - \
-      "$LEGACY_ACCESS" "$ACCEPTANCE_COHORT_ID" "$ACCEPTANCE_OWNER_USER_IDS" "$SOURCE_SHA" <<'PY'
+      "$LEGACY_ACCESS" "$ACCEPTANCE_COHORT_ID" "$ACCEPTANCE_OWNER_USER_IDS" "$SOURCE_SHA" "$ACCEPTANCE_EXPIRES_AT" <<'PY'
 import json, sys, time
 
 from control import legacy_access_definition
 
-raw, cohort_id, owners, source_sha = sys.argv[1:]
+raw, cohort_id, owners, source_sha, expires_at = sys.argv[1:]
 try:
     value = json.loads(raw)
     pilot = {"cohort_id": cohort_id, "owner_allowlist": [owner.strip() for owner in owners.split(",") if owner.strip()],
-             "source_sha": source_sha}
+             "source_sha": source_sha, "expires_at": int(expires_at)}
     definition = legacy_access_definition(value, pilot, now=int(time.time()), operator_id="workflow")
 except ValueError:
-    raise SystemExit("Approved legacy access is invalid or overlaps the named pilot.")
+    raise SystemExit("Approved legacy access must be valid, disjoint and cover the entire named pilot window.")
 print(definition["configuration_sha256"])
 PY
 )"
@@ -1411,6 +1501,9 @@ PY
   require_closed_drained_barrier
   require_drain_plane_live
   BARRIER_EXPECTED_PRIOR_MODE="closed"
+  if [[ -n "$LEGACY_ACCESS" ]]; then
+    LEGACY_ACCESS_PREFLIGHT="$(verify_approved_legacy_access)"
+  fi
   call_barrier_operator acceptance_only "$ADMISSION_BARRIER_ACCEPTANCE_PATH"
   parse_barrier_response acceptance_only
   [[ "$BARRIER_MODE" == "acceptance_only" ]] \

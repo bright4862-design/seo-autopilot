@@ -296,6 +296,8 @@ def legacy_access_definition(value: Any, pilot: dict[str, Any], *, now: int, ope
     if (legacy["cohort_id"] == pilot["cohort_id"]
             or set(legacy["owner_allowlist"]).intersection(pilot["owner_allowlist"])):
         raise ControlError("invalid_legacy_access_overlap")
+    if legacy["expires_at"] < pilot["expires_at"]:
+        raise ControlError("invalid_legacy_access_expiry")
     # The baseline source identifies the V8 evidence. The independent coordinator
     # source fences fresh legacy claims if a later coordinator is deployed.
     return {**legacy, "page_cap": 150, "coordinator_source_sha": pilot["source_sha"],
@@ -315,7 +317,26 @@ def legacy_access_boundary(legacy: dict[str, Any], *, now: int) -> dict[str, Any
         "expires_at": legacy["expires_at"],
         "owner_count": len(legacy["owner_allowlist"]),
         "configuration_sha256": legacy["configuration_sha256"],
+        "verified_at": legacy["verified_at"],
     }
+
+
+def verify_legacy_access_preflight(value: Any, legacy: dict[str, Any], *, now: int) -> int:
+    expected = {
+        "version": "published_legacy_access_preflight_v1",
+        "pilot_source_sha": legacy["coordinator_source_sha"],
+        "legacy_source_sha": legacy["source_sha"],
+        "configuration_sha256": legacy["configuration_sha256"],
+        "verified_owner_count": len(legacy["owner_allowlist"]),
+    }
+    if not isinstance(value, dict):
+        raise ControlError("invalid_legacy_access_preflight")
+    verified_at = value.get("verified_at")
+    if (type(verified_at) is not int or verified_at > now + 5 or verified_at < now - 300
+            or type(value.get("verified_owner_count")) is not int
+            or {key: item for key, item in value.items() if key != "verified_at"} != expected):
+        raise ControlError("invalid_legacy_access_preflight")
+    return verified_at
 
 
 def update_published_500_pilot(

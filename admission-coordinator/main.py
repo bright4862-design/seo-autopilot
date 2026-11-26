@@ -653,6 +653,10 @@ def _barrier_response(operation: str, payload: dict[str, Any]) -> dict[str, Any]
                 legacy = control.legacy_access_definition(
                     payload["legacy_access"], definition, now=now, operator_id=OPERATOR_ID,
                 ) if "legacy_access" in payload else None
+                if legacy:
+                    legacy["verified_at"] = control.verify_legacy_access_preflight(
+                        payload["legacy_preflight"], legacy, now=now,
+                    )
                 result = control.acceptance_control(
                     current,
                     definition,
@@ -775,7 +779,8 @@ def _handle_barrier_operation(operation: str):
     }
     if supplied_operation != operation and not published_pilot:
         return response_error("barrier_operation_conflict", 409)
-    if ("legacy_access" in payload) != (published_pilot and supplied_operation == "published_pilot_with_legacy"):
+    wants_legacy = published_pilot and supplied_operation == "published_pilot_with_legacy"
+    if ("legacy_access" in payload) != wants_legacy or ("legacy_preflight" in payload) != wants_legacy:
         return response_error("invalid_legacy_access_operation", 400)
     if published_pilot or operation == "start_500_pilot":
         acceptance = payload.get("acceptance")

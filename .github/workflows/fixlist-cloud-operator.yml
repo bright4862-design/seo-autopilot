@@ -1447,11 +1447,20 @@ jobs:
         shell: bash
         run: bash ./scripts/fixlist-cloud-operator.sh
 
-      - name: Verify matching Base44 product release is public
+      - name: Verify matching Base44 site and executing scanner/customer routes
         env:
           EXPECTED_SOURCE_SHA: ${{ steps.command.outputs.product_sha }}
         shell: bash
-        run: bash ./scripts/verify-base44-site.sh
+        run: |
+          set -euo pipefail
+          # A matching site bundle SHA is necessary, not evidence that the
+          # executing Base44 persistence and customer-reader packages match.
+          bash ./scripts/verify-base44-site.sh
+          BASE44_APP_ID=6a498732ec779dfaaeab0e53 \
+            BASE44_FUNCTION_ORIGIN=https://base44.app \
+            VERIFY_OWNER_DEBUG_RUNTIME=1 \
+            bash ./scripts/verify-base44-functions.sh
+          echo 'BASE44_PREPROMOTION_RUNTIME_ROUTES_VERIFIED'
 
       - name: Resolve the worker's canonical service URL
         id: worker-url

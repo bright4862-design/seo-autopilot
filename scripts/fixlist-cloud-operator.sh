@@ -835,7 +835,7 @@ promote_revision() {
   # Staging remains 0%-traffic and rollback remains available. New promotions
   # cannot send customers to a source that is still explicitly a candidate.
   if [[ "$OPERATION" == "promote-worker" ]]; then
-    python3 "$REPO_ROOT/scripts/assert_standard150_promotion_record.py" --source-sha "$SOURCE_SHA"
+    python3 "$REPO_ROOT/scripts/assert_standard150_promotion_record.py" --source-sha "$SOURCE_SHA" --worker
   fi
   gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
     --region="$GCP_REGION" \

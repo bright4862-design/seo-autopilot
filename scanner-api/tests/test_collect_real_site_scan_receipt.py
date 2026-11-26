@@ -9,7 +9,7 @@ import pytest
 
 from scripts import collect_real_site_scan_receipt as real
 from scripts import collect_staged_scan_receipts as receipt
-from scripts.collect_published_paid_500 import stable_json
+from scripts.collect_published_paid_500 import EMPTY_COHORT, stable_json
 from tests.test_collect_staged_scan_receipts import Reader, simulated_canary
 
 
@@ -18,14 +18,17 @@ ROUTE = "getCustomerScanResultV9Bexample"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("cap", "count", "outcome"), [
-    (150, 150, "complete_at_cap"),
-    (500, 120, "complete_queue_exhausted"),
-    (500, 120, "limited"),
+@pytest.mark.parametrize(("cap", "count", "outcome", "paid_runtime"), [
+    (150, 150, "complete_at_cap", False),
+    (500, 120, "complete_queue_exhausted", False),
+    (500, 120, "limited", False),
+    (150, 150, "complete_at_cap", True),
+    (500, 500, "complete_at_cap", True),
 ])
-async def test_joins_the_real_worker_chain_and_reports_actual_usable_html(monkeypatch, cap, count, outcome):
+async def test_joins_the_real_worker_chain_and_reports_actual_usable_html(monkeypatch, cap, count, outcome, paid_runtime):
     limited = outcome == "limited"
-    harness, prior, _, _ = await simulated_canary(monkeypatch, page_cap=cap, limited=limited)
+    harness, prior, frontier, _ = await simulated_canary(monkeypatch, page_cap=cap, limited=limited,
+                                                        paid_runtime=paid_runtime)
     canary = replace(receipt.canary_identity(prior), project_id=harness.job["project_id"], target_url=harness.job["website_url"])
     storage = Reader(harness.store)
     original = storage.read_evidence
@@ -47,12 +50,33 @@ async def test_joins_the_real_worker_chain_and_reports_actual_usable_html(monkey
     monkeypatch.setattr(storage, "read_evidence", read_evidence)
     scope = real.ReviewedScope("S01-" + str(cap), outcome, "/", ("https://example.com/",), "d" * 64,
                                "rate_limit" if limited else "")
+    if paid_runtime:
+        plan_receipt = await storage.read(harness.prefix + frontier.value["plan_receipt_ref"])
+        packet = paid_packet(prior, harness, scope, plan_receipt.value["runtime"])
+        canary, scope = real.validate_readbacks(packet, expected_result_route=ROUTE, claim_key=CLAIM_KEY)
+        assert canary.runtime["pipeline_mode"] == "monolith"
+        assert packet["saved_run"]["pipeline_mode"] == "staged"
+        forged = replace(canary, runtime={**canary.runtime, "pipeline_mode": "staged"})
+        with pytest.raises(receipt.EvidenceError, match="delivery_runtime_mismatch"):
+            await real.collect_reviewed_site(forged, scope, storage)
     verified = await real.collect_reviewed_site(canary, scope, storage)
     assert verified["receipt_evidence_verified"] is True
     assert verified["terminal_outcome"] == outcome
     assert verified["checked_distinct_url_count"] == count
     assert verified["usable_html_count"] == count - 2
     assert verified["rate_limit_observed"] is limited
+    if paid_runtime:
+        assert verified["committed_delivery_count"] == 2 + cap // 50
+
+        async def missing_paid_plan_marker(key):
+            observed = await read_evidence(key)
+            if key.endswith("plan.json"):
+                del observed.value["job"]["staged_rollout_scope"]
+            return observed
+
+        monkeypatch.setattr(storage, "read_evidence", missing_paid_plan_marker)
+        with pytest.raises(receipt.EvidenceError, match="qa_paid_plan_contract_invalid"):
+            await real.collect_reviewed_site(canary, scope, storage)
 
 
 def captured_packet():
@@ -110,6 +134,36 @@ def captured_packet():
             "history_reopened_at": now.isoformat(), "projection": projection,
         },
     }
+
+
+def paid_packet(report, harness, scope, runtime):
+    packet = captured_packet()
+    packet["worker_runtime"] = runtime
+    packet["approved_scope"].update(row_id=scope.row_id, page_cap=harness.scan["page_cap"],
+                                    target_url=harness.job["website_url"], path_prefix="/",
+                                    allowed_url_prefixes=["https://example.com/"], expected_outcome=scope.outcome)
+    run = packet["saved_run"]
+    run.update(page_cap=harness.scan["page_cap"], scan_mode=harness.scan["scan_mode"],
+               website_url=harness.job["website_url"], started_at=report["scan_started_at"],
+               completed_at=report["scan_completed_at"], pages_crawled=report["pages_crawled"],
+               pages_planned=report["pages_planned"], last_committed_batch=report["committed_batch_count"] - 1,
+               beta_revision_fingerprint=runtime["release_fingerprint"],
+               admission_release_reconciled_at=report["scan_completed_at"], staged_rollout_scope="paid")
+    packet["browser"]["projection"]["run"] = {key: run[key] for key in real.REOPENED_RUN_FIELDS}
+    return packet
+
+
+@pytest.mark.parametrize("wrong_identity", ["cohort", "attempt_scope"])
+def test_canonical_paid_runtime_rejects_nonempty_cohort_or_missing_paid_attempt(wrong_identity):
+    packet = captured_packet()
+    packet["worker_runtime"].update(pipeline_mode="monolith", staged_owner_cohort_sha256=EMPTY_COHORT)
+    packet["saved_run"]["staged_rollout_scope"] = "paid"
+    if wrong_identity == "cohort":
+        packet["worker_runtime"]["staged_owner_cohort_sha256"] = "e" * 64
+    else:
+        del packet["saved_run"]["staged_rollout_scope"]
+    with pytest.raises(receipt.EvidenceError, match="qa_paid_runtime_identity_invalid"):
+        real.validate_readbacks(packet, expected_result_route=ROUTE, claim_key=CLAIM_KEY)
 
 
 def test_binds_the_exact_signed_attempt_to_reopened_published_projection():

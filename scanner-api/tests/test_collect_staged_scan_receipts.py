@@ -36,20 +36,23 @@ class Reader:
         return await self.read(key)
 
 
-async def simulated_canary(monkeypatch, *, limited=False, fail_first_finalize=False, page_cap=500):
+async def simulated_canary(monkeypatch, *, limited=False, fail_first_finalize=False, page_cap=500, paid_runtime=False):
     from app import beta_revision, staged_telemetry
 
     started = datetime.now(timezone.utc) - timedelta(seconds=1)
     harness = Harness(monkeypatch)
     harness.scan.update(scan_mode=f"standard_{page_cap}", page_cap=page_cap)
     harness.job.update(scan_mode=f"standard_{page_cap}", page_cap=page_cap)
+    if paid_runtime:
+        harness.scan["staged_rollout_scope"] = harness.job["staged_rollout_scope"] = "paid"
     owner = harness.scan["owner_user_id"]
     source, config, fingerprint = "a" * 40, "b" * 64, "a" * 16
     revision = collector.WORKER_SERVICE + "-00100-abc"
     for key, value in {
         "FIXLIST_WORKER_SOURCE_SHA": source, "FIXLIST_STAGED_CONFIG_SHA256": config,
         "K_SERVICE": collector.WORKER_SERVICE, "K_REVISION": revision,
-        "SCAN_PIPELINE_MODE": "staged", "SCAN_STAGED_OWNER_IDS": owner,
+        "SCAN_PIPELINE_MODE": "monolith" if paid_runtime else "staged",
+        "SCAN_STAGED_OWNER_IDS": "" if paid_runtime else owner, "SCAN_PIPELINE_OWNER_IDS": "",
     }.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(staged_telemetry, "live_revision", lambda: {"fingerprint": fingerprint})
@@ -76,10 +79,12 @@ async def simulated_canary(monkeypatch, *, limited=False, fail_first_finalize=Fa
         delivery.observe_completion_response(200)
         return await harness.complete(client, scan, result, key)
 
-    if page_cap == 150:
+    pages = page_cap if page_cap == 150 or paid_runtime else 120
+    batches = (pages + 49) // 50
+    if page_cap == 150 or paid_runtime:
         async def plan(**kwargs):
             state = await harness.plan(**kwargs)
-            state.queue = list(range(page_cap))
+            state.queue = list(range(pages))
             return state
 
         async def crawl(state, *, max_pages):
@@ -91,12 +96,12 @@ async def simulated_canary(monkeypatch, *, limited=False, fail_first_finalize=Fa
 
     harness.deps.review, harness.deps.complete = review, complete
     await harness.run("plan")
-    for batch in range(3):
+    for batch in range(batches):
         await harness.run("batch", batch=batch)
     if fail_first_finalize:
         with pytest.raises(StageRetry):
-            await harness.run("finalize", batch=3, limited=limited)
-    await harness.run("finalize", batch=3, limited=limited)
+            await harness.run("finalize", batch=batches, limited=limited)
+    await harness.run("finalize", batch=batches, limited=limited)
     frontier = await harness.frontier()
     ended = datetime.now(timezone.utc).isoformat()
     report = {
@@ -105,7 +110,7 @@ async def simulated_canary(monkeypatch, *, limited=False, fail_first_finalize=Fa
         "attempt_count": 1, "page_cap": 500, "scan_id": harness.scan["id"],
         "request_id": harness.scan["request_id"], "expected_owner_user_id": owner,
         "observed_at": started.isoformat(), "scan_started_at": started.isoformat(), "scan_completed_at": ended,
-        "pages_crawled": 120, "pages_planned": 120, "committed_batch_count": 3,
+        "pages_crawled": pages, "pages_planned": pages, "committed_batch_count": batches,
         "terminal_status": "limited" if limited else "complete", "source_sha": source, "release_fingerprint": fingerprint,
         "provenance": {
             "source_sha": source, "release_fingerprint": fingerprint, "worker_config_sha256": config,

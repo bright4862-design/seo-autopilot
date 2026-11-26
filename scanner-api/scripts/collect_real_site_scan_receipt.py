@@ -26,7 +26,7 @@ from app.metadata_title_evidence import is_html_page_evidence
 from app.scanner import final_url_identity
 from app.workspace import WorkspaceObject
 from scripts import collect_staged_scan_receipts as receipt
-from scripts.collect_published_paid_500 import digest, require_fields, verify_signature
+from scripts.collect_published_paid_500 import EMPTY_COHORT, digest, require_fields, verify_signature
 
 INPUT_VERSION = "real_site_qa_receipt_input_v1"
 EVIDENCE_VERSION = "real_site_qa_receipt_evidence_v1"
@@ -103,11 +103,17 @@ def validate_readbacks(packet, *, expected_result_route, claim_key, now_ms=None)
     require(target_parts is not None and within_scope(target_parts._replace(path=path, query="").geturl(), prefixes),
             "qa_target_outside_reviewed_scope")
     source, fingerprint = runtime.get("source_sha"), runtime.get("release_fingerprint")
+    process_mode = runtime.get("pipeline_mode")
     require(matches(receipt.SOURCE_SHA, source) and matches(receipt.FINGERPRINT, fingerprint)
-            and runtime.get("service") == receipt.WORKER_SERVICE and runtime.get("pipeline_mode") == "staged"
+            and runtime.get("service") == receipt.WORKER_SERVICE and process_mode in {"monolith", "staged"}
             and matches(receipt.WORKER_REVISION, runtime.get("revision"))
             and matches(receipt.SHA256, runtime.get("staged_config_sha256"))
             and matches(receipt.SHA256, runtime.get("staged_owner_cohort_sha256")), "qa_runtime_identity_invalid")
+    if process_mode == "monolith":
+        # The canonical paid worker's process mode differs from the immutable
+        # staged attempt in its delivery. Bind both sides and the empty cohort.
+        require(runtime["staged_owner_cohort_sha256"] == EMPTY_COHORT and run.get("staged_rollout_scope") == "paid",
+                "qa_paid_runtime_identity_invalid")
 
     owner, project = scope.get("owner_user_id"), scope.get("project_id")
     scan, request, fix_list = (run.get(name) for name in ("id", "request_id", "fix_list_id"))
@@ -216,6 +222,8 @@ async def verify_page_evidence(canary, storage, prefix, artifacts, generations, 
         "scan_mode": f"standard_{canary.page_cap}", "page_cap": canary.page_cap, "pipeline_mode": "staged",
         "respect_robots_txt": True, "owner_attested_robots_override": False,
     }, "qa_plan_identity_mismatch")
+    if canary.runtime["pipeline_mode"] == "monolith":
+        require(job.get("staged_rollout_scope") == "paid", "qa_paid_plan_contract_invalid")
     require((job.get("path_prefix") or "/") == scope.path_prefix and mapping(plan.get("state")).get("pages") == [],
             "qa_plan_scope_mismatch")
 

@@ -875,7 +875,7 @@ def claim():
         return response_error("invalid_pilot_page_cap", 400)
     published_500_pilot = pilot_page_cap == 500
     pilot_replay_only = "pilot_replay_only" in payload
-    if pilot_replay_only and (payload["pilot_replay_only"] is not True or not published_500_pilot):
+    if pilot_replay_only and (payload["pilot_replay_only"] is not True or pilot_page_cap is None):
         return response_error("invalid_pilot_replay_only", 400)
     try:
         target_origin = admission.normalize_target_origin(payload["target_origin"]) if "target_origin" in payload else ""

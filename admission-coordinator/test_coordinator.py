@@ -987,7 +987,11 @@ class PublishedPilotAcceptance(CoordinatorTestCase):
             self.assertEqual(held.status_code, 200, held.json)
             self.assertEqual(held.json["barrier"]["mode"], "acceptance_only")
             self.assertEqual(held.json["pilot_snapshot"]["boundary"]["legacy_customer_access"], legacy_boundary)
-            self.assertEqual(self.post("/claim", pilot).json["outcome"], "replayed")
+            replay_only = {**pilot, "pilot_replay_only": True}
+            response = self.post("/claim", replay_only)
+            self.assertEqual(response.json["outcome"], "replayed")
+            self.assertEqual(response.json["claim_token"], claimed.json["claim_token"])
+            self.assertEqual(self.post("/claim", {**replay_only, "request_id": "replay_only_fresh"}).status_code, 423)
             self.assertEqual(self.post("/claim", {**pilot, "request_id": "fresh_after_hold"}).status_code, 423)
             self.assertEqual(self.claim(owner=another_legacy_owner).status_code, 200)
             self.assertEqual(self.claim(owner="outside_customer").status_code, 423)

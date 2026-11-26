@@ -763,11 +763,30 @@ test("active named customer launches at the confirmed cap, and expiry or forged 
   const stale = namedPilot();
   assert.equal((await stale.options()).body.launch, "pilot");
   stale.settings.SCAN_PUBLIC_PILOT_EXPIRES_AT = "0";
-  assert.equal((await stale.submit({ published_pilot_page_cap: 150 })).status, 409);
-  assert.deepEqual(stale.calls, []);
+  assert.notEqual((await stale.submit({ published_pilot_page_cap: 150 })).body.accepted, true);
+  assert.deepEqual(stale.claimRequests, [{ pilotLauncherBuildId: FUNCTION_BUILD_ID, pilotPageCap: 150, pilotReplayOnly: true }]);
+  assert.deepEqual(stale.scans, []);
   const legacyRow = namedPilot();
   assert.equal((await legacyRow.submit({ published_pilot_page_cap: 150, scan_id: "legacy_01" })).status, 409);
   assert.deepEqual(legacyRow.calls, []);
+});
+
+test("a held named 150 launch can recover the same bound request interrupted before enqueue", async () => {
+  const fixture = namedPilot({ interruptBeforeDrain: true });
+  const original = await fixture.submit({ published_pilot_page_cap: 150 });
+  assert.equal(original.status, 500);
+  assert.deepEqual(fixture.calls, ["claim", "create", "bind"]);
+  assert.deepEqual(fixture.dispatched, []);
+  fixture.settings.SCAN_PUBLIC_PILOT_EXPIRES_AT = "0";
+  assert.equal((await fixture.options()).body.launch, "paused");
+  const replay = await fixture.submit({ published_pilot_page_cap: 150 });
+  assert.equal(replay.body.accepted, true);
+  assert.equal(replay.body.replayed, true);
+  assert.equal(replay.body.scan_id, fixture.scans[0].id);
+  assert.equal(fixture.scans.length, 1);
+  assert.equal(fixture.dispatched[0].attempt_count, 1);
+  assert.deepEqual(fixture.claimRequests.at(-1),
+    { pilotLauncherBuildId: FUNCTION_BUILD_ID, pilotPageCap: 150, pilotReplayOnly: true });
 });
 
 test("a coordinator must confirm the current build and typed 150 pilot cap", async () => {

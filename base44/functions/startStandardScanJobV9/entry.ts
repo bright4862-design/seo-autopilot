@@ -439,7 +439,7 @@ export default async function (req: Request): Promise<Response> {
       }
 
       entitlement = await loadScanEntitlement(base44, user, {
-        createPreviewAccess: !pilotRequest || body.published_pilot_page_cap === 150,
+        createPreviewAccess: !pilotRequest || (pilot.enabled && body.published_pilot_page_cap === 150),
       });
       if (!entitlement.ok) {
         return jsonResponse({

@@ -314,7 +314,15 @@ function launchHarness({
     user, settings, gates,
     launch: {
       entities: {
-        Access: { filter: async query => rows.filter(row => matches(row, query)) },
+        Access: {
+          filter: async query => rows.filter(row => matches(row, query)),
+          create: async row => {
+            calls.push("create_preview_access");
+            const created = { id: "new_preview_access", ...row };
+            rows.push(created);
+            return created;
+          },
+        },
         BusinessProject: { get: async id => id === project.id ? project : null },
         ScanRun: {
           filter: async query => scans.filter(row => matches(row, query)),
@@ -766,6 +774,10 @@ test("active named customer launches at the confirmed cap, and expiry or forged 
   assert.notEqual((await stale.submit({ published_pilot_page_cap: 150 })).body.accepted, true);
   assert.deepEqual(stale.claimRequests, [{ pilotLauncherBuildId: FUNCTION_BUILD_ID, pilotPageCap: 150, pilotReplayOnly: true }]);
   assert.deepEqual(stale.scans, []);
+  const freshPreview = namedPilot({ rows: [], publicPilotExpiresAt: "0" });
+  assert.notEqual((await freshPreview.submit({ published_pilot_page_cap: 150 })).body.accepted, true);
+  assert.deepEqual(freshPreview.calls, ["claim"]);
+  assert.deepEqual(freshPreview.scans, []);
   const legacyRow = namedPilot();
   assert.equal((await legacyRow.submit({ published_pilot_page_cap: 150, scan_id: "legacy_01" })).status, 409);
   assert.deepEqual(legacyRow.calls, []);

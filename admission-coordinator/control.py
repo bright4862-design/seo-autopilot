@@ -276,6 +276,14 @@ def update_eligible_500(
             raise ControlError("eligible_500_already_held")
         policy = {**existing, "held_at": int(now)}
     else:
+        # Retained V9 launcher aliases can still submit untyped claims. The
+        # typed 150 policy keeps those incompatible claims out while a broad
+        # 500 policy is configured, held, or expired.
+        public_150 = current.get(admission.PUBLIC_150)
+        if (not isinstance(public_150, dict) or public_150.get("page_cap") != 150
+                or public_150.get("source_sha") != definition["source_sha"]
+                or public_150.get("required_launcher_build_id") != definition["required_launcher_build_id"]):
+            raise ControlError("eligible_500_requires_typed_public_150")
         if eligible_500_active(existing, now=now) or current.get(admission.PUBLISHED_500_PILOT) is not None:
             raise ControlError("standard_500_already_configured")
         policy = {**definition, "total_claims_used": 0, "owner_claims_used": {}}

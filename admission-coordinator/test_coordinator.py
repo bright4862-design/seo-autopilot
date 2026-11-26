@@ -821,6 +821,47 @@ class PublicStandard150Cohort(CoordinatorTestCase):
 
 
 class EligibleStandard500Policy(CoordinatorTestCase):
+    def test_broad_500_requires_current_typed_150_policy_even_when_150_is_held_or_expired(self):
+        source, launcher = "1" * 40, "a" * 64
+        key = f"{main.CONTROL_COLLECTION}/{main.CONTROL_DOCUMENT}"
+        context = {"reason": "Require typed 150 policy before broad 500", "change_ticket": "test-typed-150"}
+        policy500 = {
+            "cohort_id": "eligible_500", "release_id": "accepted_release", "source_sha": source,
+            "expires_at": int(time.time()) + 1200, "total_claim_budget": 2, "per_owner_claim_budget": 1,
+            "required_launcher_build_id": launcher,
+        }
+        start = {**context, "operation": "start_eligible_500", "public_500": policy500,
+                 "intended_prior": {"mode": "open", "generation": 5}}
+        with patch.object(main, "SOURCE_SHA", source):
+            STORE[key] = {"mode": "open", "generation": 5, "claim_sequence": 0}
+            refused = self.operator_post("/ops/barrier/eligible-500/start", start)
+            self.assertEqual(refused.status_code, 409, refused.json)
+            self.assertEqual(refused.json["error"], "eligible_500_requires_typed_public_150")
+            self.assertNotIn(admission.PUBLIC_500, STORE[key])
+            self.assertEqual(self.claim().status_code, 200)
+
+            policy150 = {
+                **policy500, "cohort_id": "public_150_wave", "page_cap": 150,
+                "owner_allowlist": [OWNER], "total_claims_used": 0,
+            }
+            for state, overrides in [
+                ("held", {"held_at": int(time.time())}),
+                ("expired", {"expires_at": int(time.time()) - 1}),
+            ]:
+                with self.subTest(state=state):
+                    STORE.clear()
+                    STORE[key] = {
+                        "mode": admission.STORED_BARRIER_PUBLIC_150, "generation": 5, "claim_sequence": 0,
+                        "public_150": {**policy150, **overrides},
+                    }
+                    self.assertEqual(self.post("/claim", {
+                        "owner_user_id": OWNER, "request_id": "held_150_request", "request_fingerprint": FINGERPRINT,
+                        "standard_150_launcher_build_id": launcher,
+                    }).status_code, 423)
+                    started = self.operator_post("/ops/barrier/eligible-500/start", start)
+                    self.assertEqual(started.status_code, 200, started.json)
+                    self.assertEqual(started.json["eligible_500_snapshot"]["boundary"]["public_150"]["state"], state)
+
     def test_independent_broad_500_start_hold_and_restart_with_bounded_public_150(self):
         source, launcher = "1" * 40, "a" * 64
         key = f"{main.CONTROL_COLLECTION}/{main.CONTROL_DOCUMENT}"
@@ -841,6 +882,8 @@ class EligibleStandard500Policy(CoordinatorTestCase):
         claim150 = {"owner_user_id": OWNER, "request_id": "bounded_150_one", "request_fingerprint": FINGERPRINT,
                     "standard_150_launcher_build_id": launcher}
         other_150 = {**claim150, "owner_user_id": "other_150_customer", "request_id": "bounded_150_two"}
+        untyped = {key: value for key, value in claim500.items() if key != "standard_500_launcher_build_id"}
+        untyped_150_owner = {**untyped, "owner_user_id": other_150["owner_user_id"]}
         outside = {**claim150, "owner_user_id": "outside_150_cohort"}
         with patch.object(main, "SOURCE_SHA", source):
             opened = self.operator_post("/ops/barrier/open", {
@@ -849,6 +892,7 @@ class EligibleStandard500Policy(CoordinatorTestCase):
             })
             self.assertEqual(opened.status_code, 200, opened.json)
             self.assertEqual(self.post("/claim", claim500).status_code, 423)
+            self.assertEqual(self.post("/claim", untyped_150_owner).status_code, 423)
             self.assertEqual(self.post("/claim", claim150).status_code, 200)
             self.assertEqual(self.post("/claim", outside).status_code, 423)
             self.assertEqual(self.operator_post("/ops/barrier/eligible-500/start", {
@@ -865,6 +909,7 @@ class EligibleStandard500Policy(CoordinatorTestCase):
             self.assertEqual(signed["boundary"]["public_500"]["total_claims_used"], 0)
             self.assertEqual(signed["boundary"]["public_150"]["total_claims_used"], 1)
             self.assertEqual(STORE[key]["mode"], admission.STORED_BARRIER_PUBLIC_500)
+            self.assertEqual(self.post("/claim", untyped_150_owner).status_code, 423)
             self.assertEqual(self.operator_post("/ops/barrier/pilot-500/start", {
                 **context, "operation": "start_500_pilot", "intended_prior": {"mode": "open", "generation": 6},
                 "acceptance": {**wave, "cohort_id": "named_500_conflict", "owner_user_ids": [owner500]},
@@ -891,6 +936,7 @@ class EligibleStandard500Policy(CoordinatorTestCase):
             self.assertEqual(signed["boundary"]["public_150"], after["public_150"])
             self.assertEqual(after["public_500"]["state"], "held")
             self.assertEqual(after["public_500"]["total_claims_used"], 1)
+            self.assertEqual(self.post("/claim", untyped_150_owner).status_code, 423)
             self.assertEqual(self.post("/claim", other_150).status_code, 200)
             self.assertEqual(self.post("/claim", outside).status_code, 423)
             different = {**claim500, "owner_user_id": "second_eligible_500", "request_id": "eligible_500_two"}
@@ -898,8 +944,8 @@ class EligibleStandard500Policy(CoordinatorTestCase):
             replay = self.post("/claim", claim500)
             self.assertEqual(replay.json["outcome"], "replayed")
             self.assertEqual(replay.json["cohort_evidence"], granted.json["cohort_evidence"])
-            untyped = {key: value for key, value in claim500.items() if key != "standard_500_launcher_build_id"}
             self.assertEqual(self.post("/claim", untyped).status_code, 423)
+            self.assertEqual(self.post("/claim", {**untyped, "request_id": "untyped_fresh_after_hold"}).status_code, 423)
             bound = self.post("/bind", {**claim500, "claim_token": granted.json["claim_token"], "scan_id": SCAN_ID})
             self.assertEqual(bound.status_code, 200, bound.json)
             self.assertEqual(self.post("/claim", claim500).json["scan_id"], SCAN_ID)

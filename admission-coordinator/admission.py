@@ -119,7 +119,7 @@ def normalized_control(document: dict[str, Any] | None) -> dict[str, Any]:
     source = document if isinstance(document, dict) else {}
     mode = str(source.get("mode") or BARRIER_OPEN).strip().lower()
     if mode == STORED_BARRIER_PUBLIC_500:
-        if not isinstance(source.get(PUBLIC_500), dict):
+        if not isinstance(source.get(PUBLIC_500), dict) or not isinstance(source.get(PUBLIC_150), dict):
             raise AdmissionError("invalid_public_500_control")
         mode = BARRIER_OPEN
     if mode == STORED_BARRIER_PUBLIC_150:

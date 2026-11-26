@@ -83,6 +83,43 @@ def canonical_service(value, name):
     ) is not None
 
 
+def verify_public_150(boundaries, expected, launcher_build, now):
+    require("public_150" in expected, "paid_500_public_150_expectation_required")
+    approved = expected["public_150"]
+    if approved is None:
+        require("public_150" not in boundaries, "paid_500_unexpected_public_150_boundary")
+        return None
+
+    require(isinstance(approved, dict), "paid_500_public_150_expectation_invalid")
+    owners = approved.get("owner_user_ids")
+    require(isinstance(owners, list) and 1 <= len(owners) <= 5
+            and all(matches(receipt.OWNER_ID, owner) for owner in owners)
+            and len(set(owners)) == len(owners), "paid_500_public_150_owners_invalid")
+    cohort, release_id = approved.get("cohort_id"), approved.get("release_id")
+    expires, total, per_owner = (approved.get(field) for field in (
+        "expires_at", "total_claim_budget", "per_owner_claim_budget",
+    ))
+    state = approved.get("state")
+    require(matches(receipt.ID, cohort) and matches(receipt.ID, release_id)
+            and state in {"configured", "held", "expired"}
+            and receipt.positive(expires) and receipt.positive(total) and total <= 10
+            and receipt.positive(per_owner) and per_owner <= total,
+            "paid_500_public_150_expectation_invalid")
+    boundary = mapping(boundaries.get("public_150"))
+    identity = {
+        "state": state, "page_cap": 150, "cohort_id": cohort, "release_id": release_id,
+        "source_sha": expected["source_sha"], "expires_at": expires,
+        "owner_count": len(owners), "owner_cohort_sha256": digest(sorted(owners)),
+        "required_launcher_build_id": launcher_build, "total_claim_budget": total,
+        "per_owner_claim_budget": per_owner,
+    }
+    require_fields(boundary, identity, "paid_500_public_150_boundary_mismatch")
+    used = boundary.get("total_claims_used")
+    require(type(used) is int and 0 <= used <= total, "paid_500_public_150_budget_invalid")
+    require(state != "configured" or now < expires * 1000, "paid_500_public_150_boundary_expired")
+    return {**identity, "total_claims_used": used}
+
+
 def validate_prerequisites(packet, expected, routes, operator_key, now):
     require_fields(packet, {"schema_version": PREREQUISITE_VERSION, "base44_app_id": APP_ID,
                             "source_sha": expected["source_sha"], "release_fingerprint": expected["fingerprint"]},
@@ -151,7 +188,9 @@ def validate_prerequisites(packet, expected, routes, operator_key, now):
     require_fields(barrier, {"mode": "open", "current_snapshot_id": activation["snapshot_id"]},
                    "paid_500_barrier_mismatch")
     require(receipt.positive(generation) and type(sequence) is int and sequence >= 0, "paid_500_barrier_invalid")
-    boundary = mapping(mapping(activation.get("boundary")).get("published_500_pilot"))
+    boundaries = mapping(activation.get("boundary"))
+    public_150 = verify_public_150(boundaries, expected, launcher["build_id"], now)
+    boundary = mapping(boundaries.get("published_500_pilot"))
     expiry = intake.get("public_pilot_expires_at")
     require_fields(boundary, {"state": "configured", "source_sha": source, "page_cap": 500, "expires_at": expiry,
                               "owner_count": 1, "owner_cohort_sha256": cohort_digest, "cohort_id": expected["cohort_id"],
@@ -189,6 +228,7 @@ def validate_prerequisites(packet, expected, routes, operator_key, now):
     return {
         "observed": observed, "expiry": expiry, "boundary": boundary, "barrier": barrier,
         "gateway_revision": gateway["revision"], "snapshot_id": activation["snapshot_id"],
+        "public_150_boundary": public_150,
         "runtime": {"source_sha": source, "release_fingerprint": fingerprint, "service": receipt.WORKER_SERVICE,
                     "revision": revision, "staged_config_sha256": expected["worker_config_sha256"],
                     "pipeline_mode": worker["pipeline_mode"], "staged_owner_cohort_sha256": EMPTY_COHORT},
@@ -464,6 +504,7 @@ def main():
             "source_sha": expected["source_sha"], "release_fingerprint": expected["fingerprint"],
             "gateway_revision": context["gateway_revision"], "worker_runtime": canary.runtime,
             "coordinator_snapshot_id": context["snapshot_id"], "barrier_generation": context["barrier"]["generation"],
+            "public_150_boundary": context["public_150_boundary"],
             "workspace_bucket": receipt.BUCKET, "page_cap": 500, "terminal_status": "complete",
             **evidence,
         }

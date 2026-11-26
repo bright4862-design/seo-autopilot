@@ -16,7 +16,7 @@ from tests.test_staged_workspace import Harness, State
 EXPECTED = {
     "owner_user_id": "owner_test", "source_sha": "a" * 40, "fingerprint": "a" * 16,
     "grant_id": "approved_grant", "cohort_id": "cohort_test", "release_id": "release_test",
-    "operator_id": "operator_test", "worker_config_sha256": "b" * 64,
+    "operator_id": "operator_test", "public_150": None, "worker_config_sha256": "b" * 64,
 }
 OPERATOR_KEY = b"offline-operator-key"
 CLAIM_KEY = b"offline-claim-key"
@@ -130,10 +130,10 @@ def observations():
     return packet, run, browser, int((now + timedelta(seconds=5)).timestamp() * 1000)
 
 
-def check(observations):
+def check(observations, expected=EXPECTED):
     packet, run, browser, now = observations
-    context = paid.validate_prerequisites(packet, EXPECTED, ROUTES, OPERATOR_KEY, now)
-    return paid.validate_browser(browser, run, context, EXPECTED, ROUTES, CLAIM_KEY, now)
+    context = paid.validate_prerequisites(packet, expected, ROUTES, OPERATOR_KEY, now)
+    return paid.validate_browser(browser, run, context, expected, ROUTES, CLAIM_KEY, now)
 
 
 def test_paid_readback_keeps_worker_environment_distinct_from_the_frozen_500_run(observations):
@@ -177,6 +177,77 @@ def test_rejects_unreleased_slots_or_forged_claims(observations):
     run["admission_claim_sequence"] += 1
     with pytest.raises(paid.receipt.EvidenceError, match="claim_signature"):
         check(observations)
+
+
+def resign_snapshot(snapshot):
+    unsigned = {key: value for key, value in snapshot.items() if key != "proof"}
+    snapshot["proof"] = sign(unsigned, OPERATOR_KEY, b"fixlist-admission-drain-snapshot-v1")
+
+
+def bounded_public_150(observations, *, state="configured"):
+    packet, _, _, now = observations
+    owners = ["second_customer", "first_customer"]
+    approved = {
+        "state": state, "cohort_id": "public_150_wave", "release_id": "standard150_release",
+        "owner_user_ids": owners, "expires_at": now // 1000 + 500,
+        "total_claim_budget": 3, "per_owner_claim_budget": 2,
+    }
+    expected = {**EXPECTED, "public_150": approved}
+    snapshot = packet["pilot_snapshot"]
+    snapshot["boundary"]["public_150"] = {
+        **{key: value for key, value in approved.items() if key != "owner_user_ids"},
+        "page_cap": 150, "source_sha": EXPECTED["source_sha"], "owner_count": 2,
+        "owner_cohort_sha256": paid.digest(sorted(owners)),
+        "required_launcher_build_id": ROUTES["startStandardScanJobV9"]["build_id"],
+        "total_claims_used": 1,
+    }
+    resign_snapshot(snapshot)
+    return expected, snapshot
+
+
+@pytest.mark.parametrize("state", ["configured", "held"])
+def test_accepts_independently_approved_signed_bounded_150_lane(observations, state):
+    expected, snapshot = bounded_public_150(observations, state=state)
+    assert check(observations, expected).pages == 500
+    packet, _, _, now = observations
+    context = paid.validate_prerequisites(packet, expected, ROUTES, OPERATOR_KEY, now)
+    assert context["public_150_boundary"] == snapshot["boundary"]["public_150"]
+
+
+def test_requires_explicit_choice_and_rejects_unbounded_signature_for_a_bounded_rollout(observations):
+    unspecified = {name: value for name, value in EXPECTED.items() if name != "public_150"}
+    with pytest.raises(paid.receipt.EvidenceError, match="public_150_expectation_required"):
+        check(observations, unspecified)
+    expected, snapshot = bounded_public_150(observations)
+    with pytest.raises(paid.receipt.EvidenceError, match="unexpected_public_150_boundary"):
+        check(observations)
+    del snapshot["boundary"]["public_150"]
+    resign_snapshot(snapshot)
+    with pytest.raises(paid.receipt.EvidenceError, match="public_150_boundary_mismatch"):
+        check(observations, expected)
+
+
+@pytest.mark.parametrize(("field", "value", "error"), [
+    ("source_sha", "d" * 40, "public_150_boundary_mismatch"),
+    ("required_launcher_build_id", "d" * 64, "public_150_boundary_mismatch"),
+    ("owner_cohort_sha256", "d" * 64, "public_150_boundary_mismatch"),
+    ("state", "held", "public_150_boundary_mismatch"),
+    ("total_claims_used", 4, "public_150_budget_invalid"),
+])
+def test_rejects_signed_150_boundary_with_wrong_release_policy(observations, field, value, error):
+    expected, snapshot = bounded_public_150(observations)
+    snapshot["boundary"]["public_150"][field] = value
+    resign_snapshot(snapshot)
+    with pytest.raises(paid.receipt.EvidenceError, match=error):
+        check(observations, expected)
+
+
+def test_requires_claim_generation_to_match_the_signed_two_lane_boundary(observations):
+    expected, snapshot = bounded_public_150(observations)
+    snapshot["barrier"]["generation"] += 1
+    resign_snapshot(snapshot)
+    with pytest.raises(paid.receipt.EvidenceError, match="paid_500_claim_mismatch"):
+        check(observations, expected)
 
 
 class PinnedReader(Reader):

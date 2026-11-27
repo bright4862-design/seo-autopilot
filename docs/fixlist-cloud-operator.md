@@ -15,11 +15,20 @@ or printed.
 | `status` | no | — |
 | `verify-iam` | no | — |
 | `verify-worker-routes` | no | — |
-| `promote-worker` | yes | exact revision name |
-| `rollback-worker` | yes | exact revision name |
-| `pause-queue` | yes | `PAUSE` |
-| `resume-queue` | yes | `RESUME` |
-| `activate-beta` | yes | exact revision name |
+| `verify-serving-worker-release` | no | — |
+| `verify-staged-worker-release` | no | — (exact tagged candidate revision input) |
+| `barrier-status` | no | — |
+| `verify-zero-admission-obligations` | no | exact source and barrier generation |
+| Guarded owner-comment promotion (not direct dispatch) | yes | exact main SHA, revision, immutable image digest, closed barrier generation |
+| `rollback-worker` | yes | exact revision name (separate authorized recovery) |
+
+This is a selected operations list, not permission to execute any mutation.
+Direct `promote-worker` dispatch is refused; the legacy `pause-queue`,
+`resume-queue` and `activate-beta` operations are unsupported. Use the
+signed cutover and claim-barrier procedures in the staged scan runbook only
+with separate authorization. Incident [#378](https://github.com/bright4862-design/seo-autopilot/issues/378)
+keeps Standard 150 public admission on hold pending release acceptance.
+The 500 procedures below describe future capabilities, not approval to enable them.
 
 ### Bounded public Standard 150 rollout
 
@@ -87,8 +96,12 @@ validation and promotion, it could promote a newer revision instead of the
 validated candidate. Every traffic operation therefore requires an explicit
 revision and uses `--to-revisions=<revision>=100`.
 
-The confirmation string for those operations is the revision name itself, so
-a stale confirmation cannot promote a different revision.
+The guarded promotion path binds approval to the exact main SHA, named
+revision, immutable image digest and closed barrier generation. Its owner
+comment format is `/promote-staged-worker <sha> <revision> <sha256:digest> <closed-barrier-generation>`.
+This is syntax documentation, not an executable approval. Do not post the
+command until all preconditions are met and the owner separately approves the
+transition. A SHA-only comment or a revision name alone is insufficient.
 
 ### `verify-worker-routes`
 
@@ -104,16 +117,29 @@ reports the running revision, image identity, Cloud Build provenance including
 `_RELEASE_SHA`, and request timeout. A human must confirm that the reported
 release SHA is a commit that declares both durable routes.
 
-Run this before `activate-beta`.
+The standalone workflow chooses the single 100%-serving revision from a
+reconciled, Ready service, ignoring the generic prefilled revision input. It
+fails closed on split traffic or a changed serving revision. Route provenance
+does not prove executing-process release identity: independently run
+`verify-serving-worker-release` for authenticated serving `/revision`, or
+`verify-staged-worker-release` against the exact tagged zero-traffic candidate.
+The staged check does not create or reassign a tag.
 
-### `activate-beta` ordering
+### Guarded promotion and rollback
 
-1. Promote the explicitly named revision.
-2. Probe the private worker and require an IAM rejection (`401` or `403`).
-3. Resume the queue only if the promotion and privacy probe succeed.
+The owner-comment path checks accepted source, the approved image/revision,
+candidate runtime identity, published Base44 source and executing function
+identities, and the signed closed-and-drained admission generation. The
+post-promotion checks require reconciled Ready traffic, a private worker,
+matching authenticated serving identity and unchanged queue state. A failure
+attempts guarded restoration of the previous revision and verifies its
+read-back; a concurrent ownership conflict must not be overwritten. This is
+not an atomic conditional traffic update.
 
-A failure leaves the queue paused. The operator does not publish Base44; the
-Base44 durable backend must already be published before the queue is resumed.
+Promotion does not publish Base44, reopen admissions or resume queues.
+A verified traffic transition alone is not a successful customer scan.
+Keep the admission and queue controls unchanged until the separately
+authorized acceptance and recovery steps are complete.
 
 ## One-time WIF setup
 
@@ -164,22 +190,35 @@ This prevents another workflow on the same repository and branch from borrowing
 the operator service account merely because it also has `id-token: write`.
 The workflow's explicit ref guard and pinned source provide defense in depth.
 
-## Release sequence
+## Standard 150 incident recovery sequence
 
-After the one-time WIF setup:
+Follow the [staged scan runbook](scans/staged-scan-runbook.md) for the exact
+candidate and owner-canary procedures. This checklist is not authorization
+to deploy, publish, change traffic or run a scan.
 
-1. Run `verify-worker-routes` against the current worker revision.
-2. If provenance does not map to a commit containing both durable routes,
-   rebuild/deploy the worker from the exact approved `main` release SHA before
-   any queue activation.
-3. Deploy and verify the keyless dispatch gateway from canonical
-   `dispatch-gateway/` source.
-4. Publish the audited Base44 durable backend and configure
-   `SCAN_DISPATCH_GATEWAY_URL`.
-5. Run a controlled dispatch probe and verify the exact Cloud Task and worker
-   request.
-6. Run one fresh customer Funbooker scan end to end.
+1. Read the serving worker routes and authenticated runtime identity, signed
+   admission state, and executing Base44 identities. Keep unknown evidence
+   unknown; a route check or a green CI result cannot substitute for it.
+2. Select a coherent release source and verify the tagged zero-traffic
+   candidate, immutable image digest, full component map and Base44 package
+   identity. Preserve the verified prior serving identity and recovery plan.
+3. Obtain the required owner-only acceptance evidence using the bounded
+   acceptance path in the runbook and the existing authorized account and
+   project. Verify the signed complete or correctly limited result, durable
+   persistence, customer reader reopening and terminal admission release.
+   Do not substitute an ordinary customer retry or open public claims.
+4. Record the exact-source acceptance evidence before requesting guarded
+   production promotion. Recheck the signed closed-and-drained barrier and
+   all runtime identities at the approved transition.
+5. After separately authorized promotion, verify the resulting serving
+   identity and customer journey under bounded owner-only controls. Keep
+   public admission closed until the release and rollback evidence pass and
+   the owner explicitly authorizes any queue or admission transition.
 
 Standard 150 is restored only after the real customer flow completes:
 
 `Browser → Base44 → Cloud Task → Python worker → crawl → review → durable callbacks → persisted FixList → authority proof → exact browser result`.
+
+Do not change canonical fingerprints or signing predicates to make a
+mismatched release pass. Grok, runtime AI, Extended 500 and Premium 5,000
+remain outside this recovery.

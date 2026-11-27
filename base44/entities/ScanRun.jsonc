@@ -638,6 +638,15 @@
         }
       }
     },
+    "staged_writer_request_proof": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "Original signed staged worker request accepted by the terminal writer.",
+      "rls": {
+        "read": { "user_condition": { "role": "admin" } },
+        "write": { "user_condition": { "role": "admin" } }
+      }
+    },
     "authority_proof": {
       "type": "string",
       "minLength": 64,

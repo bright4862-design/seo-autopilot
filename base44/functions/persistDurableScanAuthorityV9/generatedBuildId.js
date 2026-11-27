@@ -2,4 +2,4 @@
 // SHA-256 package identity for base44/functions/persistDurableScanAuthorityV9.
 // Every regular package file is covered except generatedBuildId.js itself.
 
-export const FUNCTION_BUILD_ID = "2e9e640e3534664c1aa00a8af5ebff63e87d2ce456cc461252f687f5c96b2b12";
+export const FUNCTION_BUILD_ID = "6a38fa9ff74585705bc2f0e8f00e102e2191ef30e14b43fe47b85de5c117dbc6";

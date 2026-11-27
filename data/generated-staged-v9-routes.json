@@ -14,10 +14,10 @@
       "package_digest": "f83f2e6d8a9d1e3b7248cad46db0747017bbc6f5708a44dc3ad88edea72aa76b"
     },
     "persistDurableScanAuthorityV9": {
-      "route_name": "persistDurableScanAuthorityV9B2e9e640e3534664c",
-      "build_id": "82661f4fa13847c109811555bc6dc625651cfe2ddd7fdeb5392305dff8c3bc0e",
+      "route_name": "persistDurableScanAuthorityV9B6a38fa9ff7458570",
+      "build_id": "b6b7bca7e91d2c52ce90971eb006cf450ffd8862d2d21fa136683d7a7ce93ab8",
       "runtime_activation_id": "persistDurableScanAuthorityV9-staged-runtime-20261111-v5",
-      "package_digest": "6f7315e2cd8f9495d0ac26c25af54d313878baa9e516a961ce0435973dfdaeea"
+      "package_digest": "dab10297b05ffe3f120262f23aa55b571faff82e0198417e528657660ffbefc9"
     },
     "persistLimitedScanResultV9": {
       "route_name": "persistLimitedScanResultV9B0f5ed27f22a0bf23",

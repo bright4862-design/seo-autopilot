@@ -26,6 +26,7 @@ from .scan_job import (
 )
 from .observability import website_host
 from .scan_limits import standard_scan_contract, task_matches_scan_contract
+from . import staged_completion
 from .staged_telemetry import MAX_RECORDED_DELIVERIES, DeliveryReceipt, active_delivery
 from .target_contact import TargetContactRetry, TargetContacts, target_contact_scope
 from .target_cooldown import TargetCooldownPending, TargetCooldownRelay, explicit_http_origin, target_cooldown_scope
@@ -89,7 +90,7 @@ class StagedScanRuntime:
         prefix = StagedScanRuntime._prefix(job)
         return "/".join(prefix.split("/")[:2]) + "/"
 
-    async def _fence(self, client: Any, job: dict[str, Any]) -> tuple[dict | None, dict | None]:
+    async def _fence(self, client: Any, job: dict[str, Any], *, allow_saved_result: bool = False) -> tuple[dict | None, dict | None]:
         scan = await self.dep.read_scan(client, job["scan_id"])
         if not isinstance(scan, dict):
             raise StageRetry("The scan record is unavailable")
@@ -100,7 +101,7 @@ class StagedScanRuntime:
         attempt = int(job.get("attempt_count") or 1)
         if is_superseded_attempt(scan, attempt) or current_attempt(scan) != attempt:
             return None, {"success": True, "skipped": "superseded_attempt"}
-        if already_terminal(scan):
+        if already_terminal(scan) and not (allow_saved_result and scan.get("status") in staged_completion.WRITERS):
             return None, {"success": True, "skipped": "already_terminal", "status": scan.get("status")}
         if await self.store.read(self._tombstone(job)):
             return None, {"success": True, "skipped": "workspace_deleted"}
@@ -274,13 +275,81 @@ class StagedScanRuntime:
         await self.dispatcher.enqueue(job, frontier["stage"], int(frontier["batch"]), **dispatch_options)
         return {"success": True, "scan_id": job["scan_id"], "stage": frontier["stage"], "batch": frontier["batch"], "pages_crawled": int(frontier.get("pages_crawled") or 0)}
 
+    async def _recover_acknowledgement(self, client, scan, job, prefix, frontier, generation, receipt):
+        from .scan_job import invoke_function
+
+        status = scan["status"]
+        writer = staged_completion.WRITERS[status]
+        signing_key = os.getenv("SCAN_EVIDENCE_SIGNING_KEY")
+        if not signing_key:
+            raise StageRetry("Authority signing is not configured")
+        saved = await self.store.read(prefix + staged_completion.ARCHIVE_NAME)
+        stamp = await self.store.read(prefix + "completion.json")
+        if not saved or not stamp or not isinstance(stamp.value.get("result_ready_at"), str):
+            raise StageRetry("The original staged completion is unavailable")
+        generations = {}
+        for label, ref in (("input_state", frontier["state_ref"]), ("result", "result.json.gz"), ("review", "review.json.gz")):
+            artifact = await self.store.read(prefix + ref)
+            if not artifact:
+                raise StageRetry("The committed staged evidence is unavailable")
+            generations[label] = str(artifact.generation)
+            receipt.observe_artifact(label, artifact.generation, produced=False)
+        binding = staged_completion.binding_for(job, scan, frontier, frontier["batch"], generations, stamp.value["result_ready_at"], writer)
+        packet = staged_completion.verified_packet(saved.value, binding, signing_key)
+        if (not packet or packet["proof"] != scan.get("staged_writer_request_proof")
+                or packet["scan"].get("result_ready_at") != stamp.value["result_ready_at"]):
+            raise StageRetry("The original staged writer request could not be verified")
+
+        def same_saved_result(row):
+            return (isinstance(row, dict) and staged_completion.exact_job(row, job) and row.get("status") == status
+                    and row.get("staged_writer_request_proof") == packet["proof"]
+                    and staged_completion.terminal_seal(row) == staged_completion.terminal_seal(scan)
+                    and row.get("fix_list_id") == scan.get("fix_list_id")
+                    and binding == staged_completion.binding_for(job, row, frontier, frontier["batch"],
+                                                                 generations, stamp.value["result_ready_at"], writer))
+
+        fresh, stopped = await self._fence(client, job, allow_saved_result=True)
+        if stopped:
+            return stopped
+        if not same_saved_result(fresh):
+            raise StageRetry("The saved staged completion changed")
+        if self.clock() >= float(frontier["lease_until"]):
+            raise StageRetry("The stage lease expired")
+        # invoke_function creates a fresh runtime challenge and verifies its signed
+        # response. The inner worker request is exactly the one the terminal row accepted.
+        response = await asyncio.wait_for(invoke_function(client, writer, packet), timeout=90)
+        body = response.get("body") or {}
+        row = body.get("scanRun")
+        verified_field = "fixListVerified" if status == "complete" else "resultIntegrityVerified"
+        if not (response.get("status_code") == 200 and body.get("success") is True and body.get("replayed") is True
+                and body.get(verified_field) is True and body.get("scanId") == scan["id"]
+                and body.get("fixListId") == scan["fix_list_id"] and same_saved_result(row)
+                and staged_completion.released(row)):
+            raise StageRetry("The staged writer has not acknowledged the saved result")
+        fresh, stopped = await self._fence(client, job, allow_saved_result=True)
+        if stopped:
+            return stopped
+        if not same_saved_result(fresh) or not staged_completion.released(fresh):
+            raise StageRetry("The staged release could not be verified")
+        await self._commit(prefix, frontier, generation, stage="done", finalize_receipt_ref=receipt.finished_ref)
+        receipt.stage_committed = True
+        return {"success": True, "scan_id": job["scan_id"], "pages_crawled": frontier["pages_crawled"],
+                "fix_list_id": scan["fix_list_id"]}
+
     async def process(self, client: Any, stage: str, job: dict, *, batch: int = 0, limited: bool = False, recovery_generation: int = 0) -> dict:
         if type(recovery_generation) is not int or recovery_generation not in (0, 1) or (recovery_generation and stage != "finalize"):
             raise ValueError("Invalid finalize recovery generation")
         delivery_deadline = time.monotonic() + STAGE_DELIVERY_SECONDS
-        scan, skipped = await self._fence(client, job)
+        scan, skipped = await self._fence(client, job, allow_saved_result=stage == "finalize")
         if skipped:
             return skipped
+        saved_result = already_terminal(scan)
+        if saved_result and not (
+            staged_completion.exact_job(scan, job) and staged_completion.terminal_seal(scan)
+            and isinstance(scan.get("staged_writer_request_proof"), str)
+            and staged_completion.HEX_PROOF.fullmatch(scan["staged_writer_request_proof"])
+        ):
+            return {"success": True, "skipped": "already_terminal", "status": scan.get("status")}
         job = self._canonical_job(scan, job)
         prefix = self._prefix(job)
         frontier = None
@@ -290,6 +359,8 @@ class StagedScanRuntime:
         try:
             leased = await self._lease(prefix, stage, batch, recovery_generation)
             if leased is None:
+                if saved_result:
+                    return {"success": True, "skipped": "already_terminal", "status": scan.get("status")}
                 stored = await self.store.read(prefix + "frontier.json")
                 if not stored:
                     raise StageRetry("The plan has not committed")
@@ -297,6 +368,11 @@ class StagedScanRuntime:
                     return {"success": True, "skipped": "superseded_finalize_delivery"}
                 return await self._replay(client, scan, job, stored.value)
             frontier, generation, allow_optional_probes = leased
+            if saved_result:
+                receipt = DeliveryReceipt(self.store, prefix, job, stage, batch, frontier["lease_owner"], generation)
+                receipt_context = active_delivery.set(receipt)
+                receipt.start()
+                return await self._recover_acknowledgement(client, scan, job, prefix, frontier, generation, receipt)
             result_snapshot = await self.store.read(prefix + "result.json.gz") if stage == "finalize" else None
             cooldown = self._target_cooldown(client, scan, job, prefix, stage)
             cooldown_pending = False
@@ -542,8 +618,18 @@ class StagedScanRuntime:
                 result = {**result, "result_ready_at": ready_at}
             if recovery_generation and self.clock() >= self._finalize_deadline(frontier):
                 raise StageRetry("The recovery window closed before the result could be saved")
-            completion = self.dep.complete(client, fresh, result, signing_key, review=reviewed) if reviewed is not None else self.dep.complete(client, fresh, result, signing_key)
-            outcome = await asyncio.wait_for(completion, timeout=90)
+            async def retain(writer, envelope):
+                generations = {name: receipt.artifacts[name]["generation"] for name in ("input_state", "review", "result")}
+                binding = staged_completion.binding_for(job, fresh, frontier, batch, generations, ready_at, writer)
+                return await staged_completion.retain_packet(self.store, prefix, binding, envelope, signing_key)
+
+            can_retain = reviewed is not None and staged_completion.exact_job(fresh, job)
+            token = staged_completion.prepare_staged_completion.set(retain if can_retain else None)
+            try:
+                completion = self.dep.complete(client, fresh, result, signing_key, review=reviewed) if reviewed is not None else self.dep.complete(client, fresh, result, signing_key)
+                outcome = await asyncio.wait_for(completion, timeout=90)
+            finally:
+                staged_completion.prepare_staged_completion.reset(token)
             if outcome.get("transient"):
                 raise StageRetry("Authority persistence is unavailable")
             if outcome.get("superseded"):

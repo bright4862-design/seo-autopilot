@@ -1130,6 +1130,22 @@ def terminal_review_limitation(review: dict[str, Any]) -> dict[str, str] | None:
     return None
 
 
+async def invoke_completion_writer(client, legacy_name, envelope):
+    from .staged_completion import prepare_staged_completion, released
+
+    writer = worker_function_name(legacy_name)
+    prepare = prepare_staged_completion.get()
+    if prepare is not None and _function_generation.get() == "V9":
+        envelope = await prepare(writer, envelope)
+        response = await invoke_function(client, writer, envelope)
+        if response.get("status_code") == 200 and (response.get("body") or {}).get("success") is True:
+            row = response["body"].get("scanRun")
+            if not isinstance(row, dict) or row.get("staged_writer_request_proof") != envelope["proof"] or not released(row):
+                return {"status_code": 503, "body": {"error_code": "staged_writer_unconfirmed"}}
+        return response
+    return await invoke_function(client, writer, envelope)
+
+
 async def persist_limited_result(
     client: httpx.AsyncClient,
     scan: dict[str, Any],
@@ -1151,7 +1167,7 @@ async def persist_limited_result(
         elapsed_ms=int((time.monotonic() - phase_started) * 1000),
         coverage_state=coverage_state_of(review),
     )
-    persisted = await invoke_function(client, worker_function_name("persistLimitedScanResultV8"), envelope)
+    persisted = await invoke_completion_writer(client, "persistLimitedScanResultV8", envelope)
     status_code = int(persisted.get("status_code") or 0)
     emit(
         "scan_job_completion_phase",
@@ -1219,6 +1235,10 @@ async def complete_authority(
         return {"ok": False, "transient": True, "failure_code": "scan_unreadable"}
     if is_superseded_attempt(fresh, current_attempt(scan)):
         return {"ok": False, "transient": False, "failure_code": "superseded_attempt", "superseded": True}
+    from .staged_completion import prepare_staged_completion
+    if already_terminal(fresh) and prepare_staged_completion.get() is not None:
+        # Only the dedicated recovery path can acknowledge an earlier writer.
+        return {"ok": False, "transient": True, "failure_code": "staged_completion_already_terminal"}
     if already_terminal(fresh) and has_authority_proof(fresh):
         # Terminal authority is immutable. A retry that finds a sealed row
         # reports the existing result rather than persisting a second one.
@@ -1404,7 +1424,7 @@ async def complete_authority(
         archetype_classifier_version=diagnostic_classifier_marker(reviewed),
         beta_revision_fingerprint=diagnostic_fingerprint_marker(reviewed),
     )
-    persisted = await invoke_function(client, worker_function_name("persistDurableScanAuthorityV8"), envelope)
+    persisted = await invoke_completion_writer(client, "persistDurableScanAuthorityV8", envelope)
     emit(
         "scan_job_completion_phase",
         scan_id=scan_id,

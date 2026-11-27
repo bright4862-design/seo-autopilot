@@ -426,6 +426,7 @@ export function buildRepairCard(item = {}) {
 
   return {
     rule: lower(item?.rule || item?.original?.rule),
+    ...(copy.optionalRedirectShortcut ? { optionalRedirectShortcut: true } : {}),
     priority,
     actionPriority,
     status: lower(item?.status || item?.user_status || item?.original?.status || item?.original?.user_status),

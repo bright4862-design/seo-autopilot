@@ -157,6 +157,25 @@ export function customerCopyForFix(item = {}) {
   }
 
   if (rule === "redirect_chain") {
+    const saved = item.original || item;
+    const evidence = saved.raw_finding || saved;
+    const destination = evidence.redirect_fetch_evidence;
+    if (saved.evidence_status === "confirmed" && evidence.non_scoring === true
+        && destination?.classification === "redirect_to_usable_page" && destination.final_status === 200) {
+      // Full reports retain the reviewer's advice. Limited reports can carry
+      // the same verified outcome with only the title and fetch evidence.
+      const explanation = saved.plain_english_explanation || "The redirects reached a working page.";
+      return {
+        optionalRedirectShortcut: true,
+        customerCategory: "Page forwarding",
+        title: saved.issue_title || saved.title || "Optional redirect shortcut",
+        explanation,
+        whyItMatters: explanation,
+        recommendation: saved.recommended_value || saved.recommendation
+          || "You can keep the current redirects. A direct route would skip the intermediate address.",
+        technicalLabel: "Redirect chain",
+      };
+    }
     const location = family === "homepage"
       ? "the homepage"
       : count > 1 && family !== "pages"
@@ -422,14 +441,5 @@ export function customerCopyForFix(item = {}) {
 }
 
 export function applyCustomerVocabulary(item = {}) {
-  const copy = customerCopyForFix(item);
-  return {
-    ...item,
-    customerCategory: copy.customerCategory,
-    title: copy.title,
-    explanation: copy.explanation,
-    whyItMatters: copy.whyItMatters,
-    recommendation: copy.recommendation,
-    technicalLabel: copy.technicalLabel,
-  };
+  return { ...item, ...customerCopyForFix(item) };
 }

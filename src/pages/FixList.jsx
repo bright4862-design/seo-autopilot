@@ -1322,7 +1322,7 @@ function CustomerRepairList({ cards = [], websiteUrl = "", explanationForCard, t
               <CustomerRepairCard
                 key={card.evidence?.mergedFromFixIds?.join("|") || `${section.key}-${index}`}
                 card={card}
-                explanation={explanationForCard?.(card)}
+                explanation={card.optionalRedirectShortcut ? undefined : explanationForCard?.(card)}
                 websiteUrl={websiteUrl}
                 initiallyOpen={section.key === "start" && index === 0}
               />
@@ -1993,7 +1993,7 @@ function FixRow({ item, cms, embedded = false, suggestion: suppliedSuggestion })
   const [showAllPages, setShowAllPages] = useState(false);
   const [copied, setCopied] = useState(false);
   const severe = item.priority === "critical" || item.priority === "high";
-  const cmsSteps = getCmsSteps(cms, item);
+  const cmsSteps = item.optionalRedirectShortcut ? [] : getCmsSteps(cms, item);
   const evidenceItems = buildEvidenceItems(item).slice(0, 4);
   const availableCount = item.affectedPages.length;
   const reportedCount = Math.max(Number(item.pageCount || 0), availableCount);
@@ -2062,7 +2062,9 @@ function FixRow({ item, cms, embedded = false, suggestion: suppliedSuggestion })
             </>
           ) : null}
 
-          {embedded ? (
+          {item.optionalRedirectShortcut ? (
+            <p className="mt-4 max-w-[56ch] text-[13.5px] leading-relaxed">{item.recommendation}</p>
+          ) : embedded ? (
             suggestion.bestApproach ? (
               <>
                 <div className="mt-5 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">How to approach it</div>

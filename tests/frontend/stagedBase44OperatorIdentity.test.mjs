@@ -13,10 +13,13 @@ const customer = { id: "6aaaaaaaaaaaaaaaaaaaaaaa", email: "customer@example.test
 const operator = "scripts/operate-base44-staged-runtime.sh";
 const collector = "scripts/collect-base44-staged-observations.sh";
 const routeManifest = "data/generated-staged-v9-routes.json";
-const { functions } = JSON.parse(readFileSync(new URL("../../" + routeManifest, import.meta.url), "utf8"));
+const launcherEntitlement = "base44/functions/startStandardScanJobV9/entitlement.js";
+const routeManifestBytes = readFileSync(new URL("../../" + routeManifest, import.meta.url), "utf8");
+const { functions } = JSON.parse(routeManifestBytes);
 const { route_name: intakeRoute, build_id: buildId, runtime_activation_id: activationId } = functions.startStandardScanJobV9;
 const fingerprint = "2".repeat(16);
 const customerDigest = createHash("sha256").update(JSON.stringify([customer.id])).digest("hex");
+const brightDigest = createHash("sha256").update(JSON.stringify([bright.id])).digest("hex");
 const gatewayOrigin = "https://fixlist-dispatch-gateway-tpucgyfewa-ew.a.run.app";
 const gatewayRevision = "fixlist-dispatch-gateway-staged-fixture";
 const pilotWorkerOrigin = "https://canary-00123-xyz---fixlist-standard150-worker-tpucgyfewa-ew.a.run.app";
@@ -32,8 +35,45 @@ function fixture(t) {
   mkdirSync(join(root, "scripts/lib"), { recursive: true });
   mkdirSync(join(root, "data"));
   writeFileSync(join(root, "data/beta-crawler-revision.json"), JSON.stringify({ fingerprint }));
-  copyFileSync(routeManifest, join(root, routeManifest));
-  for (const file of [operator, collector]) copyFileSync(file, join(root, file));
+  writeFileSync(join(root, routeManifest), routeManifestBytes);
+  mkdirSync(join(root, "base44/functions/startStandardScanJobV9"), { recursive: true });
+  copyFileSync(launcherEntitlement, join(root, launcherEntitlement));
+  for (const file of [operator, collector, "scripts/assert_tagged_zero_traffic_worker.py"]) copyFileSync(file, join(root, file));
+  const gcloud = join(root, "gcloud");
+  const workerServiceOrigin = pilotWorkerOrigin.replace("canary-00123-xyz---", "");
+  const workerRevision = "fixlist-standard150-worker-00123-xyz";
+  const sourceTag = `staged-${source.slice(0, 12)}`;
+  writeFileSync(gcloud, `#!${process.execPath}
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+if (args[0] === "auth" && args[1] === "print-identity-token") {
+  console.log("fixture-token");
+} else if (args[0] === "run" && args[1] === "services" && args[2] === "describe" && args[3] === "fixlist-standard150-worker") {
+  appendFileSync(process.env.TEST_TRACE, JSON.stringify(["worker.service"]) + "\\n");
+  console.log(JSON.stringify({ status: { url: "${workerServiceOrigin}", traffic: [
+    { revisionName: "${workerRevision}", tag: "canary-00123-xyz", url: "${pilotWorkerOrigin}", percent: Number(process.env.TEST_WORKER_PERCENT) },
+    { revisionName: "${workerRevision}", tag: "${sourceTag}", url: "${workerServiceOrigin.replace("https://", `https://${sourceTag}---`)}" },
+  ] } }));
+} else if (args[0] === "run" && args[1] === "revisions" && args[2] === "describe" && args[3] === "${workerRevision}") {
+  console.log(JSON.stringify({
+    metadata: { name: "${workerRevision}" },
+    spec: { containers: [{ env: [
+      { name: "SCAN_PIPELINE_MODE", value: "staged" },
+      { name: "SCAN_STAGED_OWNER_IDS", value: process.env.TEST_WORKER_OWNER },
+      { name: "FIXLIST_WORKER_SOURCE_SHA", value: "${source}" },
+    ] }] },
+    status: { conditions: [{ type: "Ready", status: "True" }] },
+  }));
+} else {
+  process.exit(3);
+}
+`);
+  chmodSync(gcloud, 0o700);
+  writeFileSync(join(root, "scripts/fixlist-cloud-operator.sh"), `
+[[ "$OPERATION" == verify-worker-runtime-revision && "$SOURCE_SHA" == "${source}" &&
+  "$TARGET_REVISION" == "${workerRevision}" && "$FIXLIST_WORKER_PROBE_URL" == "${pilotWorkerOrigin}" &&
+  "$FIXLIST_WORKER_TOKEN_AUDIENCE" == "${workerServiceOrigin}" && "$FIXLIST_VERIFY_STAGED_BASE44_RUNTIME" == 1 ]]
+`);
   writeFileSync(join(root, "scripts/lib/release-source-guard.sh"), [
     'fixlist_require_exact_main() { [[ "$2" == "$SOURCE_SHA" && "$TEST_MAIN_MOVED" != true ]]; }',
     'fixlist_require_merged_checkout() { [[ "$2" == "$SOURCE_SHA" && "$TEST_SOURCE_MERGED" == true ]]; }',
@@ -62,7 +102,7 @@ if (process.argv[2] !== "verify") process.exit(1);
 writeFileSync(process.argv.at(-1), "{}");
 `);
   writeFileSync(join(root, "package.json"), '{"type":"module"}');
-  const cli = join(root, "base44");
+  const cli = join(root, "base44-cli");
   const trace = join(root, "trace");
   writeFileSync(cli, `#!${process.execPath}
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -78,6 +118,10 @@ if (args[2] === "functions" && args[3] === "pull") {
 if (args[2] === "exec") {
   const base44 = {
     auth: { me: () => { log(["auth.me"]); return JSON.parse(process.env.TEST_USER); } },
+    entities: {
+      User: { get: () => { log(["user.get"]); return JSON.parse(process.env.TEST_BRIGHT_TARGET); } },
+      Access: { filter: () => { log(["grant.filter"]); return JSON.parse(process.env.TEST_BRIGHT_GRANT); } },
+    },
     functions: { invoke: (name, payload) => {
       log(["invoke", name, payload.action]);
       if (name === "fixlistStagedRuntimeControl") return {
@@ -95,7 +139,7 @@ if (args[2] === "exec") {
         staged_owner_cohort_state: "explicit", staged_owner_count: 1, staged_owner_cohort_sha256: "3".repeat(64),
         staged_owner_enabled: true, intake_gate: "enabled", admission_gate: "enabled",
         staged_rollout_scope: "off", staged_500_entitled_enabled: false, legacy_staged_500_entitled_enabled: false,
-        paid_dispatch_gateway_origin: "${gatewayOrigin}",
+        paid_dispatch_gateway_origin: "${gatewayOrigin}", admin_500_rehearsal_enabled: false,
         ...JSON.parse(process.env.TEST_V9),
         ...(changedPilot ? JSON.parse(process.env.TEST_V9_AFTER_PILOT) : {}),
       };
@@ -127,6 +171,8 @@ console.log(JSON.stringify({
     const confirm = {
       "prepare-owner": `PREPARE-BASE44-STAGED-150:${source}:${selected}${options.pilotExpiry ? ":" + options.pilotExpiry : ""}`,
       "hold-published-pilot": `HOLD-BASE44-PUBLISHED-PILOT:${source}`,
+      "prepare-admin-500-rehearsal": `PREPARE-BASE44-ADMIN-500-REHEARSAL:${source}:${gatewayRevision}:${selected}:${options.pilotExpiry}`,
+      "hold-admin-500-rehearsal": `HOLD-BASE44-ADMIN-500-REHEARSAL:${source}:${selected}`,
       "prepare-paid": `PREPARE-BASE44-STAGED-PAID:${source}:${gatewayRevision}:${options.cap || "150"}`,
       "prepare-paid-500-pilot": `PREPARE-PAID-500-PILOT:${source}:${gatewayRevision}:${selected}:${options.pilotExpiry}`,
       "hold-paid-500-pilot": `HOLD-PAID-500-PILOT:${source}:${selected}`,
@@ -147,6 +193,13 @@ console.log(JSON.stringify({
         TEST_MAIN_MOVED: options.mainMoved ? "true" : "false",
         TEST_SOURCE_MERGED: options.sourceMerged === false ? "false" : "true",
         TEST_CLI: cli, TEST_TRACE: trace, TEST_USER: JSON.stringify(user),
+        TEST_BRIGHT_TARGET: JSON.stringify(options.targetUser || bright),
+        TEST_BRIGHT_GRANT: JSON.stringify([{
+          id: "owner-test-access", owner_user_id: bright.id, user_email: bright.email, app_id: "6a498732ec779dfaaeab0e53",
+          has_full_access: true, access_status: "active", plan_id: "standard150_lifetime", page_cap: options.grantCap ?? 500,
+          grant_source: "owner_test", granted_at: "2026-11-25T00:00:00Z",
+        }]),
+        TEST_WORKER_PERCENT: String(options.workerPercent ?? 0), TEST_WORKER_OWNER: options.workerOwner || bright.id,
         TEST_PROBE: JSON.stringify(options.probe || {}), TEST_V9: JSON.stringify(options.v9 || {}),
         TEST_V9_AFTER_PILOT: JSON.stringify(options.v9AfterPilot || {}),
         STAGED_PAID_PAGE_CAP: options.cap || "150", STAGED_GATEWAY_REVISION: gatewayRevision,
@@ -324,7 +377,7 @@ for (const cap of ["150", "500"]) {
       ["secrets", "set", "SCAN_PIPELINE_MODE=staged", "SCAN_STAGED_OWNER_IDS=", "SCAN_PIPELINE_OWNER_IDS=",
         "SCAN_STAGED_ROLLOUT_SCOPE=paid", "SCAN_STAGED_500_ENTITLED_ENABLED=false",
         `SCAN_STAGED_500_ELIGIBLE_ADMISSION_ENABLED=${cap === "500"}`,
-        "SCAN_STAGED_PILOT_OWNER_IDS=", "SCAN_PUBLIC_PILOT_EXPIRES_AT=0"],
+        "SCAN_STAGED_PILOT_OWNER_IDS=", "SCAN_PUBLIC_PILOT_EXPIRES_AT=0", "SCAN_PUBLIC_PILOT_ADMIN_500_OWNER_ID="],
       ["invoke", intakeRoute, "staged_runtime_status"], ["gateway.health"],
     ]);
     assert.match(result.stdout, /BASE44_STAGED_PAID_READBACK_VERIFIED.*public_intake=closed/);
@@ -376,7 +429,8 @@ test("preparing and holding only the 500 pilot leaves the paid 150 intake settin
   });
   assert.equal(prepared.status, 0, prepared.stderr);
   assert.deepEqual(prepared.calls.filter(([command]) => command === "secrets"), [
-    ["secrets", "set", `SCAN_STAGED_PILOT_OWNER_IDS=${customer.id}`, `SCAN_PUBLIC_PILOT_EXPIRES_AT=${expiry}`],
+    ["secrets", "set", `SCAN_STAGED_PILOT_OWNER_IDS=${customer.id}`, `SCAN_PUBLIC_PILOT_EXPIRES_AT=${expiry}`,
+      "SCAN_PUBLIC_PILOT_ADMIN_500_OWNER_ID="],
   ]);
   const mismatched = fixture(t)(operator, "prepare-paid-500-pilot", customer.id, london, {
     ...options, v9: { ...options.v9, ...emptyPilot }, gateway: emptyPilot, pilotExpiry: String(expiry),
@@ -389,7 +443,7 @@ test("preparing and holding only the 500 pilot leaves the paid 150 intake settin
   });
   assert.equal(held.status, 0, held.stderr);
   assert.deepEqual(held.calls.filter(([command]) => command === "secrets"), [
-    ["secrets", "set", "SCAN_PUBLIC_PILOT_EXPIRES_AT=0"],
+    ["secrets", "set", "SCAN_PUBLIC_PILOT_EXPIRES_AT=0", "SCAN_PUBLIC_PILOT_ADMIN_500_OWNER_ID="],
   ]);
 });
 
@@ -493,6 +547,92 @@ test("holding the published pilot closes only its launcher and verifies the exac
   });
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(result.calls.filter(([name]) => name === "secrets"),
-    [["secrets", "set", "SCAN_PUBLIC_PILOT_EXPIRES_AT=0"]]);
+    [["secrets", "set", "SCAN_PUBLIC_PILOT_EXPIRES_AT=0", "SCAN_PUBLIC_PILOT_ADMIN_500_OWNER_ID="]]);
   assert.equal(result.calls.filter(row => row[1] === intakeRoute).length, 2);
+});
+
+
+function adminRehearsalOptions(overrides = {}) {
+  const expiry = Math.floor(Date.now() / 1000) + 1800;
+  return pilotOptions(london, {
+    targetRole: "admin",
+    pilotExpiry: String(expiry),
+    gateway: {
+      staged_rollout_scope: "off", staged_500_entitled_enabled: false,
+      staged_owner_count: 1, staged_owner_cohort_sha256: brightDigest,
+      canary_worker_origin: pilotWorkerOrigin, canary_owner_count: 1, canary_owner_cohort_sha256: brightDigest,
+      staged_pilot_owner_count: 0, staged_pilot_owner_cohort_sha256: emptyCohortDigest,
+    },
+    v9: {
+      pipeline_mode: "monolith", staged_owner_enabled: false, staged_owner_cohort_sha256: brightDigest,
+      staged_pilot_owner_count: 0, staged_pilot_owner_cohort_sha256: emptyCohortDigest,
+      intake_gate: "disabled",
+    },
+    v9AfterPilot: { admin_500_rehearsal_enabled: true, public_pilot_expires_at: expiry },
+    ...overrides,
+  });
+}
+
+test("London can prepare exactly Bright in the closed 500 rehearsal", t => {
+  const options = adminRehearsalOptions();
+  const result = fixture(t)(operator, "prepare-admin-500-rehearsal", bright.id, london, options);
+  assert.equal(result.status, 0, result.stderr);
+  const writes = result.calls.filter(([name]) => name === "secrets");
+  assert.deepEqual(writes[0], ["secrets", "set", "BETA_SCAN_INTAKE_ENABLED=false"]);
+  assert.ok(writes[1].includes(`SCAN_PUBLIC_PILOT_ADMIN_500_OWNER_ID=${bright.id}`));
+  assert.ok(writes[1].includes(`SCAN_PUBLIC_PILOT_EXPIRES_AT=${options.pilotExpiry}`));
+  assert.ok(writes[1].includes("SCAN_STAGED_500_ENTITLED_ENABLED=false"));
+  assert.match(result.stdout, /BASE44_ADMIN_500_REHEARSAL_PREPARED.*public_intake=closed/);
+  assert.ok(result.calls.some(([name]) => name === "user.get"));
+  assert.equal(result.calls.filter(([name]) => name === "grant.filter").length, 2);
+  assert.ok(result.calls.some(([name]) => name === "worker.service"));
+  assert.equal(result.calls.filter(row => row[1] === intakeRoute).length, 3);
+});
+
+for (const [detail, options] of [
+  ["more than two hours", { pilotExpiry: String(Math.floor(Date.now() / 1000) + 7300) }],
+  ["an ordinary or replaced Bright target", { targetUser: { ...bright, role: "user" } }],
+  ["a 150-page grant", { grantCap: 150 }],
+  ["a worker serving canonical traffic", { workerPercent: 1 }],
+  ["a worker pinned to another owner", { workerOwner: customer.id }],
+  ["a gateway for another cohort", { gateway: { staged_owner_cohort_sha256: customerDigest } }],
+]) {
+  test(`the Bright rehearsal makes no changes with ${detail}`, t => {
+    const result = fixture(t)(operator, "prepare-admin-500-rehearsal", bright.id, london, adminRehearsalOptions(options));
+    assert.notEqual(result.status, 0);
+    assert.equal(result.calls.some(([name]) => name === "secrets"), false);
+  });
+}
+
+test("holding the Bright rehearsal clears only its marker and expiry", t => {
+  const options = adminRehearsalOptions({ pilotExpiry: "", mainMoved: true });
+  options.v9.admin_500_rehearsal_enabled = true;
+  options.v9.public_pilot_expires_at = Math.floor(Date.now() / 1000) + 1800;
+  options.v9AfterPilot = { admin_500_rehearsal_enabled: false, public_pilot_expires_at: 0 };
+  const result = fixture(t)(operator, "hold-admin-500-rehearsal", bright.id, london, options);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.calls.filter(([name]) => name === "secrets"), [
+    ["secrets", "set", "SCAN_PUBLIC_PILOT_ADMIN_500_OWNER_ID=", "SCAN_PUBLIC_PILOT_EXPIRES_AT=0"],
+  ]);
+  assert.match(result.stdout, /BASE44_ADMIN_500_REHEARSAL_HELD/);
+});
+
+test("an old Bright hold cannot expire an ordinary customer's active pilot", t => {
+  const options = adminRehearsalOptions({ pilotExpiry: "" });
+  options.v9.staged_owner_cohort_sha256 = customerDigest;
+  options.v9.public_pilot_expires_at = Math.floor(Date.now() / 1000) + 1800;
+  const result = fixture(t)(operator, "hold-admin-500-rehearsal", bright.id, london, options);
+  assert.notEqual(result.status, 0);
+  assert.equal(result.calls.some(([name]) => name === "secrets"), false);
+});
+
+
+test("Bright rehearsal marker cannot be prepared until V9 observes intake closed", t => {
+  const options = adminRehearsalOptions();
+  options.v9.intake_gate = "enabled";
+  const result = fixture(t)(operator, "prepare-admin-500-rehearsal", bright.id, london, options);
+  assert.notEqual(result.status, 0);
+  assert.deepEqual(result.calls.filter(([name]) => name === "secrets"), [
+    ["secrets", "set", "BETA_SCAN_INTAKE_ENABLED=false"],
+  ]);
 });

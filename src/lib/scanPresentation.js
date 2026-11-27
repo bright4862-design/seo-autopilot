@@ -21,6 +21,20 @@ export function inventoryCoverageLine(record = {}) {
   return `We checked ${number(checked)} ${checked === 1 ? "page" : "pages"} out of ${capped ? "at least " : ""}${number(found)} found.`;
 }
 
+export function savedReportCoverageNote(record = {}, { checked, found } = {}) {
+  if (record.status !== "complete" || record.authority_verified !== true || !Number.isSafeInteger(checked) || checked < 1) {
+    return "";
+  }
+  const pageLimit = confirmedScanPageLimit(record);
+  if (record.crawl_stop_reason === "time_limit" && (pageLimit === null || checked < pageLimit)) {
+    return "The crawl reached its time limit, so this saved report covers the pages checked.";
+  }
+  if (Number.isSafeInteger(found) && found > checked) {
+    return "This saved report covers only the pages FixList checked.";
+  }
+  return "";
+}
+
 export function optionalChecksNotice(record = {}) {
   if (record.status !== "complete" || record.authority_verified !== true) return "";
   if (record.optional_checks_notice_reason === "site_rate_limited") {

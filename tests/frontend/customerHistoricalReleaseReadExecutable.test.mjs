@@ -437,6 +437,33 @@ test("changing a signed V9 skipped-check reason invalidates its full authority",
   assert.equal(body.error_code, "result_authority_invalid");
 });
 
+test("V9 reports a timed-out crawl only with authenticated unfinished coverage", async () => {
+  for (const [pages, timing, legacySeal, tampered, expected] of [
+    [71, { crawl_deadline_reached: true, queue_exhausted: false, final_queue_size: 1128 }, false, false, "time_limit"],
+    [150, { crawl_deadline_reached: true, queue_exhausted: false, final_queue_size: 1128 }, false, false, undefined],
+    [71, { crawl_deadline_reached: true, queue_exhausted: true, final_queue_size: 0 }, false, false, undefined],
+    [71, { crawl_deadline_reached: true, queue_exhausted: false, final_queue_size: 1128 }, true, false, undefined],
+    [71, { crawl_deadline_reached: false, queue_exhausted: false, final_queue_size: 1128 }, false, true, undefined],
+  ]) {
+    const response = await invokeWithFingerprint(PREVIOUS_PILOT_FINGERPRINT, {
+      stagedReader: currentStagedReader,
+      mutateRows: async rows => {
+        rows.run.pages_crawled = pages;
+        rows.run.crawl_timing = timing;
+        if (legacySeal) rows.run.authority_seal_version = "standard_review_snapshot_hmac_v1";
+        const snapshot = stagedProjection.authoritySnapshotFromRows({ ...rows, userId: rows.run.owner_user_id });
+        const proof = await createStagedAuthoritySeal(snapshot, SECRET);
+        for (const row of [rows.run, rows.fixList, ...rows.fixItems]) row.authority_proof = proof;
+        if (tampered) rows.run.crawl_timing = { ...timing, crawl_deadline_reached: true };
+      },
+    });
+    const body = await response.json();
+    assert.equal(response.status, tampered ? 409 : 200, body.error_code);
+    if (tampered) assert.equal(body.error_code, "result_authority_invalid");
+    else assert.equal(body.run.crawl_stop_reason, expected);
+  }
+});
+
 test("unsigned v1 timing cannot create a V9 skipped-check notice", async () => {
   const { response, body } = await readStagedNotice({
     mutateRows: async rows => {

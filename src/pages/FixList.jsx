@@ -41,7 +41,7 @@ import { displayPathPrefix, focusedPathSections, focusedSectionOnboardingPath, o
 import { buildPageAccounting } from "@/lib/pageAccounting";
 import { customerSafeLimitationLine, durableScanStatePresentation } from "@/lib/durableScanStatePresentation";
 import { readSiteOwnership, resolveScanOwnership } from "@/lib/siteOwnershipPolicy";
-import { confirmedScanPageLimit, pageCapFromRecord, inventoryCoverageLine, optionalChecksNotice, serverSelectedPriorityCards } from "@/lib/scanPresentation";
+import { confirmedScanPageLimit, pageCapFromRecord, inventoryCoverageLine, optionalChecksNotice, savedReportCoverageNote, serverSelectedPriorityCards } from "@/lib/scanPresentation";
 import { healthScoreExplanation } from "@/lib/healthScoreExplanation";
 
 const CMS_OPTIONS = [
@@ -885,6 +885,7 @@ export function CustomerResultsSummary({
   const coverage = limitedCoverage || (pagesFound > 0
     ? inventoryCoverageLine({ ...scanRecord, pages_crawled: pagesScanned, pages_found: pagesFound })
     : `${formatCount(pagesScanned)} ${pagesScanned === 1 ? "page" : "pages"} checked.`);
+  const coverageNote = savedReportCoverageNote(scanRecord, { checked: pagesScanned, found: pagesFound });
   const hasPriorities = Array.isArray(scanRecord.top_fix_ids);
   return (
     <header className="pt-10 sm:pt-12">
@@ -904,7 +905,10 @@ export function CustomerResultsSummary({
       <dl className="mt-5 flex flex-col gap-3 rounded-xl border border-hairline-soft bg-white px-4 py-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
         <div>
           <dt className="text-[12px] font-medium text-ink-muted">Scan coverage</dt>
-          <dd className="mt-0.5 text-[14px] leading-relaxed text-ink">{coverage}</dd>
+          <dd className="mt-0.5 text-[14px] leading-relaxed text-ink">
+            {coverage}
+            {coverageNote ? <span className="mt-1 block text-[13px] text-ink-muted">{coverageNote}</span> : null}
+          </dd>
         </div>
         {pageLimit !== null ? (
           <div className="shrink-0 border-t border-hairline-soft pt-3 sm:border-l sm:border-t-0 sm:pl-6 sm:pt-0">
@@ -1822,7 +1826,7 @@ function getRecentScanStatus(status) {
   if (status === "queued") return { label: "Queued", active: true };
   if (status === "crawling") return { label: "Scanning", active: true };
   if (status === "reviewing") return { label: "Preparing FixList", active: true };
-  if (status === "complete") return { label: "Completed", active: false };
+  if (status === "complete") return { label: "Report ready", active: false };
   if (status === "failed") return { label: "Failed", active: false };
   if (status === "limited") return { label: "Limited", active: false };
   if (status === "cancelled") return { label: "Cancelled", active: false };

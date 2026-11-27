@@ -9,6 +9,7 @@ import useDurableScanCompletion from "@/hooks/useDurableScanCompletion";
 import { ensureScanProject } from "@/lib/activeProject";
 import { normalizeActionPriority, normalizeFindingEvidence, normalizeReviewEvidenceState, normalizeReviewScope, selectFinalReviewFixes } from "@/lib/reviewContract";
 import { pageCapFromRecord } from "@/lib/scanPresentation";
+import { resolveScanFunctionRoute } from "@/lib/scanFunctionRouting";
 import { RELEASE_AUTHORITY_CONTRACT, buildAuthorityMarkers, buildScanRunFields } from "@/lib/scanRunModel";
 import { createScanRequestId, normalizedScanDomain, scanReleaseIdentity } from "@/lib/scanRunIdentity";
 import { focusedScopeFromSearchParams, focusedSectionUrl, normalizeRequestedPathPrefix } from "@/lib/focusedScanScope";
@@ -81,6 +82,8 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
   const [launchOptionsAttempt, setLaunchOptionsAttempt] = useState(0);
   const scanMode = STANDARD_SCAN_MODE;
   const checkingLaunchOptions = usesPublishedScanPilot && !launchOptions && !launchOptionsError;
+  const hasStandardV8Limit = !usesPublishedScanPilot
+    && resolveScanFunctionRoute(ASYNC_SCAN_JOB_FUNCTION, import.meta.env.VITE_SCAN_FUNCTION_GENERATION) === ASYNC_SCAN_JOB_FUNCTION;
 
   function reloadLaunchOptions() {
     setLaunchOptions(null);
@@ -95,9 +98,7 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
       if (current) setLaunchOptions(options);
     }).catch(error => {
       if (current) setLaunchOptionsError(
-        error.message === "Your pilot scans are paused."
-          ? error.message
-          : "FixList couldn’t check your scan limit.",
+        error.message === "Your pilot scans are paused." ? "paused" : "unavailable",
       );
     });
     return () => { current = false; };
@@ -484,7 +485,7 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
       if (usesPublishedScanPilot && ["scan_limit_changed", "scan_pilot_unavailable"].includes(err?.code)) {
         reloadLaunchOptions();
       }
-      if (["scan_admission_busy", "scan_admission_paused", "scan_staged_500_unavailable"].includes(err?.code)) {
+      if (["scan_admission_busy", "scan_admission_paused", "scan_intake_paused", "scan_staged_500_unavailable"].includes(err?.code)) {
         setErrorAction("open_dashboard");
       } else if (err?.code === "preview_scan_used") {
         setErrorAction("open_billing");
@@ -564,7 +565,7 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
             <p className="font-medium text-ink">Scan limit</p>
             {launchOptions?.pilotUnavailable ? (
               <div>
-                <p role="status">Standard scans check up to 150 pages. Pilot access is temporarily unavailable.</p>
+                <p role="status">Standard scans check up to 150 pages. FixList couldn’t check access to larger scans.</p>
                 <button type="button" className="underline" onClick={reloadLaunchOptions}>Check again</button>
               </div>
             ) : launchOptions ? (
@@ -573,11 +574,20 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
               <p role="status">Checking your scan limit…</p>
             ) : launchOptionsError ? (
               <div>
-                <p role="alert">{launchOptionsError}</p>
+                <p role="alert">
+                  {launchOptionsError === "paused"
+                    ? "New scans for your account are paused. Your saved reports are still available."
+                    : "FixList couldn’t check your scan limit."}
+                </p>
                 <button type="button" className="underline" onClick={reloadLaunchOptions}>Check again</button>
+                {launchOptionsError === "paused" ? (
+                  <button type="button" className="ml-3 font-semibold underline" onClick={() => navigate("/dashboard")}>
+                    Open my scans
+                  </button>
+                ) : null}
               </div>
             ) : (
-              <p>FixList confirms your account’s page limit when the scan starts.</p>
+              <p>{hasStandardV8Limit ? "Up to 150 pages per scan." : "FixList confirms your account’s page limit when the scan starts."}</p>
             )}
             <p className="mt-1 text-ink-faint">{scanSpecLine}</p>
           </div>
@@ -609,7 +619,7 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
               targetLabel={scanTargetLabel}
               elapsedLabel={formatElapsed(elapsedSeconds)}
               fallbackPhase={activeStep || "Starting your scan"}
-              longerThanUsual={elapsedSeconds >= 30 || durableScan.stalled === true}
+              showSavedScanLink={elapsedSeconds >= 30}
               backgroundExecutionProven={Boolean(watchedScanId)}
               onOpenSavedScan={watchedScanId
                 ? () => navigate(`/dashboard?scan_id=${encodeURIComponent(watchedScanId)}`)
@@ -1052,6 +1062,7 @@ function customerScanAdmissionMessage(code, serverDetail = "", retryAfterSeconds
   const messages = {
     scan_staged_500_unavailable: "500-page scans are temporarily paused. Your saved reports are still available.",
     scan_admission_paused: "New scans are temporarily paused. Your existing results are still available.",
+    scan_intake_paused: "New scans are temporarily paused. Your saved reports are still available.",
     scan_admission_busy: "Another scan is already running for this account. Open the dashboard to follow it before starting another.",
     scan_admission_pending: "This scan request is still being prepared. Please wait a few seconds and try again.",
     scan_atomic_admission_unconfirmed: "New scans are temporarily unavailable while the admission coordinator is verified.",

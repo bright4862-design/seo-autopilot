@@ -26,15 +26,26 @@ test("truthful scan progress does not invent crawler denominators or own scan st
 
 test("leave-page reassurance is gated by the explicit durable model flag", () => {
   assert.match(source, /progress\.canLeavePage \?/);
-  assert.match(source, /running in the background/);
+  assert.match(source, /leave this page and return to the scan from your history/);
 });
 
 test("saved-scan escape link cannot appear before durable background execution is proven", () => {
-  assert.match(source, /longerThanUsual\s*&&\s*progress\.canLeavePage\s*&&\s*typeof onOpenSavedScan === "function"/s);
+  assert.match(source, /showSavedScanLink\s*&&\s*progress\.canLeavePage\s*&&\s*typeof onOpenSavedScan === "function"/s);
   assert.match(source, /canOpenSavedScan \?/);
+});
+
+test("elapsed time does not imply the scan is slow or has started", () => {
+  assert.doesNotMatch(source, /taking longer than usual/i);
+  assert.match(source, /progress\.status === "queued"/);
+  assert.match(source, /updates when your scan starts/);
 });
 
 test("scan status announcements stay polite instead of repeatedly interrupting assistive technology", () => {
   assert.match(source, /role="status" aria-live="polite"/);
   assert.doesNotMatch(source, /aria-live="assertive"/);
+});
+
+test("the ticking elapsed time stays outside the live phase announcement", () => {
+  assert.match(source, /<p\b[^>]*role="status"[^>]*>\{phase\}<\/p>/);
+  assert.doesNotMatch(source, /<div\b[^>]*aria-live=/);
 });

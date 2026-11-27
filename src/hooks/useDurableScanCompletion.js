@@ -7,7 +7,6 @@ import { confirmedScanPageLimit } from "@/lib/scanPresentation";
 import { readSiteOwnership, resolveScanOwnership } from "@/lib/siteOwnershipPolicy";
 
 const POLL_INTERVAL_MS = 3000;
-const STALLED_AFTER_MS = 150_000;
 const TERMINAL_FAILURE_STATUSES = new Set(["failed", "cancelled"]);
 
 // The browser's own function chain is not the only path to a saved result.
@@ -17,7 +16,6 @@ const TERMINAL_FAILURE_STATUSES = new Set(["failed", "cancelled"]);
 // preview frame reload). No substitute scan is ever opened: only scanId.
 const EMPTY_STATE = {
   status: "",
-  stalled: false,
   domain: "",
   failureMessage: "",
   pagesFound: 0,
@@ -49,7 +47,6 @@ export default function useDurableScanCompletion(scanId, active) {
       return undefined;
     }
     let cancelled = false;
-    const startedAt = Date.now();
 
     async function check() {
       const bundle = await getScanRunWithFixList(scanId).catch(() => null);
@@ -59,14 +56,14 @@ export default function useDurableScanCompletion(scanId, active) {
       const status = String(run?.status || "");
 
       if (["complete", "limited"].includes(status) && fixListId) {
-        setState({ status, stalled: false, failureMessage: "", ...progressFrom(run) });
+        setState({ status, failureMessage: "", ...progressFrom(run) });
         navigate(`/dashboard?scan=complete&scan_id=${encodeURIComponent(scanId)}`);
         return;
       }
       if (TERMINAL_FAILURE_STATUSES.has(status)) {
         const ownership = resolveScanOwnership(run, readSiteOwnership(run.website_url));
         const { detail, nextStep } = durableScanStatePresentation(run, { ownership });
-        setState({ status, stalled: false, failureMessage: `${detail} ${nextStep}`, ...progressFrom(run) });
+        setState({ status, failureMessage: `${detail} ${nextStep}`, ...progressFrom(run) });
         return;
       }
       // A transient null read never ends the watch; it just waits for the
@@ -77,7 +74,6 @@ export default function useDurableScanCompletion(scanId, active) {
         const next = progressFrom(run);
         return {
           status,
-          stalled: Date.now() - startedAt >= STALLED_AFTER_MS,
           domain: next.domain || previous.domain,
           failureMessage: "",
           pagesFound: Math.max(previous.pagesFound, next.pagesFound),

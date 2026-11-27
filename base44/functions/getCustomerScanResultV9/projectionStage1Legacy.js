@@ -394,7 +394,7 @@ function previewFixItems(fixItems = []) {
 
 export function buildCustomerProjection({
   run, fixList, fixItems, fullAccess, previewAccess = false, authorityVerified, resultIntegrityVerified,
-  signedPreview = false, verifiedOptionalChecksNoticeReason,
+  signedPreview = false, verifiedOptionalChecksNoticeReason, verifiedCrawlStopReason,
 }) {
   // A verified limited result is readable and is never authoritative. The two
   // flags stay separate all the way to the customer so nothing downstream can
@@ -434,6 +434,8 @@ export function buildCustomerProjection({
       ...(previewVerified ? sanitizePreviewRun(run) : sanitizeRun(run, { detailed: canReadResult, healthScoreStatus: customerHealthScoreStatus })),
       ...(canReadSummary && authorityVerified === true ? {geo_readiness: signedPreview && previewVerified ? validatedGeoSummary(run?.geo_readiness ?? geoReadinessSummary(emptyGeoReadiness())) : customerGeoReadiness(run, canReadResult)} : {}),
       ...optionalChecksNotice,
+      ...(canReadSummary && authorityVerified === true && run?.status === "complete"
+        && verifiedCrawlStopReason === "time_limit" ? { crawl_stop_reason: verifiedCrawlStopReason } : {}),
       ...(limitedVerified && run?.status === "limited" && authorityVerified !== true ? sanitizeLimitedCoverage(run) : {}),
     },
     fixList: canReadResult

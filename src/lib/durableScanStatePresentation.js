@@ -329,19 +329,20 @@ function slowButHealthyNote(record, now) {
 function inProgressPresentation(record, now) {
   const model = scanProgressModel(record);
   const canLeavePage = model.canLeavePage === true;
+  const queued = model.status === "queued";
   return {
     kind: "in_progress",
     title: model.phaseLabel,
-    detail: COPY.in_progress.detail,
+    detail: queued ? "This page updates when your scan starts." : COPY.in_progress.detail,
     nextStep: canLeavePage
-      ? "You can close this page and come back to it from your scan history; the scan keeps running."
+      ? "You can close this page and come back to it from your scan history."
       : "Keep this page open to see your report when it’s ready.",
     retryAdvice: COPY.in_progress.retryAdvice,
     countLabel: model.countLabel,
     pageLimit: model.pageLimit,
     percent: model.status === "reviewing" ? null : model.percent,
     canLeavePage,
-    slowNote: slowButHealthyNote(record, now),
+    slowNote: queued ? "" : slowButHealthyNote(record, now),
   };
 }
 

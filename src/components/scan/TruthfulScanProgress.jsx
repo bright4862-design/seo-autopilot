@@ -15,24 +15,28 @@ export default function TruthfulScanProgress({
   targetLabel = "",
   elapsedLabel = "",
   fallbackPhase = "Starting your scan",
-  longerThanUsual = false,
+  showSavedScanLink = false,
   onOpenSavedScan,
 }) {
   const progress = useMemo(() => scanProgressModel(scan), [scan]);
   const phase = progress.status ? progress.phaseLabel : fallbackPhase;
+  let detail = "";
+  if (progress.status === "queued") detail = "This page updates when your scan starts.";
+  else if (progress.active) detail = "This page updates as your scan runs.";
+  else if (!progress.status) detail = "Keep this page open while we start your scan.";
   const canOpenSavedScan = Boolean(
-    longerThanUsual
+    showSavedScanLink
       && progress.canLeavePage
       && typeof onOpenSavedScan === "function",
   );
 
   return (
-    <div role="status" aria-live="polite" aria-atomic="true">
+    <div>
       <div className="flex items-start gap-3">
         <Loader2 aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0 text-ink motion-safe:animate-spin" />
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline justify-between gap-3">
-            <p className="text-[15px] font-medium tracking-tight">{phase}</p>
+            <p role="status" aria-live="polite" className="text-[15px] font-medium tracking-tight">{phase}</p>
             {elapsedLabel ? (
               <span className="shrink-0 text-[12px] tabular-nums text-ink-faint">{elapsedLabel}</span>
             ) : null}
@@ -50,16 +54,10 @@ export default function TruthfulScanProgress({
           {progress.pageLimit !== null ? (
             <p className="mt-1 text-[12px] text-ink-muted">Up to {progress.pageLimit} pages in this scan</p>
           ) : null}
-          <p className="mt-1 text-[13px] leading-relaxed text-ink-muted">
-            {longerThanUsual
-              ? "This is taking longer than usual."
-              : progress.status
-                ? "This page updates as your scan runs."
-                : "Keep this page open while we start your scan."}
-          </p>
+          {detail && <p className="mt-1 text-[13px] leading-relaxed text-ink-muted">{detail}</p>}
           {progress.canLeavePage ? (
             <p className="mt-2 text-[12px] leading-relaxed text-ink-faint">
-              This scan is running in the background, so you can leave this page and come back later.
+              You can leave this page and return to the scan from your history.
             </p>
           ) : null}
           {canOpenSavedScan ? (
@@ -71,8 +69,7 @@ export default function TruthfulScanProgress({
                 className="font-semibold underline underline-offset-2"
               >
                 open this saved scan
-              </button>{" "}
-              while it continues.
+              </button>.
             </p>
           ) : null}
         </div>

@@ -127,9 +127,21 @@ else
   fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$SOURCE_SHA"
 fi
 
+if [[ -n "$PUBLIC_PILOT_EXPIRES_AT" ]]; then
+  pilot_mode=PUBLISHED_PILOT
+  if [[ "$OPERATION" == prepare-paid-500-pilot ]]; then pilot_mode=PAID_PILOT; fi
+  EXPECTED_SOURCE_SHA="$SOURCE_SHA" bash "$REPO_ROOT/scripts/verify-base44-site.sh" --published-pilot "$pilot_mode"
+fi
+
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 chmod 700 "$TMP"
+mkdir "$TMP/probe-project"
+printf '{"private":true}\n' > "$TMP/probe-project/package.json"
+exec_probe() (
+  cd "$TMP/probe-project"
+  "$@" "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" exec --data-env prod
+)
 fixlist_install_base44_cli "$TMP/pinned-cli"
 fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TMP/whoami" "$APP_ID"
 
@@ -160,7 +172,7 @@ if (![byOwner, byEmail].every(rows => Array.isArray(rows) && rows.length === 1 &
 NODE
   fi
   printf '%s\n' 'console.log("FIXLIST_STAGED_APP_OWNER_VERIFIED");' >> "$TMP/preflight.js"
-  if ! "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" exec --data-env prod \
+  if ! exec_probe \
       < "$TMP/preflight.js" > "$TMP/owner.out" 2> "$TMP/owner.err" \
     || [[ "$(grep -Fxc 'FIXLIST_STAGED_APP_OWNER_VERIFIED' "$TMP/owner.out")" != 1 ]]; then
     if [[ "$OPERATION" == prepare-admin-500-rehearsal ]]; then
@@ -200,7 +212,7 @@ const value = result?.data && typeof result.data === "object" ? result.data : re
 if (value?.success !== true || value.operator_build_id !== "fixlist-staged-runtime-control-v1") throw new Error("runtime_probe_not_ready");
 console.log("FIXLIST_STAGED_BASE44_READBACK=" + JSON.stringify(value));
 NODE
-  if ! "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" exec --data-env prod < "$TMP/readback.js" > "$TMP/probe.out" 2> "$TMP/probe.err"; then
+  if ! exec_probe < "$TMP/readback.js" > "$TMP/probe.out" 2> "$TMP/probe.err"; then
     echo "BASE44_STAGED_READBACK_UNVERIFIED: owner CLI could not invoke the deployed runtime probe." >&2
     return 1
   fi
@@ -238,7 +250,7 @@ const fields = ["schema_version", "success", "observed_at", "build_id", "runtime
 const safe = Object.fromEntries(fields.map(key => [key, value?.[key]]));
 console.log("FIXLIST_V9_PILOT_READBACK=" + JSON.stringify(safe));
 NODE
-  timeout --signal=TERM --kill-after=5s 55 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" exec --data-env prod \
+  exec_probe timeout --signal=TERM --kill-after=5s 55 \
     < "$TMP/v9-pilot.js" > "$TMP/v9-pilot.out" 2> "$TMP/v9-pilot.err" || return 1
   node --input-type=module - "$TMP/v9-pilot.out" "$TMP/v9-pilot.json" \
     "$REPO_ROOT" "$V9_BUILD_ID" "$V9_ACTIVATION_ID" "$OWNER_ID" "$OPERATOR_ID" "$phase" "$PAID_PAGE_CAP" "$GATEWAY_ORIGIN" "$PUBLIC_PILOT_EXPIRES_AT" <<'NODE'

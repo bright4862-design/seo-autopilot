@@ -36,7 +36,11 @@ if ! command -v node >/dev/null 2>&1; then
   exit 2
 fi
 
+probe_project="$(mktemp -d)"
+trap 'rm -rf "$probe_project"' EXIT
+printf '{"private":true}\n' > "$probe_project/package.json"
 probe_output="$(
+  cd "$probe_project"
   cat <<'JS' | "$CLI" --app-id "$APP_ID" exec --data-env prod
 const requestId = "scanreq_intake_probe_" + crypto.randomUUID();
 let status = 0;

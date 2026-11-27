@@ -23,12 +23,16 @@ case "$ACTION" in
     EXPECTED_CONFIRM="PAUSE-BASE44-SCAN-INTAKE:${SOURCE_SHA}"
     VALUE=false
     ;;
+  resume-published-pilot)
+    EXPECTED_CONFIRM="RESUME-PUBLISHED-PILOT-SCAN-INTAKE:${SOURCE_SHA}"
+    VALUE=true
+    ;;
   resume)
     EXPECTED_CONFIRM="RESUME-BASE44-SCAN-INTAKE:${SOURCE_SHA}"
     VALUE=true
     ;;
   *)
-    echo "Refusing Base44 scan-intake mutation: ACTION must be pause or resume." >&2
+    echo "Refusing Base44 scan-intake mutation: select pause, resume or resume-published-pilot." >&2
     exit 2
     ;;
 esac
@@ -45,6 +49,18 @@ fixlist_install_base44_cli "$TMP"
 # safely or non-interactively by a hosted GitHub runner.
 fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TMP/whoami" "$APP_ID"
 
+readback_action="$ACTION"
+if [[ "$ACTION" == resume-published-pilot ]]; then
+  generation="$(node -p 'require(process.argv[1]).generation' "$REPO_ROOT/data/base44-function-routes.json")"
+  case "$generation" in
+    v8) pilot_mode=PUBLISHED_PILOT ;;
+    v9) pilot_mode=PAID_PILOT ;;
+    *) echo "Unknown published scanner generation" >&2; exit 2 ;;
+  esac
+  EXPECTED_SOURCE_SHA="$SOURCE_SHA" bash "$REPO_ROOT/scripts/verify-base44-site.sh" --published-pilot "$pilot_mode"
+  readback_action=resume
+fi
+
 # This is the sole mutation. In particular, do not list, delete, export, or
 # replace admission-connectivity or unrelated Base44 values.
 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" secrets set \
@@ -56,7 +72,7 @@ fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TMP/whoami" "$APP_ID"
 # create a ScanRun, claim admission, or enqueue a task.
 FIXLIST_BASE44_CLI="$FIXLIST_BASE44_CLI" \
 BASE44_APP_ID="$APP_ID" \
-ACTION="$ACTION" \
+ACTION="$readback_action" \
 /bin/bash "$REPO_ROOT/scripts/verify-base44-scan-intake-runtime.sh"
 
 printf 'BASE44_SCAN_INTAKE_UPDATED\naction=%s\nsource_sha=%s\n' "$ACTION" "$SOURCE_SHA"

@@ -10,8 +10,9 @@ on:
         options:
           - pause
           - resume
+          - resume-published-pilot
       confirm:
-        description: "Exact PAUSE/RESUME-BASE44-SCAN-INTAKE:<main-sha> confirmation"
+        description: "Exact intake confirmation for the selected action and main SHA"
         required: true
         type: string
 

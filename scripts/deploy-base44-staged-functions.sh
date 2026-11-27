@@ -44,7 +44,10 @@ if (operator) {
 console.log(proofMarker);
 NODE
   } > "$tmp/intake.js"
-  if ! timeout --signal=TERM --kill-after=5s 25 "$FIXLIST_BASE44_CLI" --app-id "$app" exec --data-env prod \
+  # Deno can materialize its SDK under the current node_modules during exec.
+  # Keep the authenticated probe in its own package scope.
+  printf '{"private":true}\n' > "$tmp/package.json"
+  if ! (cd "$tmp" && timeout --signal=TERM --kill-after=5s 25 "$FIXLIST_BASE44_CLI" --app-id "$app" exec --data-env prod) \
       < "$tmp/intake.js" > "$tmp/intake.out" 2> "$tmp/intake.err" \
       || [[ "$(grep -Fxc "$marker" "$tmp/intake.out")" != 1 ]]; then
     if [[ "$mode" == operator ]]; then

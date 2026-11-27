@@ -286,6 +286,7 @@ function sanitizeRepairObservation(value = {}) {
       continue;
     }
     if (key === "status" || key === "h1_count") {
+      if (raw == null || raw === "") continue;
       const number = Number(raw);
       if (Number.isInteger(number) && number >= 0) output[key] = number;
     }
@@ -519,15 +520,15 @@ export function customerRedirectEvidenceRows(card = {}, siteOrigin = "") {
 }
 
 function observationValueLabel(value = {}) {
-  if (Object.prototype.hasOwnProperty.call(value, "canonical_url")) {
-    return `Canonical observed: ${clean(value.canonical_url) || "missing"}`;
+  if (typeof value.canonical_url === "string") {
+    return `Canonical in the source HTML: ${clean(value.canonical_url) || "missing"}`;
   }
   if (Object.prototype.hasOwnProperty.call(value, "meta_description_state")) {
     const state = lower(value.meta_description_state).replace(/_/g, " ") || "unknown";
     return `Meta description observed: ${state}`;
   }
-  if (Object.prototype.hasOwnProperty.call(value, "h1_count")) {
-    return `H1 count observed: ${Number(value.h1_count) || 0}`;
+  if (Number.isInteger(value.h1_count) && value.h1_count >= 0) {
+    return `H1 count in the source HTML: ${value.h1_count}`;
   }
   if (clean(value.title)) return `Title observed: ${clean(value.title)}`;
   if (clean(value.excerpt)) return clean(value.excerpt);

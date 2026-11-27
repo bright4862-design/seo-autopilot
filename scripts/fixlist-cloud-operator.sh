@@ -1118,7 +1118,7 @@ bound = counts.get("bound")
 ready = snapshot.get("drain_ready") is True
 if mode not in {"open", "closed", "acceptance_only"}:
     raise SystemExit("Invalid barrier mode")
-if not isinstance(generation, int) or generation < 0:
+if type(generation) is not int or generation < 0:
     raise SystemExit("Invalid barrier generation")
 expected_version = {
     "start_500_pilot": "admission_published_500_pilot_snapshot_v1",
@@ -1135,6 +1135,13 @@ if not re.fullmatch(r"[0-9a-f]{64}", proof):
     raise SystemExit(f"Invalid {snapshot_kind} snapshot proof")
 if not hmac.compare_digest(proof, expected_proof):
     raise SystemExit(f"{snapshot_kind.capitalize()} snapshot signature mismatch")
+# Bind unsigned transport mode/generation to the authenticated snapshot.
+signed_barrier = snapshot.get("barrier")
+if (not isinstance(signed_barrier, dict)
+        or signed_barrier.get("mode") != mode
+        or type(signed_barrier.get("generation")) is not int
+        or signed_barrier["generation"] != generation):
+    raise SystemExit("Barrier envelope disagrees with signed drain snapshot")
 boundary = snapshot.get("boundary") or {}
 if expected == "acceptance_only" and launcher_build_id:
     if boundary.get("required_launcher_build_id") != launcher_build_id:

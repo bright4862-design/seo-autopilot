@@ -1,0 +1,1783 @@
+import { frozenTaskScanContract, hasLargeScanGrant, publishedPilotLaunchPolicy, readStagedScanSettings, resolveServerScanContract, stagedScanOwnerEnabled, trustedScanContract } from "./scanLimits.js";
+import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
+import { secrets } from "base44:runtime";
+import {
+  DRAIN_DELAY_SECONDS,
+  enqueueScanDrain,
+  enqueueScanJob,
+  normalizeAttemptCount,
+  stagedDispatchGatewayUrl,
+} from "./cloudTasks.js";
+import { evaluateScanAccess, uniqueAccessRows } from "./entitlement.js";
+import {
+  betaScanAdmissionPolicy,
+  normalizeAdmissionIdentity,
+  scanIsTerminal,
+} from "./admission.js";
+import {
+  admissionTargetOrigin,
+  bindAdmission,
+  claimAdmission,
+  releaseAdmission,
+  statusAdmission,
+  verifyAdmissionClaimEvidence,
+} from "./admissionClient.js";
+import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
+import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
+const BASE44_RUNTIME_ACTIVATION_ID = "startStandardScanJobV9-staged-runtime-20261111-v5";
+const STAGED_RUNTIME_ACTION = "staged_runtime_status";
+const PUBLISHED_SCAN_OPTIONS_ACTION = "published_scan_options";
+const PUBLIC_PILOT_EXPIRY = "SCAN_PUBLIC_PILOT_EXPIRES_AT";
+const STAGED_RUNTIME_ADMIN_EMAILS = new Map([
+  ["6a498da58ef5cec1f5cd4486", "bright4862@gmail.com"],
+  ["6a498732ec779dfaaeab0e54", "londonparisbrussels@gmail.com"],
+]);
+
+const CORS_HEADERS = Object.freeze({
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+});
+
+function corsHeaders() {
+  return { ...CORS_HEADERS };
+}
+
+function jsonResponse(payload, status = 200, headers = {}) {
+  return Response.json(payload, { status, headers: { ...corsHeaders(), ...headers } });
+}
+
+function mutableScanIntakeValue() {
+  try {
+    return secrets.get("BETA_SCAN_INTAKE_ENABLED");
+  } catch {
+    return "";
+  }
+}
+
+function mutableScanAdmissionSecret(name) {
+  try {
+    return secrets.get(name);
+  } catch {
+    return "";
+  }
+}
+
+function mutableScanAdmissionValue() {
+  return mutableScanAdmissionSecret("BETA_SCAN_ADMISSION_ENABLED");
+}
+
+function mutableScanAdmissionEnv(name) {
+  if (
+    name === "BETA_SCAN_ADMISSION_ENABLED"
+    || name === "SCAN_ADMISSION_COORDINATOR_URL"
+    || name === "SCAN_EVIDENCE_SIGNING_KEY"
+  ) {
+    return mutableScanAdmissionSecret(name);
+  }
+  return String(Deno.env.get(name) || "");
+}
+
+function stagedScanEnv(name: string) {
+  return Deno.env.get(name);
+}
+
+function paidPilotScanEnv(name: string) {
+  return name === "SCAN_STAGED_PILOT_OWNER_IDS" ? mutableScanAdmissionSecret(name) : stagedScanEnv(name);
+}
+
+function publishedPilotExpiry(settings: ReturnType<typeof readStagedScanSettings>) {
+  return settings.rolloutScope === "paid" ? mutableScanAdmissionSecret(PUBLIC_PILOT_EXPIRY) : stagedScanEnv(PUBLIC_PILOT_EXPIRY);
+}
+
+function reportedGate(value: unknown) {
+  if (value === "true") return "enabled";
+  if (value === "false") return "disabled";
+  return "unavailable";
+}
+
+async function stagedRuntimeStatus(user, raw) {
+  function response(payload: Record<string, unknown>, status = 200) {
+    return Response.json(payload, { status, headers: { ...corsHeaders(), "Cache-Control": "no-store" } });
+  }
+  const expectedEmail = STAGED_RUNTIME_ADMIN_EMAILS.get(user.id);
+  if (!expectedEmail || String(user.email).trim().toLowerCase() !== expectedEmail
+      || String(user.role || "").trim().toLowerCase() !== "admin") {
+    return response({ success: false, error_code: "owner_only" }, 403);
+  }
+  const input = Object.keys(raw).length === 1 && Object.hasOwn(raw, "data") ? raw.data : raw;
+  if (input?.action !== STAGED_RUNTIME_ACTION || Object.keys(input).length !== 1) {
+    return response({ success: false, error_code: "invalid_action" }, 400);
+  }
+  try {
+    const settings = readStagedScanSettings(paidPilotScanEnv);
+    const { cohort, ownerIds } = settings;
+    // The launcher accepts trimmed owner IDs. Attest a cohort only when the
+    // configured list also meets the strict deployment format.
+    const explicit = cohort === ownerIds.join(",") && ownerIds.length > 0 && ownerIds.length <= 5
+      && ownerIds.every(id => /^[A-Za-z0-9_-]{6,64}$/.test(id)) && new Set(ownerIds).size === ownerIds.length;
+    const cohortState = explicit ? "explicit" : cohort === "" ? "empty" : cohort === undefined ? "absent" : "invalid";
+    let cohortHash: string | null = null;
+    if (explicit || cohortState === "empty") {
+      const canonicalCohort = JSON.stringify([...ownerIds].sort());
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalCohort));
+      cohortHash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+    }
+    let pilotCohortHash: string | null = null;
+    if (settings.validPilotCohort) {
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify([...settings.pilotOwnerIds].sort())));
+      pilotCohortHash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+    }
+    const enabled = stagedScanOwnerEnabled(settings, user.id);
+    const pilotExpiry = publishedPilotExpiry(settings);
+    return response({
+      success: true,
+      schema_version: "fixlist_staged_v9_intake_readback_v1",
+      observed_at: new Date().toISOString(),
+      build_id: FUNCTION_BUILD_ID,
+      runtime_activation_id: BASE44_RUNTIME_ACTIVATION_ID,
+      release_fingerprint: RELEASE_FINGERPRINT,
+      configured_pipeline_mode: settings.pipelineMode,
+      staged_rollout_scope: settings.rolloutScope,
+      staged_500_entitled_enabled: settings.entitled500Enabled,
+      staged_pilot_owner_count: pilotCohortHash === null ? null : settings.pilotOwnerIds.length,
+      staged_pilot_owner_cohort_sha256: pilotCohortHash,
+      paid_dispatch_gateway_origin: stagedDispatchGatewayUrl(stagedScanEnv),
+      pipeline_mode: enabled ? "staged" : "monolith",
+      staged_owner_cohort_state: cohortState,
+      staged_owner_count: cohortHash === null ? null : ownerIds.length,
+      staged_owner_cohort_sha256: cohortHash,
+      staged_owner_enabled: enabled,
+      intake_gate: reportedGate(mutableScanIntakeValue()),
+      admission_gate: reportedGate(mutableScanAdmissionValue()),
+      ...(pilotExpiry !== undefined ? { public_pilot_expires_at: /^[0-9]{1,12}$/.test(pilotExpiry) ? Number(pilotExpiry) : null } : {}),
+    });
+  } catch {
+    return response({ success: false, error_code: "runtime_unavailable" }, 503);
+  }
+}
+
+async function publishedScanOptions(base44, user, settings, pilot, body) {
+  const noStore = { "Cache-Control": "no-store" };
+  if (Object.keys(body).length !== 1) {
+    return jsonResponse({ success: false, error_code: "invalid_action" }, 400, noStore);
+  }
+  const version = "published_scan_options_v1";
+  const options = (launch, pageCap) => jsonResponse({
+    success: true, version, launch, page_cap: pageCap, release_fingerprint: RELEASE_FINGERPRINT,
+  }, 200, noStore);
+  if (!pilot.configured || !pilot.namedCustomer) return options("legacy", 150);
+  if (!pilot.paidPilot && (!pilot.enabled || !stagedDispatchGatewayUrl())) return options("paused", null);
+
+  const entitlement = await loadScanEntitlement(base44, user, { createPreviewAccess: false });
+  if (!entitlement.ok) {
+    return jsonResponse({
+      success: false, error_code: entitlement.failureCode, error: customerStatusDetail(entitlement.failureCode),
+    }, entitlement.failureCode === "paid_access_conflict" ? 409 : 402, noStore);
+  }
+  if (pilot.paidPilot && !hasLargeScanGrant(entitlement.record)) return options("legacy", 150);
+  if (!pilot.enabled || !stagedDispatchGatewayUrl()) return options("paused", null);
+  const { page_cap } = resolveServerScanContract({
+    access: entitlement.record, ownerUserId: user.id, verifiedAccess: entitlement.preview === false, settings,
+    paidPilot: pilot.paidPilot && pilot.enabled,
+  });
+  if (pilot.paidPilot && page_cap !== 500) return options("paused", null);
+  return options("pilot", page_cap);
+}
+
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "22526f0da5f2fbac";
+const VERSION = "startStandardScanJob_v3_server_admission";
+const PUBLIC_SCAN_MODE = "standard_150";
+
+const ASYNC_WORKER_BUDGET_MS = 210_000;
+const TERMINAL_SCAN_STATUSES = new Set(["complete", "limited", "failed", "cancelled"]);
+const ADMISSION_RECONCILIATION_VERSION = RELEASE_COMPONENT_VERSIONS.admission_reconciliation_version;
+const SITE_OWNERSHIP_POLICY_VERSION = "owner_managed_robots_v1";
+const SAFE_RELEASE_FAILURE_CODES = new Set([
+  "admission_release_failed",
+  "admission_unreachable",
+  "admission_disabled",
+  "admission_not_configured",
+  "admission_sign_failed",
+  "coordinator_rejected",
+  "coordinator_unavailable",
+  "scan_identity_conflict",
+  "scan_not_bound",
+  "barrier_generation_conflict",
+]);
+
+const CUSTOMER_STATUS_DETAIL: Record<string, string> = {
+  paid_access_required: "Standard 150 access is required before this scan can start.",
+  paid_access_conflict: "Your access record needs support before this scan can start.",
+  preview_scan_used: "Your free preview scan has already been used. Unlock full access for $49 to run another scan and open the complete FixList.",
+  durable_worker_not_configured: "The scan worker is not configured yet. No scan was started.",
+  invalid_worker_url: "The scan worker is not configured correctly. No scan was started.",
+  tasks_credentials_not_configured: "The scan queue is not configured yet. No scan was started.",
+  tasks_token_mint_failed: "The scan queue could not authenticate. No scan was started.",
+  tasks_unreachable: "The scan queue could not be reached. Please retry.",
+  scan_admission_paused: "New scans are temporarily paused.",
+  scan_intake_paused: "New scans are temporarily paused.",
+  scan_admission_configuration_invalid: "The scan admission coordinator is not configured correctly.",
+  scan_staged_rollout_configuration_invalid: "New scans are temporarily paused.",
+  scan_staged_500_unavailable: "Standard 500 scans are temporarily paused.",
+  scan_pilot_unavailable: "This scan is unavailable. Check your scan limit before trying again.",
+  scan_limit_changed: "Your scan limit changed. Check your new limit and try again.",
+  scan_pilot_saved_request: "Open this scan from your dashboard.",
+  dispatch_gateway_not_configured: "The scan queue is not configured yet. No scan was started.",
+};
+
+function pilotLaunchRefused(code: string) {
+  return jsonResponse({ success: false, accepted: false, failure_code: code, error: customerStatusDetail(code) }, 409);
+}
+
+export default async function (req: Request): Promise<Response> {
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders() });
+  if (req.method !== "POST") {
+    return jsonResponse({ success: false, version: VERSION, build_id: FUNCTION_BUILD_ID, runtime_activation_id: BASE44_RUNTIME_ACTIVATION_ID, error: "Method not allowed." }, 405);
+  }
+  if (RELEASE_FINGERPRINT !== BASE44_HANDLER_RELEASE_FINGERPRINT) {
+    return jsonResponse({ success: false, version: VERSION, error: "The scan service release is not active." }, 503);
+  }
+
+  try {
+    const base44 = createClientFromRequest(req);
+    const user = await base44.auth.me().catch(() => null);
+    if (!user?.id || !user?.email) {
+      return jsonResponse({ success: false, version: VERSION, error: "Unauthorized." }, 401);
+    }
+
+    const raw = await safeReadJson(req);
+    const body = unwrapRequestBody(raw);
+    if (raw?.action === STAGED_RUNTIME_ACTION || body.action === STAGED_RUNTIME_ACTION) {
+      return stagedRuntimeStatus(user, raw);
+    }
+    const optionsRequest = raw?.action === PUBLISHED_SCAN_OPTIONS_ACTION || body.action === PUBLISHED_SCAN_OPTIONS_ACTION;
+    const identity = resolveRequestIdentity(body);
+    if (identity.conflict && !optionsRequest) {
+      return jsonResponse({
+        success: false,
+        version: VERSION,
+        error: "request_id and idempotency_key must match.",
+        ...identity.fields,
+      }, 409);
+    }
+    if (!identity.fields.request_id && !optionsRequest) {
+      return jsonResponse({
+        success: false,
+        version: VERSION,
+        error: "A durable request_id is required.",
+      }, 400);
+    }
+
+    const stagedSettings = readStagedScanSettings(paidPilotScanEnv);
+    if (stagedSettings.rolloutScope === "invalid") {
+      const code = "scan_staged_rollout_configuration_invalid";
+      return jsonResponse({
+        success: false, accepted: false, version: VERSION, failure_code: code,
+        error: customerStatusDetail(code), retryable: true, ...identity.fields,
+      }, 503);
+    }
+    const pilot = publishedPilotLaunchPolicy({ settings: stagedSettings, user, expiresAt: publishedPilotExpiry(stagedSettings) });
+    if (optionsRequest) return publishedScanOptions(base44, user, stagedSettings, pilot, body);
+    const pilotRequest = (!pilot.paidPilot && pilot.configured) || Object.hasOwn(body, "published_pilot_page_cap");
+    const typedPilotRequest = pilot.paidPilot || body.published_pilot_page_cap === 150;
+    if (pilotRequest && (!pilot.namedCustomer || (!typedPilotRequest && !pilot.enabled))) {
+      return pilotLaunchRefused("scan_pilot_unavailable");
+    }
+    if (pilotRequest && identity.fields.scan_id) return pilotLaunchRefused("scan_pilot_saved_request");
+    if (pilotRequest && !(pilot.paidPilot ? [500] : [150, 500]).includes(body.published_pilot_page_cap)) {
+      return pilotLaunchRefused("scan_limit_changed");
+    }
+
+    const requestedMode = String(
+      body.scan_mode || body.canonical_mode || body.audit_profile || PUBLIC_SCAN_MODE,
+    ).trim().toLowerCase();
+    if (!["standard_150", "standard_500"].includes(requestedMode)) {
+      return jsonResponse({
+        success: false,
+        version: VERSION,
+        error: "The requested scan mode is not supported.",
+        ...identity.fields,
+      }, 400);
+    }
+
+    const websiteUrl = normalizeWebsiteUrl(
+      body.website_url || body.url || body.normalized_url || body.requested_start_url || body.start_url || "",
+    );
+    if (!websiteUrl) {
+      return jsonResponse({
+        success: false,
+        version: VERSION,
+        error: "Missing or invalid website_url.",
+        ...identity.fields,
+      }, 400);
+    }
+    const safety = validatePublicHttpUrl(websiteUrl);
+    if (!safety.ok) {
+      return jsonResponse({
+        success: false,
+        version: VERSION,
+        error: safety.reason,
+        ...identity.fields,
+      }, 400);
+    }
+
+    const scope = resolveFocusedPathScope(body, websiteUrl);
+    if (!scope.ok) {
+      return jsonResponse({
+        success: false,
+        accepted: false,
+        version: VERSION,
+        failure_code: scope.code,
+        error: scope.error,
+        ...identity.fields,
+      }, scope.status);
+    }
+    if (scope.focused && identity.fields.scan_id) {
+      return jsonResponse({
+        success: false,
+        accepted: false,
+        version: VERSION,
+        failure_code: "focused_scope_requires_server_admission",
+        error: "Focused scans require a fresh server-admitted scan.",
+        ...identity.fields,
+      }, 409);
+    }
+
+    let context;
+    let entitlement;
+    let admissionMeta = { replayed: false, replay_reason: "" };
+    if (identity.fields.scan_id) {
+      // Temporary cache-compatible path for a browser-created row. It remains
+      // only until the server-admission frontend has crossed its cache window.
+      context = await loadOwnedScanContext({ base44, user, identity, websiteUrl });
+      if (!context.ok) {
+        return jsonResponse({
+          success: false,
+          version: VERSION,
+          error: context.error,
+          ...identity.fields,
+        }, context.status);
+      }
+      entitlement = await loadScanEntitlement(base44, user);
+      if (!entitlement.ok) {
+        const attemptCount = normalizeAttemptCount(context.scan?.attempt_count);
+        await failOwnedScanRun({
+          base44,
+          context,
+          identity: identity.fields,
+          attemptCount,
+          failureCode: entitlement.failureCode,
+        });
+        return jsonResponse({
+          success: false,
+          accepted: false,
+          version: VERSION,
+          retryable: false,
+          failure_code: entitlement.failureCode,
+          error: customerStatusDetail(entitlement.failureCode),
+          ...identity.fields,
+        }, entitlement.failureCode === "paid_access_conflict" ? 409 : 402);
+      }
+    } else {
+      const policy = betaScanAdmissionPolicy(
+        mutableScanIntakeValue(),
+        mutableScanAdmissionValue(),
+        mutableScanAdmissionEnv("SCAN_ADMISSION_COORDINATOR_URL"),
+        mutableScanAdmissionEnv("SCAN_EVIDENCE_SIGNING_KEY"),
+      );
+      if (!policy.ok) {
+        return jsonResponse({
+          success: false,
+          accepted: false,
+          version: VERSION,
+          retryable: false,
+          failure_code: policy.code,
+          error: customerStatusDetail(policy.code),
+          ...identity.fields,
+        }, 503);
+      }
+      // An active access grant (Stripe checkout, owner test, or manual grant)
+      // IS the beta invitation. The static cohort id list is no longer a
+      // separate gate: it used to 403 fully-granted customers, and the browser
+      // treated that refusal as an expired session. Entitlement below is the
+      // single admission gate.
+      const project = await loadExactOwnedProject({
+        base44,
+        user,
+        projectId: body.project_id,
+        websiteUrl,
+      });
+      if (!project.ok) {
+        return jsonResponse({
+          success: false,
+          accepted: false,
+          version: VERSION,
+          failure_code: project.code,
+          error: project.error,
+          ...identity.fields,
+        }, project.status);
+      }
+      const robotsPolicy = robotsPolicyForOwnedProject(project.project);
+
+      const focusedParent = await validateFocusedParentScan({
+        base44,
+        user,
+        project: project.project,
+        scope,
+        websiteUrl,
+      });
+      if (!focusedParent.ok) {
+        return jsonResponse({
+          success: false,
+          accepted: false,
+          version: VERSION,
+          failure_code: focusedParent.code,
+          error: focusedParent.error,
+          ...identity.fields,
+        }, focusedParent.status);
+      }
+
+      entitlement = await loadScanEntitlement(base44, user, {
+        createPreviewAccess: !pilotRequest || (pilot.enabled && body.published_pilot_page_cap === 150),
+      });
+      if (!entitlement.ok) {
+        return jsonResponse({
+          success: false,
+          accepted: false,
+          version: VERSION,
+          retryable: false,
+          failure_code: entitlement.failureCode,
+          error: customerStatusDetail(entitlement.failureCode),
+          ...identity.fields,
+        }, entitlement.failureCode === "paid_access_conflict" ? 409 : 402);
+      }
+
+      const scanContract = resolveServerScanContract({
+        access: entitlement.record, ownerUserId: user.id,
+        verifiedAccess: entitlement.preview === false, settings: stagedSettings,
+        paidPilot: pilot.paidPilot && pilotRequest,
+      });
+      if (pilotRequest && scanContract.page_cap !== body.published_pilot_page_cap) {
+        return pilotLaunchRefused("scan_limit_changed");
+      }
+      const requiresExistingScan = hasLargeScanGrant(entitlement.record) && scanContract.page_cap !== 500;
+      const admitted = await admitServerOwnedScan({
+        base44,
+        user,
+        access: entitlement.record,
+        scanContract,
+        requiresExistingScan,
+        pilotRequest,
+        pilotReplayOnly: typedPilotRequest && pilotRequest && !pilot.enabled,
+        project: project.project,
+        body,
+        identity,
+        websiteUrl,
+        scope,
+        robotsPolicy,
+      });
+      if (!admitted.ok) {
+        const originPause = ["target_cooldown_active", "target_contact_busy", "target_contact_unconfirmed"].includes(admitted.code);
+        const cooldownHeaders = originPause
+          ? { "Retry-After": String(admitted.retryAfter), "Access-Control-Expose-Headers": "Retry-After" }
+          : {};
+        return jsonResponse({
+          success: false,
+          accepted: false,
+          version: VERSION,
+          retryable: admitted.retryable === true,
+          retry_after: admitted.retryAfter || undefined,
+          ...(originPause ? { retry_after_seconds: admitted.retryAfter } : {}),
+          failure_code: admitted.code,
+          error: admitted.error,
+          ...identity.fields,
+        }, admitted.status, cooldownHeaders);
+      }
+      context = admitted.context;
+      identity.fields.scan_id = String(context.scan.id);
+      identity.fields.scan_run_id = String(context.scan.id);
+      admissionMeta = {
+        replayed: admitted.replayed === true,
+        replay_reason: admitted.replayReason || "",
+      };
+    }
+
+    const frozenTaskContract = frozenTaskScanContract(context.scan);
+    const scanContract = frozenTaskContract.page_cap === undefined
+      ? trustedScanContract(context.scan)
+      : frozenTaskContract;
+    const paidRoutePaused = stagedSettings.rolloutScope !== "paid"
+      || (scanContract.page_cap === 500 && !stagedSettings.entitled500Enabled
+        && !(pilot.paidPilot && pilotRequest));
+    const paidDispatch = context.scan.staged_rollout_scope === "paid";
+    const requireGateway = scanContract.pipeline_mode === "staged" || paidDispatch;
+    const readOnlyReplay = context.readOnlyReplay || (paidDispatch && paidRoutePaused);
+    const scanRobotsPolicy = readOnlyReplay
+      ? robotsPolicyFromScanRun(context.scan)
+      : await ensureFrozenScanRobotsPolicy({ base44, context });
+    if (!scanRobotsPolicy) {
+      return jsonResponse({
+        success: false,
+        accepted: false,
+        version: VERSION,
+        failure_code: "scan_identity_mismatch",
+        error: "The saved scan policy could not be verified.",
+        ...identity.fields,
+      }, 409);
+    }
+
+    const attemptCount = normalizeAttemptCount(context.scan?.attempt_count);
+    if (readOnlyReplay || scanIsTerminal(context.scan)) {
+      return jsonResponse({
+        success: true,
+        accepted: true,
+        version: VERSION,
+        ...scanContract,
+        status: String(context.scan.status),
+        max_pages: scanContract.page_cap,
+        respect_robots_txt: scanRobotsPolicy.respect_robots_txt,
+        owner_attested_robots_override: scanRobotsPolicy.owner_attested_robots_override,
+        deno_fallback_used: false,
+        ...admissionMeta,
+        ...identity.fields,
+      });
+    }
+
+    const queuePath = String(Deno.env.get("SCAN_TASKS_QUEUE_PATH") || "");
+    const drainQueuePath = String(Deno.env.get("SCAN_DRAIN_QUEUE_PATH") || "");
+    const workerUrl = String(Deno.env.get("SCAN_WORKER_URL") || "");
+    const invokerServiceAccount = String(Deno.env.get("TASKS_INVOKER_SERVICE_ACCOUNT") || "");
+    const dispatchSigningKey = String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || "");
+    if (!queuePath || !drainQueuePath || queuePath === drainQueuePath || !workerUrl || !invokerServiceAccount) {
+      await failOwnedScanRun({
+        base44,
+        context,
+        identity: identity.fields,
+        attemptCount,
+        failureCode: "durable_worker_not_configured",
+      });
+      return jsonResponse({
+        success: false,
+        accepted: false,
+        version: VERSION,
+        retryable: true,
+        failure_code: "durable_worker_not_configured",
+        error: customerStatusDetail("durable_worker_not_configured"),
+        ...identity.fields,
+      }, 503);
+    }
+
+    const pathPrefix = scope.pathPrefix || null;
+    const drainAfter = new Date(Date.now() + DRAIN_DELAY_SECONDS * 1000).toISOString();
+    const commonPayload = {
+      scan_id: identity.fields.scan_id,
+      attempt_count: attemptCount,
+      request_id: identity.fields.request_id,
+      idempotency_key: identity.fields.idempotency_key,
+      project_id: String(context.scan?.project_id || ""),
+      owner_user_id: String(user.id),
+      website_url: websiteUrl,
+      normalized_domain: identity.fields.normalized_domain,
+    };
+
+    // The delayed, attempt-bound watchdog is created first. If the scan task or
+    // all of its retries disappear, this task is the final server-side owner of
+    // terminal state. If the scan completes, it no-ops.
+    const drain = await enqueueScanDrain({
+      queuePath: drainQueuePath,
+      workerUrl,
+      invokerServiceAccount,
+      scanId: identity.fields.scan_id,
+      attemptCount,
+      payload: { ...commonPayload, ...frozenTaskContract, drain_after: drainAfter },
+      signingKey: dispatchSigningKey,
+      requireGateway,
+    });
+    if (!drain.ok) {
+      await failOwnedScanRun({
+        base44,
+        context,
+        identity: identity.fields,
+        attemptCount,
+        failureCode: drain.failureCode,
+      });
+      return jsonResponse({
+        success: false,
+        accepted: false,
+        version: VERSION,
+        retryable: true,
+        failure_code: drain.failureCode,
+        error: "The scan safety watchdog could not be queued. No scan was started.",
+        ...identity.fields,
+      }, 503);
+    }
+
+    const enqueued = await enqueueScanJob({
+      queuePath,
+      workerUrl,
+      invokerServiceAccount,
+      scanId: identity.fields.scan_id,
+      attemptCount,
+      payload: {
+        ...commonPayload,
+        path_prefix: pathPrefix,
+        business_name: String(body.business_name || body.project_name || ""),
+        cms_platform: String(body.cms_platform || body.platform || ""),
+        ...scanContract,
+        ...(paidDispatch ? { staged_rollout_scope: "paid" } : {}),
+        respect_robots_txt: scanRobotsPolicy.respect_robots_txt,
+        owner_attested_robots_override: scanRobotsPolicy.owner_attested_robots_override,
+      },
+      signingKey: dispatchSigningKey,
+      requireGateway,
+    });
+
+    if (!enqueued.ok && enqueued.outcomeUnknown !== true) {
+      await failOwnedScanRun({
+        base44,
+        context,
+        identity: identity.fields,
+        attemptCount,
+        failureCode: enqueued.failureCode,
+      });
+      return jsonResponse({
+        success: false,
+        accepted: false,
+        version: VERSION,
+        retryable: true,
+        failure_code: enqueued.failureCode,
+        error: "The scan job could not be queued.",
+        ...identity.fields,
+      }, 503);
+    }
+
+    const dispatchUncertain = enqueued.ok !== true;
+    logBoundary("async_job_accepted", identity.fields, {
+      attempt_count: attemptCount,
+      task_name: enqueued.taskName || "",
+      watchdog_task_name: drain.taskName || "",
+      deduplicated: enqueued.deduplicated === true,
+      dispatch_uncertain: dispatchUncertain,
+    });
+    return jsonResponse({
+      success: true,
+      accepted: true,
+      version: VERSION,
+      ...scanContract,
+      status: String(context.scan?.status || "queued"),
+      worker_budget_ms: ASYNC_WORKER_BUDGET_MS,
+      max_pages: scanContract.page_cap,
+      respect_robots_txt: scanRobotsPolicy.respect_robots_txt,
+      owner_attested_robots_override: scanRobotsPolicy.owner_attested_robots_override,
+      deno_fallback_used: false,
+      dispatch_uncertain: dispatchUncertain,
+      ...admissionMeta,
+      ...identity.fields,
+    });
+  } catch (error) {
+    console.error("startStandardScanJob failed", {
+      message: String(error?.message || error).slice(0, 180),
+    });
+    return jsonResponse({
+      success: false,
+      accepted: false,
+      version: VERSION,
+      error: "The scan job could not be submitted.",
+      retryable: true,
+    }, 500);
+  }
+}
+
+function robotsPolicyForOwnedProject(project = {}) {
+  const raw = String(project?.site_owner_attestation || "").trim().toLowerCase();
+  const siteOwnershipAnswer = raw === "owner_or_manager" || raw === "not_owner" ? raw : "";
+  const ownerAttested = siteOwnershipAnswer === "owner_or_manager";
+  return {
+    respect_robots_txt: !ownerAttested,
+    owner_attested_robots_override: ownerAttested,
+    site_ownership_answer: siteOwnershipAnswer,
+    site_ownership_policy_version: SITE_OWNERSHIP_POLICY_VERSION,
+  };
+}
+
+function robotsPolicyFromScanRun(scan = {}) {
+  const respect = scan?.respect_robots_txt;
+  const ownerOverride = scan?.owner_attested_robots_override;
+  if (typeof respect !== "boolean" || typeof ownerOverride !== "boolean" || ownerOverride !== (respect === false)) {
+    return null;
+  }
+  const rawAnswer = String(scan?.site_ownership_answer || "").trim().toLowerCase();
+  const siteOwnershipAnswer = rawAnswer === "owner_or_manager" || rawAnswer === "not_owner" ? rawAnswer : "";
+  return {
+    respect_robots_txt: respect,
+    owner_attested_robots_override: ownerOverride,
+    site_ownership_answer: siteOwnershipAnswer,
+    site_ownership_policy_version: String(scan?.site_ownership_policy_version || ""),
+  };
+}
+
+function sameRobotsPolicy(scan, robotsPolicy) {
+  const stored = robotsPolicyFromScanRun(scan);
+  return Boolean(
+    stored
+    && stored.respect_robots_txt === robotsPolicy.respect_robots_txt
+    && stored.owner_attested_robots_override === robotsPolicy.owner_attested_robots_override
+    && stored.site_ownership_answer === robotsPolicy.site_ownership_answer
+    && stored.site_ownership_policy_version === robotsPolicy.site_ownership_policy_version
+  );
+}
+
+async function ensureFrozenScanRobotsPolicy({ base44, context }) {
+  const stored = robotsPolicyFromScanRun(context?.scan);
+  if (stored) return stored;
+  if (!context?.scan?.id || !context?.project) return null;
+  const robotsPolicy = robotsPolicyForOwnedProject(context.project);
+  try {
+    const updated = await base44.asServiceRole.entities.ScanRun.update(context.scan.id, {
+      respect_robots_txt: robotsPolicy.respect_robots_txt,
+      owner_attested_robots_override: robotsPolicy.owner_attested_robots_override,
+      site_ownership_answer: robotsPolicy.site_ownership_answer,
+      site_ownership_policy_version: robotsPolicy.site_ownership_policy_version,
+    });
+    context.scan = { ...context.scan, ...(updated || {}), ...robotsPolicy };
+    return robotsPolicyFromScanRun(context.scan);
+  } catch {
+    return null;
+  }
+}
+
+async function loadExactOwnedProject({ base44, user, projectId, websiteUrl }) {
+  const id = String(projectId || "").trim();
+  if (!id) {
+    return { ok: false, status: 400, code: "project_id_required", error: "Choose a website project first." };
+  }
+  const project = await base44.asServiceRole.entities.BusinessProject.get(id).catch(() => null);
+  if (!project || String(project.id || "") !== id || String(project.owner_user_id || "") !== String(user.id)) {
+    return { ok: false, status: 404, code: "project_not_found", error: "This website project is not available." };
+  }
+  if (authorityDomain(project.website_url) !== authorityDomain(websiteUrl)) {
+    return { ok: false, status: 409, code: "project_domain_mismatch", error: "The scan website does not match this project." };
+  }
+  return { ok: true, project };
+}
+
+async function replayBoundScanWithoutAdmission({ base44, user, project, request, websiteUrl, robotsPolicy, code }) {
+  const paused = { ok: false, status: 503, code, error: customerStatusDetail(code), retryable: true };
+  const ownerUserId = String(user.id);
+  // A read-only lookup cannot consume a new admission slot when dispatch is
+  // unavailable. Accept only a scan already bound to this request.
+  const status = await statusAdmission({ ownerUserId, env: mutableScanAdmissionEnv }).catch(() => null);
+  const binding = status?.admission;
+  if (status?.ok !== true || binding?.request_id !== request.request_id || !binding?.scan_id) return paused;
+  const scan = await base44.asServiceRole.entities.ScanRun.get(binding.scan_id).catch(() => null);
+  if (scan?.id !== binding.scan_id) return paused;
+
+  const admissionEvidence = await verifiedAdmissionClaim({
+    claim: {
+      ...binding,
+      cohort_evidence_proof: scan.admission_cohort_evidence_proof,
+      cohort_evidence: {
+        version: "admission_claim_evidence_v1",
+        owner_user_id: ownerUserId,
+        request_id: binding.request_id,
+        barrier_generation: binding.barrier_generation,
+        claim_sequence: binding.claim_sequence,
+        admission_mode: binding.admission_mode,
+        acceptance_cohort_id: binding.acceptance_cohort_id,
+        acceptance_release_id: binding.acceptance_release_id,
+        acceptance_source_sha: binding.acceptance_source_sha,
+        acceptance_expires_at: binding.acceptance_expires_at,
+      },
+    },
+    ownerUserId,
+    requestId: request.request_id,
+    signingKey: String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || ""),
+  });
+  if (!admissionEvidence) return paused;
+  const validation = validateServerScanContext({ scan, user, project, request, websiteUrl, admissionEvidence, robotsPolicy });
+  if (!validation.ok) return validation;
+  return {
+    ok: true, replayed: true, replayReason: "request_replay",
+    context: { ok: true, scan, project, expectedDomain: authorityDomain(websiteUrl), readOnlyReplay: true },
+  };
+}
+
+async function admitServerOwnedScan({
+  base44, user, access, scanContract, requiresExistingScan, pilotRequest, pilotReplayOnly, project, body, identity, websiteUrl, scope, robotsPolicy,
+}) {
+  const pilotPageCap = pilotRequest && (scanContract.page_cap === 150 || scanContract.staged_rollout_scope === "paid")
+    ? scanContract.page_cap
+    : undefined;
+  // Attest a server-resolved Standard 150 contract before signing the claim.
+  // A broad entitled 500 launch has no Standard 150 or named-pilot authority.
+  const standard150LauncherBuildId = user.role === "user" && !pilotRequest && scanContract.page_cap === 150
+    && scanContract.staged_rollout_scope === "paid" ? FUNCTION_BUILD_ID : undefined;
+  const request = normalizeAdmissionIdentity({
+    request_id: identity.fields.request_id,
+    idempotency_key: identity.fields.idempotency_key,
+    request_fingerprint: await buildAdmissionFingerprint(websiteUrl, scope?.pathPrefix || "", robotsPolicy, pilotPageCap),
+  });
+  if (!request.ok) {
+    return { ok: false, status: 409, code: request.code, error: "The scan request identity is invalid." };
+  }
+  identity.fields.request_fingerprint = request.request_fingerprint;
+
+  const blockedDispatch = requiresExistingScan ? "scan_staged_500_unavailable"
+    : scanContract.pipeline_mode === "staged" && !stagedDispatchGatewayUrl() ? "dispatch_gateway_not_configured" : "";
+  if (blockedDispatch) {
+    return replayBoundScanWithoutAdmission({
+      base44, user, project, request, websiteUrl, robotsPolicy, code: blockedDispatch,
+    });
+  }
+
+  const targetOrigin = admissionTargetOrigin(websiteUrl);
+  let claim;
+  try {
+    claim = await claimAdmission({
+      ownerUserId: String(user.id),
+      requestId: request.request_id,
+      requestFingerprint: request.request_fingerprint,
+      targetOrigin,
+      queueIfOriginBusy: scanContract.pipeline_mode === "staged",
+      pilotLauncherBuildId: pilotRequest ? FUNCTION_BUILD_ID : undefined,
+      pilotPageCap,
+      pilotReplayOnly,
+      standard150LauncherBuildId,
+      env: mutableScanAdmissionEnv,
+    });
+  } catch {
+    claim = { ok: false, outcomeUnknown: true, failureCode: "admission_unreachable" };
+  }
+  if (!claim?.ok) return coordinatorAdmissionFailure(claim);
+
+  const verifiedEvidence = await verifiedAdmissionClaim({
+    claim,
+    ownerUserId: String(user.id),
+    requestId: request.request_id,
+    signingKey: String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || ""),
+  });
+  if (!verifiedEvidence || (claim.target_origin !== undefined && claim.target_origin !== targetOrigin)
+      || (pilotRequest && (claim.pilot_launcher_build_id !== FUNCTION_BUILD_ID || verifiedEvidence.admission_mode !== "acceptance_only"))
+      || (pilotPageCap !== undefined && claim.pilot_page_cap !== pilotPageCap)
+      || (pilotReplayOnly && claim.outcome !== "replayed")) {
+    return {
+      ok: false,
+      status: 503,
+      code: "admission_claim_evidence_invalid",
+      error: "Scan admission evidence could not be verified.",
+      retryable: true,
+      retryAfter: 2,
+    };
+  }
+
+  const admissionEvidence = {
+    ...verifiedEvidence,
+    ...(targetOrigin && claim.target_origin === targetOrigin ? { admission_target_origin: targetOrigin } : {}),
+  };
+  const claimToken = String(claim.claim_token || "").trim();
+  const claimedScanId = String(claim.scan_id || "").trim();
+  if (claim.outcome === "replayed" && claimedScanId) {
+    let scan = await base44.asServiceRole.entities.ScanRun.get(claimedScanId).catch(() => null);
+    const validation = validateServerScanContext({ scan, user, project, request, websiteUrl, admissionEvidence, robotsPolicy });
+    if (!validation.ok) return validation;
+    scan = await normalizeRecoveredServerScan({ scans: base44.asServiceRole.entities.ScanRun, scan });
+    return {
+      ok: true,
+      replayed: true,
+      replayReason: "request_replay",
+      context: { ok: true, scan, project, expectedDomain: authorityDomain(websiteUrl) },
+    };
+  }
+  if (!["claimed", "replayed"].includes(String(claim.outcome || "")) || !claimToken) {
+    return { ok: false, status: 503, code: "scan_admission_state_invalid", error: "Scan admission is temporarily unavailable.", retryable: true, retryAfter: 2 };
+  }
+
+  // Only the caller that received a fresh `claimed` outcome may create a new
+  // ScanRun. An exact replay with no coordinator scan_id first looks for a row
+  // that the original caller may already have created before losing its bind
+  // response. If none exists yet, it waits instead of racing a second create.
+  if (claim.outcome === "replayed" && !claimedScanId) {
+    const recovered = await recoverExistingServerScan({
+      base44,
+      user,
+      project,
+      request,
+      websiteUrl,
+      admissionEvidence,
+      robotsPolicy,
+    }).catch(() => null);
+    if (!recovered) {
+      return {
+        ok: false,
+        status: 202,
+        code: "scan_admission_pending",
+        error: "This exact scan request is still being admitted.",
+        retryable: true,
+        retryAfter: 2,
+      };
+    }
+    const rebound = await bindAdmission({
+      ownerUserId: String(user.id),
+      requestId: request.request_id,
+      claimToken,
+      scanId: String(recovered.id),
+      barrierGeneration: admissionEvidence.admission_barrier_generation,
+      env: mutableScanAdmissionEnv,
+    }).catch(() => ({ ok: false, outcomeUnknown: true, failureCode: "admission_unreachable" }));
+    if (!exactBindResult(rebound, {
+      requestId: request.request_id,
+      scanId: String(recovered.id),
+      admissionEvidence,
+    })) {
+      const failure = coordinatorAdmissionFailure(rebound, "scan_admission_binding_lost");
+      return { ...failure, error: "The recovered scan could not be bound to this request." };
+    }
+    return {
+      ok: true,
+      replayed: true,
+      replayReason: "request_replay_recovered",
+      context: { ok: true, scan: recovered, project, expectedDomain: authorityDomain(websiteUrl) },
+    };
+  }
+
+  let scan;
+  try {
+    scan = await recoverOrCreateServerScan({
+      base44,
+      user,
+      access,
+      scanContract,
+      project,
+      body,
+      request,
+      websiteUrl,
+      admissionEvidence,
+      scope,
+      robotsPolicy,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      status: Number(error?.status || 503),
+      code: String(error?.code || "scan_admission_create_unknown"),
+      error: "The durable scan record could not be admitted yet.",
+      retryable: true,
+      retryAfter: 2,
+    };
+  }
+
+  let bound;
+  try {
+    bound = await bindAdmission({
+      ownerUserId: String(user.id),
+      requestId: request.request_id,
+      claimToken,
+      scanId: String(scan.id),
+      barrierGeneration: admissionEvidence.admission_barrier_generation,
+      env: mutableScanAdmissionEnv,
+    });
+  } catch {
+    bound = { ok: false, outcomeUnknown: true, failureCode: "admission_unreachable" };
+  }
+  if (!exactBindResult(bound, {
+    requestId: request.request_id,
+    scanId: String(scan.id),
+    admissionEvidence,
+  })) {
+    const failure = coordinatorAdmissionFailure(bound, "scan_admission_binding_lost");
+    return { ...failure, error: "The durable scan record could not be bound to this request." };
+  }
+
+  return {
+    ok: true,
+    replayed: claim.outcome === "replayed",
+    replayReason: claim.outcome === "replayed" ? "request_replay_recovered" : "server_admitted",
+    context: { ok: true, scan, project, expectedDomain: authorityDomain(websiteUrl) },
+  };
+}
+
+async function verifiedAdmissionClaim({ claim, ownerUserId, requestId, signingKey }) {
+  const evidence = claim?.cohort_evidence;
+  const proof = String(claim?.cohort_evidence_proof || "").trim().toLowerCase();
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return null;
+  const barrierGeneration = nonNegativeInteger(evidence.barrier_generation);
+  const claimSequence = nonNegativeInteger(evidence.claim_sequence);
+  const admissionMode = String(evidence.admission_mode || "");
+  const expiresAt = evidence.acceptance_expires_at === null
+    ? null
+    : nonNegativeInteger(evidence.acceptance_expires_at);
+  if (
+    String(evidence.version || "") !== "admission_claim_evidence_v1"
+    || String(evidence.owner_user_id || "") !== ownerUserId
+    || String(evidence.request_id || "") !== requestId
+    || String(claim?.request_id || "") !== requestId
+    || barrierGeneration === null
+    || claimSequence === null
+    || nonNegativeInteger(claim?.barrier_generation) !== barrierGeneration
+    || nonNegativeInteger(claim?.claim_sequence) !== claimSequence
+    || String(claim?.admission_mode || "") !== admissionMode
+    || !["open", "acceptance_only"].includes(admissionMode)
+    || !await verifyAdmissionClaimEvidence({ evidence, proof, signingKey })
+  ) return null;
+
+  const cohortId = String(evidence.acceptance_cohort_id || "");
+  const releaseId = String(evidence.acceptance_release_id || "");
+  const sourceSha = String(evidence.acceptance_source_sha || "").toLowerCase();
+  if (admissionMode === "open") {
+    if (cohortId || releaseId || sourceSha || expiresAt !== null) return null;
+  } else if (!cohortId || !releaseId || !/^[a-f0-9]{40}$/.test(sourceSha) || expiresAt === null) {
+    return null;
+  }
+
+  return {
+    admission_barrier_generation: barrierGeneration,
+    admission_claim_sequence: claimSequence,
+    admission_mode: admissionMode,
+    admission_acceptance_cohort_id: cohortId,
+    admission_acceptance_release_id: releaseId,
+    admission_acceptance_source_sha: sourceSha,
+    ...(expiresAt === null ? {} : { admission_acceptance_expires_at: expiresAt }),
+    admission_cohort_evidence_version: "admission_claim_evidence_v1",
+    admission_cohort_evidence_proof: proof,
+  };
+}
+
+function exactBindResult(result, { requestId, scanId, admissionEvidence }) {
+  return Boolean(
+    result?.ok === true
+    && ["bound", "already_bound"].includes(String(result?.outcome || ""))
+    && String(result?.request_id || "") === requestId
+    && String(result?.scan_id || "") === scanId
+    && nonNegativeInteger(result?.barrier_generation) === admissionEvidence.admission_barrier_generation
+    && nonNegativeInteger(result?.claim_sequence) === admissionEvidence.admission_claim_sequence
+  );
+}
+
+function matchesPersistedAdmissionEvidence(scan, expected) {
+  if (!expected) return false;
+  const persistedExpires = scan?.admission_acceptance_expires_at === undefined
+    || scan?.admission_acceptance_expires_at === null
+    ? null
+    : nonNegativeInteger(scan.admission_acceptance_expires_at);
+  const expectedExpires = expected.admission_acceptance_expires_at ?? null;
+  return nonNegativeInteger(scan?.admission_barrier_generation) === expected.admission_barrier_generation
+    && nonNegativeInteger(scan?.admission_claim_sequence) === expected.admission_claim_sequence
+    && String(scan?.admission_mode || "") === expected.admission_mode
+    && String(scan?.admission_acceptance_cohort_id || "") === expected.admission_acceptance_cohort_id
+    && String(scan?.admission_acceptance_release_id || "") === expected.admission_acceptance_release_id
+    && String(scan?.admission_acceptance_source_sha || "") === expected.admission_acceptance_source_sha
+    && persistedExpires === expectedExpires
+    && String(scan?.admission_cohort_evidence_version || "") === expected.admission_cohort_evidence_version
+    && String(scan?.admission_cohort_evidence_proof || "") === expected.admission_cohort_evidence_proof;
+}
+
+function nonNegativeInteger(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function coordinatorAdmissionFailure(result = {}, fallbackCode = "scan_admission_state_unavailable") {
+  const upstream = String(result?.failureCode || fallbackCode);
+  const originPauses = {
+    target_cooldown_active: { status: 429, error: "This site has asked automated scanners to wait." },
+    target_contact_busy: { status: 409, error: "FixList is spacing out requests to this website." },
+    target_contact_unconfirmed: { status: 409, error: "FixList has paused requests to this website after an interrupted scan." },
+  };
+  if (Object.hasOwn(originPauses, upstream)) {
+    const pause = originPauses[upstream];
+    const seconds = result.retryAfterSeconds;
+    if (result.status === pause.status && Number.isSafeInteger(seconds) && seconds > 0) {
+      return {
+        ok: false,
+        ...pause,
+        code: upstream,
+        retryable: true,
+        retryAfter: seconds,
+      };
+    }
+    return { ok: false, status: 503, code: fallbackCode, error: "Scan admission is temporarily unavailable.", retryable: true, retryAfter: 2 };
+  }
+  if (upstream === "admission_busy") {
+    return {
+      ok: false,
+      status: 429,
+      code: "scan_admission_busy",
+      error: "Another scan is already active for this account.",
+      retryable: true,
+      retryAfter: Math.max(1, Number(result?.retryAfterSeconds || 2)),
+    };
+  }
+  if (["request_conflict", "scan_identity_conflict", "invalid_claim_token", "claim_expired"].includes(upstream)) {
+    return { ok: false, status: 409, code: upstream === "request_conflict" ? "scan_request_identity_conflict" : upstream, error: "The scan request identity conflicts with an existing request." };
+  }
+  return {
+    ok: false,
+    status: 503,
+    code: upstream || fallbackCode,
+    error: "Scan admission is temporarily unavailable.",
+    retryable: true,
+    retryAfter: Math.max(1, Number(result?.retryAfterSeconds || 2)),
+  };
+}
+
+async function buildAdmissionFingerprint(websiteUrl, pathPrefix = "", robotsPolicy = {}, pilotPageCap?: number) {
+  const normalizedPrefix = normalizeFocusedPathPrefix(pathPrefix);
+  const pathSuffix = normalizedPrefix ? `|path:${normalizedPrefix}` : "";
+  const policySuffix = robotsPolicy.owner_attested_robots_override === true
+    ? "|robots:owner_override"
+    : "|robots:respect";
+  const pilotSuffix = pilotPageCap === 500 ? "|cap:500" : "";
+  const canonical = `${PUBLIC_SCAN_MODE}|${normalizeWebsiteUrl(websiteUrl)}${pathSuffix}${policySuffix}${pilotSuffix}`;
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical)));
+  return `standard150:${Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+async function recoverExistingServerScan({ base44, user, project, request, websiteUrl, admissionEvidence, robotsPolicy }) {
+  const scans = base44.asServiceRole.entities.ScanRun;
+  const matches = await scans.filter(
+    { owner_user_id: String(user.id), request_id: request.request_id },
+    "-created_date",
+    3,
+  ).catch(() => []);
+  if (matches.length > 1) {
+    throw Object.assign(new Error("scan_request_duplicate_rows"), { status: 409, code: "scan_request_duplicate_rows" });
+  }
+  if (matches.length === 0) return null;
+  const validation = validateServerScanContext({
+    scan: matches[0],
+    user,
+    project,
+    request,
+    websiteUrl,
+    admissionEvidence,
+    robotsPolicy,
+  });
+  if (!validation.ok) throw Object.assign(new Error(validation.code), validation);
+  return normalizeRecoveredServerScan({ scans, scan: matches[0] });
+}
+
+async function recoverOrCreateServerScan({
+  base44,
+  user,
+  access,
+  scanContract,
+  project,
+  body,
+  request,
+  websiteUrl,
+  admissionEvidence,
+  scope,
+  robotsPolicy,
+}) {
+  const scans = base44.asServiceRole.entities.ScanRun;
+  let matches = await scans.filter(
+    { owner_user_id: String(user.id), request_id: request.request_id },
+    "-queued_at",
+    3,
+  );
+  if ((matches || []).length > 1) {
+    throw Object.assign(new Error("duplicate_scan_request"), { status: 409, code: "duplicate_scan_request" });
+  }
+
+  let scan = matches?.[0] || null;
+  if (scan) {
+    const validation = validateServerScanContext({ scan, user, project, request, websiteUrl, admissionEvidence, robotsPolicy });
+    if (!validation.ok) throw Object.assign(new Error(validation.code), validation);
+    return normalizeRecoveredServerScan({ scans, scan });
+  }
+
+  let previousScanId = "";
+  const previous = await scans.filter(
+    { owner_user_id: String(user.id), project_id: String(project.id) },
+    "-completed_at",
+    30,
+  ).catch(() => []);
+  previousScanId = (previous || []).find((row) => (
+    ["complete", "limited"].includes(String(row.status || ""))
+    && scanMatchesRequestedScope(row, scope)
+  ))?.id || "";
+
+  const now = new Date().toISOString();
+  try {
+    const created = await scans.create({
+      request_id: request.request_id,
+      idempotency_key: request.idempotency_key,
+      request_fingerprint: request.request_fingerprint,
+      project_id: String(project.id),
+      website_url: websiteUrl,
+      submitted_url: String(body.submitted_url || body.requested_start_url || websiteUrl),
+      final_url: "",
+      normalized_domain: authorityDomain(websiteUrl),
+      path_prefix: scope?.pathPrefix || "",
+      scope_type: scope?.focused ? "path_prefix" : "",
+      parent_scan_id: scope?.focused ? scope.parentScanId : "",
+      requested_origin: scope?.requestedOrigin || originOf(websiteUrl),
+      requested_path_prefix: scope?.pathPrefix || "",
+      discovered_from: scope?.focused ? scope.discoveredFrom : "",
+      user_confirmed: scope?.focused === true,
+      ...scanContract,
+      scan_source: String(body.source || "scan_website_page"),
+      status: "queued",
+      previous_scan_id: String(previousScanId),
+      attempt_count: 1,
+      respect_robots_txt: robotsPolicy.respect_robots_txt,
+      owner_attested_robots_override: robotsPolicy.owner_attested_robots_override,
+      site_ownership_answer: robotsPolicy.site_ownership_answer,
+      site_ownership_policy_version: robotsPolicy.site_ownership_policy_version,
+      queued_at: now,
+      owner_user_id: String(user.id),
+      admission_access_id: String(access.id),
+      ...admissionEvidence,
+      admission_release_state: "pending",
+      admission_release_reconciled_at: "",
+      admission_release_last_attempt_at: "",
+      admission_release_coordinator_request_id: "",
+      admission_release_outcome: "",
+      admission_release_failure_code: "",
+      admission_reconciliation_version: ADMISSION_RECONCILIATION_VERSION,
+    });
+    if (admissionEvidence.admission_target_origin && created?.admission_target_origin !== admissionEvidence.admission_target_origin) {
+      throw Object.assign(new Error("admission_target_origin_not_saved"), { status: 503, code: "admission_target_origin_not_saved" });
+    }
+    return normalizeRecoveredServerScan({ scans, scan: created });
+  } catch (error) {
+    // A create/update response can be lost after Base44 committed it. Recover by
+    // the owner/request identity before reporting an ambiguous admission.
+    matches = await scans.filter(
+      { owner_user_id: String(user.id), request_id: request.request_id },
+      "-queued_at",
+      3,
+    ).catch(() => []);
+    if (matches.length === 1) {
+      scan = matches[0];
+      const validation = validateServerScanContext({ scan, user, project, request, websiteUrl, admissionEvidence, robotsPolicy });
+      if (validation.ok) return normalizeRecoveredServerScan({ scans, scan });
+    }
+    throw error;
+  }
+}
+
+async function normalizeRecoveredServerScan({ scans, scan }) {
+  const id = String(scan?.id || "").trim();
+  if (!id) throw Object.assign(new Error("admission_scan_id_missing"), { status: 503, code: "admission_scan_id_missing" });
+  const fields = {};
+  if (String(scan?.scan_id || "") !== id) fields.scan_id = id;
+  // Queue wait is not crawl time. The worker owns the queued -> crawling
+  // transition through durableScanWorkerControl so started_at reflects actual
+  // pickup, not browser/server submission time.
+  if (Object.keys(fields).length === 0) return { ...scan, id, scan_id: id };
+  const updated = await scans.update(id, fields);
+  return { ...scan, ...(updated || {}), ...fields, id, scan_id: id };
+}
+
+function validateServerScanContext({ scan, user, project, request, websiteUrl, admissionEvidence, robotsPolicy }) {
+  if (!scan || String(scan.owner_user_id || "") !== String(user.id)) {
+    return { ok: false, status: 404, code: "scan_not_found", error: "This scan is not available to this account." };
+  }
+  const storedFingerprint = String(scan.request_fingerprint || "")
+    || `${String(scan.scan_mode || PUBLIC_SCAN_MODE)}|${normalizeWebsiteUrl(scan.website_url || scan.submitted_url)}`;
+  if (
+    String(scan.request_id || "") !== request.request_id
+    || String(scan.idempotency_key || scan.request_id || "") !== request.idempotency_key
+    || storedFingerprint !== request.request_fingerprint
+    || String(scan.project_id || "") !== String(project.id)
+    || authorityDomain(scan.website_url || scan.submitted_url) !== authorityDomain(websiteUrl)
+    || !matchesPersistedAdmissionEvidence(scan, admissionEvidence)
+    || (admissionEvidence.admission_target_origin && scan.admission_target_origin !== admissionEvidence.admission_target_origin)
+    || !sameRobotsPolicy(scan, robotsPolicy)
+  ) {
+    return { ok: false, status: 409, code: "scan_request_identity_conflict", error: "The scan request identity does not match." };
+  }
+  return { ok: true };
+}
+
+async function loadScanEntitlement(base44, user, { createPreviewAccess = true } = {}) {
+  const userId = String(user?.id || "").trim();
+  const email = String(user?.email || "").trim().toLowerCase();
+  const entities = base44.asServiceRole.entities;
+  try {
+    const [byUser, byEmail, ownedRuns, legacyRuns] = await Promise.all([
+      entities.Access.filter({ owner_user_id: userId }),
+      entities.Access.filter({ user_email: email }),
+      entities.ScanRun.filter({ owner_user_id: userId }, "-queued_at", 30),
+      entities.ScanRun.filter({ created_by_id: userId }, "-queued_at", 30),
+    ]);
+    const priorRuns = Array.from(new Map(
+      [...(ownedRuns || []), ...(legacyRuns || [])]
+        .filter((row) => row?.id)
+        .map((row) => [String(row.id), row]),
+    ).values());
+    let rows = uniqueAccessRows([...(byUser || []), ...(byEmail || [])]);
+    let entitlement = evaluateScanAccess({ rows, user, priorRuns });
+    if (createPreviewAccess && entitlement.ok && entitlement.preview === true && entitlement.needsAccessRecord === true) {
+      await entities.Access.create({
+        user_email: email,
+        owner_user_id: userId,
+        access_status: "pending",
+        plan_id: "standard150_lifetime",
+        grant_source: "checkout_pending",
+        app_id: "6a498732ec779dfaaeab0e53",
+        has_full_access: false,
+      });
+      const [freshByUser, freshByEmail] = await Promise.all([
+        entities.Access.filter({ owner_user_id: userId }),
+        entities.Access.filter({ user_email: email }),
+      ]);
+      rows = uniqueAccessRows([...(freshByUser || []), ...(freshByEmail || [])]);
+      entitlement = evaluateScanAccess({ rows, user, priorRuns });
+    }
+    return entitlement;
+  } catch {
+    return { ok: false, failureCode: "paid_access_required" };
+  }
+}
+
+async function loadOwnedScanContext({ base44, user, identity, websiteUrl }) {
+  try {
+    const scan = await base44.asServiceRole.entities.ScanRun.get(identity.fields.scan_id);
+    if (!scan || !recordOwnedBy(scan, user)) {
+      return { ok: false, status: 403, error: "The scan does not belong to this account." };
+    }
+    if (TERMINAL_SCAN_STATUSES.has(String(scan.status || "").toLowerCase())) {
+      return { ok: false, status: 409, error: "This scan attempt is already terminal." };
+    }
+    if (scan.request_id && scan.request_id !== identity.fields.request_id) {
+      return { ok: false, status: 409, error: "The scan request identity does not match." };
+    }
+    if (scan.idempotency_key && scan.idempotency_key !== identity.fields.idempotency_key) {
+      return { ok: false, status: 409, error: "The scan request identity does not match." };
+    }
+
+    const projectId = String(scan.project_id || "").trim();
+    if (!projectId) {
+      return { ok: false, status: 409, error: "The scan is missing its website project identity." };
+    }
+    const project = await base44.asServiceRole.entities.BusinessProject.get(projectId);
+    if (!project || !recordOwnedBy(project, user)) {
+      return { ok: false, status: 403, error: "The website project does not belong to this account." };
+    }
+
+    const expectedDomain = authorityDomain(websiteUrl);
+    if (
+      !expectedDomain
+      || authorityDomain(scan.website_url || scan.submitted_url) !== expectedDomain
+      || authorityDomain(project.website_url) !== expectedDomain
+    ) {
+      return { ok: false, status: 409, error: "The scan website does not match its saved project." };
+    }
+    return { ok: true, scan, project, expectedDomain };
+  } catch {
+    return {
+      ok: false,
+      status: 503,
+      error: "The saved scan context is unavailable. Please retry.",
+    };
+  }
+}
+
+async function failOwnedScanRun({ base44, context, identity, attemptCount, failureCode }) {
+  if (!context?.ok || !context.scan?.id) return;
+  const current = await base44.asServiceRole.entities.ScanRun.get(context.scan.id).catch(() => null);
+  if (
+    !current
+    || normalizeAttemptCount(current.attempt_count) !== normalizeAttemptCount(attemptCount)
+    || TERMINAL_SCAN_STATUSES.has(String(current.status || "").toLowerCase())
+  ) return;
+
+  try {
+    await base44.asServiceRole.entities.ScanRun.update(context.scan.id, {
+      status: "failed",
+      status_detail: customerStatusDetail(failureCode),
+      error_code: failureCode,
+      error_message: customerStatusDetail(failureCode),
+      completed_at: new Date().toISOString(),
+      release_gate_eligible: false,
+      admission_release_state: "pending",
+      admission_reconciliation_version: ADMISSION_RECONCILIATION_VERSION,
+    });
+    const terminal = await base44.asServiceRole.entities.ScanRun.get(context.scan.id).catch(() => null);
+    if (terminal?.admission_access_id) {
+      await releaseCoordinatorAdmission({
+        scans: base44.asServiceRole.entities.ScanRun,
+        scan: terminal,
+      });
+    }
+    logBoundary("dispatcher_terminal_failed", identity, {
+      attempt_count: normalizeAttemptCount(attemptCount),
+      failure_code: failureCode,
+    });
+  } catch (error) {
+    console.error("startStandardScanJob terminal write failed", {
+      request_id: identity?.request_id,
+      scan_id: identity?.scan_id,
+      failure_code: failureCode,
+      update_error: String(error?.message || error).slice(0, 160),
+    });
+  }
+}
+
+async function releaseCoordinatorAdmission({ scans, scan }) {
+  const expected = admissionReleaseIdentity(scan);
+  const attemptedAt = new Date().toISOString();
+  if (!expected) return false;
+  const released = await releaseAdmission({
+    ownerUserId: expected.ownerUserId,
+    scanId: expected.scanId,
+    terminalStatus: expected.terminalStatus,
+    env: mutableScanAdmissionEnv,
+  }).catch(() => ({
+    ok: false,
+    failureCode: "admission_unreachable",
+    outcomeUnknown: true,
+  }));
+  const exact = released?.ok === true
+    && ["released", "already_released"].includes(String(released?.outcome || ""))
+    && String(released?.request_id || "") === expected.requestId
+    && String(released?.scan_id || "") === expected.scanId
+    && nonNegativeInteger(released?.barrier_generation) === expected.barrierGeneration
+    && nonNegativeInteger(released?.claim_sequence) === expected.claimSequence;
+  const fresh = await scans.get(expected.scanId).catch(() => null);
+  if (!matchesAdmissionReleaseIdentity(fresh, expected)) return false;
+  if (exact) {
+    await scans.update(expected.scanId, {
+      admission_release_state: "released",
+      admission_release_reconciled_at: attemptedAt,
+      admission_release_last_attempt_at: attemptedAt,
+      admission_release_coordinator_request_id: expected.requestId,
+      admission_release_outcome: String(released.outcome),
+      admission_release_failure_code: "",
+      admission_reconciliation_version: ADMISSION_RECONCILIATION_VERSION,
+    });
+    const persisted = await scans.get(expected.scanId).catch(() => null);
+    return matchesAdmissionReleaseIdentity(persisted, expected)
+      && String(persisted?.admission_release_state || "") === "released";
+  }
+  const failureCode = released?.ok === true
+    ? "admission_release_identity_conflict"
+    : sanitizeFailureCode(released?.failureCode);
+  await scans.update(expected.scanId, {
+    admission_release_state: "pending",
+    admission_release_last_attempt_at: attemptedAt,
+    admission_release_outcome: String(released?.outcome || "").slice(0, 80),
+    admission_release_failure_code: failureCode,
+    admission_reconciliation_version: ADMISSION_RECONCILIATION_VERSION,
+  });
+  console.error("startStandardScanJob admission release failed", {
+    scan_id: expected.scanId,
+    terminal_status: expected.terminalStatus,
+    failure_code: failureCode,
+    outcome_unknown: released?.outcomeUnknown === true,
+  });
+  return false;
+}
+
+function admissionReleaseIdentity(scan) {
+  const status = String(scan?.status || "").trim().toLowerCase();
+  const barrierGeneration = nonNegativeInteger(scan?.admission_barrier_generation);
+  const claimSequence = nonNegativeInteger(scan?.admission_claim_sequence);
+  const scanId = String(scan?.id || "").trim();
+  const ownerUserId = String(scan?.owner_user_id || scan?.created_by_id || "").trim();
+  const requestId = String(scan?.request_id || "").trim();
+  const idempotencyKey = String(scan?.idempotency_key || scan?.request_id || "").trim();
+  if (
+    !scanId || !ownerUserId || !requestId || idempotencyKey !== requestId
+    || barrierGeneration === null || claimSequence === null
+    || !TERMINAL_SCAN_STATUSES.has(status)
+  ) return null;
+  return {
+    scanId,
+    ownerUserId,
+    requestId,
+    idempotencyKey,
+    attemptCount: normalizeAttemptCount(scan?.attempt_count),
+    barrierGeneration,
+    claimSequence,
+    terminalStatus: status,
+  };
+}
+
+function matchesAdmissionReleaseIdentity(scan, expected) {
+  const current = admissionReleaseIdentity(scan);
+  return Boolean(current
+    && current.scanId === expected.scanId
+    && current.ownerUserId === expected.ownerUserId
+    && current.requestId === expected.requestId
+    && current.idempotencyKey === expected.idempotencyKey
+    && current.attemptCount === expected.attemptCount
+    && current.barrierGeneration === expected.barrierGeneration
+    && current.claimSequence === expected.claimSequence
+    && current.terminalStatus === expected.terminalStatus);
+}
+
+function sanitizeFailureCode(value) {
+  const code = String(value || "").trim().toLowerCase();
+  return SAFE_RELEASE_FAILURE_CODES.has(code) ? code : "admission_release_failed";
+}
+
+function customerStatusDetail(failureCode) {
+  return CUSTOMER_STATUS_DETAIL[failureCode]
+    || "The scan did not complete. No partial result was saved. Please try again.";
+}
+
+function resolveRequestIdentity(body = {}) {
+  const requestId = String(body.request_id || body.idempotency_key || "").trim();
+  const idempotencyKey = String(body.idempotency_key || requestId).trim();
+  const scanId = String(body.scan_id || body.scan_run_id || "").trim();
+  const submittedUrl = String(
+    body.submitted_url || body.requested_start_url || body.website_url || "",
+  ).trim();
+  const normalizedDomain = authorityDomain(
+    body.normalized_domain || body.website_url || submittedUrl,
+  );
+  return {
+    conflict: Boolean(requestId && idempotencyKey && requestId !== idempotencyKey),
+    fields: {
+      request_id: requestId,
+      idempotency_key: idempotencyKey,
+      scan_id: scanId,
+      scan_run_id: scanId,
+      request_fingerprint: "",
+      submitted_url: submittedUrl,
+      normalized_domain: normalizedDomain,
+    },
+  };
+}
+
+function recordOwnedBy(record, user) {
+  const userId = String(user?.id || "").trim();
+  const userEmail = String(user?.email || "").trim().toLowerCase();
+  if (!userId) return false;
+  const explicitOwner = String(record?.owner_user_id || "").trim();
+  if (explicitOwner) return explicitOwner === userId;
+  const creatorId = String(record?.created_by_id || "").trim();
+  if (creatorId) return creatorId === userId;
+  return Boolean(userEmail && String(record?.created_by || "").trim().toLowerCase() === userEmail);
+}
+
+const FOCUSED_SCOPE_SOURCES = new Set(["sitemap", "internal_link", "canonical", "hreflang"]);
+
+function originOf(value) {
+  const normalized = normalizeWebsiteUrl(value);
+  if (!normalized) return "";
+  try {
+    return new URL(normalized).origin;
+  } catch {
+    return "";
+  }
+}
+
+function normalizeFocusedPathPrefix(value) {
+  const raw = String(value || "").trim();
+  if (!raw || raw === "/") return "";
+  if (/^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith("//")) return "";
+
+  // Reject traversal/separator encodings before URL parsing can normalize
+  // dot-segments away and hide the original unsafe request.
+  for (const segment of raw.replace(/^\/+/, "").split("/").filter(Boolean)) {
+    let rawDecoded;
+    try {
+      rawDecoded = decodeURIComponent(segment);
+    } catch {
+      return "";
+    }
+    if (
+      !rawDecoded
+      || rawDecoded === "."
+      || rawDecoded === ".."
+      || rawDecoded.includes("/")
+      || rawDecoded.includes("\\")
+    ) return "";
+  }
+
+  try {
+    const parsed = new URL(raw.startsWith("/") ? raw : `/${raw}`, "https://scope.invalid");
+    if (parsed.origin !== "https://scope.invalid" || parsed.search || parsed.hash) return "";
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    if (segments.length === 0) return "";
+    for (const segment of segments) {
+      let decoded;
+      try {
+        decoded = decodeURIComponent(segment);
+      } catch {
+        return "";
+      }
+      if (!decoded || decoded === "." || decoded === ".." || decoded.includes("/") || decoded.includes("\\")) return "";
+    }
+    return `/${segments.join("/")}`;
+  } catch {
+    return "";
+  }
+}
+
+function requestedPathPrefix(body = {}, websiteUrl = "") {
+  const explicit = String(body.path_prefix || body.requested_path_prefix || body.crawl_path_prefix || "").trim();
+  if (explicit) return normalizeFocusedPathPrefix(explicit);
+  try {
+    return normalizeFocusedPathPrefix(new URL(websiteUrl).pathname || "");
+  } catch {
+    return "";
+  }
+}
+
+function resolveFocusedPathScope(body = {}, websiteUrl = "") {
+  const pathPrefix = requestedPathPrefix(body, websiteUrl);
+  const scopeType = String(body.scope_type || "").trim().toLowerCase();
+  const parentScanId = String(body.parent_scan_id || "").trim();
+  const hasExplicitScope = Boolean(scopeType || parentScanId || body.requested_origin || body.discovered_from || body.user_confirmed === true);
+  if (!hasExplicitScope) {
+    return {
+      ok: true,
+      focused: false,
+      pathPrefix,
+      requestedOrigin: originOf(websiteUrl),
+      parentScanId: "",
+      discoveredFrom: "",
+    };
+  }
+  if (scopeType !== "path_prefix") {
+    return { ok: false, status: 400, code: "unsupported_focused_scope", error: "Only same-site folder scans are available in this release." };
+  }
+  if (!parentScanId || body.user_confirmed !== true) {
+    return { ok: false, status: 400, code: "focused_scope_confirmation_required", error: "Choose a discovered site section before starting a focused scan." };
+  }
+  if (!pathPrefix) {
+    return { ok: false, status: 400, code: "focused_scope_path_required", error: "The focused scan is missing its site-section path." };
+  }
+  const requestedOrigin = originOf(body.requested_origin || websiteUrl);
+  const websiteOrigin = originOf(websiteUrl);
+  if (!requestedOrigin || requestedOrigin !== websiteOrigin) {
+    return { ok: false, status: 409, code: "focused_scope_origin_mismatch", error: "Focused scans must stay on the same website origin." };
+  }
+  const source = String(body.discovered_from || "").trim().toLowerCase();
+  if (!FOCUSED_SCOPE_SOURCES.has(source)) {
+    return { ok: false, status: 400, code: "focused_scope_source_invalid", error: "This site section does not have supported discovery evidence." };
+  }
+  return {
+    ok: true,
+    focused: true,
+    pathPrefix,
+    requestedOrigin,
+    parentScanId,
+    discoveredFrom: source,
+  };
+}
+
+function scanMatchesRequestedScope(row = {}, scope = {}) {
+  const rowType = String(row.scope_type || "").trim();
+  const rowPrefix = normalizeFocusedPathPrefix(row.requested_path_prefix || row.path_prefix || "");
+  const requestedPrefix = normalizeFocusedPathPrefix(scope?.pathPrefix || "");
+  if (scope?.focused) {
+    return rowType === "path_prefix" && rowPrefix === requestedPrefix;
+  }
+  return !rowType && rowPrefix === requestedPrefix;
+}
+
+function discoveredPrefixCount(parent = {}, pathPrefix = "") {
+  const evidence = parent?.sampling_evidence && typeof parent.sampling_evidence === "object"
+    ? parent.sampling_evidence
+    : {};
+  const prefixes = evidence.path_prefixes_discovered && typeof evidence.path_prefixes_discovered === "object"
+    ? evidence.path_prefixes_discovered
+    : {};
+  const direct = Number(prefixes[pathPrefix] ?? prefixes[`${pathPrefix}/`]);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const segment = pathPrefix.split("/").filter(Boolean)[0] || "";
+  const markets = evidence.markets_discovered && typeof evidence.markets_discovered === "object"
+    ? evidence.markets_discovered
+    : {};
+  const marketCount = Number(markets[segment.toLowerCase()]);
+  return Number.isFinite(marketCount) && marketCount > 0 ? marketCount : 0;
+}
+
+async function validateFocusedParentScan({ base44, user, project, scope, websiteUrl }) {
+  if (!scope?.focused) return { ok: true };
+  const parent = await base44.asServiceRole.entities.ScanRun.get(scope.parentScanId).catch(() => null);
+  if (!parent || String(parent.owner_user_id || "") !== String(user.id)) {
+    return { ok: false, status: 404, code: "focused_parent_not_found", error: "The parent scan is not available to this account." };
+  }
+  if (String(parent.project_id || "") !== String(project.id)) {
+    return { ok: false, status: 409, code: "focused_parent_project_mismatch", error: "The focused scan does not match the parent website project." };
+  }
+  if (!["complete", "limited"].includes(String(parent.status || "").toLowerCase())) {
+    return { ok: false, status: 409, code: "focused_parent_not_terminal", error: "Wait for the parent scan to finish before scanning one section separately." };
+  }
+  if (String(parent.scope_type || "").trim()) {
+    return { ok: false, status: 409, code: "focused_parent_must_be_full_site", error: "Start focused scans from the original full-site scan." };
+  }
+  if (originOf(parent.website_url || parent.submitted_url) !== originOf(websiteUrl)) {
+    return { ok: false, status: 409, code: "focused_parent_origin_mismatch", error: "The focused scan must stay on the parent scan's website origin." };
+  }
+  if (discoveredPrefixCount(parent, scope.pathPrefix) <= 0) {
+    return { ok: false, status: 409, code: "focused_scope_not_discovered", error: "This folder was not discovered in the parent scan." };
+  }
+  return { ok: true, parent };
+}
+function authorityDomain(value) {
+  const normalized = normalizeWebsiteUrl(value);
+  if (!normalized) return "";
+  try {
+    return new URL(normalized).hostname.toLowerCase().replace(/^www\./, "").replace(/\.$/, "");
+  } catch {
+    return "";
+  }
+}
+
+function normalizeWebsiteUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    if (!/^https?:$/.test(url.protocol) || !url.hostname || url.username || url.password) return "";
+    url.hash = "";
+    return url.href;
+  } catch {
+    return "";
+  }
+}
+
+function validatePublicHttpUrl(value) {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+    if (!/^https?:$/.test(url.protocol)) return { ok: false, reason: "URL must use http or https." };
+    if (!host || host === "localhost" || host.endsWith(".localhost")) {
+      return { ok: false, reason: "Localhost URLs are not allowed." };
+    }
+    if (/^(127\.|10\.|0\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(host)) {
+      return { ok: false, reason: "Private network URLs are not allowed." };
+    }
+    if (host === "::1" || host.startsWith("[::1")) {
+      return { ok: false, reason: "Private network URLs are not allowed." };
+    }
+    return { ok: true, reason: "" };
+  } catch {
+    return { ok: false, reason: "Missing or invalid website_url." };
+  }
+}
+
+async function safeReadJson(req) {
+  try {
+    return await req.json();
+  } catch {
+    return {};
+  }
+}
+
+function unwrapRequestBody(raw) {
+  if (!raw || typeof raw !== "object") return {};
+  for (const key of ["data", "body", "payload", "input", "args", "request"]) {
+    if (raw[key] && typeof raw[key] === "object") return raw[key];
+  }
+  return raw;
+}
+
+function logBoundary(boundary, identity, extra = {}) {
+  console.info("[fixlist.scanjob]", {
+    boundary,
+    request_id: identity?.request_id || "",
+    scan_id: identity?.scan_id || "",
+    at: new Date().toISOString(),
+    ...extra,
+  });
+}

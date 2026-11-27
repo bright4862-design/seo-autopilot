@@ -2,4 +2,4 @@
 // SHA-256 package identity for base44/functions/persistLimitedScanResultV8.
 // Every regular package file is covered except generatedBuildId.js itself.
 
-export const FUNCTION_BUILD_ID = "7489d855b47dbbf630ae21401a22026e5d2b8f036dd9b5f169ac1cbfb8c22494";
+export const FUNCTION_BUILD_ID = "05a5150abd3728087cb5edf55dde6a436bf8aee988a2257281b52521f0ccbea9";

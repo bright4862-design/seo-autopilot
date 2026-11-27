@@ -77,6 +77,7 @@ verify_v9() {
 }
 verify_site() {
   PUBLIC_URL="${2:-https://getfixlist.com/}" BASE44_URL="${2:-https://getfixlist.base44.app/}" EXPECTED_SOURCE_SHA="$1" \
+    EXPECTED_SCAN_FUNCTION_GENERATION="${3:-}" \
     bash "$ROOT/scripts/verify-base44-site.sh"
 }
 verify_v8() {
@@ -216,7 +217,7 @@ timeout --kill-after=5s 180 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" site deploy
 during_recovery_capture "$work/after-upload" || refuse "The function inventory is unavailable. Restore the saved snapshot after the provider recovers."
 restore_and_verify "$work/after-upload/digests.json"
 (( site_status == 0 )) || refuse "The site upload did not report success; function packages were checked."
-verify_site "$SOURCE_SHA"
+verify_site "$SOURCE_SHA" "" PUBLISHED_PILOT
 verify_drain pinned
 fixlist_require_exact_main "$ROOT" "$SOURCE_SHA" "$SOURCE_SHA" || refuse "Main advanced after upload. The published source and routes were verified with admissions closed."
 printf 'BASE44_PUBLISHED_PILOT_VERIFIED source_sha=%s baseline_sha=%s admission=closed\n' "$SOURCE_SHA" "$PUBLIC_BASELINE_SHA"

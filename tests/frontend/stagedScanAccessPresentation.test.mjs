@@ -42,7 +42,7 @@ function browserReader(result, generation) {
   return { calls, read, invoke: client.functions.invoke };
 }
 
-test("the browser uses the V9 reader only when configured and preserves the exact failed run", async () => {
+test("the browser uses the configured reader first and preserves the exact failed run", async () => {
   const result = projection({ ...failedRun, ...respectRobots, status_detail: workerDetail("Cloudflare", "a bot challenge") });
   for (const [generation, name] of [[undefined, "getCustomerScanResultV8"], ["V9", deployments.functions.getCustomerScanResultV9.route_name]]) {
     const response = generation === "V9" ? result : { ...result, run: { ...failedRun } };
@@ -174,7 +174,66 @@ test("published pilot falls back for a historical read or an unavailable route, 
   assert.deepEqual(calls.map(call => call.name), [v9, "getCustomerScanResultV8"]);
   calls.length = 0;
   await assert.rejects(client.functions.invoke("getCustomerScanResultV8", { ...lostRoute, scenario: "scan_not_found" }));
+  assert.deepEqual(calls.splice(0).map(call => call.name), [v9]);
+  await assert.rejects(client.functions.invoke("getCustomerScanResultV8", { ...historical, status: 401 }));
   assert.deepEqual(calls.map(call => call.name), [v9]);
+});
+
+test("a default V8 build retries only a release-mismatched saved report through the exact V9 reader", async () => {
+  const source = asScript("src/api/base44Client.js").replace("import.meta.env?.VITE_SCAN_FUNCTION_GENERATION", "generation");
+  const v8 = "getCustomerScanResultV8";
+  const v9 = deployments.functions.getCustomerScanResultV9.route_name;
+  const scanId = "archived_001";
+  const calls = [];
+  let failure = { status: 503, data: { error_code: "result_release_mismatch" } };
+  let returnedId = scanId;
+  const sdk = {
+    auth: { me: async () => ({ id: "owner_test" }) },
+    functions: { invoke: async (name, body) => {
+      calls.push({ name, body });
+      if (name === v9) return { data: {
+        success: true, scan_id: returnedId, access: "full", authority_verified: true,
+        run: { id: returnedId, project_id: "project_test", status: "complete", beta_revision_fingerprint: "b36ca24b8e0f728e" },
+        fixItems: [],
+      } };
+      throw Object.assign(new Error("reader failed"), { response: failure });
+    } },
+  };
+  const client = new Function("createClient", "appParams", "resolveScanFunctionRoute", "generation", source + "\nreturn base44;")(
+    () => sdk, {}, resolveScanFunctionRoute, undefined,
+  );
+  const read = new Function("base44", "clearCustomerAuthBoundary", `${asScript("src/lib/scanRuns.js")}
+return getScanRunWithFixList;`)(client, () => {});
+  const result = await read(scanId);
+  assert.equal(result.ok, true);
+  assert.equal(result.authority_verified, true);
+  assert.equal(result.run.beta_revision_fingerprint, "b36ca24b8e0f728e");
+  assert.deepEqual(calls.splice(0), [v8, v9].map(name => ({ name, body: { scan_id: scanId } })));
+
+  returnedId = "wrong_scan";
+  assert.equal((await read(scanId)).kind, "authority_invalid");
+  calls.length = 0;
+  for (const [name, body] of [
+    ["startStandardScanJobV8", { scan_id: scanId, published_pilot_page_cap: 500 }],
+    ["deleteCustomerScanDataV8", { scan_id: scanId }],
+    [v8, { action: "list", scan_id: scanId }],
+    [v8, { action: "compare", scan_id: scanId }],
+    [v8, { scan_id: scanId, scan_run_id: "wrong_scan" }],
+    [v8, { scan_id: scanId, data: { scan_id: "wrong_scan" } }],
+    [v8, { scan_id: "" }],
+  ]) {
+    await assert.rejects(client.functions.invoke(name, body));
+    assert.deepEqual(calls.splice(0), [{ name, body }]);
+  }
+
+  for (const [status, error_code] of [
+    [401, "unauthorized"], [403, "result_release_mismatch"], [403, "forbidden"],
+    [503, "result_authority_invalid"], [404, "scan_not_found"], [503, undefined],
+  ]) {
+    failure = { status, data: { error_code } };
+    await assert.rejects(client.functions.invoke(v8, { scan_id: scanId }));
+    assert.deepEqual(calls.splice(0), [{ name: v8, body: { scan_id: scanId } }]);
+  }
 });
 
 test("an unavailable pilot capability leaves Standard 150 available, but a known pilot pause stays in effect", async () => {

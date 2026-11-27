@@ -302,7 +302,7 @@ test("Base44 site publication restores the durable backend after the site deploy
   assert.match(mainEntry, /import\.meta\.env\.VITE_FIXLIST_SOURCE_SHA/);
   assert.match(mainEntry, /__FIXLIST_SOURCE_SHA__/);
   assert.match(verifySite, /\/assets\/index-/);
-  assert.match(verifySite, /grep -Fq "\$EXPECTED_SOURCE_SHA"/);
+  assert.match(verifySite, /hasMarker\("__FIXLIST_SOURCE_SHA__", expectedSource\)/);
   assert.match(deploySite, /base44-public-routes\.mjs/);
   for (const required of [
     "createAccessCheckout",

@@ -97,6 +97,30 @@ function resolveInvokedFunctionName(functionName, payload) {
   return resolveScanFunctionRoute(legacyResolved, pilotLaunch ? "V9" : scanFunctionGeneration);
 }
 
+function isExactSavedReportRead(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload) || Object.hasOwn(payload, "data")) return false;
+  const { action = "get", scan_id, scan_run_id } = payload;
+  const scanId = scan_id ?? scan_run_id;
+  return action === "get" && typeof scanId === "string" && /^[A-Za-z0-9_-]{1,160}$/.test(scanId)
+    && (scan_id === undefined || scan_id === scanId) && (scan_run_id === undefined || scan_run_id === scanId);
+}
+
+function savedReportRecoveryRoute(functionName, invokedFunctionName, payload, error) {
+  if (functionName !== "getCustomerScanResultV8") return "";
+  const failure = getErrorPayload(error);
+  const status = Number(error?.response?.status ?? error?.status ?? failure.status);
+  if (status === 401 || status === 403) return "";
+  const mismatch = failure.error_code === "result_release_mismatch";
+  if (invokedFunctionName === functionName && mismatch && isExactSavedReportRead(payload)) {
+    return resolveScanFunctionRoute(functionName, "V9");
+  }
+  // Keep the named pilot's existing compatibility route for earlier reports.
+  if (usesPublishedScanPilot && invokedFunctionName !== functionName && (mismatch || isPilotRouteUnavailable(error))) {
+    return functionName;
+  }
+  return "";
+}
+
 function sanitizeFunctionPayload(functionName, payload) {
   if (![LEGACY_STANDARD_SCAN_FUNCTION, STANDARD_SCAN_FUNCTION].includes(functionName) || !payload || typeof payload !== 'object') return payload;
   const { max_pages, max_browser_render_attempts, crawl_timeout_ms, enable_screaming_frog_lite, ...cleanPayload } = payload;
@@ -385,17 +409,13 @@ if (rawBase44?.functions?.invoke) {
       const response = await originalInvoke(invokedFunctionName, sanitizeFunctionPayload(functionName, payload), ...rest);
       return sanitizeFunctionResponse(invokedFunctionName, response);
     } catch (error) {
-      if (usesPublishedScanPilot && functionName === "getCustomerScanResultV8"
-          && (getErrorPayload(error).error_code === "result_release_mismatch" || isPilotRouteUnavailable(error))) {
-        // A retained V8 reader can still verify its own seals. Never replay
-        // launch or deletion requests against a different function.
-        try {
-          return await originalInvoke(functionName, payload, ...rest);
-        } catch (readError) {
-          throw decorateFunctionError(readError);
-        }
+      const recoveryRoute = savedReportRecoveryRoute(functionName, invokedFunctionName, payload, error);
+      if (!recoveryRoute || recoveryRoute === invokedFunctionName) throw decorateFunctionError(error);
+      try {
+        return await originalInvoke(recoveryRoute, payload, ...rest);
+      } catch (readError) {
+        throw decorateFunctionError(readError);
       }
-      throw decorateFunctionError(error);
     }
   };
 }

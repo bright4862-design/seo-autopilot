@@ -1282,9 +1282,10 @@ function CustomerRepairList({ cards = [], websiteUrl = "", explanationForCard, t
     );
   }
 
-  // These are reading groups only. Preserve the authenticated canonical array
-  // instead of regrouping or sorting repairs by their presentation labels.
-  const sections = [
+  const reviewOnly = Array.isArray(topFixIds) && topFixIds.length === 0;
+  // Keep the authenticated order, including when the server found only checks
+  // needing review and therefore selected no immediate fixes.
+  const sections = reviewOnly ? [{ key: "review", cards: list }] : [
     { key: "start", label: "Start here", cards: list.slice(0, 1) },
     { key: "then", label: "Then", cards: list.slice(1) },
   ].filter((section) => section.cards.length > 0);
@@ -1294,7 +1295,7 @@ function CustomerRepairList({ cards = [], websiteUrl = "", explanationForCard, t
     <div className="mt-10 sm:mt-12" aria-labelledby="customer-fixlist-heading">
       <div className="mb-5 border-b border-hairline pb-4">
         <h2 id="customer-fixlist-heading" className="text-[19px] font-semibold tracking-tight text-ink">
-          Your fixes, in order
+          {reviewOnly ? "Findings to review" : "Your fixes, in order"}
         </h2>
         <p className="mt-1.5 max-w-[65ch] text-[13px] leading-relaxed text-ink-muted">
           Page groups can overlap, so the counts below aren&rsquo;t added up.
@@ -1312,16 +1313,16 @@ function CustomerRepairList({ cards = [], websiteUrl = "", explanationForCard, t
       </div>
 
       {sections.map((section) => (
-        <section key={section.key} className="mt-6 first:mt-0" aria-labelledby={`customer-repair-section-${section.key}`}>
-          <h3 id={`customer-repair-section-${section.key}`} className="text-[10.5px] font-medium uppercase tracking-[0.12em] text-ink-muted">
+        <section key={section.key} className="mt-6 first:mt-0" aria-labelledby={section.label ? `customer-repair-section-${section.key}` : "customer-fixlist-heading"}>
+          {section.label && <h3 id={`customer-repair-section-${section.key}`} className="text-[10.5px] font-medium uppercase tracking-[0.12em] text-ink-muted">
             {section.label}
-          </h3>
+          </h3>}
           <div className="mt-1">
             {section.cards.map((card, index) => (
               <CustomerRepairCard
                 key={card.evidence?.mergedFromFixIds?.join("|") || `${section.key}-${index}`}
                 card={card}
-                explanation={explanationForCard?.(card)}
+                explanation={card.optionalRedirectShortcut ? undefined : explanationForCard?.(card)}
                 websiteUrl={websiteUrl}
                 initiallyOpen={section.key === "start" && index === 0}
               />
@@ -1717,17 +1718,21 @@ function RequestedScanState({ title = "", detail = "", presentation = null, limi
   );
 }
 
-function CustomerRecoveryState({ failure, target, onAction }) {
+export function CustomerRecoveryState({ failure, target, onAction }) {
   const copy = resolveRecoveryCopy(failure?.kind, target);
-  const actionLabel = recoveryActionLabel(copy.action, target);
+  const reloadSavedScan = target === "scan" && failure?.kind === "release_mismatch";
+  const actionLabel = reloadSavedScan ? "Reload and open this scan" : recoveryActionLabel(copy.action, target);
+  const detail = reloadSavedScan
+    ? "Your scan is saved. Reload this page to open it with the latest available version of FixList. If this message returns, contact support with the reference below."
+    : copy.detail;
   return (
     <div className="mt-16 rounded-2xl border border-hairline-soft bg-white p-6">
       <h1 className="text-[22px] font-semibold tracking-tight">{copy.title}</h1>
-      <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{copy.detail}</p>
+      <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{detail}</p>
       {actionLabel ? (
         <button
           type="button"
-          onClick={() => onAction(copy.action)}
+          onClick={() => reloadSavedScan ? window.location.reload() : onAction(copy.action)}
           className="mt-5 rounded-full bg-ink px-4 py-2 text-[13px] font-medium text-paper transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
         >
           {actionLabel}
@@ -1992,7 +1997,7 @@ function FixRow({ item, cms, embedded = false, suggestion: suppliedSuggestion })
   const [showAllPages, setShowAllPages] = useState(false);
   const [copied, setCopied] = useState(false);
   const severe = item.priority === "critical" || item.priority === "high";
-  const cmsSteps = getCmsSteps(cms, item);
+  const cmsSteps = item.optionalRedirectShortcut ? [] : getCmsSteps(cms, item);
   const evidenceItems = buildEvidenceItems(item).slice(0, 4);
   const availableCount = item.affectedPages.length;
   const reportedCount = Math.max(Number(item.pageCount || 0), availableCount);
@@ -2061,7 +2066,9 @@ function FixRow({ item, cms, embedded = false, suggestion: suppliedSuggestion })
             </>
           ) : null}
 
-          {embedded ? (
+          {item.optionalRedirectShortcut ? (
+            <p className="mt-4 max-w-[56ch] text-[13.5px] leading-relaxed">{item.recommendation}</p>
+          ) : embedded ? (
             suggestion.bestApproach ? (
               <>
                 <div className="mt-5 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">How to approach it</div>

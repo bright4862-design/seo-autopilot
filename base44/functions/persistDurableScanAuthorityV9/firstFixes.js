@@ -12,6 +12,18 @@ const ownerCanDo = fix => {
 const rank = fix => Number.isFinite(Number(fix?.canonical_action_rank)) && Number(fix?.canonical_action_rank) > 0 ? Number(fix.canonical_action_rank) : Number.MAX_SAFE_INTEGER;
 const compatible = (fix, chosen) => !chosen.some(other => id(other) === id(fix) || (root(fix) && root(other) === root(fix)) || (template(fix) && template(other) === template(fix)));
 
+function isActionable(fix) {
+  return fix.action_priority !== "review"
+    && fix.evidence_status !== "needs_verification"
+    && fix.verification_state !== "needs_verification";
+}
+
+function actionBand(fix) {
+  if (fix.action_priority === "fix_first") return 0;
+  if (fix.action_priority === "important") return 1;
+  return 2;
+}
+
 const factorScore = fix => {
   const value = fix?.stage3_priority_factors?.priority_factor_score ?? fix?.raw_finding?.stage3_delivery?.priority_factors?.priority_factor_score;
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -25,7 +37,11 @@ export function topFixIds(fixes = [], { handoff } = {}) {
   const candidates = fixes.map(fix => roots.has(id(fix))
     ? { ...fix, root_cause_id: fix?.root_cause_id || fix?.raw_finding?.root_cause_id || roots.get(id(fix)) }
     : fix);
-  const ordered = candidates.filter(fix => id(fix)).map((fix, index) => ({fix, index})).sort((a, b) => ((factorScore(b.fix) ?? -Infinity) - (factorScore(a.fix) ?? -Infinity)) || rank(a.fix) - rank(b.fix) || a.index - b.index).map(row => row.fix);
+  const ordered = candidates
+    .filter(fix => id(fix) && isActionable(fix))
+    .sort((a, b) => actionBand(a) - actionBand(b)
+      || (factorScore(b) ?? -Infinity) - (factorScore(a) ?? -Infinity)
+      || rank(a) - rank(b));
   const selected = [];
   for (const fix of ordered) {
     if (compatible(fix, selected)) selected.push(fix);
@@ -41,7 +57,9 @@ export function topFixIds(fixes = [], { handoff } = {}) {
         if (withOwner.length === 3) break;
         if (compatible(fix, withOwner)) withOwner.push(fix);
       }
-      selected.splice(0, selected.length, ...withOwner);
+      // An owner task may use a discretionary slot, but must preserve urgent work.
+      const keepsUrgentFixes = selected.every(fix => actionBand(fix) !== 0 || withOwner.includes(fix));
+      if (actionBand(owner) === 0 || keepsUrgentFixes) selected.splice(0, selected.length, ...withOwner);
     }
   }
   return selected.sort((a, b) => ordered.indexOf(a) - ordered.indexOf(b)).map(id);

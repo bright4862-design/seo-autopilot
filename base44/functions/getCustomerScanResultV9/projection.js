@@ -56,14 +56,14 @@ export function buildCustomerProjection(args = {}) {
     const run = clean?.run?.authority_seal_version === STAGE3_AUTHORITY_VERSION
       ? { ...clean.run, authority_seal_version: PUBLISHED_REVIEW_ATTESTATION_VERSION }
       : clean.run;
-    return withFirstFixes(legacy.buildCustomerProjection({ ...clean, run }), run);
+    return withFirstFixes(legacy.buildCustomerProjection({ ...clean, run }), run, clean.fixItems);
   }
   if (!hasPersistedStage3Delivery(args?.run)) {
-    return withFirstFixes(legacy.buildCustomerProjection(args), args.run);
+    return withFirstFixes(legacy.buildCustomerProjection(args), args.run, args.fixItems);
   }
   return withFirstFixes(buildCustomerProjectionStage3({
     ...args,
     [INTERNAL_STAGE3_BASE]: true,
     run: asTransientStage3Run(args.run),
-  }), args.run);
+  }), args.run, args.fixItems);
 }

@@ -14,10 +14,10 @@
       "package_digest": "f83f2e6d8a9d1e3b7248cad46db0747017bbc6f5708a44dc3ad88edea72aa76b"
     },
     "persistDurableScanAuthorityV9": {
-      "route_name": "persistDurableScanAuthorityV9B1c059a271438ebed",
-      "build_id": "be5291466252eff97ee054463142fd3eddb0bd945be667d78acf3a0b8d6f4a80",
+      "route_name": "persistDurableScanAuthorityV9B2e9e640e3534664c",
+      "build_id": "82661f4fa13847c109811555bc6dc625651cfe2ddd7fdeb5392305dff8c3bc0e",
       "runtime_activation_id": "persistDurableScanAuthorityV9-staged-runtime-20261111-v5",
-      "package_digest": "55e7ec82fa1981c375d64ec600936bc588cd28b7a5a97b49a75ea7ae11997606"
+      "package_digest": "6f7315e2cd8f9495d0ac26c25af54d313878baa9e516a961ce0435973dfdaeea"
     },
     "persistLimitedScanResultV9": {
       "route_name": "persistLimitedScanResultV9B0f5ed27f22a0bf23",
@@ -26,10 +26,10 @@
       "package_digest": "007f348ae18b9d876da979be1e3f7494cf48d3681e0125ebf97e222fb8f6b9bf"
     },
     "getCustomerScanResultV9": {
-      "route_name": "getCustomerScanResultV9Bab4ed37ac27ba394",
-      "build_id": "072932ad2749edb60477e0f5b1e8826f67f77a1ad822f1fd4efaf925eb0b5ed0",
+      "route_name": "getCustomerScanResultV9B95c8e06521bd8c14",
+      "build_id": "ec2a4974729b046e1021bda06dfd058f046b79de04f5f4b07918a948c8e71479",
       "runtime_activation_id": "getCustomerScanResultV9-staged-runtime-20261111-v5",
-      "package_digest": "92fe1a58e17672874f5d8afdfb7d432e66f22f75e95eecc03eda093c54467def"
+      "package_digest": "07430f52d30ec6abc2fe46c22cc81d4e248a83f56824ec54442eb739d12c6161"
     },
     "deleteCustomerScanDataV9": {
       "route_name": "deleteCustomerScanDataV9B537a39ee2f9815d1",

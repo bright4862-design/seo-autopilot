@@ -614,11 +614,11 @@ PY
       ;;
   esac
 
-  python3 - "$response" "$recorded" "$expected_sha" <<'PY' || compare_status=$?
+  python3 - "$response" "$recorded" "$expected_sha" "$revision" <<'PY' || compare_status=$?
 # runtime-revision-comparator
 import json, sys
 
-response_path, recorded_path, expected_sha = sys.argv[1:4]
+response_path, recorded_path, expected_sha, expected_revision = sys.argv[1:5]
 try:
     live = json.load(open(response_path, encoding="utf-8"))
 except Exception:
@@ -632,9 +632,12 @@ recorded = json.load(open(recorded_path, encoding="utf-8"))
 live_fingerprint = str(live.get("fingerprint") or "")
 recorded_fingerprint = str(recorded.get("fingerprint") or "")
 live_sha = str(live.get("source_sha") or "")
+live_worker_revision = str(live.get("worker_revision") or "")
 print("runtime fingerprint:  %s" % (live_fingerprint or "(absent)"))
 print("recorded fingerprint: %s" % (recorded_fingerprint or "(absent)"))
 print("runtime source_sha:   %s" % (live_sha or "(unset)"))
+print("runtime worker revision: %s" % (live_worker_revision or "(absent)"))
+print("expected worker revision: %s" % (expected_revision or "(absent)"))
 
 failed = False
 live_components = live.get("component_versions")
@@ -690,10 +693,67 @@ elif expected_sha and live_sha != expected_sha:
     print("FAIL: the container says it was built from %s, but the release being" % live_sha)
     print("promoted is %s." % expected_sha)
 
+# The revision name comes from Cloud Run's own K_REVISION environment in
+# the process answering /revision, not from the caller or the source-SHA stamp.
+# Comparing it with the control-plane-selected revision also catches an
+# A -> B -> A routing switch hidden between two identical service snapshots.
+if not expected_revision or live_worker_revision != expected_revision:
+    failed = True
+    print("FAIL: the responding worker revision is absent or differs from the Cloud Run revision selected for this probe.")
+
 raise SystemExit(1 if failed else 0)
 PY
 
   if [ "$compare_status" -ne 0 ]; then
+    return 1
+  fi
+
+  # A canonical service URL is a moving router. If traffic changes between
+  # the first Cloud Run describe and /revision, a matching response might have
+  # come from a *different* revision. Tags can be reassigned too. Re-read the
+  # control plane after the probe and require the selected destination to
+  # remain attributed to the same revision in both snapshots.
+  # This is a fail-closed stability observation, not a claim of atomic routing.
+  local after_service_json route_binding_status=0
+  after_service_json="$RUNTIME_PROBE_TMP/service-after.json"
+  gcloud run services describe "$CLOUD_RUN_SERVICE" \
+    --region="$GCP_REGION" --project="$GCP_PROJECT" --format=json > "$after_service_json"
+  python3 - "$service_json" "$after_service_json" "$revision" "$probe_url" "$FIXLIST_WORKER_TOKEN_AUDIENCE" <<'PY' || route_binding_status=$?
+# runtime-revision-route-stability
+import json, sys
+
+before_path, after_path, revision, probe_url, audience = sys.argv[1:6]
+
+def attributed(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return False
+    status = data.get("status") if isinstance(data, dict) else None
+    if not isinstance(status, dict) or status.get("url") != audience:
+        return False
+    traffic = status.get("traffic")
+    if not isinstance(traffic, list):
+        return False
+    for row in traffic:
+        if not isinstance(row, dict) or row.get("revisionName") != revision:
+            continue
+        # 100% service routing is valid only while that exact revision serves.
+        if probe_url == audience:
+            if row.get("percent") == 100:
+                return True
+        # A tagged URL addresses only the revision the tag currently names.
+        elif row.get("tag") and row.get("url") == probe_url:
+            return True
+    return False
+
+if not (attributed(before_path) and attributed(after_path)):
+    print("INDETERMINATE: Cloud Run routing for the probed revision changed or became unreadable during verification.")
+    raise SystemExit(1)
+print("PASS: route attribution remained stable across the authenticated probe.")
+PY
+  if [ "$route_binding_status" -ne 0 ]; then
     return 1
   fi
   echo "PASS: the running worker computes the release identity this commit records."

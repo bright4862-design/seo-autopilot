@@ -136,6 +136,20 @@ test("a checked count of zero is a real answer, not a missing one", () => {
 });
 
 
+test("a discovered folder omitted from bounded checked evidence has unknown coverage", () => {
+  const scan = record(MATRIX[0]);
+  Object.assign(scan.sampling_evidence, {
+    markets_discovered: { en: 30, tx: 100 },
+    markets_selected: { en: 10, tx: 1 },
+    path_prefixes_discovered: { "/en": 30 },
+    path_prefixes_checked: { "/en": 0 },
+  });
+  const rows = focusedPathSections(scan);
+  assert.deepEqual(rows.map(row => [row.requested_path_prefix, row.checked, row.checkedCoverage]), [
+    ["/en", 0, 0], ["/tx", null, null],
+  ]);
+});
+
 test("checked coverage survives the seal and the customer projection", () => {
   // The section rows are only as honest as the field that reaches them. A
   // value the producer records and the persistence layer drops would leave the

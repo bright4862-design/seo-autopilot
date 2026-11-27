@@ -273,7 +273,7 @@ test("an untagged revision that does not hold all traffic yields no probe URL", 
 // Running the real operation end to end against stubbed gcloud/curl is the only
 // way to prove the refusal paths refuse. Asserting on their prose would pass a
 // guard that printed INDETERMINATE and then fell through to PASS.
-function runGuard({ service, revision = "", body, code = "200", token = "stub-token", audience = "", probeUrl = "", sourceSha = "" }) {
+function runGuard({ service, revision = "", body, code = "200", token = "stub-token", audience = "", probeUrl = "", sourceSha = "", legacyRecord }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-revision-e2e-"));
   const bin = path.join(dir, "bin");
   fs.mkdirSync(bin);
@@ -323,7 +323,18 @@ printf '%s' "${code}"
     SOURCE_SHA: sourceSha,
   };
   try {
-    const stdout = execFileSync("bash", [SCRIPT], { encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"] });
+    let args = [SCRIPT];
+    if (legacyRecord) {
+      const baselineData = path.join(dir, "baseline", "data");
+      fs.mkdirSync(baselineData, { recursive: true });
+      fs.writeFileSync(path.join(baselineData, "beta-crawler-revision.json"), JSON.stringify(legacyRecord));
+      const entrypoint = '\ncase "$OPERATION" in\n';
+      const dispatch = operator.lastIndexOf(entrypoint);
+      assert.ok(dispatch > 0, "the operator must have an entrypoint");
+      const harness = `${operator.slice(0, dispatch)}\nREPO_ROOT="$PWD"\nverify_legacy_fallback_worker "$1"\n`;
+      args = ["-c", harness, SCRIPT, dir];
+    }
+    const stdout = execFileSync("bash", args, { encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"] });
     return { status: 0, stdout, curl: fs.readFileSync(curlLog, "utf8") };
   } catch (error) {
     return {
@@ -359,6 +370,24 @@ test("end to end: a worker serving the recorded identity passes", () => {
   assert.match(result.stdout, /PASS: the running worker computes/);
   assert.match(result.curl, new RegExp(`${SERVICE_URL}/revision`));
   assert.match(result.curl, /authorization: Bearer stub-token/);
+});
+
+test("legacy preflight compares the canonical worker to the retained V8 writer's release", () => {
+  const legacyRecord = { fingerprint: "b36ca24b8e0f728e", component_versions: COMPONENTS };
+  const legacyWorker = { ...legacyRecord, source_sha: "b".repeat(40) };
+  const service = serving("worker-00054-trs");
+  service.status.traffic.push({ revisionName: "worker-00055-jdd", percent: 0, tag: "candidate", url: TAG_URL });
+  const options = { service, revision: "worker-00055-jdd", probeUrl: TAG_URL, legacyRecord };
+
+  const matching = runGuard({ ...options, body: legacyWorker });
+  assert.equal(matching.status, 0, matching.stdout);
+  assert.ok(matching.curl.includes(`${SERVICE_URL}/revision`));
+  assert.ok(!matching.curl.includes(`${TAG_URL}/revision`));
+
+  const mismatching = runGuard({ ...options, body: LIVE_MATCHING });
+  assert.notEqual(mismatching.status, 0);
+  assert.match(mismatching.stdout, /recorded fingerprint: b36ca24b8e0f728e/);
+  assert.doesNotMatch(mismatching.stdout, /PASS:/);
 });
 
 test("end to end: a worker serving a different identity fails and is diagnosed", () => {

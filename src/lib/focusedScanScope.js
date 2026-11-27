@@ -1,3 +1,5 @@
+import { recordedPageCount } from "./scanCoverageDisclosure.js";
+
 export const FOCUSED_SCAN_SCOPE_VERSION = "focused_scan_scope_v3_fullsite_scope_type_case_preserved_candidates";
 
 const LOCALE_SEGMENT_RE = /^[a-z]{2}(?:-[a-z]{2})?$/i;
@@ -194,10 +196,7 @@ export function focusedPathSections(record = {}) {
   // Outcome: what the crawl actually returned. Absent on every record written
   // before the producer recorded it, and absence must stay visible rather than
   // being filled in from selection.
-  const hasCheckedEvidence = Boolean(
-    evidence.path_prefixes_checked && typeof evidence.path_prefixes_checked === "object",
-  );
-  const checked = hasCheckedEvidence ? evidence.path_prefixes_checked : {};
+  const checked = evidence.path_prefixes_checked ?? {};
   const marketDiscovered = evidence.markets_discovered && typeof evidence.markets_discovered === "object"
     ? evidence.markets_discovered
     : {};
@@ -220,9 +219,7 @@ export function focusedPathSections(record = {}) {
       prefix,
       discovered: discoveredCount,
       selected: Math.max(0, Number(selected[rawPrefix] ?? selected[prefix]) || 0),
-      checked: hasCheckedEvidence
-        ? Math.max(0, Number(checked[rawPrefix] ?? checked[prefix]) || 0)
-        : null,
+      checked: recordedPageCount(checked[rawPrefix] ?? checked[prefix]),
       discoveredFrom: "sitemap",
     });
   }
@@ -242,9 +239,7 @@ export function focusedPathSections(record = {}) {
       prefix,
       discovered: Math.max(existing?.discovered || 0, discoveredCount),
       selected: Math.max(existing?.selected || 0, Math.max(0, Number(marketSelected[market]) || 0)),
-      checked: hasCheckedEvidence
-        ? Math.max(existing?.checked || 0, Math.max(0, Number(marketChecked[market]) || 0))
-        : null,
+      checked: existing?.checked ?? recordedPageCount(marketChecked[market]),
       discoveredFrom: "sitemap",
     });
   }
@@ -276,9 +271,7 @@ export function focusedPathSections(record = {}) {
     // coverage, and ordering by it would recommend the wrong folder while
     // looking authoritative.
     .sort((a, b) => (
-      (a.checkedCoverage === null || b.checkedCoverage === null
-        ? 0
-        : a.checkedCoverage - b.checkedCoverage)
+      (a.checkedCoverage ?? Infinity) - (b.checkedCoverage ?? Infinity)
       || (b.discovered - a.discovered)
       || a.requested_path_prefix.localeCompare(b.requested_path_prefix)
     ))

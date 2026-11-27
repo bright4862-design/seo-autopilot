@@ -53,7 +53,7 @@ test("repair observation rows preserve explicit missing values", () => {
   const rows = customerRepairObservationRows(card, "https://example.com");
   assert.equal(rows.length, 2);
   assert.equal(rows[0].page.href, "https://example.com/products/a");
-  assert.equal(rows[0].valueLabel, "Canonical observed: missing");
+  assert.equal(rows[0].valueLabel, "Canonical in the source HTML: missing");
   assert.equal(rows[1].valueLabel, "Meta description observed: missing");
   assert.equal(rows[0].statusLabel, "HTTP 200");
 });

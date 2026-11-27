@@ -34,7 +34,7 @@ import { evidenceLink, evidenceIdentityOptions } from "@/lib/evidenceUrl";
 import { serializeAffectedUrlsCsv, serializeAffectedUrlsText } from "@/lib/affectedUrlExport";
 import { buildScanHandoff, scanHandoffFilename, serializeScanHandoff } from "@/lib/scanHandoff";
 import { buildCustomerRepairPlan } from "@/lib/customerRepairPlan";
-import { scanCoverageDisclosure } from "@/lib/scanCoverageDisclosure";
+import { checkedFolderRows, scanCoverageDisclosure } from "@/lib/scanCoverageDisclosure";
 import { trackEvent } from "@/lib/analytics";
 import { samplingDisclosure } from "@/lib/samplingDisclosure";
 import { displayPathPrefix, focusedPathSections, focusedSectionOnboardingPath, orderFocusedScanHistory } from "@/lib/focusedScanScope";
@@ -727,7 +727,7 @@ export default function FixList() {
 
             <ExplicitPassedChecks scan={scanRecord} />
 
-            <ObservedScanCoverage coverage={observedScanCoverage} />
+            <ObservedScanCoverage coverage={observedScanCoverage} folders={checkedFolderRows(scanRecord)} />
 
             {sampleCoverage ? (
               <details className="mt-5 max-w-[60ch] rounded-xl border border-hairline-soft bg-white/35 px-4 py-3">
@@ -738,7 +738,7 @@ export default function FixList() {
                   <p>
                     Route patterns: <span className="font-medium text-ink-muted">{sampleCoverage.routesSelected} of {sampleCoverage.routesDiscovered}</span> chosen for this scan
                     {sampleCoverage.localeVariantsCollapsed > 0
-                      ? ` · ${formatCount(sampleCoverage.localeVariantsCollapsed)} translated duplicate${sampleCoverage.localeVariantsCollapsed === 1 ? "" : "s"} treated as one page`
+                      ? ` · ${formatCount(sampleCoverage.localeVariantsCollapsed)} additional URL${sampleCoverage.localeVariantsCollapsed === 1 ? "" : "s"} grouped under existing route patterns`
                       : ""}
                   </p>
                   {sampleCoverage.identityDiscovered > 0 ? (
@@ -1125,7 +1125,7 @@ function OptionalChecksNotice({ scanRecord }) {
   return notice ? <p className="mt-4 max-w-[60ch] text-[13.5px] leading-relaxed text-ink-muted">{notice}</p> : null;
 }
 
-function ObservedScanCoverage({ coverage = {} }) {
+function ObservedScanCoverage({ coverage = {}, folders = [] }) {
   const rows = [
     ["urls_attempted", "URLs attempted"],
     ["usable_html_pages", "Usable HTML pages"],
@@ -1134,7 +1134,7 @@ function ObservedScanCoverage({ coverage = {} }) {
     ["non_html_resources", "Non-HTML resources"],
     ["unique_retained_destinations", "Unique final destinations"],
   ].filter(([key]) => Number.isInteger(coverage[key]) && coverage[key] >= 0);
-  if (rows.length === 0) return null;
+  if (!rows.length && !folders.length) return null;
   return (
     <details className="mt-5 max-w-[60ch] rounded-xl border border-hairline-soft bg-white/35 px-4 py-3">
       <summary className="cursor-pointer text-[12.5px] font-medium text-ink-muted underline decoration-hairline underline-offset-4">
@@ -1148,9 +1148,34 @@ function ObservedScanCoverage({ coverage = {} }) {
           </div>
         ))}
       </dl>
-      <p className="mt-2 text-[11.5px] leading-relaxed text-ink-faint">
-        These are observed counters, not completion percentages. Some access-limited responses can also be verified HTTP responses, so categories may overlap.
-      </p>
+      {rows.length > 0 && (
+        <p className="mt-2 text-[11.5px] leading-relaxed text-ink-faint">
+          A page with restricted access can also count as a verified HTTP failure.
+        </p>
+      )}
+      {folders.length > 0 && (
+        <table className="mt-4 w-full text-left text-[12px]">
+          <caption className="mb-2 text-left font-medium text-ink">Coverage by URL folder</caption>
+          <thead className="text-ink-muted">
+            <tr>
+              <th scope="col">Folder</th>
+              <th scope="col" className="text-right">Found</th>
+              <th scope="col" className="text-right">Chosen</th>
+              <th scope="col" className="text-right">Checked</th>
+            </tr>
+          </thead>
+          <tbody>
+            {folders.map(folder => (
+              <tr key={folder.path} className="border-t border-hairline-soft">
+                <th scope="row" className="break-all py-1.5 font-normal text-ink-muted">{folder.path}/</th>
+                <td className="text-right tabular-nums">{folder.found ?? "—"}</td>
+                <td className="text-right tabular-nums">{folder.selected ?? "—"}</td>
+                <td className="text-right font-medium tabular-nums">{folder.checked}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </details>
   );
 }

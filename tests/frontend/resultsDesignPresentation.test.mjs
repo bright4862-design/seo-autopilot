@@ -395,3 +395,27 @@ test("a signed rate-limited report explains why it stopped and keeps useful cove
   assert.match(complete, /We checked 58 pages out of 60 found/);
   assert.doesNotMatch(complete, /usable HTML pages/);
 });
+
+
+test("saved dashboard shows actual folder checks alongside selections and preserves unmeasured values", () => {
+  const evidence = {
+    route_signatures_discovered: 30, route_signatures_sampled: 5, locale_variants_collapsed: 2,
+    markets_discovered: { fr: 18, en: 10, tx: 10 }, markets_sampled: { fr: 5 },
+    path_prefixes_discovered: { "/fr": 18, "/en": 10, "/tx": 10 },
+    path_prefixes_selected: { "/fr": 5, "/en": 0 },
+    path_prefixes_checked: { "/fr": 4, "/en": 1, "/tx": 0 },
+  };
+  const scan = savedRecord({ sampling_version: "balanced_sitemap_buckets_v2_locale_collapsed_identity_reserve", sampling_evidence: evidence });
+  const html = renderSavedPage(scan);
+  const table = html.match(/<table[^>]*><caption[^>]*>Coverage by URL folder<\/caption>[\s\S]*?<\/table>/)?.[0];
+  assert.ok(table, "the ordinary saved dashboard must render the measured folder table");
+  const rows = [...table.matchAll(/<tr[^>]*>(.*?)<\/tr>/gs)].map(match => match[1].replace(/<[^>]*>/g, "|").split("|").filter(Boolean));
+  assert.deepEqual(rows, [
+    ["Folder", "Found", "Chosen", "Checked"],
+    ["/fr/", "18", "5", "4"], ["/en/", "10", "0", "1"], ["/tx/", "10", "—", "0"],
+  ]);
+  assert.doesNotMatch(html, /translated duplicate|Markets\/languages/);
+  assert.match(html, /additional URLs grouped under existing route patterns/);
+  const legacy = renderSavedPage({ ...scan, sampling_evidence: { ...evidence, path_prefixes_checked: undefined } });
+  assert.doesNotMatch(legacy, /Coverage by URL folder/);
+});

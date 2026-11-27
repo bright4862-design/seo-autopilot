@@ -26,4 +26,25 @@ export function scanCoverageDisclosure(scan = {}) {
   return output;
 }
 
+export function recordedPageCount(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+export function checkedFolderRows(scan = {}) {
+  const evidence = scan?.sampling_evidence;
+  const checked = evidence?.path_prefixes_checked;
+  if (!checked || typeof checked !== "object" || Array.isArray(checked)) return [];
+  const selected = evidence.path_prefixes_selected ?? evidence.path_prefixes_sampled;
+
+  return Object.entries(checked)
+    .filter(([path, value]) => /^\/[^/?#]+$/.test(path) && recordedPageCount(value) !== null)
+    .map(([path, value]) => ({
+      path,
+      found: recordedPageCount(evidence.path_prefixes_discovered?.[path]),
+      selected: recordedPageCount(selected?.[path]),
+      checked: value,
+    }))
+    .sort((a, b) => b.checked - a.checked || a.path.localeCompare(b.path));
+}
+
 export const SCAN_COVERAGE_KEYS = COVERAGE_KEYS;

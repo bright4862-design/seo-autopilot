@@ -83,7 +83,7 @@ export function samplingDisclosure(record = {}) {
   const sampledFamilyNames = Object.keys(familySampled).filter((family) => Number(familySampled[family]) > 0);
 
   const marketSummary = marketNames.length > 0
-    ? `Markets/languages: ${sampledMarketNames.length} of ${marketNames.length} chosen for this scan.`
+    ? `The scan chose pages from ${sampledMarketNames.length} of ${marketNames.length} folder groups.`
     : "";
   const familySummary = familyNames.length > 0
     ? `Page families: ${sampledFamilyNames.length} of ${familyNames.length} chosen for this scan.`
@@ -91,7 +91,7 @@ export function samplingDisclosure(record = {}) {
 
   const gaps = [];
   if (unsampledMarkets.length > 0) {
-    gaps.push(`Markets not chosen: ${unsampledMarkets.slice(0, 6).join(", ")}${unsampledMarkets.length > 6 ? ` +${unsampledMarkets.length - 6} more` : ""}.`);
+    gaps.push(`Folder groups outside the selection include ${unsampledMarkets.slice(0, 6).join(", ")}${unsampledMarkets.length > 6 ? ` +${unsampledMarkets.length - 6} more` : ""}.`);
   }
   if (unsampledFamilies.length > 0) {
     gaps.push(`Page families not chosen: ${unsampledFamilies.slice(0, 4).map(labelFamily).join(", ")}${unsampledFamilies.length > 4 ? ` +${unsampledFamilies.length - 4} more` : ""}.`);

@@ -184,6 +184,7 @@ test("fresh Base44 routes preserve canonical source outside preview, Stage 3, an
   );
   const v7OnlyFiles = new Map([
     ["persistDurableScanAuthority", [
+      "authoritySaveFailure.js",
       "authoritySnapshotStage1Legacy.js",
       "comparisonEvidence.js",
       "customerPreviewSeal.js",

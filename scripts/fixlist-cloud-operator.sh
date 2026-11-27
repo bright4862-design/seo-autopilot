@@ -338,49 +338,47 @@ print("\n".join(sorted(routes)))
 # probes cannot answer this: Cloud Run IAM rejects them before routing. The
 # only external proof is the image's build provenance.
 verify_worker_routes() {
-  local revision image digest timeout release_sha verdict=0
-  local want_routes got_routes
+  local revision image timeout release_sha verdict=0
+  local want_routes got_routes revision_json builds_json
   revision="${TARGET_REVISION:-$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
     --region="$GCP_REGION" --project="$GCP_PROJECT" \
     --format='value(status.latestReadyRevisionName)')}"
   [ -n "$revision" ] || { echo "No ready revision found." >&2; exit 2; }
 
-  image=$(gcloud run revisions describe "$revision" \
-    --region="$GCP_REGION" --project="$GCP_PROJECT" \
-    --format='value(spec.containers[0].image)')
+  # A deployment may be specified by a mutable tag, but the *exact revision*
+  # records the resolved immutable digest even for tag-form image references.
+  # Do not attribute a running digest to the first build sharing a tag/name.
+  OPERATOR_TMP="$(mktemp -d)"
+  chmod 700 "$OPERATOR_TMP"
+  revision_json="$OPERATOR_TMP/worker-revision.json"
+  builds_json="$OPERATOR_TMP/cloud-builds.json"
+  gcloud run revisions describe "$revision" \
+    --region="$GCP_REGION" --project="$GCP_PROJECT" --format=json > "$revision_json"
+  image="$(python3 - "$revision_json" <<'PY'
+import json, sys
+revision = json.load(open(sys.argv[1], encoding="utf-8"))
+print(str(((revision.get("spec") or {}).get("containers") or [{}])[0].get("image") or ""))
+PY
+)"
   echo "revision: $revision"
   echo "image:    $image"
 
-  digest="${image##*@}"
-  if [ "$digest" = "$image" ]; then
-    echo "WARNING: revision runs a mutable tag, not an immutable digest."
-    digest=""
-  fi
-
-  # Match the image back to the Cloud Build that produced it. gcloud's --filter
-  # cannot reliably index into results.images, so the builds are pulled as JSON
-  # and matched here: by digest when the revision is digest-pinned, otherwise by
-  # image name.
   echo
-  echo "=== Build provenance ==="
-  release_sha=$(gcloud builds list --project="$GCP_PROJECT" --region="$GCP_REGION" --limit=50 \
-    --format=json 2>/dev/null | python3 -c '
-import json,sys
-builds=json.load(sys.stdin)
-image=sys.argv[1]; digest=sys.argv[2]
-name=image.split("@")[0].split(":")[0]
-for b in builds:
-    imgs=(b.get("results") or {}).get("images") or []
-    names=[i.get("name","") for i in imgs]
-    digs=[i.get("digest","") for i in imgs]
-    hit=(digest and digest in digs) or (not digest and any(n.split("@")[0].split(":")[0]==name for n in names))
-    if hit:
-        sha=(b.get("substitutions") or {}).get("_RELEASE_SHA","")
-        print(sha)
-        sys.stderr.write("build %s  status=%s  created=%s  _RELEASE_SHA=%s\n" % (
-            b.get("id",""), b.get("status",""), b.get("createTime",""), sha or "(unset)"))
-        break
-' "$image" "$digest" || true)
+  echo "=== Build provenance (exact Ready revision + resolved digest) ==="
+  # This bounded recent-build view may not include the original build.
+  # Absence must be INDETERMINATE, never a fallback to image-name matching.
+  if ! gcloud builds list --project="$GCP_PROJECT" --region="$GCP_REGION" --limit=50 \
+    --format=json > "$builds_json"; then
+    echo "INDETERMINATE: unable to retrieve Cloud Build records." >&2
+    return 1
+  fi
+  if ! release_sha="$(python3 "$REPO_ROOT/scripts/verify_worker_build_provenance.py" \
+      --revision-json "$revision_json" --builds-json "$builds_json" \
+      --revision "$revision" --service "$CLOUD_RUN_SERVICE")"; then
+    echo "INDETERMINATE: cannot uniquely bind the exact Ready revision's image digest to a SUCCESS build." >&2
+    release_sha=""
+    verdict=1
+  fi
 
   # The runner has this repository checked out with full history, so whether a
   # SHA declares the durable routes is a fact we can decide here rather than
@@ -388,9 +386,9 @@ for b in builds:
   echo
   echo "=== Route verification ==="
   if [ -z "$release_sha" ]; then
-    echo "INDETERMINATE: no Cloud Build recorded for this image, or _RELEASE_SHA unset."
-    echo "The image predates provenance-tagged builds. Rebuild from"
-    echo "cloudbuild.durable-worker.yaml at a known SHA before promoting."
+    echo "INDETERMINATE: no uniquely authenticated successful build/source for this exact revision digest."
+    echo "The build may be absent from the recent-record window, malformed or ambiguous."
+    echo "Do not infer a source from its mutable tag. Verify immutable provenance before promotion."
     verdict=1
   elif ! git cat-file -e "${release_sha}^{commit}" 2>/dev/null; then
     echo "INDETERMINATE: _RELEASE_SHA $release_sha is not a commit in this repository."
@@ -614,11 +612,11 @@ PY
       ;;
   esac
 
-  python3 - "$response" "$recorded" "$expected_sha" <<'PY' || compare_status=$?
+  python3 - "$response" "$recorded" "$expected_sha" "$revision" <<'PY' || compare_status=$?
 # runtime-revision-comparator
 import json, sys
 
-response_path, recorded_path, expected_sha = sys.argv[1:4]
+response_path, recorded_path, expected_sha, expected_revision = sys.argv[1:5]
 try:
     live = json.load(open(response_path, encoding="utf-8"))
 except Exception:
@@ -632,9 +630,12 @@ recorded = json.load(open(recorded_path, encoding="utf-8"))
 live_fingerprint = str(live.get("fingerprint") or "")
 recorded_fingerprint = str(recorded.get("fingerprint") or "")
 live_sha = str(live.get("source_sha") or "")
+live_worker_revision = str(live.get("worker_revision") or "")
 print("runtime fingerprint:  %s" % (live_fingerprint or "(absent)"))
 print("recorded fingerprint: %s" % (recorded_fingerprint or "(absent)"))
 print("runtime source_sha:   %s" % (live_sha or "(unset)"))
+print("runtime worker revision: %s" % (live_worker_revision or "(absent)"))
+print("expected worker revision: %s" % (expected_revision or "(absent)"))
 
 failed = False
 live_components = live.get("component_versions")
@@ -690,10 +691,67 @@ elif expected_sha and live_sha != expected_sha:
     print("FAIL: the container says it was built from %s, but the release being" % live_sha)
     print("promoted is %s." % expected_sha)
 
+# The revision name comes from Cloud Run's own K_REVISION environment in
+# the process answering /revision, not from the caller or the source-SHA stamp.
+# Comparing it with the control-plane-selected revision also catches an
+# A -> B -> A routing switch hidden between two identical service snapshots.
+if not expected_revision or live_worker_revision != expected_revision:
+    failed = True
+    print("FAIL: the responding worker revision is absent or differs from the Cloud Run revision selected for this probe.")
+
 raise SystemExit(1 if failed else 0)
 PY
 
   if [ "$compare_status" -ne 0 ]; then
+    return 1
+  fi
+
+  # A canonical service URL is a moving router. If traffic changes between
+  # the first Cloud Run describe and /revision, a matching response might have
+  # come from a *different* revision. Tags can be reassigned too. Re-read the
+  # control plane after the probe and require the selected destination to
+  # remain attributed to the same revision in both snapshots.
+  # This is a fail-closed stability observation, not a claim of atomic routing.
+  local after_service_json route_binding_status=0
+  after_service_json="$RUNTIME_PROBE_TMP/service-after.json"
+  gcloud run services describe "$CLOUD_RUN_SERVICE" \
+    --region="$GCP_REGION" --project="$GCP_PROJECT" --format=json > "$after_service_json"
+  python3 - "$service_json" "$after_service_json" "$revision" "$probe_url" "$FIXLIST_WORKER_TOKEN_AUDIENCE" <<'PY' || route_binding_status=$?
+# runtime-revision-route-stability
+import json, sys
+
+before_path, after_path, revision, probe_url, audience = sys.argv[1:6]
+
+def attributed(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return False
+    status = data.get("status") if isinstance(data, dict) else None
+    if not isinstance(status, dict) or status.get("url") != audience:
+        return False
+    traffic = status.get("traffic")
+    if not isinstance(traffic, list):
+        return False
+    for row in traffic:
+        if not isinstance(row, dict) or row.get("revisionName") != revision:
+            continue
+        # 100% service routing is valid only while that exact revision serves.
+        if probe_url == audience:
+            if row.get("percent") == 100:
+                return True
+        # A tagged URL addresses only the revision the tag currently names.
+        elif row.get("tag") and row.get("url") == probe_url:
+            return True
+    return False
+
+if not (attributed(before_path) and attributed(after_path)):
+    print("INDETERMINATE: Cloud Run routing for the probed revision changed or became unreadable during verification.")
+    raise SystemExit(1)
+print("PASS: route attribution remained stable across the authenticated probe.")
+PY
+  if [ "$route_binding_status" -ne 0 ]; then
     return 1
   fi
   echo "PASS: the running worker computes the release identity this commit records."
@@ -1118,7 +1176,7 @@ bound = counts.get("bound")
 ready = snapshot.get("drain_ready") is True
 if mode not in {"open", "closed", "acceptance_only"}:
     raise SystemExit("Invalid barrier mode")
-if not isinstance(generation, int) or generation < 0:
+if type(generation) is not int or generation < 0:
     raise SystemExit("Invalid barrier generation")
 expected_version = {
     "start_500_pilot": "admission_published_500_pilot_snapshot_v1",
@@ -1135,6 +1193,13 @@ if not re.fullmatch(r"[0-9a-f]{64}", proof):
     raise SystemExit(f"Invalid {snapshot_kind} snapshot proof")
 if not hmac.compare_digest(proof, expected_proof):
     raise SystemExit(f"{snapshot_kind.capitalize()} snapshot signature mismatch")
+# Bind unsigned transport mode/generation to the authenticated snapshot.
+signed_barrier = snapshot.get("barrier")
+if (not isinstance(signed_barrier, dict)
+        or signed_barrier.get("mode") != mode
+        or type(signed_barrier.get("generation")) is not int
+        or signed_barrier["generation"] != generation):
+    raise SystemExit("Barrier envelope disagrees with signed drain snapshot")
 boundary = snapshot.get("boundary") or {}
 if expected == "acceptance_only" and launcher_build_id:
     if boundary.get("required_launcher_build_id") != launcher_build_id:

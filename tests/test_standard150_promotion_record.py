@@ -213,6 +213,15 @@ def test_restart_recovery_binds_independent_probe_package_to_accepted_source(v9_
     "scripts/fixlist-cloud-operator.sh",
     "scripts/lib/release-source-guard.sh",
     ".github/workflows/fixlist-cloud-operator.yml",
+    "scripts/verify_worker_build_provenance.py",
+    "scripts/resolve_serving_worker_revision.py",
+    "scripts/verify_staged_worker_base44_runtime.py",
+    "scripts/verify-base44-site.sh",
+    "scripts/verify-base44-functions.sh",
+    "scripts/lib/base44-public-routes.mjs",
+    "scripts/generate_release_contracts.mjs",
+    "scripts/base44_release_manifest.mjs",
+    "scripts/lib/staged-v9-function-packages.mjs",
 ])
 @pytest.mark.parametrize("flag", ["--worker", "--worker-promotion"])
 def test_worker_promotion_refuses_changed_runtime_inputs(v9_release_history, path, flag):

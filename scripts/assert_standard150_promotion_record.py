@@ -47,6 +47,16 @@ WORKER_RUNTIME_INPUTS = (
     "scripts/fixlist-cloud-operator.sh",
     "scripts/lib/release-source-guard.sh",
     ".github/workflows/fixlist-cloud-operator.yml",
+    # Bind the verification programs and their package-identity helpers too.
+    "scripts/verify_worker_build_provenance.py",
+    "scripts/resolve_serving_worker_revision.py",
+    "scripts/verify_staged_worker_base44_runtime.py",
+    "scripts/verify-base44-site.sh",
+    "scripts/verify-base44-functions.sh",
+    "scripts/lib/base44-public-routes.mjs",
+    "scripts/generate_release_contracts.mjs",
+    "scripts/base44_release_manifest.mjs",
+    "scripts/lib/staged-v9-function-packages.mjs",
 )
 
 

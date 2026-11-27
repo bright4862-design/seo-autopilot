@@ -78,7 +78,7 @@ function withoutStandard500RefreshGuard(value) {
     .replace(/^  if \(hasStandard500Grant\(access\)\) \{\n    return replayStandard150For500Grant[^\n]+\n  \}\n\n/m, "");
 }
 
-test("V8 packages preserve V7 behavior outside route identity, comparison, and the 500 refresh guard", () => {
+test("V8 packages preserve V7 behavior outside route identity, comparison, save diagnostics, and the 500 refresh guard", () => {
   for (const canonical of canonicals) {
     const v7dir = "base44/functions/" + canonical + "V7";
     const v8dir = "base44/functions/" + canonical + "V8";
@@ -88,7 +88,7 @@ test("V8 packages preserve V7 behavior outside route identity, comparison, and t
       canonical === "getCustomerScanResult"
         ? ["comparisonEvidence.js", "comparisonGateway.js", "comparisonReader.js"]
         : canonical === "persistDurableScanAuthority"
-          ? ["comparisonEvidence.js"]
+          ? ["authoritySaveFailure.js", "comparisonEvidence.js"]
           : [];
     const comparisonChangedInheritedFiles =
       canonical === "getCustomerScanResult"
@@ -105,6 +105,16 @@ test("V8 packages preserve V7 behavior outside route identity, comparison, and t
       if (file === "entry.ts" || file === "index.ts") {
         if (canonical === "getCustomerScanResult") actual = withoutComparisonOperation(actual);
         if (canonical === "startStandardScanJob") actual = withoutStandard500RefreshGuard(actual);
+        if (canonical === "persistDurableScanAuthority") {
+          actual = actual
+            .replace('import { authoritySaveFailure } from "./authoritySaveFailure.js";\n', "")
+            .replace(/^ *let saveStage = "verify_envelope";\n/m, "")
+            .replace(/^ *saveStage = "[a-z_]+";\n/gm, "")
+            .replace(", stage => { saveStage = stage; }", "")
+            .replace("identity, scan, markStage)", "identity, scan)")
+            .replace('  markStage(current?.id ? "reconcile_existing_fix_list" : "create_fix_list");\n', "")
+            .replace("JSON.stringify(authoritySaveFailure(saveStage, error))", 'error instanceof Error ? error.name : "unknown_error"');
+        }
         actual = normalizeActivation(actual);
         expected = normalizeActivation(expected);
       }

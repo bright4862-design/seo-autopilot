@@ -3,6 +3,7 @@ import { secrets } from "base44:runtime";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
 const BASE44_RUNTIME_ACTIVATION_ID = "persistDurableScanAuthorityV8-fresh-runtime-20260922-v1";
 import { createAuthoritySeal, verifyAuthoritySeal } from "./authoritySeal.js";
+import { authoritySaveFailure } from "./authoritySaveFailure.js";
 import { authorityRowsFromSnapshot } from "./authorityRows.js";
 import { AUTHORITY_CONTRACT, buildAuthoritySnapshot, buildPersistedAuthoritySnapshot, firstFailedAuthorityPredicate, hasCompleteAcceptanceEvidence } from "./authoritySnapshot.js";
 import { PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION } from "./evidenceUrlIdentity.js";
@@ -77,6 +78,7 @@ Deno.serve(async (req) => {
     return Response.json({ success: false, error_code: "method_not_allowed", error: "Use POST to persist durable scan authority.", build_id: FUNCTION_BUILD_ID, runtime_activation_id: BASE44_RUNTIME_ACTIVATION_ID }, { status: 405 });
   }
 
+  let saveStage = "verify_envelope";
   try {
     if (AUTHORITY_CONTRACT.beta_revision_fingerprint !== BASE44_HANDLER_RELEASE_FINGERPRINT) {
       throw new RequestProblem(503, "authority_release_activation_mismatch", "Server scan authority release activation is inconsistent.");
@@ -105,6 +107,7 @@ Deno.serve(async (req) => {
       throw new RequestProblem(400, "worker_identity_missing", "The durable worker identity is incomplete.");
     }
 
+    saveStage = "read_owner_records";
     const scan = await entities.ScanRun.get(identity.scan_id).catch(() => null);
     const project = await entities.BusinessProject.get(identity.project_id).catch(() => null);
     if (!scan || !project) throw new RequestProblem(404, "authority_record_not_found", "The durable scan project was not found.");
@@ -120,6 +123,7 @@ Deno.serve(async (req) => {
       user_confirmed: scan.user_confirmed === true,
     };
 
+    saveStage = "validate_authority";
     const failedPredicate = firstFailedAuthorityPredicate(authorityScanResult, review, { identityVersion: PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION });
     if (failedPredicate) {
       const classifierDiagnostic = failedPredicate === "archetype_classifier_version"
@@ -140,6 +144,7 @@ Deno.serve(async (req) => {
     }
 
     const stableSealedAt = stableTimestamp(scan);
+    saveStage = "build_snapshot";
     const snapshot = buildAuthoritySnapshot({
       identityVersion: PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION,
       scan: authorityScanResult,
@@ -148,6 +153,7 @@ Deno.serve(async (req) => {
       userId: identity.owner_user_id,
       now: stableSealedAt,
     });
+    saveStage = "sign_snapshot";
     const authorityProof = await createAuthoritySeal(snapshot, secret);
     const claimedAttempt = normalizeAttempt(identity.attempt_count);
     const rowAttempt = normalizeAttempt(scan.attempt_count);
@@ -161,6 +167,7 @@ Deno.serve(async (req) => {
     }
     if (scanStatus === "complete") {
       if (scan.authority_proof && scan.fix_list_id) {
+        saveStage = "replay_readback";
         const replayFixList = await entities.FixList.get(scan.fix_list_id).catch(() => null);
         const replayItems = replayFixList?.id
           ? await entities.FixItem.filter({ fix_list_id: replayFixList.id }, "created_date", MAX_FIX_ITEMS)
@@ -180,6 +187,7 @@ Deno.serve(async (req) => {
         ) {
           let replayScan = scan;
           if (String(scan.beta_revision_fingerprint || "") === BASE44_HANDLER_RELEASE_FINGERPRINT) {
+            saveStage = "replay_preview";
             replayScan = await ensureVerifiedCustomerPreview({
               entities,
               scan,
@@ -190,6 +198,7 @@ Deno.serve(async (req) => {
               secret,
             });
           }
+          saveStage = "release_admission";
           const release = await persistExactAdmissionRelease({
             entities,
             scan: replayScan,
@@ -223,18 +232,22 @@ Deno.serve(async (req) => {
     }
     const replayed = scan.authority_proof === authorityProof;
 
+    saveStage = "build_rows";
     const rowsWithoutListId = authorityRowsFromSnapshot(snapshot, {
       ownerUserId: identity.owner_user_id,
       proof: authorityProof,
     });
-    const fixList = await upsertSingleFixList(entities, rowsWithoutListId.fixList, identity, scan);
+    saveStage = "lookup_fix_list";
+    const fixList = await upsertSingleFixList(entities, rowsWithoutListId.fixList, identity, scan, stage => { saveStage = stage; });
     if (!fixList?.id) throw new RequestProblem(500, "authority_persistence_failed", "The authoritative FixList could not be saved.");
 
+    saveStage = "build_rows";
     const rows = authorityRowsFromSnapshot(snapshot, {
       fixListId: fixList.id,
       ownerUserId: identity.owner_user_id,
       proof: authorityProof,
     });
+    saveStage = "stage_fix_items";
     await reconcileFixItems(entities, fixList.id, rows.fixItems);
     await assertAttemptStillActive(entities, identity.scan_id, claimedAttempt);
 
@@ -246,8 +259,10 @@ Deno.serve(async (req) => {
       release_gate_eligible: false,
       completed_at: "",
     };
+    saveStage = "stage_scan_run";
     await entities.ScanRun.update(identity.scan_id, stagedScanFields);
 
+    saveStage = "verify_staged_rows";
     const stagedScan = await entities.ScanRun.get(identity.scan_id);
     const persistedFixList = await entities.FixList.get(fixList.id);
     const persistedItems = rows.fixItems.length > 0
@@ -279,6 +294,7 @@ Deno.serve(async (req) => {
     // exact representation the customer reader will later reconstruct, not the
     // pre-write worker object. Keep the scan non-terminal until that stored
     // representation has been re-read and cryptographically verified.
+    saveStage = "seal_stored_rows";
     const persistedAuthoritySnapshot = buildPersistedAuthoritySnapshot({
       run: {
         ...stagedScan,
@@ -298,12 +314,16 @@ Deno.serve(async (req) => {
       proof: finalAuthorityProof,
     });
 
+    saveStage = "finalize_fix_list";
     await entities.FixList.update(fixList.id, finalRows.fixList);
+    saveStage = "finalize_fix_items";
     await reconcileFixItems(entities, fixList.id, finalRows.fixItems);
     await assertAttemptStillActive(entities, identity.scan_id, claimedAttempt);
     const { attempt_count: _finalAttempt, ...finalScanFields } = finalRows.scanRun;
+    saveStage = "finalize_scan_run";
     await entities.ScanRun.update(identity.scan_id, finalScanFields);
 
+    saveStage = "verify_final_rows";
     const persistedScan = await entities.ScanRun.get(identity.scan_id);
     const finalPersistedFixList = await entities.FixList.get(fixList.id);
     const finalPersistedItems = finalRows.fixItems.length > 0
@@ -337,6 +357,7 @@ Deno.serve(async (req) => {
     // authority verification above; the preview therefore attests to two
     // customer-safe findings from an already-authoritative result rather than
     // bypassing or weakening the full seal.
+    saveStage = "save_preview";
     const previewPersistedScan = await ensureVerifiedCustomerPreview({
       entities,
       scan: persistedScan,
@@ -347,6 +368,7 @@ Deno.serve(async (req) => {
       secret,
     });
 
+    saveStage = "release_admission";
     const release = await persistExactAdmissionRelease({
       entities,
       scan: previewPersistedScan,
@@ -369,7 +391,7 @@ Deno.serve(async (req) => {
     });
   } catch (error) {
     if (error instanceof RequestProblem) return problemResponse(error);
-    console.error("persistDurableScanAuthority failed", error instanceof Error ? error.name : "unknown_error");
+    console.error("persistDurableScanAuthority failed", JSON.stringify(authoritySaveFailure(saveStage, error)));
     return problemResponse(new RequestProblem(500, "durable_authority_failed", "The durable scan authority could not be saved."));
   }
 });
@@ -506,7 +528,7 @@ function robotsPolicyMatches(scan, scanResult) {
     && storedOverride === resultOverride;
 }
 
-async function upsertSingleFixList(entities, desired, identity, scan) {
+async function upsertSingleFixList(entities, desired, identity, scan, markStage) {
   const existing = await entities.FixList.filter({
     scan_run_id: identity.scan_id,
     owner_user_id: identity.owner_user_id,
@@ -517,6 +539,7 @@ async function upsertSingleFixList(entities, desired, identity, scan) {
     || [...rows].sort((a, b) => String(a.id).localeCompare(String(b.id)))[0]
     || null;
 
+  markStage(current?.id ? "reconcile_existing_fix_list" : "create_fix_list");
   if (!current?.id) return entities.FixList.create(desired);
 
   for (const duplicate of rows) {

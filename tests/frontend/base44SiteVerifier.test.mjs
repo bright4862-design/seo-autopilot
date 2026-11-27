@@ -46,14 +46,14 @@ if [ "$status" = "000" ]; then
   echo "curl: (6) Could not resolve host" >&2
   exit 6
 fi
+if [ "$fail" = 1 ] && [ "$status" -ge 400 ]; then
+  echo "curl: (22) The requested URL returned error: $status" >&2
+  exit 22
+fi
 if [ -n "$out" ]; then
   if [ -n "$body" ]; then cat "$body" > "$out"; else : > "$out"; fi
   [ "$fmt" = '%{http_code}' ] && printf '%s' "$status"
   exit 0
-fi
-if [ "$fail" = 1 ] && [ "$status" -ge 400 ]; then
-  echo "curl: (22) The requested URL returned error: $status" >&2
-  exit 22
 fi
 [ -n "$body" ] && cat "$body"
 exit 0
@@ -94,10 +94,12 @@ function sandbox(t, routes) {
 }
 
 const page = `<!doctype html><html><head><script type="module" src="${ASSET}"></script></head><body></body></html>`;
-const bundle = (sha) => `(()=>{window.__FIXLIST_SOURCE_SHA__="${sha}";})();`;
-const servingSite = (origin, sha = SHA) => [
+const marker = (name, value) =>
+  `Object.defineProperty(window,"${name}",{value:${value},configurable:!1,enumerable:!1,writable:!1})`;
+const bundle = (sha) => `const n$="${sha}";typeof window<"u"&&${marker("__FIXLIST_SOURCE_SHA__", "n$")};`;
+const servingSite = (origin, sha = SHA, javascript = bundle(sha)) => [
   ["200", `${origin}/`, page],
-  ["200", `${origin}${ASSET}`, bundle(sha)],
+  ["200", `${origin}${ASSET}`, javascript],
 ];
 
 test("with no overrides the verifier proves getfixlist.com and the canonical Base44 site", (t) => {
@@ -146,6 +148,47 @@ test("a Base44 site serving a different source still fails as a source mismatch"
   assert.equal(result.status, 1);
   assert.match(result.stderr, new RegExp(`SITE SOURCE SHA MISMATCH: ${BASE44}/${ASSET}`));
   assert.doesNotMatch(result.stdout, /BASE44_SITE_SOURCE_VERIFIED/);
+});
+
+test("a hosting rebuild cannot pass by embedding the expected SHA away from the source marker", (t) => {
+  const rebuilt = `function hA(){return"${SHA}"}${bundle("")}`;
+  const result = sandbox(t, [...servingSite(PUBLIC, SHA, rebuilt), ...servingSite(BASE44)]).run();
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /SITE SOURCE SHA MISMATCH/);
+  assert.ok(result.requests.every((url) => new URL(url).host === "getfixlist.com"));
+});
+
+test("comments, string literals and unreachable declarations cannot attest a source", (t) => {
+  for (const javascript of [`// ${bundle(SHA)}`, `const x=${JSON.stringify(bundle(SHA))};`, `if(false){${bundle(SHA)}}`]) {
+    const result = sandbox(t, servingSite(PUBLIC, SHA, javascript)).run();
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /SITE SOURCE SHA MISMATCH/);
+  }
+});
+
+test("a window marker cannot resolve to a different scope's SHA", (t) => {
+  const shadowed = `const n$="${SHA}";if(typeof window !== "undefined"){const n$="";${marker("__FIXLIST_SOURCE_SHA__", "n$")};}`;
+  const result = sandbox(t, [...servingSite(PUBLIC, SHA, shadowed), ...servingSite(BASE44)]).run();
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /SITE SOURCE SHA MISMATCH/);
+});
+
+test("the optional scan mode must match the dedicated marker", (t) => {
+  const generation = "PUBLISHED_PILOT";
+  const build = `const n$="${SHA}",g="${generation}";typeof window<"u"&&(${marker("__FIXLIST_SOURCE_SHA__", "n$")},${marker("__FIXLIST_SCAN_FUNCTION_GENERATION__", "g")});`;
+  const confirmed = sandbox(t, [...servingSite(PUBLIC, SHA, build), ...servingSite(BASE44, SHA, build)]);
+  assert.equal(confirmed.run({ EXPECTED_SCAN_FUNCTION_GENERATION: generation }).status, 0);
+
+  const sameWordWithoutMarker = `${bundle(SHA)}function mode(){return"${generation}"}`;
+  const unconfirmed = sandbox(t, [...servingSite(PUBLIC, SHA, sameWordWithoutMarker), ...servingSite(BASE44)]);
+  const missing = unconfirmed.run({ EXPECTED_SCAN_FUNCTION_GENERATION: generation });
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /SITE SCAN FUNCTION GENERATION MISMATCH/);
+
+  const wrongMode = confirmed.run({ EXPECTED_SCAN_FUNCTION_GENERATION: "V9" });
+  assert.equal(wrongMode.status, 1);
+  assert.match(wrongMode.stderr, /SITE SCAN FUNCTION GENERATION MISMATCH/);
 });
 
 test("the public site is still verified first and still fails closed", (t) => {

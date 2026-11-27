@@ -9,9 +9,16 @@ import '@/index.css'
 // bundle by the guarded Base44 site publisher and verified after deployment.
 // It contains no secret material; it only ties the customer UI bytes to source.
 const FIXLIST_SOURCE_SHA = String(import.meta.env.VITE_FIXLIST_SOURCE_SHA || '')
+const FIXLIST_SCAN_FUNCTION_GENERATION = String(import.meta.env.VITE_SCAN_FUNCTION_GENERATION || 'PUBLIC')
 if (typeof window !== 'undefined') {
   Object.defineProperty(window, '__FIXLIST_SOURCE_SHA__', {
     value: FIXLIST_SOURCE_SHA,
+    configurable: false,
+    enumerable: false,
+    writable: false,
+  })
+  Object.defineProperty(window, '__FIXLIST_SCAN_FUNCTION_GENERATION__', {
+    value: FIXLIST_SCAN_FUNCTION_GENERATION,
     configurable: false,
     enumerable: false,
     writable: false,

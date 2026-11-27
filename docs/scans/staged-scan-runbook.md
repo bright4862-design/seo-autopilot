@@ -195,6 +195,10 @@ Phase 7 (5,000-page scans), adaptive sampling, weekly monitoring and the separat
 
 ## Pilot on getfixlist.com
 
+The named pilot commands in this runbook use the prebuilt publication path. They compare both hosts with the exact locked build uploaded through `site deploy --no-build`. Its SDK has no hosting commit embedded in `X-Base44-Build`.
+
+A provider-native checkpoint can compile the same Git source with an additional `VITE_BASE44_BUILD_COMMIT`, producing different JavaScript bytes. Its admission gate requires authenticated provider metadata that binds the exact app, checkpoint, reviewed source commit and hosting commit. Rebuild from the reviewed lock with that independently verified hosting commit, verify the SDK's build header, and compare the exact assets and source/mode markers on both hosts. Until that provenance and verifier exist, keep native-checkpoint named admissions held. A source marker or a hosting commit supplied by the shell cannot establish that binding.
+
 Keep the public route manifest on V8 during the named-account pilot. The pilot bundle reads its configured V9 launcher for the authenticated account’s limit. Non-pilot launches retain V8. Result reads can use the pinned V9 reader after the pilot stops accepting new scans.
 
 1. Pin and review the exact merged candidate. Deploy the coordinator build with pilot launcher binding, the zero-percent tagged worker, and the six generated V9 function packages through the existing candidate operations. Verify the serving builds and schema from that source. Deploy the signed gateway with both `gateway_canary` and `gateway_staged_config` set to `owner-canary`, using the same named account and the verified worker revision. Record the returned gateway revision and `GATEWAY_CANARY_WORKER_ORIGIN` for pilot preparation.

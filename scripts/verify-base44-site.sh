@@ -204,7 +204,7 @@ verify_url "$BASE44_URL"
 if [[ "$pilot" == true ]]; then
   verify_url "$PUBLIC_URL" /onboarding
   verify_url "$BASE44_URL" /onboarding
-  printf 'PUBLISHED_PILOT_FRONTEND_VERIFIED source_sha=%s mode=%s lockfile_build=matched\n' \
+  printf 'PUBLISHED_PILOT_FRONTEND_VERIFIED source_sha=%s mode=%s publication=prebuilt lockfile_build=matched\n' \
     "$EXPECTED_SOURCE_SHA" "$EXPECTED_SCAN_FUNCTION_GENERATION"
 fi
 printf 'BASE44_SITE_SOURCE_VERIFIED source_sha=%s\n' "$EXPECTED_SOURCE_SHA"

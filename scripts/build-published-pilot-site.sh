@@ -7,6 +7,11 @@ source_sha="${1:-}" mode="${2:-}" destination="${3:-}"
 [[ $# == 3 && "$source_sha" =~ ^[0-9a-f]{40}$ && "$source_sha" == "$(git -C "$root" rev-parse HEAD)" ]]
 [[ "$mode" == PUBLISHED_PILOT || "$mode" == PAID_PILOT ]]
 [[ "$destination" == /* && ! -e "$destination" && ! -L "$destination" ]]
+if [[ -n "${VITE_BASE44_BUILD_COMMIT:-}" ]]; then
+  echo "The prebuilt pilot publisher does not take a native hosting commit." >&2
+  exit 2
+fi
+unset VITE_BASE44_BUILD_COMMIT
 mkdir -m 700 "$destination"
 git -C "$root" archive "$source_sha" | tar -x -C "$destination"
 cd "$destination"

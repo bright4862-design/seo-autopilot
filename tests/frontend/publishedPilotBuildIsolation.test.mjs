@@ -70,6 +70,12 @@ elif [ "$1 $2" = "run build" ]; then
   echo built >dist/index.html
 else exit 1; fi
 `, 0o755);
+  const native = run("bash", ["scripts/build-published-pilot-site.sh", sha, "PUBLISHED_PILOT", path.join(temp, "native")], {
+    VITE_BASE44_BUILD_COMMIT: "a".repeat(40),
+  });
+  assert.equal(native.status, 2);
+  assert.match(native.stderr, /does not take a native hosting commit/);
+  assert.equal(fs.existsSync(path.join(temp, "native")), false);
   for (const version of ["0.8.63", "0.8.39"]) {
     const destination = path.join(temp, version);
     const result = run("bash", ["scripts/build-published-pilot-site.sh", sha, "PUBLISHED_PILOT", destination], {

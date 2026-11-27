@@ -126,3 +126,28 @@ printf '%s %s\\n' "$BARRIER_MODE" "$BARRIER_GENERATION"
     else:
         assert outcome.returncode == 0, outcome.stderr
         assert outcome.stdout.strip() == "open 16"
+
+
+@pytest.mark.parametrize(("function", "arguments", "mode"), [
+    ("activate_acceptance_only", "", "PUBLISHED_PILOT"),
+    ("operate_published_500_pilot", "start", "PAID_PILOT"),
+])
+def test_named_claim_gate_checks_published_site_before_opening(tmp_path, function, arguments, mode):
+    verify = tmp_path / "scripts/verify-base44-site.sh"
+    verify.parent.mkdir()
+    verify.write_text('printf "%s %s %s" "$EXPECTED_SOURCE_SHA" "$1" "$2" > verified\nexit 7\n')
+    args = _setting_values() + f"""
+REPO_ROOT=. ADMISSION_BARRIER_ACCEPTANCE_PATH=fixture
+require_exact_main_owner_source() {{ :; }}
+require_barrier_inputs() {{ :; }}
+require_pilot_launcher_build() {{ :; }}
+require_confirmation() {{ :; }}
+require_closed_drained_barrier() {{ :; }}
+require_drain_plane_live() {{ :; }}
+call_barrier_operator() {{ touch opened; }}
+{function} {arguments}
+"""
+    result = _operator_function(function, args, tmp_path)
+    assert result.returncode == 7, result.stderr
+    assert (tmp_path / "verified").read_text() == f"{SOURCE} --published-pilot {mode}"
+    assert not (tmp_path / "opened").exists()

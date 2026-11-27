@@ -141,6 +141,7 @@ test("the publisher restores stripped routes before rejecting extra aliases and 
   fs.writeFileSync(path.join(root, "scripts/lib/base44-public-routes.mjs"), 'console.log("v8 launcherV8");');
   fs.writeFileSync(path.join(root, "scripts/generate_release_contracts.mjs"), "");
   fs.writeFileSync(path.join(root, "scripts/verify-base44-site.sh"), "exit 0\n");
+  fs.writeFileSync(path.join(root, "scripts/build-published-pilot-site.sh"), 'mkdir -p "$3"\n');
   fs.writeFileSync(path.join(root, "scripts/verify-base44-functions.sh"), [
     'test -f "$TEST_PROVIDER/base44/functions/launcherV8/entry.ts"',
     'printf "verified-v8\\n" >> "$TEST_CALLS"',

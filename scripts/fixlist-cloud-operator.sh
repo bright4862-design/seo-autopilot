@@ -1513,7 +1513,9 @@ for (const id of ownerIds) {
 }
 console.log("APPROVED_V8_OWNERS_VERIFIED=" + ownerIds.length);
 JS
-  if ! timeout --signal=TERM --kill-after=5s 180 "$FIXLIST_BASE44_CLI" --app-id "$app_id" exec --data-env prod \
+  mkdir "$view/probe-project"
+  printf '{"private":true}\n' > "$view/probe-project/package.json"
+  if ! (cd "$view/probe-project" && timeout --signal=TERM --kill-after=5s 180 "$FIXLIST_BASE44_CLI" --app-id "$app_id" exec --data-env prod) \
     < "$view/readback.js" > "$view/access.out" 2> "$view/access.err"; then
     echo "The approved ordinary users' active Standard 150 grants could not be verified." >&2
     return 1
@@ -1576,6 +1578,9 @@ PY
   if [[ -n "$LEGACY_ACCESS" ]]; then
     LEGACY_ACCESS_PREFLIGHT="$(verify_approved_legacy_access)"
   fi
+  if [[ -n "$ACCEPTANCE_LAUNCHER_BUILD_ID" ]]; then
+    EXPECTED_SOURCE_SHA="$SOURCE_SHA" bash "$REPO_ROOT/scripts/verify-base44-site.sh" --published-pilot PUBLISHED_PILOT
+  fi
   call_barrier_operator acceptance_only "$ADMISSION_BARRIER_ACCEPTANCE_PATH"
   parse_barrier_response acceptance_only
   [[ "$BARRIER_MODE" == "acceptance_only" ]] \
@@ -1610,6 +1615,7 @@ operate_published_500_pilot() {
     [[ "$ACCEPTANCE_SOURCE_SHA" == "$SOURCE_SHA" ]] || return 1
     require_confirmation "START-PUBLISHED-500-PILOT:${SOURCE_SHA}:${BARRIER_EXPECTED_GENERATION}:${ACCEPTANCE_COHORT_ID}:${ACCEPTANCE_LAUNCHER_BUILD_ID}"
     require_drain_plane_live
+    EXPECTED_SOURCE_SHA="$SOURCE_SHA" bash "$REPO_ROOT/scripts/verify-base44-site.sh" --published-pilot PAID_PILOT
   else
     require_confirmation "HOLD-PUBLISHED-500-PILOT:${SOURCE_SHA}:${BARRIER_EXPECTED_GENERATION}:${ACCEPTANCE_COHORT_ID}"
   fi

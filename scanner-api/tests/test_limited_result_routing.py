@@ -226,3 +226,37 @@ async def test_release_eligible_review_keeps_existing_authority_path(monkeypatch
         "authority_proof": "a" * 64,
     }
     assert [name for name, _payload in calls] == ["persistDurableScanAuthorityV8"]
+
+
+@pytest.mark.parametrize(("code", "expected"), [
+    ("durable_authority_failed", "durable_authority_failed"),
+    ("authority_persistence_incomplete", "authority_persistence_incomplete"),
+    ("fixture-private-message", "unclassified"),
+    ({"nested": "fixture-private-message"}, "unclassified"),
+    (None, "unclassified"),
+])
+@pytest.mark.asyncio
+async def test_authority_save_5xx_logs_only_known_codes_and_remains_retryable(monkeypatch, capsys, code, expected):
+    import json
+
+    async def read_fresh(_client, _scan_id):
+        return _scan()
+
+    async def invoke(_client, name, _envelope):
+        assert name == "persistDurableScanAuthorityV8"
+        return {"status_code": 500, "body": {"error_code": code, "error": "fixture-private-detail"}}
+
+    monkeypatch.setattr(scan_job, "read_scan_run", read_fresh)
+    monkeypatch.setattr(scan_job, "invoke_function", invoke)
+    outcome = await scan_job.complete_authority(
+        object(), _scan(),
+        {"pages": [], "normalized_domain": "example.com", "respect_robots_txt": True, "owner_attested_robots_override": False},
+        "fixture-key", review=review("sufficient", eligible=True),
+    )
+    assert outcome == {"ok": False, "transient": True, "failure_code": "persistence_unavailable"}
+    output = capsys.readouterr().out
+    assert "fixture-private" not in output
+    events = [json.loads(line) for line in output.splitlines()]
+    saved = [event for event in events if event.get("phase") == "persist_done"]
+    assert len(saved) == 1
+    assert saved[0]["writer_error_code"] == expected

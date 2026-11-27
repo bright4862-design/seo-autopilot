@@ -132,6 +132,22 @@ def diagnostic_fingerprint_marker(review: dict[str, Any]) -> str:
     return marker if re.fullmatch(r"[0-9a-f]{16}", marker) else "missing"
 
 
+# Only known server codes may enter logs. An SDK or proxy can return arbitrary
+# data (including customer content) under the same error_code field.
+_AUTHORITY_SAVE_SERVER_CODES = frozenset({
+    "admission_release_pending", "authority_not_configured", "authority_persistence_failed",
+    "authority_persistence_incomplete", "authority_release_activation_mismatch",
+    "authority_terminal_update_failed", "customer_preview_persistence_failed",
+    "durable_authority_failed", "worker_runtime_identity_mismatch",
+    "worker_runtime_not_configured", "worker_runtime_unverified",
+})
+
+
+def authority_save_server_code(body: dict[str, Any]) -> str:
+    code = body.get("error_code")
+    return code if isinstance(code, str) and code in _AUTHORITY_SAVE_SERVER_CODES else "unclassified"
+
+
 def base44_api_url() -> str:
     return str(os.getenv("BASE44_API_URL") or "https://base44.app").rstrip("/")
 
@@ -1394,6 +1410,7 @@ async def complete_authority(
         scan_id=scan_id,
         attempt_count=attempt_count,
         phase="persist_done",
+        writer_error_code=authority_save_server_code(persisted["body"]) if persisted["status_code"] >= 500 else None,
         elapsed_ms=int((time.monotonic() - phase_started) * 1000),
         status_code=int(persisted.get("status_code") or 0),
     )

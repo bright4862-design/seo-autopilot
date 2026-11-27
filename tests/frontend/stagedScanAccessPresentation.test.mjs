@@ -7,6 +7,7 @@ import { parsePublishedScanOptions, resolveScanFunctionRoute } from "../../src/l
 import { resolveScanOwnership } from "../../src/lib/siteOwnershipPolicy.js";
 import publicRouteContract from "../../data/base44-function-routes.json" with { type: "json" };
 import deployments from "../../data/generated-staged-v9-routes.json" with { type: "json" };
+import { loadSavedReportClient, savedReportReader } from "./helpers/savedReportClient.mjs";
 
 const respectRobots = { respect_robots_txt: true, owner_attested_robots_override: false, site_ownership_answer: "not_owner" };
 const overrideRobots = { respect_robots_txt: false, owner_attested_robots_override: true, site_ownership_answer: "owner_or_manager" };
@@ -30,16 +31,11 @@ function asScript(file) {
 
 function browserReader(result, generation) {
   const calls = [];
-  const sdk = {
-    auth: { me: async () => ({ id: "owner_test" }) },
-    functions: { invoke: async (name, body) => { calls.push({ name, body }); return { data: result }; } },
-  };
-  const clientScript = asScript("src/api/base44Client.js").replace("import.meta.env?.VITE_SCAN_FUNCTION_GENERATION", "generation");
-  const client = new Function("createClient", "appParams", "resolveScanFunctionRoute", "generation", `${clientScript}\nreturn base44;`)(
-    () => sdk, {}, resolveScanFunctionRoute, generation,
-  );
-  const read = new Function("base44", "clearCustomerAuthBoundary", `${asScript("src/lib/scanRuns.js")}\nreturn getScanRunWithFixList;`)(client, () => {});
-  return { calls, read, invoke: client.functions.invoke };
+  const client = loadSavedReportClient((name, body) => {
+    calls.push({ name, body });
+    return Response.json(result);
+  }, { generation, userId: "owner_test" });
+  return { calls, read: savedReportReader(client), invoke: client.functions.invoke };
 }
 
 test("the browser uses the configured reader first and preserves the exact failed run", async () => {

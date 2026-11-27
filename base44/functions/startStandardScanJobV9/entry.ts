@@ -8,7 +8,7 @@ import {
   normalizeAttemptCount,
   stagedDispatchGatewayUrl,
 } from "./cloudTasks.js";
-import { evaluateScanAccess, uniqueAccessRows } from "./entitlement.js";
+import { evaluateScanAccess, OWNER_TEST_EMAIL, OWNER_TEST_USER_ID, uniqueAccessRows } from "./entitlement.js";
 import {
   betaScanAdmissionPolicy,
   normalizeAdmissionIdentity,
@@ -28,8 +28,10 @@ const BASE44_RUNTIME_ACTIVATION_ID = "startStandardScanJobV9-staged-runtime-2026
 const STAGED_RUNTIME_ACTION = "staged_runtime_status";
 const PUBLISHED_SCAN_OPTIONS_ACTION = "published_scan_options";
 const PUBLIC_PILOT_EXPIRY = "SCAN_PUBLIC_PILOT_EXPIRES_AT";
+const PUBLIC_ADMIN_500_OWNER = "SCAN_PUBLIC_PILOT_ADMIN_500_OWNER_ID";
+const ADMIN_500_REHEARSAL_MAX_SECONDS = 2 * 60 * 60;
 const STAGED_RUNTIME_ADMIN_EMAILS = new Map([
-  ["6a498da58ef5cec1f5cd4486", "bright4862@gmail.com"],
+  [OWNER_TEST_USER_ID, OWNER_TEST_EMAIL],
   ["6a498732ec779dfaaeab0e54", "londonparisbrussels@gmail.com"],
 ]);
 
@@ -95,6 +97,32 @@ function publishedPilotExpiry(settings: ReturnType<typeof readStagedScanSettings
   return settings.rolloutScope === "paid" ? mutableScanAdmissionSecret(PUBLIC_PILOT_EXPIRY) : stagedScanEnv(PUBLIC_PILOT_EXPIRY);
 }
 
+function admin500RehearsalConfiguration(settings: ReturnType<typeof readStagedScanSettings>, expiresAt: string | undefined) {
+  const configured = settings.rolloutScope === "off"
+    && mutableScanAdmissionSecret(PUBLIC_ADMIN_500_OWNER) === OWNER_TEST_USER_ID;
+  const expiry = typeof expiresAt === "string" && /^[0-9]{1,12}$/.test(expiresAt) ? Number(expiresAt) : 0;
+  const now = Date.now() / 1_000;
+  return {
+    configured,
+    enabled: configured && settings.pipelineMode === "staged" && settings.cohort === OWNER_TEST_USER_ID
+      && settings.validPilotCohort && stagedScanEnv("SCAN_STAGED_ROLLOUT_SCOPE") === "off"
+      && !stagedScanEnv("SCAN_PIPELINE_OWNER_IDS") && stagedScanEnv("SCAN_STAGED_500_ENTITLED_ENABLED") !== "true"
+      && expiry > now && expiry <= now + ADMIN_500_REHEARSAL_MAX_SECONDS,
+  };
+}
+
+function browserPilotPolicy(settings: ReturnType<typeof readStagedScanSettings>, user) {
+  const expiresAt = publishedPilotExpiry(settings);
+  const pilot = publishedPilotLaunchPolicy({ settings, user, expiresAt });
+  if (user.id !== OWNER_TEST_USER_ID || user.role !== "admin" || String(user.email).trim().toLowerCase() !== OWNER_TEST_EMAIL) {
+    return { ...pilot, admin500Rehearsal: false };
+  }
+  const rehearsal = admin500RehearsalConfiguration(settings, expiresAt);
+  return rehearsal.configured
+    ? { ...pilot, ...rehearsal, admin500Rehearsal: true }
+    : { ...pilot, admin500Rehearsal: false };
+}
+
 function reportedGate(value: unknown) {
   if (value === "true") return "enabled";
   if (value === "false") return "disabled";
@@ -154,6 +182,7 @@ async function stagedRuntimeStatus(user, raw) {
       staged_owner_count: cohortHash === null ? null : ownerIds.length,
       staged_owner_cohort_sha256: cohortHash,
       staged_owner_enabled: enabled,
+      admin_500_rehearsal_enabled: admin500RehearsalConfiguration(settings, pilotExpiry).enabled,
       intake_gate: reportedGate(mutableScanIntakeValue()),
       admission_gate: reportedGate(mutableScanAdmissionValue()),
       ...(pilotExpiry !== undefined ? { public_pilot_expires_at: /^[0-9]{1,12}$/.test(pilotExpiry) ? Number(pilotExpiry) : null } : {}),
@@ -172,7 +201,7 @@ async function publishedScanOptions(base44, user, settings, pilot, body) {
   const options = (launch, pageCap) => jsonResponse({
     success: true, version, launch, page_cap: pageCap, release_fingerprint: RELEASE_FINGERPRINT,
   }, 200, noStore);
-  if (!pilot.configured || !pilot.namedCustomer) return options("legacy", 150);
+  if (!pilot.configured || (!pilot.namedCustomer && !pilot.admin500Rehearsal)) return options("legacy", 150);
   if (!pilot.paidPilot && (!pilot.enabled || !stagedDispatchGatewayUrl())) return options("paused", null);
 
   const entitlement = await loadScanEntitlement(base44, user, { createPreviewAccess: false });
@@ -180,6 +209,9 @@ async function publishedScanOptions(base44, user, settings, pilot, body) {
     return jsonResponse({
       success: false, error_code: entitlement.failureCode, error: customerStatusDetail(entitlement.failureCode),
     }, entitlement.failureCode === "paid_access_conflict" ? 409 : 402, noStore);
+  }
+  if (pilot.admin500Rehearsal && (entitlement.preview !== false || !hasLargeScanGrant(entitlement.record))) {
+    return options("paused", null);
   }
   if (pilot.paidPilot && !hasLargeScanGrant(entitlement.record)) return options("legacy", 150);
   if (!pilot.enabled || !stagedDispatchGatewayUrl()) return options("paused", null);
@@ -283,15 +315,15 @@ export default async function (req: Request): Promise<Response> {
         error: customerStatusDetail(code), retryable: true, ...identity.fields,
       }, 503);
     }
-    const pilot = publishedPilotLaunchPolicy({ settings: stagedSettings, user, expiresAt: publishedPilotExpiry(stagedSettings) });
+    const pilot = browserPilotPolicy(stagedSettings, user);
     if (optionsRequest) return publishedScanOptions(base44, user, stagedSettings, pilot, body);
     const pilotRequest = (!pilot.paidPilot && pilot.configured) || Object.hasOwn(body, "published_pilot_page_cap");
-    const typedPilotRequest = pilot.paidPilot || body.published_pilot_page_cap === 150;
-    if (pilotRequest && (!pilot.namedCustomer || (!typedPilotRequest && !pilot.enabled))) {
+    const typedPilotRequest = !pilot.admin500Rehearsal && (pilot.paidPilot || body.published_pilot_page_cap === 150);
+    if (pilotRequest && ((!pilot.namedCustomer && !pilot.admin500Rehearsal) || (!typedPilotRequest && !pilot.enabled))) {
       return pilotLaunchRefused("scan_pilot_unavailable");
     }
     if (pilotRequest && identity.fields.scan_id) return pilotLaunchRefused("scan_pilot_saved_request");
-    if (pilotRequest && !(pilot.paidPilot ? [500] : [150, 500]).includes(body.published_pilot_page_cap)) {
+    if (pilotRequest && !(pilot.paidPilot || pilot.admin500Rehearsal ? [500] : [150, 500]).includes(body.published_pilot_page_cap)) {
       return pilotLaunchRefused("scan_limit_changed");
     }
 
@@ -459,6 +491,14 @@ export default async function (req: Request): Promise<Response> {
         }, entitlement.failureCode === "paid_access_conflict" ? 409 : 402);
       }
 
+      if (pilot.admin500Rehearsal) {
+        if (!admin500RehearsalConfiguration(stagedSettings, publishedPilotExpiry(stagedSettings)).enabled) {
+          return pilotLaunchRefused("scan_pilot_unavailable");
+        }
+        if (entitlement.preview !== false || !hasLargeScanGrant(entitlement.record)) {
+          return pilotLaunchRefused("scan_limit_changed");
+        }
+      }
       const scanContract = resolveServerScanContract({
         access: entitlement.record, ownerUserId: user.id,
         verifiedAccess: entitlement.preview === false, settings: stagedSettings,

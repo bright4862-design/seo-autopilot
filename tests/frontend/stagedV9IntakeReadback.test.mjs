@@ -47,6 +47,7 @@ function harness({
   }
   const dependencies = {
     "./scanLimits.js": scanLimits,
+    "./entitlement.js": entitlement,
     "./cloudTasks.js": { stagedDispatchGatewayUrl },
     ...launch.modules,
     "./runtimeConfig.js": runtimeConfig,
@@ -64,7 +65,7 @@ function harness({
       secretReads.push(name);
       if (operator && ["SCAN_PIPELINE_MODE", "SCAN_STAGED_OWNER_IDS"].includes(name)) return settings[name];
       if (["SCAN_STAGED_PILOT_OWNER_IDS", "SCAN_PUBLIC_PILOT_EXPIRES_AT",
-        "SCAN_STAGED_500_ELIGIBLE_ADMISSION_ENABLED"].includes(name)) return gates[name];
+        "SCAN_STAGED_500_ELIGIBLE_ADMISSION_ENABLED", "SCAN_PUBLIC_PILOT_ADMIN_500_OWNER_ID"].includes(name)) return gates[name];
       if (launch.entities && Object.hasOwn(gates, name)) return gates[name];
       if (name !== "BETA_SCAN_INTAKE_ENABLED" && name !== "BETA_SCAN_ADMISSION_ENABLED") {
         return sideEffect(`secrets.get:${name}`);
@@ -125,6 +126,7 @@ test("actual V9 intake returns a closed, no-store owner-only settings and releas
     staged_owner_count: 2,
     staged_owner_cohort_sha256: hash,
     staged_owner_enabled: true,
+    admin_500_rehearsal_enabled: false,
     intake_gate: "disabled",
     admission_gate: "enabled",
   });
@@ -132,7 +134,7 @@ test("actual V9 intake returns a closed, no-store owner-only settings and releas
     "SCAN_DISPATCH_GATEWAY_URL", "SCAN_PIPELINE_MODE", "SCAN_PUBLIC_PILOT_EXPIRES_AT",
     "SCAN_STAGED_500_ENTITLED_ENABLED", "SCAN_STAGED_OWNER_IDS", "SCAN_STAGED_ROLLOUT_SCOPE",
   ]);
-  assert.deepEqual(fixture.secretReads, ["SCAN_STAGED_500_ELIGIBLE_ADMISSION_ENABLED", "SCAN_STAGED_PILOT_OWNER_IDS", "BETA_SCAN_INTAKE_ENABLED", "BETA_SCAN_ADMISSION_ENABLED"]);
+  assert.deepEqual(fixture.secretReads, ["SCAN_STAGED_500_ELIGIBLE_ADMISSION_ENABLED", "SCAN_STAGED_PILOT_OWNER_IDS", "SCAN_PUBLIC_PILOT_ADMIN_500_OWNER_ID", "BETA_SCAN_INTAKE_ENABLED", "BETA_SCAN_ADMISSION_ENABLED"]);
   assert.deepEqual(fixture.sideEffects, []);
 });
 
@@ -283,7 +285,7 @@ function launchHarness({
   gateway = "https://dispatch-gateway.example", claimFailure, echoClaimOrigin = false, omitPersistedOrigin = false,
   publicPilotExpiresAt, acknowledgePilot = true, pilotOwners, pilotClaimCap, claimMode, user = paidCustomer,
   acknowledgeCap = true, invalidClaimProof = false, interruptBeforeDrain = false,
-  acknowledgeEligible500 = true, legacyEntitled500 = "false",
+  acknowledgeEligible500 = true, legacyEntitled500 = "false", admin500RehearsalOwnerId,
 } = {}) {
   const settings = {
     ...(rollout === null ? {} : { SCAN_STAGED_ROLLOUT_SCOPE: rollout }),
@@ -303,6 +305,7 @@ function launchHarness({
     SCAN_ADMISSION_COORDINATOR_URL: "https://coordinator.example", SCAN_EVIDENCE_SIGNING_KEY: signingKey,
     SCAN_STAGED_PILOT_OWNER_IDS: pilotOwners, SCAN_PUBLIC_PILOT_EXPIRES_AT: publicPilotExpiresAt,
     SCAN_STAGED_500_ELIGIBLE_ADMISSION_ENABLED: entitled500,
+    SCAN_PUBLIC_PILOT_ADMIN_500_OWNER_ID: admin500RehearsalOwnerId,
   };
   const scans = [];
   const dispatched = [];
@@ -424,7 +427,7 @@ function launchHarness({
     scan_mode: "standard_500", page_cap: 500, staged_rollout_scope: "paid", ...overrides,
   });
   return { submit, settings, gates, calls, scans, dispatched, taskTransports, admittedOrigins, claimRequests,
-    options: () => fixture.post({ action: "published_scan_options" }) };
+    options: () => fixture.post({ action: "published_scan_options" }), runtimeStatus: () => fixture.post() };
 }
 
 test("V9 target cooldown returns a generic 429 before accepting a paid or preview scan", async () => {
@@ -823,6 +826,108 @@ test("published scan options attest the ordinary owner's 150 or 500 cap without 
       release_fingerprint: releaseContract.RELEASE_FINGERPRINT,
     });
     assert.deepEqual(fixture.calls, []);
+  }
+});
+
+const bright500Grant = {
+  ...paidGrant, owner_user_id: owner.id, user_email: owner.email,
+  grant_source: "owner_test", granted_at: "2026-11-27T00:00:00.000Z", page_cap: 500,
+};
+
+function bright500Rehearsal(options = {}) {
+  return namedPilot({ user: owner, cohort: owner.id, rows: [bright500Grant], admin500RehearsalOwnerId: owner.id, ...options });
+}
+
+test("the opted-in Bright administrator can launch a 500-page rehearsal from the published form", async () => {
+  const fixture = bright500Rehearsal();
+  const options = await fixture.options();
+  assert.equal(options.status, 200);
+  assert.equal(options.body.launch, "pilot");
+  assert.equal(options.body.page_cap, 500);
+  assert.equal(options.cacheControl, "no-store");
+  assert.deepEqual(fixture.calls, []);
+
+  const accepted = await fixture.submit({ published_pilot_page_cap: 500 });
+  assert.equal(accepted.body.accepted, true);
+  assert.equal(accepted.body.page_cap, 500);
+  assert.equal(fixture.scans[0].pipeline_mode, "staged");
+  assert.equal(fixture.scans[0].page_cap, 500);
+  assert.equal(fixture.dispatched[0].page_cap, 500);
+  assert.deepEqual(fixture.claimRequests, [{ pilotLauncherBuildId: FUNCTION_BUILD_ID, pilotPageCap: undefined }]);
+  assert.deepEqual(fixture.taskTransports, [
+    { stage: "drain", requireGateway: true }, { stage: "entry", requireGateway: true },
+  ]);
+});
+
+test("a Bright rehearsal requires a verified active 500 grant and an exact browser cap", async () => {
+  for (const rows of [[], [{ ...bright500Grant, page_cap: 150 }]]) {
+    const fixture = bright500Rehearsal({ rows });
+    const options = await fixture.options();
+    assert.equal(options.body.launch, "paused");
+    assert.equal(options.body.page_cap, null);
+    assert.notEqual((await fixture.submit({ published_pilot_page_cap: 500 })).body.accepted, true);
+    assert.deepEqual(fixture.calls, []);
+    assert.deepEqual(fixture.scans, []);
+  }
+  for (const rows of [[{ ...bright500Grant, access_status: "revoked" }], [bright500Grant, { ...bright500Grant, id: "duplicate" }]]) {
+    const fixture = bright500Rehearsal({ rows });
+    assert.notEqual((await fixture.options()).body.launch, "pilot");
+    assert.notEqual((await fixture.submit({ published_pilot_page_cap: 500 })).body.accepted, true);
+    assert.deepEqual(fixture.calls, []);
+  }
+  const fixture = bright500Rehearsal();
+  for (const cap of [150, "500", undefined]) {
+    const rejected = await fixture.submit({ published_pilot_page_cap: cap });
+    assert.equal(rejected.body.failure_code, "scan_limit_changed");
+    assert.deepEqual(fixture.calls, []);
+  }
+});
+
+test("Bright's browser rehearsal is off by default and refuses other identities or invalid windows", async () => {
+  const longExpiry = String(Math.floor(Date.now() / 1000) + 7300);
+  for (const [changes, expectedOptions] of [
+    [{ admin500RehearsalOwnerId: undefined }, "legacy"],
+    [{ user: london, cohort: london.id, admin500RehearsalOwnerId: london.id }, "legacy"],
+    [{ user: { ...owner, email: london.email } }, "legacy"],
+    [{ publicPilotExpiresAt: "0" }, "paused"],
+    [{ publicPilotExpiresAt: longExpiry }, "paused"],
+    [{ cohort: `${owner.id},${london.id}` }, "paused"],
+    [{ cohort: ` ${owner.id}` }, "paused"],
+    [{ mode: "monolith" }, "paused"],
+    [{ rollout: null }, "paused"],
+    [{ legacyEntitled500: "true" }, "paused"],
+  ]) {
+    const fixture = bright500Rehearsal(changes);
+    assert.equal((await fixture.options()).body.launch, expectedOptions);
+    assert.notEqual((await fixture.submit({ published_pilot_page_cap: 500 })).body.accepted, true);
+    assert.deepEqual(fixture.calls, []);
+  }
+  const fixture = bright500Rehearsal();
+  fixture.settings.SCAN_PIPELINE_OWNER_IDS = owner.id;
+  assert.equal((await fixture.options()).body.launch, "paused");
+  assert.notEqual((await fixture.submit({ published_pilot_page_cap: 500 })).body.accepted, true);
+  assert.deepEqual(fixture.calls, []);
+});
+
+test("a Bright rehearsal needs exact signed acceptance-only evidence before creating or dispatching a scan", async () => {
+  for (const changes of [{ acknowledgePilot: false }, { invalidClaimProof: true }, { claimMode: "open" }]) {
+    const fixture = bright500Rehearsal(changes);
+    const result = await fixture.submit({ published_pilot_page_cap: 500 });
+    assert.equal(result.body.failure_code, "admission_claim_evidence_invalid");
+    assert.deepEqual(fixture.calls, ["claim"]);
+    assert.deepEqual(fixture.scans, []);
+    assert.deepEqual(fixture.taskTransports, []);
+  }
+});
+
+test("the staged readback attests Bright's opt-in to either approved administrator without reporting an owner ID", async () => {
+  for (const user of [owner, london]) {
+    const fixture = bright500Rehearsal({ user });
+    const readback = await fixture.runtimeStatus();
+    assert.equal(readback.body.admin_500_rehearsal_enabled, true);
+    assert.equal(JSON.stringify(readback.body).includes(owner.id), false);
+    fixture.gates.SCAN_PUBLIC_PILOT_ADMIN_500_OWNER_ID = "";
+    assert.equal((await fixture.runtimeStatus()).body.admin_500_rehearsal_enabled, false);
   }
 });
 

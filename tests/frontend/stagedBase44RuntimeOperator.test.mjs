@@ -168,7 +168,10 @@ test("operator shell only changes staged config and intake, never admission rele
   assert.match(src,/SCAN_STAGED_OWNER_IDS=/);
   assert.match(src,/BETA_SCAN_INTAKE_ENABLED=false/);
   assert.doesNotMatch(src,/secrets set[^\n]*BETA_SCAN_ADMISSION_ENABLED=/);
-  for(const unsafe of ["gcloud run", "gcloud tasks", "update-traffic", "functions deploy startStandardScanJobV9",
+  const runCommands = src.split("\n").filter(line => /^\s*gcloud run /.test(line));
+  assert.equal(runCommands.length, 2);
+  assert.ok(runCommands.every(line => /^\s*gcloud run (services|revisions) describe /.test(line)));
+  for(const unsafe of ["gcloud tasks", "update-traffic", "functions deploy startStandardScanJobV9",
                         "secrets set SCAN_EVIDENCE_SIGNING_KEY", "base44 deploy"]) {
     assert.equal(src.includes(unsafe),false);
   }

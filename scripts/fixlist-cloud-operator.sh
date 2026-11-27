@@ -477,19 +477,19 @@ for b in builds:
 # service audience. Anything unattributable remains INDETERMINATE.
 verify_worker_runtime_revision() {
   local revision="${1:-$TARGET_REVISION}" expected_sha="${2:-}"
-  local service_json recorded response probe_url token code compare_status=0
+  local recorded="${3:-$REPO_ROOT/data/beta-crawler-revision.json}"
+  local service_json response probe_url token code compare_status=0
 
   echo
   echo "=== Runtime revision fingerprint ==="
 
-  RUNTIME_PROBE_TMP="$(mktemp -d)"
-  chmod 700 "$RUNTIME_PROBE_TMP"
+  RUNTIME_PROBE_TMP="$(mktemp -d)" || return 1
+  chmod 700 "$RUNTIME_PROBE_TMP" || return 1
   service_json="$RUNTIME_PROBE_TMP/service.json"
   response="$RUNTIME_PROBE_TMP/revision.json"
-  recorded="$REPO_ROOT/data/beta-crawler-revision.json"
 
   gcloud run services describe "$CLOUD_RUN_SERVICE" \
-    --region="$GCP_REGION" --project="$GCP_PROJECT" --format=json > "$service_json"
+    --region="$GCP_REGION" --project="$GCP_PROJECT" --format=json > "$service_json" || return 1
 
   service_url="$(python3 - "$service_json" <<'PY'
 import json, sys
@@ -1454,6 +1454,16 @@ require_pilot_launcher_build() {
   fi
 }
 
+verify_legacy_fallback_worker() {
+  local view="$1"
+  local recorded="$view/baseline/data/beta-crawler-revision.json"
+  [[ -s "$recorded" ]] || { echo "The retained V8 worker release record is missing." >&2; return 1; }
+  # The separate control roster uses the canonical worker. The named V9
+  # worker may be healthy while the canonical worker cannot save V8 reports.
+  TMPDIR="$view" TARGET_REVISION="" FIXLIST_WORKER_PROBE_URL="" FIXLIST_VERIFY_STAGED_BASE44_RUNTIME=0 \
+    verify_worker_runtime_revision "" "" "$recorded"
+}
+
 verify_approved_legacy_access() (
   set -euo pipefail
   local app_id="6a498732ec779dfaaeab0e53" baseline_sha view route_selection expected_owner expected_operator
@@ -1520,6 +1530,7 @@ JS
   fi
   PUBLIC_URL=https://getfixlist.com/ BASE44_URL=https://getfixlist.base44.app/ EXPECTED_SOURCE_SHA="$SOURCE_SHA" \
     bash "$REPO_ROOT/scripts/verify-base44-site.sh" >&2 || return 1
+  verify_legacy_fallback_worker "$view" >&2 || return 1
   python3 - "$LEGACY_ACCESS" "$LEGACY_ACCESS_SHA256" "$SOURCE_SHA" "$view/access.out" <<'PY'
 import json, sys, time
 raw, digest, candidate, access_report = sys.argv[1:]

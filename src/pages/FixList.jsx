@@ -1718,17 +1718,21 @@ function RequestedScanState({ title = "", detail = "", presentation = null, limi
   );
 }
 
-function CustomerRecoveryState({ failure, target, onAction }) {
+export function CustomerRecoveryState({ failure, target, onAction }) {
   const copy = resolveRecoveryCopy(failure?.kind, target);
-  const actionLabel = recoveryActionLabel(copy.action, target);
+  const reloadSavedScan = target === "scan" && failure?.kind === "release_mismatch";
+  const actionLabel = reloadSavedScan ? "Reload and open this scan" : recoveryActionLabel(copy.action, target);
+  const detail = reloadSavedScan
+    ? "Your scan is saved. Reload this page to open it with the latest available version of FixList. If this message returns, contact support with the reference below."
+    : copy.detail;
   return (
     <div className="mt-16 rounded-2xl border border-hairline-soft bg-white p-6">
       <h1 className="text-[22px] font-semibold tracking-tight">{copy.title}</h1>
-      <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{copy.detail}</p>
+      <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{detail}</p>
       {actionLabel ? (
         <button
           type="button"
-          onClick={() => onAction(copy.action)}
+          onClick={() => reloadSavedScan ? window.location.reload() : onAction(copy.action)}
           className="mt-5 rounded-full bg-ink px-4 py-2 text-[13px] font-medium text-paper transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
         >
           {actionLabel}

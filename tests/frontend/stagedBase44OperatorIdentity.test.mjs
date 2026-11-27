@@ -39,6 +39,11 @@ function fixture(t) {
   mkdirSync(join(root, "base44/functions/startStandardScanJobV9"), { recursive: true });
   copyFileSync(launcherEntitlement, join(root, launcherEntitlement));
   for (const file of [operator, collector, "scripts/assert_tagged_zero_traffic_worker.py"]) copyFileSync(file, join(root, file));
+  writeFileSync(join(root, "scripts/verify-base44-site.sh"), [
+    '[[ "$EXPECTED_SOURCE_SHA" == "$SOURCE_SHA" && "$1" == --published-pilot ]] || exit 4',
+    "printf '[\"site.verify\",\"%s\"]\\n' \"$2\" >> \"$TEST_TRACE\"",
+    '[[ "${TEST_PILOT_SITE_STALE:-}" != yes ]]',
+  ].join("\n"));
   const gcloud = join(root, "gcloud");
   const workerServiceOrigin = pilotWorkerOrigin.replace("canary-00123-xyz---", "");
   const workerRevision = "fixlist-standard150-worker-00123-xyz";
@@ -199,6 +204,7 @@ console.log(JSON.stringify({
           has_full_access: true, access_status: "active", plan_id: "standard150_lifetime", page_cap: options.grantCap ?? 500,
           grant_source: "owner_test", granted_at: "2026-11-25T00:00:00Z",
         }]),
+        TEST_PILOT_SITE_STALE: options.siteStale ? "yes" : "",
         TEST_WORKER_PERCENT: String(options.workerPercent ?? 0), TEST_WORKER_OWNER: options.workerOwner || bright.id,
         TEST_PROBE: JSON.stringify(options.probe || {}), TEST_V9: JSON.stringify(options.v9 || {}),
         TEST_V9_AFTER_PILOT: JSON.stringify(options.v9AfterPilot || {}),
@@ -635,4 +641,17 @@ test("Bright rehearsal marker cannot be prepared until V9 observes intake closed
   assert.deepEqual(result.calls.filter(([name]) => name === "secrets"), [
     ["secrets", "set", "BETA_SCAN_INTAKE_ENABLED=false"],
   ]);
+});
+
+test("a stale public site blocks each named preparation before any Base44 mutation", t => {
+  const pilotExpiry = String(Math.floor(Date.now() / 1000) + 3600);
+  for (const [operation, target, mode, options] of [
+    ["prepare-owner", customer.id, "PUBLISHED_PILOT", pilotOptions(london, { pilotExpiry })],
+    ["prepare-admin-500-rehearsal", bright.id, "PUBLISHED_PILOT", adminRehearsalOptions()],
+    ["prepare-paid-500-pilot", customer.id, "PAID_PILOT", pilotOptions(london, { pilotExpiry })],
+  ]) {
+    const result = fixture(t)(operator, operation, target, london, { ...options, siteStale: true });
+    assert.notEqual(result.status, 0);
+    assert.deepEqual(result.calls, [["site.verify", mode]], result.stderr);
+  }
 });

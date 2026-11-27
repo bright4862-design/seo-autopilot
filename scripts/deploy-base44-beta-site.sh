@@ -94,6 +94,12 @@ deploy_active_v9() {
   fi
 }
 
+site_directory="$REPO_ROOT"
+if [[ "$SCAN_FUNCTION_GENERATION" == PAID_PILOT ]]; then
+  site_directory="$TMP/paid-pilot-site"
+  bash "$REPO_ROOT/scripts/build-published-pilot-site.sh" "$SOURCE_SHA" PAID_PILOT "$site_directory"
+fi
+
 deploy_active_v9 active-preflight
 fixlist_install_base44_cli "$TMP"
 fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TMP/whoami" "$APP_ID"
@@ -103,13 +109,15 @@ BASE44_APP_ID="$APP_ID" bash "$REPO_ROOT/scripts/verify-base44-functions.sh"
 printf 'BASE44_RELEASE_ROUTES_ACTIVE_PRE_SITE\n'
 
 # A fresh browser has no cached Base44 app ID; bind it to this deployment.
-VITE_SCAN_FUNCTION_GENERATION="$SCAN_FUNCTION_GENERATION" VITE_BASE44_APP_ID="$APP_ID" VITE_FIXLIST_SOURCE_SHA="$SOURCE_SHA" npm run build
+if [[ "$SCAN_FUNCTION_GENERATION" != PAID_PILOT ]]; then
+  VITE_SCAN_FUNCTION_GENERATION="$SCAN_FUNCTION_GENERATION" VITE_BASE44_APP_ID="$APP_ID" VITE_FIXLIST_SOURCE_SHA="$SOURCE_SHA" npm run build
+fi
 if [[ "${ROUTE_FIELDS[0]}" == "v9" ]]; then
   fixlist_require_pinned_checkout "$REPO_ROOT" "$SOURCE_SHA"
   fixlist_assert_active_v9_intake_closed "$REPO_ROOT" "$APP_ID" "$BASE44_EXPECTED_OWNER"
 fi
 SITE_STATUS=0
-"$FIXLIST_BASE44_CLI" --app-id "$APP_ID" site deploy --no-build --yes || SITE_STATUS=$?
+(cd "$site_directory" && "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" site deploy --no-build --yes) || SITE_STATUS=$?
 
 # Re-establish every function afterwards using the SAME authenticated CLI
 # session so a second interactive login can never strand production with the
@@ -145,7 +153,11 @@ if (( SITE_STATUS != 0 )); then
   echo 'Base44 site upload reported failure. The selected function inventory was restored.' >&2
   exit "$SITE_STATUS"
 fi
-EXPECTED_SOURCE_SHA="$SOURCE_SHA" bash "$REPO_ROOT/scripts/verify-base44-site.sh"
+if [[ "$SCAN_FUNCTION_GENERATION" == PAID_PILOT ]]; then
+  EXPECTED_SOURCE_SHA="$SOURCE_SHA" bash "$REPO_ROOT/scripts/verify-base44-site.sh" --published-pilot PAID_PILOT
+else
+  EXPECTED_SOURCE_SHA="$SOURCE_SHA" bash "$REPO_ROOT/scripts/verify-base44-site.sh"
+fi
 
 printf 'BASE44_SITE_AND_BACKEND_DEPLOYED\nsource_sha=%s\nbuild_verified=%s\nbuild_unverified=%s\n' \
   "$SOURCE_SHA" "${VERIFIED_FUNCTIONS[*]}" "${UNVERIFIED_FUNCTIONS[*]}"

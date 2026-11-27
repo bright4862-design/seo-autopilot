@@ -224,7 +224,7 @@ verify_v9 before
 make_capture_project "$backup/restore"
 capture "$backup/before" "$backup/restore"
 
-VITE_SCAN_FUNCTION_GENERATION=PUBLISHED_PILOT VITE_BASE44_APP_ID="$APP_ID" VITE_FIXLIST_SOURCE_SHA="$SOURCE_SHA" npm run build
+bash "$ROOT/scripts/build-published-pilot-site.sh" "$SOURCE_SHA" PUBLISHED_PILOT "$work/site"
 fixlist_require_pinned_checkout "$ROOT" "$SOURCE_SHA"
 verify_drain
 fixlist_assert_active_v9_intake_closed "$ROOT" "$APP_ID" "$BASE44_EXPECTED_OWNER"
@@ -237,14 +237,14 @@ before_upload_difference="$(difference "$work/before-upload/digests.json")"
 preserve_snapshot=true
 printf 'Recovery copy captured at %s\n' "$backup"
 site_status=0
-timeout --kill-after=5s 180 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" site deploy --no-build --yes || site_status=$?
+(cd "$work/site" && timeout --kill-after=5s 180 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" site deploy --no-build --yes) || site_status=$?
 
 # Snapshot reconciliation can change live function packages even when the site
 # call returns an error. Restore only routes with different or missing bytes.
 during_recovery_capture "$work/after-upload" || refuse "The function inventory is unavailable. Restore the saved snapshot after the provider recovers."
 restore_and_verify "$work/after-upload/digests.json"
 (( site_status == 0 )) || refuse "The site upload did not report success; function packages were checked."
-verify_site "$SOURCE_SHA" "" PUBLISHED_PILOT
+EXPECTED_SOURCE_SHA="$SOURCE_SHA" bash "$ROOT/scripts/verify-base44-site.sh" --published-pilot PUBLISHED_PILOT
 verify_drain pinned
 fixlist_require_exact_main "$ROOT" "$SOURCE_SHA" "$SOURCE_SHA" || refuse "Main advanced after upload. The published source and routes were verified with admissions closed."
 printf 'BASE44_PUBLISHED_PILOT_VERIFIED source_sha=%s baseline_sha=%s admission=closed\n' "$SOURCE_SHA" "$PUBLIC_BASELINE_SHA"

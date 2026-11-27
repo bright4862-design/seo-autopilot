@@ -1282,9 +1282,10 @@ function CustomerRepairList({ cards = [], websiteUrl = "", explanationForCard, t
     );
   }
 
-  // These are reading groups only. Preserve the authenticated canonical array
-  // instead of regrouping or sorting repairs by their presentation labels.
-  const sections = [
+  const reviewOnly = Array.isArray(topFixIds) && topFixIds.length === 0;
+  // Keep the authenticated order, including when the server found only checks
+  // needing review and therefore selected no immediate fixes.
+  const sections = reviewOnly ? [{ key: "review", cards: list }] : [
     { key: "start", label: "Start here", cards: list.slice(0, 1) },
     { key: "then", label: "Then", cards: list.slice(1) },
   ].filter((section) => section.cards.length > 0);
@@ -1294,7 +1295,7 @@ function CustomerRepairList({ cards = [], websiteUrl = "", explanationForCard, t
     <div className="mt-10 sm:mt-12" aria-labelledby="customer-fixlist-heading">
       <div className="mb-5 border-b border-hairline pb-4">
         <h2 id="customer-fixlist-heading" className="text-[19px] font-semibold tracking-tight text-ink">
-          Your fixes, in order
+          {reviewOnly ? "Findings to review" : "Your fixes, in order"}
         </h2>
         <p className="mt-1.5 max-w-[65ch] text-[13px] leading-relaxed text-ink-muted">
           Page groups can overlap, so the counts below aren&rsquo;t added up.
@@ -1312,10 +1313,10 @@ function CustomerRepairList({ cards = [], websiteUrl = "", explanationForCard, t
       </div>
 
       {sections.map((section) => (
-        <section key={section.key} className="mt-6 first:mt-0" aria-labelledby={`customer-repair-section-${section.key}`}>
-          <h3 id={`customer-repair-section-${section.key}`} className="text-[10.5px] font-medium uppercase tracking-[0.12em] text-ink-muted">
+        <section key={section.key} className="mt-6 first:mt-0" aria-labelledby={section.label ? `customer-repair-section-${section.key}` : "customer-fixlist-heading"}>
+          {section.label && <h3 id={`customer-repair-section-${section.key}`} className="text-[10.5px] font-medium uppercase tracking-[0.12em] text-ink-muted">
             {section.label}
-          </h3>
+          </h3>}
           <div className="mt-1">
             {section.cards.map((card, index) => (
               <CustomerRepairCard

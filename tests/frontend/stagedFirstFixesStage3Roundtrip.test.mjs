@@ -155,3 +155,29 @@ test("altering the stored V9 shortlist breaks both reconstructed HMACs", async (
     assert.equal(await verifyAuthoritySeal(rebuilt, emitted.secret, result.proof, webcrypto), false);
   }
 });
+
+test("new staged reports put an urgent repair ahead of higher-factor browser checks", async () => {
+  const result = await roundtrip({ editReview(review) {
+    const [urgent, highFactorCheck, actionable, ownerCheck] = review.canonical_repairs;
+    urgent.action_priority = "fix_first";
+    highFactorCheck.action_priority = "improve";
+    highFactorCheck.verification_state = "needs_verification";
+    actionable.action_priority = "improve";
+    ownerCheck.action_priority = "review";
+    ownerCheck.who_can_do_this = "owner";
+  } });
+  assert.deepEqual(result.snapshot.fix_list.top_action_fix_ids, ["meta-00", "meta-02"]);
+  assert.deepEqual(result.customer.top_fix_ids, result.snapshot.fix_list.top_action_fix_ids);
+  assert.equal(result.customer.fixItems.length, 4);
+  await assertSealedRoundtrip(result);
+});
+
+test("review-only results retain all findings and have no immediate actions", async () => {
+  const result = await roundtrip({ editReview(review) {
+    for (const fix of review.canonical_repairs) fix.verification_state = "needs_verification";
+  } });
+  assert.deepEqual(result.customer.top_fix_ids, []);
+  assert.deepEqual(result.snapshot.fix_list.top_action_fix_ids, []);
+  assert.equal(result.customer.fixItems.length, 4);
+  await assertSealedRoundtrip(result);
+});

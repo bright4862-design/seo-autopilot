@@ -13,6 +13,7 @@ import {
   hasCompleteAcceptanceEvidence,
   limitedRowsFromSnapshot,
   requiresCompleteAcceptanceEvidence,
+  verifyLimitedResultReadback,
   MAX_LIMITED_FIXES,
 } from "./limitedResultIntegrity.js";
 
@@ -189,9 +190,18 @@ async function dispatchWorkerRequest(req: Request, body, secret: string) {
     }
     const integrityProof = await createLimitedResultProof(snapshot, secret);
 
-    if (scanStatus === "limited" && cleanProof(scan.result_integrity_proof) === integrityProof && scan.fix_list_id) {
-      const release = await persistLimitedAdmissionRelease(entities, scan);
-      const replayedScan = release?.scanRun || await entities.ScanRun.get(identity.scan_id).catch(() => scan);
+    if (scanStatus === "limited") {
+      if (
+        !scan.fix_list_id || cleanProof(scan.result_integrity_proof) !== integrityProof
+        || (scan.staged_writer_request_proof && scan.staged_writer_request_proof !== proof)
+        || cleanId(scan.owner_user_id || scan.created_by_id) !== identity.owner_user_id
+        || cleanId(scan.project_id) !== identity.project_id || cleanId(scan.request_id) !== identity.request_id
+        || (scan.normalized_domain && scan.normalized_domain !== identity.normalized_domain)
+      ) {
+        throw new RequestProblem(409, "limited_result_immutable", "This scan already has a different saved result.");
+      }
+      await verifySavedLimitedRows(entities, scan, identity, snapshot, secret, integrityProof);
+      const replayedScan = await finishLimitedAdmissionRelease(entities, scan);
       return Response.json({
         success: true,
         replayed: true,
@@ -211,9 +221,10 @@ async function dispatchWorkerRequest(req: Request, body, secret: string) {
     await reconcileFixItems(entities, fixList.id, rows.fixItems);
     await assertAttemptStillActive(entities, identity.scan_id, claimedAttempt);
 
-    const completedAt = (scanStatus === "limited" ? scan.completed_at : "") || (completionTime ? sealedAt : "");
+    const completedAt = completionTime ? sealedAt : "";
     await entities.ScanRun.update(identity.scan_id, {
       ...rows.scanRun,
+      ...(scan.pipeline_mode === "staged" ? { staged_writer_request_proof: proof } : {}),
       ...(completedAt ? { completed_at: completedAt } : {}),
     });
     const persistedScan = await entities.ScanRun.get(identity.scan_id);
@@ -225,6 +236,7 @@ async function dispatchWorkerRequest(req: Request, body, secret: string) {
     const persisted = Boolean(
       persistedScan?.status === "limited"
       && (!completedAt || persistedScan?.completed_at === completedAt)
+      && (scan.pipeline_mode !== "staged" || persistedScan.staged_writer_request_proof === proof)
       && persistedScan?.release_gate_eligible === false
       && persistedScan?.score_is_provisional === true
       && !cleanProof(persistedScan?.authority_proof)
@@ -239,8 +251,7 @@ async function dispatchWorkerRequest(req: Request, body, secret: string) {
       throw new RequestProblem(500, "limited_persistence_incomplete", "The limited result rows were not completely saved.");
     }
 
-    const release = await persistLimitedAdmissionRelease(entities, persistedScan);
-    const releasedScan = release?.scanRun || await entities.ScanRun.get(identity.scan_id).catch(() => persistedScan);
+    const releasedScan = await finishLimitedAdmissionRelease(entities, persistedScan);
 
     return Response.json({
       success: true,
@@ -256,6 +267,38 @@ async function dispatchWorkerRequest(req: Request, body, secret: string) {
     console.error("persistLimitedScanResult failed", error instanceof Error ? error.name : "unknown_error");
     return problemResponse(new RequestProblem(500, "limited_result_failed", "The limited scan result could not be saved."));
   }
+}
+
+async function verifySavedLimitedRows(entities, scan, identity, snapshot, secret, proof) {
+  const fixList = await entities.FixList.get(scan.fix_list_id);
+  const linked = row => row?.scan_run_id === scan.id
+    && row.project_id === identity.project_id && row.owner_user_id === identity.owner_user_id
+    && cleanProof(row.result_integrity_proof) === proof && row.is_authoritative === false;
+  const invalid = () => new RequestProblem(409, "limited_result_invalid", "The saved result no longer matches its integrity proof.");
+  if (!linked(fixList) || fixList.id !== scan.fix_list_id || fixList.result_integrity_version !== snapshot.version
+    || scan.result_integrity_domain !== snapshot.integrity_domain || scan.score_is_provisional !== true
+    || scan.release_gate_eligible !== false || fixList.score_is_provisional !== true
+    || fixList.total_fixes !== snapshot.fix_list.total_fixes || fixList.scan_status !== snapshot.fix_list.scan_status
+    || fixList.health_score !== snapshot.fix_list.health_score
+    || (fixList.health_grade ?? "") !== snapshot.fix_list.health_grade) {
+    throw invalid();
+  }
+  const items = await entities.FixItem.filter({ fix_list_id: fixList.id }, "created_date", MAX_LIMITED_FIXES + 1);
+  if (!Array.isArray(items) || items.length !== fixList.total_fixes
+    || items.some(item => !linked(item) || item.fix_list_id !== fixList.id)
+    || !await verifyLimitedResultReadback({
+      identity, scan, review: scan, now: scan.result_integrity_sealed_at, version: snapshot.version,
+    }, items, secret, proof)) {
+    throw invalid();
+  }
+}
+
+async function finishLimitedAdmissionRelease(entities, scan) {
+  const release = await persistLimitedAdmissionRelease(entities, scan);
+  if (!release.ok || (scan.admission_access_id && release.scanRun?.admission_release_state !== "released")) {
+    throw new RequestProblem(503, "admission_release_pending", "The scan completed but its admission release is still pending.");
+  }
+  return release.scanRun || scan;
 }
 
 function robotsPolicyMatches(scan, scanResult) {

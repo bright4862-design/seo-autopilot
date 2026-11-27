@@ -148,6 +148,35 @@ export async function verifyLimitedResultProof(snapshot, secret, proof, cryptoIm
   }
 }
 
+export async function verifyLimitedResultReadback(args, fixItems, secret, proof) {
+  function matches(items) {
+    const snapshot = buildLimitedResultSnapshot({
+      ...args,
+      review: { ...args.review, recommendations: items },
+    });
+    return verifyLimitedResultProof(snapshot, secret, proof);
+  }
+  const normalized = fixItems.map((item) => {
+    const row = { ...item };
+    for (const field of ["affected_page_count", "affected_page_count_is_lower_bound", "template_impact_estimates"]) {
+      if (row[field] === null) delete row[field];
+    }
+    return row;
+  });
+  if (await matches(normalized)) return normalized;
+
+  // Base44 may add an empty array when the producer omitted estimates.
+  // Retain explicitly signed empty arrays whenever the existing proof verifies.
+  const withoutEmptyEstimates = normalized.map((fix) => {
+    const { template_impact_estimates: estimates, ...rest } = fix;
+    return Array.isArray(estimates) && estimates.length === 0 ? rest : fix;
+  });
+  if (withoutEmptyEstimates.some((fix, index) => fix !== normalized[index]) && await matches(withoutEmptyEstimates)) {
+    return withoutEmptyEstimates;
+  }
+  return null;
+}
+
 export function limitedRowsFromSnapshot(snapshot, { fixListId, proof } = {}) {
   const cleanProof = String(proof || "").toLowerCase();
   const owner = { owner_user_id: String(snapshot?.owner_user_id || "") };

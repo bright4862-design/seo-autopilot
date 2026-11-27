@@ -211,6 +211,40 @@ function findButton(node, predicate) {
   return null;
 }
 
+test("a full-page release mismatch reloads the current saved scan only when clicked", () => {
+  const { CustomerRecoveryState } = module.exports;
+  const href = "https://getfixlist.com/dashboard?from=history&scan_id=scan-design-regression#repairs";
+  const reloads = [];
+  const actions = [];
+  const reference = "FL-TEST000000001";
+  browser.location = Object.assign(new BrowserURL(href), { reload() { reloads.push(this.href); } });
+  try {
+    function state(kind, target) {
+      return CustomerRecoveryState({ failure: { kind, support_reference: reference }, target, onAction: action => actions.push(action) });
+    }
+    const mismatch = state("release_mismatch", "scan");
+    assert.match(textOf(mismatch), /contact support/i);
+    assert.ok(textOf(mismatch).includes(reference));
+    assert.deepEqual(reloads, []);
+    findButton(mismatch, label => label === "Reload and open this scan").props.onClick();
+    assert.deepEqual(reloads, [href]);
+    assert.deepEqual(actions, []);
+
+    for (const [kind, target, buttonLabel] of [
+      ["unavailable", "scan", "Retry loading this scan"],
+      ["load_failed", "scan", "Retry loading this scan"],
+      ["release_mismatch", "history", "Retry loading saved scans"],
+      ["unavailable", "history", "Retry loading saved scans"],
+    ]) {
+      findButton(state(kind, target), label => label === buttonLabel).props.onClick();
+    }
+    assert.deepEqual(actions, ["retry", "retry", "retry", "retry"]);
+    assert.deepEqual(reloads, [href]);
+  } finally {
+    delete browser.location;
+  }
+});
+
 test("the JSON menu action downloads the actual distinct repairs and never exports an unavailable score", async () => {
   assert.equal(typeof module.exports.ScanExportControls, "function");
   const input = exportProps();

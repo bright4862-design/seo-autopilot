@@ -17,8 +17,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const APP_ID = '6a498732ec779dfaaeab0e53';
 export const STAGED_SCHEMA_ENTITIES = Object.freeze(['ScanRun', 'FixList', 'FixItem', 'Access']);
 const ADMISSION_TARGET_ORIGIN = 'admission_target_origin';
+const WRITER_REQUEST_PROOF = 'staged_writer_request_proof';
 const ADDITIONS = Object.freeze({
-  ScanRun: ['page_cap', 'pipeline_mode', 'staged_rollout_scope', 'pages_planned', 'workspace_cleanup_state', 'workspace_cleanup_completed_at', 'last_committed_batch', ADMISSION_TARGET_ORIGIN],
+  ScanRun: ['page_cap', 'pipeline_mode', 'staged_rollout_scope', 'pages_planned', 'workspace_cleanup_state', 'workspace_cleanup_completed_at', 'last_committed_batch', ADMISSION_TARGET_ORIGIN, WRITER_REQUEST_PROOF],
   FixItem: ['affected_page_count', 'affected_page_count_is_lower_bound', 'template_impact_estimates'],
   Access: ['page_cap'],
 });
@@ -42,6 +43,12 @@ export function planStagedSchemas(schemas, local = localSchemas()) {
     && !local.ScanRun.required?.includes(ADMISSION_TARGET_ORIGIN)
     && equal(originProperty.rls, {write: {user_condition: {role: 'admin'}}}),
   'ScanRun.admission_target_origin must be a protected optional string');
+  const proofProperty = local.ScanRun?.properties?.[WRITER_REQUEST_PROOF];
+  const admin = {user_condition: {role: 'admin'}};
+  requireCondition(proofProperty?.type === 'string' && proofProperty.pattern === '^[a-f0-9]{64}$'
+    && !Object.hasOwn(proofProperty, 'default') && !local.ScanRun.required?.includes(WRITER_REQUEST_PROOF)
+    && equal(proofProperty.rls, {read: admin, write: admin}),
+  'ScanRun.staged_writer_request_proof must be an optional admin-only HMAC');
   const after = structuredClone(schemas), operations = [];
   for (const name of STAGED_SCHEMA_ENTITIES) {
     const schema = after[name];
@@ -90,6 +97,8 @@ export function assertRollbackRows(evidence, operations) {
   requireCondition(evidence?.complete === true && object(evidence.rows), 'rollback row inventory is unverified');
   const removesOrigin = operations.some(({entity, kind, property}) =>
     entity === 'ScanRun' && kind === 'add_property' && property === ADMISSION_TARGET_ORIGIN);
+  const removesWriterProof = operations.some(({entity, kind, property}) =>
+    entity === 'ScanRun' && kind === 'add_property' && property === WRITER_REQUEST_PROOF);
   const counts = {};
   for (const name of ['ScanRun', 'FixItem', 'Access']) {
     const rows = evidence.rows[name];
@@ -101,6 +110,7 @@ export function assertRollbackRows(evidence, operations) {
         requireCondition(['complete', 'limited', 'failed', 'cancelled'].includes(row.status), 'active or unknown ScanRun status blocks rollback');
         requireCondition(!row.pipeline_mode || row.pipeline_mode === 'monolith', 'staged ScanRun blocks rollback');
         requireCondition(row.scan_mode !== 'standard_500' && (row.page_cap == null || row.page_cap === 150), 'large-cap ScanRun blocks rollback');
+        if (removesWriterProof) requireCondition(row.staged_writer_proof_state === 'empty', 'retained or unobserved staged writer proof blocks rollback');
         if (removesOrigin) requireCondition(row[ADMISSION_TARGET_ORIGIN] == null || row[ADMISSION_TARGET_ORIGIN] === '', 'retained admission origin blocks rollback');
         requireCondition(['staged_rollout_scope', 'pages_planned', 'last_committed_batch', 'workspace_cleanup_state', 'workspace_cleanup_completed_at'].every(key => row[key] == null || row[key] === ''), 'retained staged ScanRun evidence blocks rollback');
       } else if (name === 'Access') {

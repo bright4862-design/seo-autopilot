@@ -165,7 +165,7 @@ async function fetchInventory(destination, entities = AUTHORITY_ENTITIES) {
 // Project metadata only. Missing/looping pagination is never proof of no rows.
 async function stagedRows(destination) {
   const fields = {
-    ScanRun: "id,status,scan_mode,pipeline_mode,page_cap,pages_planned,last_committed_batch,workspace_cleanup_state,workspace_cleanup_completed_at,admission_target_origin",
+    ScanRun: "id,status,scan_mode,pipeline_mode,page_cap,pages_planned,last_committed_batch,workspace_cleanup_state,workspace_cleanup_completed_at,admission_target_origin,staged_writer_request_proof",
     FixItem: "id,affected_page_count,affected_page_count_is_lower_bound,template_impact_estimates",
     Access: "id,page_cap",
   };
@@ -183,7 +183,17 @@ async function stagedRows(destination) {
           || body.items.some(item => !item || typeof item !== "object" || Array.isArray(item) || typeof item.id !== "string" || !item.id)) {
         throw new Error(`Staged rollback rows are unverified for ${name}`);
       }
-      rows[name].push(...body.items);
+      for (const item of body.items) {
+        if (name === "ScanRun") {
+          // An omitted protected field cannot authorize its removal. Keep only
+          // the observation, never the private HMAC, in the row inventory.
+          const proof = item.staged_writer_request_proof;
+          item.staged_writer_proof_state = !Object.hasOwn(item, "staged_writer_request_proof")
+            ? "unobserved" : proof == null || proof === "" ? "empty" : "present";
+          delete item.staged_writer_request_proof;
+        }
+        rows[name].push(item);
+      }
       if (!body.has_more) { complete = true; break; }
       if (typeof body.next_cursor !== "string" || !body.next_cursor || body.next_cursor.length > 8000 || seen.has(body.next_cursor)) {
         throw new Error(`Staged rollback pagination is unverified for ${name}`);

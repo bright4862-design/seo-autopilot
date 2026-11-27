@@ -195,6 +195,9 @@ async function dispatchWorkerRequest(req: Request, body, secret: string) {
       throw new RequestProblem(409, "terminal_authority_rejected", "This scan attempt is already terminal.");
     }
     if (scanStatus === "complete") {
+      if (scan.staged_writer_request_proof && scan.staged_writer_request_proof !== proof) {
+        throw new RequestProblem(409, "terminal_authority_rejected", "The original staged completion is required.");
+      }
       if (scan.authority_proof && scan.fix_list_id) {
         saveStage = "replay_readback";
         const replayFixList = await entities.FixList.get(scan.fix_list_id).catch(() => null);
@@ -351,7 +354,10 @@ async function dispatchWorkerRequest(req: Request, body, secret: string) {
     await assertAttemptStillActive(entities, identity.scan_id, claimedAttempt);
     const { attempt_count: _finalAttempt, ...finalScanFields } = finalRows.scanRun;
     saveStage = "finalize_scan_run";
-    await entities.ScanRun.update(identity.scan_id, finalScanFields);
+    await entities.ScanRun.update(identity.scan_id, {
+      ...finalScanFields,
+      ...(scan.pipeline_mode === "staged" ? { staged_writer_request_proof: proof } : {}),
+    });
 
     saveStage = "verify_final_rows";
     const persistedScan = await entities.ScanRun.get(identity.scan_id);
@@ -368,6 +374,7 @@ async function dispatchWorkerRequest(req: Request, body, secret: string) {
     });
     const authorityPersisted = Boolean(
       persistedScan?.status === "complete"
+      && (scan.pipeline_mode !== "staged" || persistedScan.staged_writer_request_proof === proof)
       && persistedScan?.authority_proof === finalAuthorityProof
       && persistedScan?.authority_seal_version === persistedAuthoritySnapshot.version
       && persistedScan?.authority_sealed_at === persistedAuthoritySnapshot.sealed_at

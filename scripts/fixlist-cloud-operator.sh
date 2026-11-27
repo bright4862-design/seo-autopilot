@@ -323,7 +323,7 @@ base44_routes_called() {
     | python3 -c '
 import re, sys
 source = sys.stdin.read()
-routes = set(re.findall(r"invoke_function\(\s*client,\s*(?:worker_function_name\()?\"([A-Za-z0-9_]+)\"", source))
+routes = set(re.findall(r"(?:invoke_function|invoke_completion_writer)\(\s*client,\s*(?:worker_function_name\()?\"([A-Za-z0-9_]+)\"", source))
 if "def worker_function_name(" in source:
     routes.update(route[:-2] + "V9" for route in list(routes) if route.endswith("V8"))
 print("\n".join(sorted(routes)))

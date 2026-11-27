@@ -61,6 +61,7 @@ test("the worker's Base44 routes are read out of its own source", () => {
   for (const route of head) {
     assert.match(route, /^[A-Za-z][A-Za-z0-9_]*$/);
   }
+  assert.ok(head.some((route) => route.startsWith("persistLimitedScanResult")), "the worker must include limited persistence");
   // Whatever generation the source is on, the worker's persistence calls are
   // part of it -- otherwise this check would be comparing nothing that matters.
   assert.ok(

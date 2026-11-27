@@ -88,7 +88,10 @@ def test_the_worker_routes_limited_coverage_to_the_limited_function():
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[1] / "app" / "scan_job.py").read_text(encoding="utf-8")
-    assert 'invoke_function(client, worker_function_name("persistLimitedScanResultV8")' in source
+    assert 'invoke_completion_writer(client, "persistLimitedScanResultV8", envelope)' in source
+    writer = source.split("async def invoke_completion_writer(", 1)[1].split("async def persist_limited_result(", 1)[0]
+    assert "writer = worker_function_name(legacy_name)" in writer
+    assert "await invoke_function(client, writer, envelope)" in writer
     assert "LIMITED_COVERAGE_STATES" in source
 
 

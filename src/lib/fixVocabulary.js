@@ -157,6 +157,25 @@ export function customerCopyForFix(item = {}) {
   }
 
   if (rule === "redirect_chain") {
+    const saved = item.original || item;
+    const evidence = saved.raw_finding || saved;
+    const destination = evidence.redirect_fetch_evidence;
+    if (saved.evidence_status === "confirmed" && evidence.non_scoring === true
+        && destination?.classification === "redirect_to_usable_page" && destination.final_status === 200) {
+      // Full reports retain the reviewer's advice. Limited reports can carry
+      // the same verified outcome with only the title and fetch evidence.
+      const explanation = saved.plain_english_explanation || "The redirects reached a working page.";
+      return {
+        optionalRedirectShortcut: true,
+        customerCategory: "Page forwarding",
+        title: saved.issue_title || saved.title || "Optional redirect shortcut",
+        explanation,
+        whyItMatters: explanation,
+        recommendation: saved.recommended_value || saved.recommendation
+          || "You can keep the current redirects. A direct route would skip the intermediate address.",
+        technicalLabel: "Redirect chain",
+      };
+    }
     const location = family === "homepage"
       ? "the homepage"
       : count > 1 && family !== "pages"
@@ -289,6 +308,17 @@ export function customerCopyForFix(item = {}) {
     };
   }
 
+  if (rule === "canonical_target_redirect") {
+    return {
+      customerCategory: "Search visibility",
+      title: "Check where the preferred page address leads",
+      explanation: "This report flags the page’s preferred address as redirecting. Check the exact address declared on the page to verify the finding.",
+      whyItMatters: "A redirect can send search engines to a different address than the one the page names.",
+      recommendation: "Copy the preferred address exactly as it appears in the page source, including its trailing slash. Check its HTTP response. If it redirects, confirm the final address is the version you want, then update the existing setting to point there directly. If it already returns 200 at the intended address, keep the setting.",
+      technicalLabel: "Canonical redirect",
+    };
+  }
+
   if (rule === "canonical_missing" || rule.includes("canonical")) {
     // "Canonical URL" is the correct technical name and it stays on the Check
     // line, where someone briefing a developer can find it. It has no business
@@ -302,6 +332,16 @@ export function customerCopyForFix(item = {}) {
         : family === "homepage"
           ? "Tell search engines which version of your homepage to show"
           : "Tell search engines which version of this page to show";
+    if (rule === "canonical_missing" || rule === "missing_canonical") {
+      return {
+        customerCategory: "Search visibility",
+        title,
+        explanation: "The scanner found no preferred address in the page HTML it received.",
+        whyItMatters: "Several addresses can show the same content. A preferred address helps search engines choose the version you want to appear in search.",
+        recommendation: "Decide which address should appear in search. Ask your web person to check the page after it loads and its HTTP headers for an existing preferred address. Add one if the page needs it and none is present.",
+        technicalLabel: "Canonical URL",
+      };
+    }
     return {
       customerCategory: "Search visibility",
       title,
@@ -324,11 +364,14 @@ export function customerCopyForFix(item = {}) {
       technicalLabel: "Image purpose review" };
   }
   if (rule === "visible_template_content") {
-    return { customerCategory: "Page content", title: "Fix unfinished visible page content",
-      explanation: item.explanation || item.plain_english_explanation || "Accepted HTML contains unfinished content. Review the recorded placement and excerpts.",
-      whyItMatters: "Unresolved variables and unfinished page shells can prevent visitors from understanding the page.",
-      recommendation: item.recommendation || item.recommended_value || "Correct the source field or template, then verify the published content.",
-      technicalLabel: "Visible template content" };
+    return {
+      customerCategory: "Page content",
+      title: "Review unfinished content in the page source",
+      explanation: "The scanner found unfinished text or an empty content area in the HTML it received. The saved examples show where to check.",
+      whyItMatters: "A placeholder in a title or description can appear in search. An empty content area can affect visitors if it stays empty after the page loads.",
+      recommendation: "Compare the saved example with the page source and the page after it loads. Correct any unfinished title or description. If a placeholder or empty area remains on the loaded page, fix its content or template.",
+      technicalLabel: "Content in the page source",
+    };
   }
 
   if (rule === "image_alt_text" || rule.includes("image_alt") || rule.includes("alt_text")) {
@@ -422,14 +465,5 @@ export function customerCopyForFix(item = {}) {
 }
 
 export function applyCustomerVocabulary(item = {}) {
-  const copy = customerCopyForFix(item);
-  return {
-    ...item,
-    customerCategory: copy.customerCategory,
-    title: copy.title,
-    explanation: copy.explanation,
-    whyItMatters: copy.whyItMatters,
-    recommendation: copy.recommendation,
-    technicalLabel: copy.technicalLabel,
-  };
+  return { ...item, ...customerCopyForFix(item) };
 }

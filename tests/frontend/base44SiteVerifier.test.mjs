@@ -75,9 +75,17 @@ function sandbox(t, routes) {
   });
   fs.writeFileSync(path.join(dir, "routes"), `${lines.join("\n")}\n`);
   fs.writeFileSync(path.join(dir, "requests.log"), "");
+  const scripts = path.join(dir, "scripts");
+  fs.mkdirSync(path.join(scripts, "lib"), { recursive: true });
+  const verifier = path.join(scripts, "verify-base44-site.sh");
+  fs.copyFileSync(VERIFIER, verifier);
+  fs.copyFileSync("scripts/lib/published-site-assets.py", path.join(scripts, "lib/published-site-assets.py"));
+  fs.writeFileSync(path.join(scripts, "build-published-pilot-site.sh"),
+    'set -eu\n[[ "$1" == "$EXPECTED_SOURCE_SHA" && "$2" == "$TEST_BUILD_MODE" ]]\nmkdir "$3"\ncp -R "$TEST_DIST" "$3/dist"\n');
   return {
-    run(env = {}) {
-      const result = spawnSync("bash", [VERIFIER], {
+    dir,
+    run(env = {}, args = []) {
+      const result = spawnSync("bash", [verifier, ...args], {
         encoding: "utf8",
         env: {
           PATH: `${bin}${path.delimiter}${process.env.PATH}`,
@@ -229,5 +237,36 @@ test("both release paths still rely on the verifier's canonical defaults", () =>
   assert.match(operator, /EXPECTED_SOURCE_SHA: \$\{\{ steps\.command\.outputs\.product_sha \}\}\n\s+shell: bash\n\s+run: bash \.\/scripts\/verify-base44-site\.sh/);
   for (const source of [publish, operator]) {
     assert.doesNotMatch(source, /BASE44_URL|rich-rank-pilot-flow/, "a caller override would bring the stale-alias failure back");
+  }
+});
+
+test("named pilot requires lock-built entry bytes and the expected mode on both hosts and launch forms", t => {
+  const mode = "PUBLISHED_PILOT";
+  const code = bundle(SHA) + marker("__FIXLIST_SCAN_FUNCTION_GENERATION__", JSON.stringify(mode));
+  const style = "/assets/index-reviewed.css";
+  const stylesheet = "body{color:red}";
+  const html = page.replace("</head>", `<link rel="stylesheet" href="${style}"></head>`);
+  function run({ aliasJs = code, scannerHtml = html, css = stylesheet, expectedJs = code, sourceMode = mode } = {}) {
+    const entries = [PUBLIC, BASE44].flatMap(origin => [
+      ["200", origin + "/", html], ["200", origin + "/onboarding", scannerHtml],
+      ["200", origin + ASSET, origin === BASE44 ? aliasJs : code], ["200", origin + style, css],
+    ]);
+    const box = sandbox(t, entries);
+    const dist = path.join(box.dir, "dist");
+    fs.mkdirSync(path.join(dist, "assets"), { recursive: true });
+    fs.writeFileSync(path.join(dist, "index.html"), html);
+    fs.writeFileSync(path.join(dist, ASSET), expectedJs);
+    fs.writeFileSync(path.join(dist, style), stylesheet);
+    return box.run({ TEST_DIST: dist, TEST_BUILD_MODE: sourceMode }, ["--published-pilot", sourceMode]);
+  }
+  const ok = run();
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(ok.requests.length, 12);
+  for (const bad of [
+    { aliasJs: code + "/*provider rebuild*/" }, { css: "body{color:blue}" },
+    { expectedJs: code + "/*different dependency*/" },
+    { scannerHtml: '<!--' + html + '-->' }, { sourceMode: "PAID_PILOT" },
+  ]) {
+    assert.notEqual(run(bad).status, 0);
   }
 });

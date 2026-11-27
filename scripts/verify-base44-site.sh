@@ -26,6 +26,20 @@ esac
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
+pilot=false
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if (( $# > 0 )); then
+  [[ $# == 2 && "$1" == --published-pilot && ( "$2" == PUBLISHED_PILOT || "$2" == PAID_PILOT ) ]] || exit 2
+  pilot=true
+  EXPECTED_SCAN_FUNCTION_GENERATION="$2"
+  PUBLIC_URL=https://getfixlist.com/
+  BASE44_URL=https://getfixlist.base44.app/
+  bash "$repo_root/scripts/build-published-pilot-site.sh" "$EXPECTED_SOURCE_SHA" "$2" "$TMP/source" >&2
+  pilot_dist="$TMP/source/dist"
+  local_assets="$(python3 "$repo_root/scripts/lib/published-site-assets.py" "$pilot_dist/index.html")"
+  read -r local_script local_style <<<"$local_assets"
+fi
+
 verify_bundle_identity() {
   node --expose-internals - "$1" "$EXPECTED_SOURCE_SHA" "$EXPECTED_SCAN_FUNCTION_GENERATION" <<'NODE'
 const fs = require("node:fs");
@@ -128,7 +142,7 @@ NODE
 
 verify_url() {
   local url="$1"
-  local status html asset marker_status
+  local page_path="${2:-/}" status html asset style marker_status assets
   # Read the HTTP status instead of letting --fail collapse every answer into
   # curl exit 22. A host that is not serving the app (a retired alias, an
   # unpublished site) is a different failure from a site serving the wrong
@@ -137,7 +151,7 @@ verify_url() {
     -H 'Cache-Control: no-cache' \
     -H 'Pragma: no-cache' \
     -o "$TMP/page.html" -w '%{http_code}' \
-    "${url%/}/?fixlist_release_verify=${EXPECTED_SOURCE_SHA}")"; then
+    "${url%/}${page_path}?fixlist_release_verify=${EXPECTED_SOURCE_SHA}")"; then
     echo "SITE_URL_UNREACHABLE url=$url" >&2
     return 1
   fi
@@ -146,8 +160,13 @@ verify_url() {
     echo "This host is not serving the FixList app. That is a stale or unpublished site URL, not a source-SHA mismatch: compare it with the 'Visit your site at:' line printed by 'site deploy'." >&2
     return 3
   fi
-  html="$(<"$TMP/page.html")"
-  asset="$(grep -oE '/assets/index-[A-Za-z0-9_-]+\.js' <<<"$html" | head -1 || true)"
+  if [[ "$pilot" == true ]]; then
+    assets="$(python3 "$repo_root/scripts/lib/published-site-assets.py" "$TMP/page.html")" || return 1
+    read -r asset style <<<"$assets"
+  else
+    html="$(<"$TMP/page.html")"
+    asset="$(grep -oE '/assets/index-[A-Za-z0-9_-]+\.js' <<<"$html" | head -1 || true)"
+  fi
   if [[ -z "$asset" ]]; then
     echo "SITE BUNDLE NOT FOUND: $url" >&2
     return 1
@@ -157,6 +176,16 @@ verify_url() {
     -H 'Pragma: no-cache' \
     "${url%/}${asset}?fixlist_release_verify=${EXPECTED_SOURCE_SHA}" || return 1
   if verify_bundle_identity "$TMP/bundle.js"; then
+    if [[ "$pilot" == true ]]; then
+      curl --fail --silent --show-error --max-time 30 -o "$TMP/bundle.css" \
+        -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+        "${url%/}${style}?fixlist_release_verify=${EXPECTED_SOURCE_SHA}" || return 1
+      if [[ "$asset" != "$local_script" || "$style" != "$local_style" ]] \
+        || ! cmp -s "$pilot_dist$local_script" "$TMP/bundle.js" || ! cmp -s "$pilot_dist$local_style" "$TMP/bundle.css"; then
+        echo "PUBLISHED_PILOT_ASSET_MISMATCH host=$url path=$page_path" >&2
+        return 1
+      fi
+    fi
     printf 'SITE_SOURCE_SHA_VERIFIED %s%s\n' "$url" "$asset"
     return 0
   else
@@ -172,4 +201,10 @@ verify_url() {
 
 verify_url "$PUBLIC_URL"
 verify_url "$BASE44_URL"
+if [[ "$pilot" == true ]]; then
+  verify_url "$PUBLIC_URL" /onboarding
+  verify_url "$BASE44_URL" /onboarding
+  printf 'PUBLISHED_PILOT_FRONTEND_VERIFIED source_sha=%s mode=%s publication=prebuilt lockfile_build=matched\n' \
+    "$EXPECTED_SOURCE_SHA" "$EXPECTED_SCAN_FUNCTION_GENERATION"
+fi
 printf 'BASE44_SITE_SOURCE_VERIFIED source_sha=%s\n' "$EXPECTED_SOURCE_SHA"

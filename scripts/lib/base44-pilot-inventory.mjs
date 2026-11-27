@@ -50,6 +50,10 @@ function digest(pkg) {
   return createHash("sha256").update(JSON.stringify([data, files])).digest("hex");
 }
 
+export function functionInventoryDigest(directory, name) {
+  return digest(readPackage(directory, name));
+}
+
 export function captureFunctionInventory(project, listedFunctions, restoreProject) {
   const functions = path.join(project, "base44/functions");
   const present = inventory(functions);

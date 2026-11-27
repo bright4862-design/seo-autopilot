@@ -37,9 +37,9 @@ test("sampling disclosure reports route, market, family and identity coverage", 
   // Selection language throughout: every number in this module comes from
   // the pre-crawl half of sampling_report(), so none of it may claim a page
   // was looked at.
-  assert.equal(disclosure.marketSummary, "Markets/languages: 2 of 3 chosen for this scan.");
+  assert.equal(disclosure.marketSummary, "The scan chose pages from 2 of 3 folder groups.");
   assert.equal(disclosure.familySummary, "Page families: 2 of 3 chosen for this scan.");
-  assert.match(disclosure.notChosenSummary, /Markets not chosen: de/);
+  assert.match(disclosure.notChosenSummary, /Folder groups outside the selection include de/);
   assert.match(disclosure.notChosenSummary, /Page families not chosen: legal info/);
 });
 
@@ -95,7 +95,7 @@ test("the disclosure survives the sampling version bump that ships with it", () 
   });
   assert.notEqual(disclosure, null, "the shipped sampler must produce a disclosure");
   assert.equal(disclosure.routesDiscovered, 120);
-  assert.match(disclosure.notChosenSummary, /Markets not chosen: de/);
+  assert.match(disclosure.notChosenSummary, /Folder groups outside the selection include de/);
 });
 
 test("an unrecognised sampler is still refused", () => {

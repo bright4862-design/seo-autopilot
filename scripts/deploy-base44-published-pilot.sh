@@ -19,13 +19,18 @@ SNAPSHOT_DIR="${PILOT_SNAPSHOT_DIR:-}"
 operation="${1:-publish}"
 CAPTURE_CONFIG='{"name":"fixlist-pilot-capture","functionsDir":"functions","entitiesDir":"entities"}'
 
+if [[ "$operation" == prepare-provider-snapshot ]]; then
+  PUBLIC_BASELINE_SHA="$(<"$ROOT/data/published-pilot-legacy-source")"
+fi
+
 refuse() { printf 'Published FixList pilot stopped. %s\n' "$*" >&2; exit 2; }
 [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ && "$PUBLIC_BASELINE_SHA" =~ ^[a-f0-9]{40}$ ]] || refuse "Supply the exact candidate and currently published commits."
-(( $# <= 1 )) || refuse "Choose publish or restore-snapshot."
+(( $# <= 1 )) || refuse "Choose publish, restore-snapshot, or prepare-provider-snapshot."
 case "$operation" in
+  prepare-provider-snapshot) expected_confirmation="PREPARE-PROVIDER-SNAPSHOT:$SOURCE_SHA:$PUBLIC_BASELINE_SHA:$BARRIER_EXPECTED_GENERATION" ;;
   publish) expected_confirmation="PUBLISH-BASE44-PILOT:$SOURCE_SHA:$PUBLIC_BASELINE_SHA" ;;
   restore-snapshot) expected_confirmation="RESTORE-BASE44-PILOT:$SOURCE_SHA:$PUBLIC_BASELINE_SHA:$BARRIER_EXPECTED_GENERATION" ;;
-  *) refuse "Choose publish or restore-snapshot." ;;
+  *) refuse "Choose publish, restore-snapshot, or prepare-provider-snapshot." ;;
 esac
 [[ "$CONFIRM" == "$expected_confirmation" ]] || refuse "Supply exact confirmation for the selected operation."
 [[ "${BASE44_APP_ID:-$APP_ID}" == "$APP_ID" && -z "${BASE44_API_KEY:-}" ]] || refuse "Use the authenticated owner session for the GetFixList app."
@@ -136,6 +141,28 @@ mkdir "$work/baseline"
 git archive "$PUBLIC_BASELINE_SHA" | tar -x -C "$work/baseline"
 [[ "$(node "$work/baseline/scripts/lib/base44-public-routes.mjs")" == v8\ * ]] || refuse "The current public baseline does not specify V8."
 
+if [[ "$operation" == prepare-provider-snapshot ]]; then
+  output="${PILOT_PROVIDER_DIR:-}"
+  [[ "$output" == /* && ! -e "$output" && ! -L "$output" ]] || refuse "Supply a new absolute PILOT_PROVIDER_DIR."
+  parent="$(cd "$(dirname "$output")" && pwd -P)"
+  [[ "$parent" != "$ROOT" && "$parent" != "$ROOT/"* ]] || refuse "Choose a directory outside the checkout."
+  verify_drain
+  fixlist_install_base44_cli "$work/cli"
+  fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$work/auth" "$APP_ID"
+  fixlist_assert_active_v9_intake_closed "$ROOT" "$APP_ID" "$BASE44_EXPECTED_OWNER"
+  verify_v8
+  verify_v9 before
+  capture "$work/initial"
+  capture "$work/current"
+  diff -q "$work/initial/digests.json" "$work/current/digests.json" || refuse "The management inventory changed during capture."
+  verify_drain
+  fixlist_require_exact_main "$ROOT" "$SOURCE_SHA" "$SOURCE_SHA"
+  mkdir "$work/source"
+  git archive "$SOURCE_SHA" | tar -x -C "$work/source"
+  node "$ROOT/scripts/lib/base44-provider-snapshot.mjs" "$work/source" "$work/baseline" "$work/current" "$output" "$SOURCE_SHA" "$SOURCE_SHA" checkpoint-input
+  exit 0
+fi
+
 snapshot_identity="$(printf '%s\n' "$APP_ID" "$SOURCE_SHA" "$PUBLIC_BASELINE_SHA")"
 if [[ -n "$SNAPSHOT_DIR" ]]; then
   [[ "$SNAPSHOT_DIR" == /* ]] || refuse "The snapshot directory must be an absolute path."
@@ -197,7 +224,7 @@ verify_v9 before
 make_capture_project "$backup/restore"
 capture "$backup/before" "$backup/restore"
 
-VITE_SCAN_FUNCTION_GENERATION=PUBLISHED_PILOT VITE_BASE44_APP_ID="$APP_ID" VITE_FIXLIST_SOURCE_SHA="$SOURCE_SHA" npm run build
+bash "$ROOT/scripts/build-published-pilot-site.sh" "$SOURCE_SHA" PUBLISHED_PILOT "$work/site"
 fixlist_require_pinned_checkout "$ROOT" "$SOURCE_SHA"
 verify_drain
 fixlist_assert_active_v9_intake_closed "$ROOT" "$APP_ID" "$BASE44_EXPECTED_OWNER"
@@ -210,14 +237,14 @@ before_upload_difference="$(difference "$work/before-upload/digests.json")"
 preserve_snapshot=true
 printf 'Recovery copy captured at %s\n' "$backup"
 site_status=0
-timeout --kill-after=5s 180 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" site deploy --no-build --yes || site_status=$?
+(cd "$work/site" && timeout --kill-after=5s 180 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" site deploy --no-build --yes) || site_status=$?
 
 # Snapshot reconciliation can change live function packages even when the site
 # call returns an error. Restore only routes with different or missing bytes.
 during_recovery_capture "$work/after-upload" || refuse "The function inventory is unavailable. Restore the saved snapshot after the provider recovers."
 restore_and_verify "$work/after-upload/digests.json"
 (( site_status == 0 )) || refuse "The site upload did not report success; function packages were checked."
-verify_site "$SOURCE_SHA" "" PUBLISHED_PILOT
+EXPECTED_SOURCE_SHA="$SOURCE_SHA" bash "$ROOT/scripts/verify-base44-site.sh" --published-pilot PUBLISHED_PILOT
 verify_drain pinned
 fixlist_require_exact_main "$ROOT" "$SOURCE_SHA" "$SOURCE_SHA" || refuse "Main advanced after upload. The published source and routes were verified with admissions closed."
 printf 'BASE44_PUBLISHED_PILOT_VERIFIED source_sha=%s baseline_sha=%s admission=closed\n' "$SOURCE_SHA" "$PUBLIC_BASELINE_SHA"

@@ -433,6 +433,12 @@ jobs:
           export FIXLIST_VERIFY_STAGED_BASE44_RUNTIME=1
           OPERATION=verify-worker-runtime-revision bash ./scripts/fixlist-cloud-operator.sh
 
+      - name: Use the published pilot build runtime
+        if: inputs.operation == 'start-published-500-pilot' || (inputs.operation == 'acceptance-only' && inputs.acceptance_launcher_build_id != '')
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20.19.5'
+
       - name: Run allowlisted worker operation
         if: inputs.operation != 'deploy-dispatch-gateway' && inputs.operation != 'deploy-admission-coordinator' && inputs.operation != 'build-worker-candidate' && inputs.operation != 'prepare-staged-scan-infra' && inputs.operation != 'verify-staged-scan-infra' && !startsWith(inputs.operation, 'staged-queue-') && inputs.operation != 'sync-base44-signing-key' && inputs.operation != 'verify-serving-worker-release' && inputs.operation != 'verify-staged-worker-release' && inputs.operation != 'verify-base44-v8-preflight' && inputs.operation != 'apply-scanrun-comparison-evidence' && inputs.operation != 'rollback-scanrun-comparison-evidence'
         env:

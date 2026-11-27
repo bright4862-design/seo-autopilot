@@ -45,7 +45,7 @@ test("history copy distinguishes active, complete, failed, limited, and cancelle
   assert.deepEqual(getRecentScanStatus("queued"), { label: "Queued", active: true });
   assert.deepEqual(getRecentScanStatus("crawling"), { label: "Scanning", active: true });
   assert.deepEqual(getRecentScanStatus("reviewing"), { label: "Preparing FixList", active: true });
-  assert.deepEqual(getRecentScanStatus("complete"), { label: "Completed", active: false });
+  assert.deepEqual(getRecentScanStatus("complete"), { label: "Report ready", active: false });
   assert.deepEqual(getRecentScanStatus("failed"), { label: "Failed", active: false });
   assert.deepEqual(getRecentScanStatus("limited"), { label: "Limited", active: false });
   assert.deepEqual(getRecentScanStatus("cancelled"), { label: "Cancelled", active: false });

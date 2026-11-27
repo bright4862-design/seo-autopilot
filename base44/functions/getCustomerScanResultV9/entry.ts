@@ -354,6 +354,12 @@ Deno.serve(async (req) => {
       throw new RequestProblem(409, "result_authority_invalid", "This saved result no longer matches its server authority seal.");
     }
 
+    const timing = snapshot.scan?.crawl_timing;
+    const checked = snapshot.scan?.pages_crawled;
+    const planned = Math.min(snapshot.scan?.page_cap ?? 150, snapshot.scan?.pages_found);
+    const crawlStoppedForTime = timing?.crawl_deadline_reached === true
+      && timing.queue_exhausted === false && timing.final_queue_size > 0
+      && checked < planned;
     return Response.json(buildCustomerProjection({
       run,
       fixList,
@@ -361,7 +367,8 @@ Deno.serve(async (req) => {
       fullAccess: access.ok,
       previewAccess: !access.ok,
       authorityVerified: true,
-      verifiedOptionalChecksNoticeReason: snapshot.scan?.crawl_timing?.optional_checks_notice_reason,
+      verifiedOptionalChecksNoticeReason: timing?.optional_checks_notice_reason,
+      verifiedCrawlStopReason: crawlStoppedForTime ? "time_limit" : undefined,
     }));
   } catch (error) {
     if (error instanceof RequestProblem) return problemResponse(error);

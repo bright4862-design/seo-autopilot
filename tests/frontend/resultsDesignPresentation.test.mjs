@@ -280,16 +280,43 @@ test("the actual saved-results page puts fixes before optional report detail and
   assert.doesNotMatch(html, /Explain for|Mark as done|Take this list with you/);
 });
 
+test("a saved deadline-stopped report separates the scan allowance, checked pages and capped inventory", () => {
+  for (const [cap, checked] of [[150, 71], [500, 322]]) {
+    const html = renderSavedPage(savedRecord({
+      scan_mode: `standard_${cap}`, page_cap: cap === 150 ? null : cap,
+      pages_crawled: checked, pages_found: 5000, sampling_evidence: { inventory_capped: true },
+      crawl_stop_reason: "time_limit",
+    }));
+    assert.match(html, new RegExp(`We checked ${checked} pages out of at least 5,000 found`));
+    assert.match(html, /The crawl reached its time limit, so this saved report covers the pages checked\./);
+    assert.match(html, new RegExp(`Up to ${cap} pages`));
+    assert.doesNotMatch(html, /Limited report/);
+  }
+});
+
+test("older saved reports do not infer a deadline or an inventory cap", () => {
+  const html = renderSavedPage(savedRecord({
+    page_cap: 150, pages_crawled: 71, pages_found: 5000,
+    crawl_timing: { crawl_deadline_reached: true, queue_exhausted: false, final_queue_size: 1_128 },
+  }));
+  assert.match(html, /We checked 71 pages out of 5,000 found/);
+  assert.match(html, /This saved report covers only the pages FixList checked\./);
+  assert.doesNotMatch(html, /reached its time limit|at least 5,000/);
+  const complete = renderSavedPage(savedRecord({ page_cap: 150, pages_crawled: 150, pages_found: 150 }));
+  assert.doesNotMatch(complete, /This saved report covers only the pages FixList checked/);
+});
+
 test("the actual limited saved-results page preserves the limitation and findings while hiding score 55", () => {
   const record = savedRecord({ status: "limited", authority_verified: false, release_gate_eligible: false,
     is_authoritative: false, result_integrity_verified: true, score_is_provisional: true,
     health_score: 55, health_score_status: "insufficient_evidence", limitation: "Only one page could be checked in this scan.",
-    pages_crawled: 1, pages_found: 1 });
+    pages_crawled: 1, pages_found: 1, crawl_stop_reason: "time_limit" });
   const html = renderSavedPage(record);
   assert.match(html, /Limited report/);
   assert.match(html, /Site health score unavailable/);
   assert.doesNotMatch(html, /Site health score 55|>55</);
   assert.match(html, /Only one page could be checked in this scan\./);
+  assert.doesNotMatch(html, /saved report covers the pages checked|reached its time limit/);
   assert.match(html, /Keep the saved alpha instruction\./);
   assert.match(html, /Keep the separate beta instruction\./);
 });

@@ -15,7 +15,7 @@ export default function DurableScanProgressSurface({
   targetLabel = "",
   elapsedLabel = "",
   fallbackPhase = "Starting your scan",
-  longerThanUsual = false,
+  showSavedScanLink = false,
   backgroundExecutionProven = false,
   onOpenSavedScan,
 }) {
@@ -33,7 +33,7 @@ export default function DurableScanProgressSurface({
       targetLabel={targetLabel}
       elapsedLabel={elapsedLabel}
       fallbackPhase={fallbackPhase}
-      longerThanUsual={longerThanUsual}
+      showSavedScanLink={showSavedScanLink}
       onOpenSavedScan={backgroundExecutionProven === true ? onOpenSavedScan : undefined}
     />
   );

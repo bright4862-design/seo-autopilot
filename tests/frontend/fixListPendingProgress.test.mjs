@@ -41,6 +41,22 @@ test("each active phase says what is actually happening", () => {
   assert.equal(titles.size, 3, "two phases read the same");
 });
 
+test("a durable queued scan is described as waiting, even with a recent heartbeat", () => {
+  const now = Date.parse("2026-09-06T12:00:00.000Z");
+  const view = durableScanStatePresentation({
+    status: "queued",
+    queued_at: "2026-09-06T11:52:00.000Z",
+    worker_heartbeat_at: "2026-09-06T11:59:40.000Z",
+    durable_background_execution: true,
+  }, { now });
+
+  assert.match(view.detail, /when (your|the) scan starts/);
+  assert.match(view.nextStep, /scan history/);
+  assert.doesNotMatch(view.nextStep, /keeps running/);
+  assert.equal(view.canLeavePage, true);
+  assert.equal(view.slowNote, "");
+});
+
 test("a truthful page count is shown, and an invented denominator is not", () => {
   // 38 of 3,689 discovered is not 1% done: discovery is still running and the
   // crawl may stop at 38 legitimately. The count is real; the ratio is not.

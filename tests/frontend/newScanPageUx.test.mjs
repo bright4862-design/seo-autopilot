@@ -4,6 +4,7 @@ import fs from "node:fs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { resolveScanFunctionRoute } from "../../src/lib/scanFunctionRouting.js";
 
 const scanForm = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
 const onboarding = readFileSync("src/pages/Onboarding.jsx", "utf8");
@@ -25,6 +26,43 @@ test("retired copy is gone", () => {
   assert.doesNotMatch(scanForm, /A complete, prioritized scan of up to 150 pages/);
   assert.doesNotMatch(scanForm, /Standard · 150/);
   assert.doesNotMatch(scanForm, /Takes about 2–4 minutes\. You can leave this page — we’ll save your list\./);
+});
+
+test("the form states the built-in cap only when its ordinary launch route is V8", () => {
+  const declaration = scanForm.match(/const hasStandardV8Limit = [\s\S]*?;/)?.[0];
+  assert.ok(declaration, "the form needs the resolved V8 route before displaying 150");
+  const hasKnownLimit = new Function("usesPublishedScanPilot", "resolveScanFunctionRoute", "generation", `
+    const ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV8";
+    ${declaration.replace("import.meta.env.VITE_SCAN_FUNCTION_GENERATION", "generation")}
+    return hasStandardV8Limit;
+  `);
+  const v9 = { startStandardScanJob: "startStandardScanJobV9" };
+  const publicV8Routes = {
+    generation: "v8",
+    routes: { startStandardScanJob: "startStandardScanJobV8" },
+    candidate_routes: { v9 },
+  };
+  const resolvePublicV8 = (name, generation) => resolveScanFunctionRoute(name, generation, publicV8Routes);
+  assert.equal(hasKnownLimit(false, resolvePublicV8, ""), true);
+  assert.equal(hasKnownLimit(true, resolvePublicV8, "PUBLISHED_PILOT"), false);
+  assert.equal(hasKnownLimit(false, resolvePublicV8, "V9"), false);
+  const publicV9Routes = { generation: "v9", routes: v9 };
+  const resolvePublicV9 = (name, generation) => resolveScanFunctionRoute(name, generation, publicV9Routes);
+  assert.equal(hasKnownLimit(false, resolvePublicV9, ""), false);
+  assert.match(scanForm, /hasStandardV8Limit \? "Up to 150 pages per scan\."/);
+});
+
+test("a paused intake preserves access to saved reports", () => {
+  const actual = scanForm.match(/^function customerScanAdmissionMessage\([\s\S]*?^\}/m)?.[0];
+  const message = new Function("UNLOCK_PRICE_LABEL", "serverProvidedDetail", `
+    ${actual}
+    return customerScanAdmissionMessage;
+  `)("$49", () => "Internal detail");
+  assert.equal(
+    message("scan_intake_paused"),
+    "New scans are temporarily paused. Your saved reports are still available.",
+  );
+  assert.match(scanForm, /launchOptionsError === "paused"[\s\S]*?Open my scans/);
 });
 
 test("the new scan form leads with the site and puts optional inputs after the start action", () => {
@@ -118,6 +156,7 @@ test("the loading state delegates to the truthful durable progress surface", () 
   assert.match(scanForm, /durableScan=\{durableScan\}/);
   assert.match(scanForm, /targetLabel=\{scanTargetLabel\}/);
   assert.match(scanForm, /elapsedLabel=\{formatElapsed\(elapsedSeconds\)\}/);
+  assert.doesNotMatch(scanForm, /longerThanUsual=\{elapsedSeconds/);
   assert.match(scanForm, /backgroundExecutionProven=\{Boolean\(watchedScanId\)\}/);
   assert.match(scanForm, /onOpenSavedScan=\{watchedScanId/);
   assert.doesNotMatch(scanForm, /SCAN_PROGRESS_STEPS|scanProgressIndex\(/);
@@ -226,4 +265,9 @@ test("progress counters never move backwards during one scan", () => {
   // Derived from the run already fetched for completion — no extra polling.
   assert.equal((hook.match(/getScanRunWithFixList\(/g) || []).length, 1,
     "live progress must reuse the existing read, not add a second request");
+});
+
+test("the completion poll never marks a scan stalled using time since the browser started watching", () => {
+  const hook = fs.readFileSync("src/hooks/useDurableScanCompletion.js", "utf8");
+  assert.doesNotMatch(hook, /stalled: Date\.now\(\)/);
 });

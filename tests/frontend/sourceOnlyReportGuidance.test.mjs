@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildRepairCard, customerRepairObservationRows } from "../../src/lib/repairCardModel.js";
+import { applyCustomerVocabulary } from "../../src/lib/fixVocabulary.js";
 import { buildScanHandoff } from "../../src/lib/scanHandoff.js";
 
 function customerCard(rule, observations, fields = {}) {
@@ -31,6 +32,20 @@ test("HTML template observations separate a source repair from a visitor-content
     const handoff = buildScanHandoff({ scanRecord: { website_url: origin }, cards: [item] });
     assert.equal(handoff.fixes[0].what_to_change, item.whatToChange);
   }
+});
+
+test("archived explanations cannot turn a source observation into a claim about visitors", () => {
+  const original = {
+    rule: "visible_template_content",
+    explanation: "Visitors see an empty page.",
+    plain_english_explanation: "The page is blank for every visitor.",
+    recommendation: "Replace the whole page now.",
+  };
+  const shown = applyCustomerVocabulary(original);
+  assert.match(shown.explanation, /HTML it received/);
+  assert.doesNotMatch(shown.explanation, /for every visitor|visitors see/i);
+  assert.match(shown.recommendation, /after it loads/);
+  assert.match(shown.recommendation, /fix its content or template/);
 });
 
 test("the H1 count describes the source and an unrecorded count does not become zero", () => {

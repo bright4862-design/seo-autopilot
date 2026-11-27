@@ -367,7 +367,7 @@ export function customerCopyForFix(item = {}) {
     return {
       customerCategory: "Page content",
       title: "Review unfinished content in the page source",
-      explanation: item.explanation || item.plain_english_explanation || "The scanner found unfinished text or an empty content area in the HTML it received.",
+      explanation: "The scanner found unfinished text or an empty content area in the HTML it received. The saved examples show where to check.",
       whyItMatters: "A placeholder in a title or description can appear in search. An empty content area can affect visitors if it stays empty after the page loads.",
       recommendation: "Compare the saved example with the page source and the page after it loads. Correct any unfinished title or description. If a placeholder or empty area remains on the loaded page, fix its content or template.",
       technicalLabel: "Content in the page source",

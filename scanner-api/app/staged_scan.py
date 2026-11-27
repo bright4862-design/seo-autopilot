@@ -321,7 +321,14 @@ class StagedScanRuntime:
         body = response.get("body") or {}
         row = body.get("scanRun")
         verified_field = "fixListVerified" if status == "complete" else "resultIntegrityVerified"
-        if not (response.get("status_code") == 200 and body.get("success") is True and body.get("replayed") is True
+        if status == "complete" and (not isinstance(row, dict)
+                or row.get("beta_revision_fingerprint") != binding["release"]
+                or not isinstance(row.get("customer_preview_proof"), str)
+                or not staged_completion.HEX_PROOF.fullmatch(row["customer_preview_proof"])):
+            raise StageRetry("The staged writer has not verified the saved preview")
+        observed_request = receipt.completion_request or {}
+        if not (observed_request.get("function") == writer and observed_request.get("status_code") == 200
+                and response.get("status_code") == 200 and body.get("success") is True and body.get("replayed") is True
                 and body.get(verified_field) is True and body.get("scanId") == scan["id"]
                 and body.get("fixListId") == scan["fix_list_id"] and same_saved_result(row)
                 and staged_completion.released(row)):

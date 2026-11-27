@@ -67,6 +67,8 @@ def binding_for(job, scan, frontier, batch, generations, ready_at, writer):
         "respect_robots_txt": scan.get("respect_robots_txt"),
         "owner_attested_robots_override": scan.get("owner_attested_robots_override"),
         "admission_access_id": scan.get("admission_access_id"),
+        "admission_target_origin": scan.get("admission_target_origin"),
+        "request_fingerprint": scan.get("request_fingerprint"),
         "claim_sequence": scan.get("admission_claim_sequence"),
         "barrier_generation": scan.get("admission_barrier_generation"),
         "state_ref": frontier["state_ref"], "generations": generations,
@@ -76,6 +78,8 @@ def binding_for(job, scan, frontier, batch, generations, ready_at, writer):
 
 
 def verified_packet(record, binding, key):
+    if not isinstance(record, dict):
+        return None
     envelope = record.get("envelope")
     if record.get("binding") != binding or not isinstance(envelope, dict):
         return None

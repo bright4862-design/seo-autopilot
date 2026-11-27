@@ -11,7 +11,7 @@ const sourceSha = 'a'.repeat(40);
 const appId = '6a498732ec779dfaaeab0e53';
 const entities = ['ScanRun', 'FixList', 'FixItem', 'Access'];
 const fields = {
-  ScanRun: ['page_cap', 'pipeline_mode', 'staged_rollout_scope', 'pages_planned', 'workspace_cleanup_state', 'workspace_cleanup_completed_at', 'last_committed_batch', 'admission_target_origin'],
+  ScanRun: ['page_cap', 'pipeline_mode', 'staged_rollout_scope', 'pages_planned', 'workspace_cleanup_state', 'workspace_cleanup_completed_at', 'last_committed_batch', 'admission_target_origin', 'staged_writer_request_proof'],
   FixItem: ['affected_page_count', 'affected_page_count_is_lower_bound', 'template_impact_estimates'],
   Access: ['page_cap'],
 };
@@ -33,7 +33,7 @@ function run(script, args, options = {}) {
     child.on('close', status => resolveRun({status, stdout, stderr}));
   });
 }
-async function fixture(t, {schemas = baseline(), rows = {}, changeReadback = false, omitOriginRls = false, driftBeforeWrite = false, rowsMalformed = false} = {}) {
+async function fixture(t, {schemas = baseline(), rows = {}, changeReadback = false, omitOriginRls = false, omitWriterProofReadRls = false, driftBeforeWrite = false, rowsMalformed = false} = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'staged-schema-')));
   const artifactRoot = realpathSync(mkdtempSync(join(tmpdir(), 'staged-schema-reports-')));
   mkdirSync(join(root, 'scripts/lib'), {recursive: true});
@@ -69,6 +69,7 @@ async function fixture(t, {schemas = baseline(), rows = {}, changeReadback = fal
         assert.equal(payload.entity_schema.name, name);
         state[name] = payload.entity_schema;
         if (changeReadback) state[name].rls.update = {user_condition: {role: 'user'}};
+        if (omitWriterProofReadRls && name === 'ScanRun') delete state[name].properties.staged_writer_request_proof.rls.read;
         if (omitOriginRls && name === 'ScanRun') delete state[name].properties.admission_target_origin.rls;
         response.end('{}');
       } else if (url.pathname.includes('/entities/')) {
@@ -120,7 +121,7 @@ test('staged plan allows exactly the known additions while preserving the live d
   delete before.ScanRun.properties.website_url.description;
   const plan = planStagedSchemas(before);
   assert.equal(plan.decision, 'apply');
-  assert.equal(plan.operations.length, 13);
+  assert.equal(plan.operations.length, 14);
   assert.equal(plan.after.ScanRun.platform_marker, 'preserve');
   assert.deepEqual(plan.after.ScanRun.properties.created_date, {type: 'string'});
   assert.equal(Object.hasOwn(plan.after.ScanRun.properties.website_url, 'description'), false);
@@ -151,7 +152,7 @@ test('offline plan writes a source-bound report without authentication or reques
   assert.equal(result.data.source_sha, sourceSha);
   assert.equal(result.data.live_verified, false);
   assert.match(result.data.contract_sha256, /^[a-f0-9]{64}$/);
-  assert.equal(result.data.operations.length, 13);
+  assert.equal(result.data.operations.length, 14);
   assert.equal(f.requests.length, 0);
   assert.equal(existsSync(f.events), false);
 });
@@ -291,7 +292,7 @@ test('changed live readback refuses success and preserves evidence without overw
 });
 
 test('rollback removes only this receipt additions after full paginated row proof', async t => {
-  const f = await fixture(t, {rows: {ScanRun: [[{id: 'old', status: 'complete', pipeline_mode: 'monolith', scan_mode: 'standard_150'}], [{id: 'old2', status: 'failed'}]]}});
+  const f = await fixture(t, {rows: {ScanRun: [[{id: 'old', status: 'complete', pipeline_mode: 'monolith', scan_mode: 'standard_150', staged_writer_request_proof: null}], [{id: 'old2', status: 'failed', staged_writer_request_proof: null}]]}});
   const applied = await f.command('apply'); assert.equal(applied.status, 0, applied.stderr);
   const {receiptDigest} = await moduleUnderTest();
   const result = await f.command('rollback', ['--generation', '77', '--receipt', applied.report, '--confirm', `ROLLBACK-STAGED-SCHEMA:${sourceSha}:77:${receiptDigest(applied.data)}`]);
@@ -309,7 +310,7 @@ test('rollback preserves staged properties that were already present before this
   before.Access.properties.page_cap = local().Access.properties.page_cap;
   before.ScanRun.properties.admission_target_origin = local().ScanRun.properties.admission_target_origin;
   const f = await fixture(t, {schemas: before, rows: {ScanRun: [[{
-    id: 'older', status: 'complete', pipeline_mode: 'monolith', admission_target_origin: 'https://fixture.example:443',
+    id: 'older', status: 'complete', pipeline_mode: 'monolith', staged_writer_request_proof: null, admission_target_origin: 'https://fixture.example:443',
   }]]}});
   const applied = await f.command('apply'); assert.equal(applied.status, 0, applied.stderr);
   assert.equal(applied.data.operations.some(operation => operation.entity === 'Access'), false);
@@ -335,6 +336,8 @@ for (const [label, rows, rowsMalformed] of [
   ['active scan', {ScanRun: [[{id: 'active', status: 'crawling'}]]}, false],
   ['terminal staged scan', {ScanRun: [[{id: 'staged', status: 'complete', pipeline_mode: 'staged'}]]}, false],
   ['later-page staged scan', {ScanRun: [[{id: 'old', status: 'complete'}], [{id: 'staged', status: 'limited', pipeline_mode: 'staged'}]]}, false],
+  ['retained worker request', {ScanRun: [[{id: 'retained', status: 'complete', staged_writer_request_proof: 'a'.repeat(64)}]]}, false],
+  ['unobserved worker request', {ScanRun: [[{id: 'legacy', status: 'complete'}]]}, false],
   ['retained origin provenance', {ScanRun: [[{id: 'origin', status: 'complete', pipeline_mode: 'monolith', admission_target_origin: 'https://fixture.example:443'}]]}, false],
   ['500 entitlement', {Access: [[{id: 'grant', page_cap: 500}]]}, false],
   ['retained FixItem evidence', {FixItem: [[{id: 'fix', affected_page_count: 20}]]}, false],
@@ -347,4 +350,30 @@ for (const [label, rows, rowsMalformed] of [
   const result = await f.command('rollback', ['--generation', '77', '--receipt', applied.report, '--confirm', `ROLLBACK-STAGED-SCHEMA:${sourceSha}:77:${receiptDigest(applied.data)}`]);
   assert.notEqual(result.status, 0);
   assert.equal(f.requests.filter(row => row.method === 'PUT').length, putCount);
+});
+
+test('optional original writer proof is the only change to a previous staged schema', async t => {
+  const old = local();
+  delete old.ScanRun.properties.staged_writer_request_proof;
+  const f = await fixture(t, {schemas: old, rows: {ScanRun: [[{id: 'before-upgrade', status: 'complete'}]]}});
+  const result = await f.command('apply');
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.data.operations, [{entity: 'ScanRun', kind: 'add_property', property: 'staged_writer_request_proof'}]);
+  const proof = f.state.ScanRun.properties.staged_writer_request_proof;
+  const admin = {user_condition: {role: 'admin'}};
+  assert.deepEqual(proof.rls, {read: admin, write: admin});
+  assert.equal(proof.pattern, '^[a-f0-9]{64}$');
+  assert.ok(!Object.hasOwn(proof, 'default') && !f.state.ScanRun.required.includes('staged_writer_request_proof'));
+  assert.equal((await f.command('verify')).status, 0);
+  assert.ok(f.requests.every(req => !req.path.includes('/entities/')));
+});
+
+test('actual schema readback refuses missing private read restrictions', async t => {
+  const old = local();
+  delete old.ScanRun.properties.staged_writer_request_proof;
+  const f = await fixture(t, {schemas: old, omitWriterProofReadRls: true});
+  const result = await f.command('apply');
+  assert.notEqual(result.status, 0);
+  assert.equal(result.data.readback_verified, false);
+  assert.notEqual((await f.command('verify')).status, 0);
 });

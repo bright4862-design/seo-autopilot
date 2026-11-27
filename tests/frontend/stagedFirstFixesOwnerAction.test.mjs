@@ -163,6 +163,13 @@ test("writer and reader shortlist the same owner action from legacy-compatible p
   assert.match(firstScreen, /Repair owner-action/);
   assert.match(firstScreen, /You/);
   assert.equal((firstScreen.match(/Show me how/g) || []).length, 3);
+  const reviewOnlyHtml = renderToStaticMarkup(React.createElement(module.exports.CustomerCanonicalRepairs, {
+    scanRecord: { top_fix_ids: [] }, customerRepairCards: cards,
+  }));
+  assert.match(reviewOnlyHtml, /Findings to review/);
+  assert.doesNotMatch(reviewOnlyHtml, /Start here|Start with this fix|Start with these/);
+  for (const fix of fixes) assert.match(reviewOnlyHtml, new RegExp(`Repair ${fix.fix_id}`));
+
   assert.match(html, /<details[^>]*><summary[^>]*>See all 4 fixes/);
   for (const fix of fixes) assert.match(html, new RegExp(`Repair ${fix.fix_id}`));
 });
@@ -178,4 +185,22 @@ test("the server shortlist maps to three varied cards and retains every other re
   const selection = serverSelectedPriorityCards(cards, topFixIds(fixes));
   assert.deepEqual(selection.first.map(card => card.fixId), expected);
   assert.deepEqual(selection.remaining.map(card => card.fixId), ["technical-c"]);
+});
+
+test("verified limited shortlists use sealed evidence status and ignore extra authority fields", () => {
+  const fixItems = [
+    { fix_id: "check", rule: "rendered_heading_review", priority: "critical", evidence_status: "needs_verification" },
+    { fix_id: "action", rule: "404_error", priority: "high", evidence_status: "confirmed", action_priority: "review" },
+  ];
+  const result = withFirstFixes({ result_integrity_verified: true, fixItems }, { page_cap: 150 });
+  assert.deepEqual(result.top_fix_ids, ["action"]);
+  assert.deepEqual(result.fixItems, fixItems);
+});
+
+test("an owner task cannot replace a confirmed urgent repair for the same template", () => {
+  const fixes = [
+    rankedFix("urgent", 1, { action_priority: "fix_first", page_template_family: "article" }),
+    rankedFix("owner", 2, { action_priority: "improve", page_template_family: "article", who_can_do_this: "you" }),
+  ];
+  for (const select of [readerTopFixIds, writerTopFixIds]) assert.deepEqual(select(fixes), ["urgent"]);
 });

@@ -7,6 +7,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { build } from "esbuild";
 import { buildScanRunFields } from "../../src/lib/scanRunModel.js";
+import { buildRepairCard } from "../../src/lib/repairCardModel.js";
 
 const result = await build({
   entryPoints: [resolve("src/pages/FixList.jsx")], bundle: true, write: false,
@@ -14,7 +15,7 @@ const result = await build({
   external: ["react", "react/*", "react-dom", "react-dom/*", "react-router-dom"],
   plugins: [{ name: "no-remote-services", setup(builder) {
     builder.onLoad({ filter: /\/src\/pages\/FixList\.jsx$/ }, ({ path }) => ({
-      contents: `${readFileSync(path, "utf8")}\nexport { PreviewResultState };`, loader: "jsx",
+      contents: `${readFileSync(path, "utf8")}\nexport { FixRow, PreviewResultState };`, loader: "jsx",
     }));
     builder.onResolve({ filter: /\/api\/base44Client(?:\.js)?$/ }, () => ({ path: "client", namespace: "fixture" }));
     builder.onLoad({ filter: /.*/, namespace: "fixture" }, () => ({ contents: "export const base44 = {};" }));
@@ -24,6 +25,48 @@ const module = { exports: {} };
 new Function("require", "module", "exports", result.outputFiles[0].text)(createRequire(import.meta.url), module, module.exports);
 const { CustomerCanonicalRepairs, CustomerResultsSummary, PreviewResultState } = module.exports;
 const render = (component, props) => renderToStaticMarkup(React.createElement(component, props));
+
+test("a verified optional homepage shortcut keeps its guidance in full and limited customer cards", () => {
+  const { FixRow, prepareCustomerPageRecommendations } = module.exports;
+  const title = "Optional shortcut to the language homepage";
+  const row = {
+    fix_id: "locale-entry", rule: "redirect_chain", issue_title: title, priority: "low", evidence_status: "confirmed",
+    page_url: "https://funbooker.com/", affected_pages: ["https://funbooker.com/"],
+    raw_finding: { non_scoring: true, score_impact: 0, redirect_fetch_evidence: {
+      classification: "redirect_to_usable_page", final_status: 200, final_url: "https://www.funbooker.com/fr/",
+    } },
+  };
+  const record = { website_url: row.page_url, recommendations: [row] };
+  const [limited] = prepareCustomerPageRecommendations(record);
+  const limitedHtml = render(FixRow, { item: limited, embedded: true });
+  assert.match(limitedHtml, /Optional shortcut to the language homepage/);
+  assert.match(limitedHtml, /You can keep the current redirects/);
+  assert.doesNotMatch(limitedHtml, /Change the first redirect|Fix the source links|Step-by-step instructions/);
+
+  const savedAdvice = "You can redirect the bare domain directly to the language homepage to save one request.";
+  const full = { ...row, evidence_class: "opportunity", action_priority: "review",
+    plain_english_explanation: "Both redirects work. The final language homepage returned indexable HTML.",
+    recommended_value: savedAdvice };
+  const scanRecord = { ...record, id: "test-scan", scan_id: "test-scan", customer_access: "full", status: "complete",
+    authority_verified: true, release_gate_eligible: true, is_authoritative: true, total_fixes: 1, recommendations: [full] };
+  const card = buildRepairCard(prepareCustomerPageRecommendations(scanRecord)[0]);
+  const fullHtml = render(CustomerCanonicalRepairs, { scanRecord, requestedScanId: scanRecord.id, customerRepairCards: [card] });
+  assert.equal(card.actionPriority, "review");
+  assert.equal(card.title, title);
+  assert.match(fullHtml, /Both redirects work/);
+  assert.ok(fullHtml.includes(savedAdvice));
+  assert.doesNotMatch(fullHtml, /ask your website maintainer to remove|Update the first redirect/);
+
+  for (const control of [
+    { ...row, raw_finding: {} },
+    { ...row, raw_finding: { ...row.raw_finding, non_scoring: false } },
+    { ...row, evidence_status: "needs_verification" },
+    { ...row, raw_finding: { ...row.raw_finding, redirect_fetch_evidence: { classification: "redirect_destination_unusable", final_status: 404 } } },
+  ]) {
+    const [regular] = prepareCustomerPageRecommendations({ ...record, recommendations: [control] });
+    assert.match(buildRepairCard(regular).whatToChange, /^Update the first redirect/);
+  }
+});
 
 test("server priorities lead the results and all original fixes remain behind a collapsed disclosure", () => {
   const cards = ["a", "b", "c", "d"].map((fixId, index) => ({

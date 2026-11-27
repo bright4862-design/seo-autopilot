@@ -153,6 +153,7 @@ Deno.serve(async (req) => {
       userId: identity.owner_user_id,
       now: stableSealedAt,
     });
+    saveStage = "sign_snapshot";
     const authorityProof = await createAuthoritySeal(snapshot, secret);
     const claimedAttempt = normalizeAttempt(identity.attempt_count);
     const rowAttempt = normalizeAttempt(scan.attempt_count);
@@ -236,8 +237,8 @@ Deno.serve(async (req) => {
       ownerUserId: identity.owner_user_id,
       proof: authorityProof,
     });
-    saveStage = "upsert_fix_list";
-    const fixList = await upsertSingleFixList(entities, rowsWithoutListId.fixList, identity, scan);
+    saveStage = "lookup_fix_list";
+    const fixList = await upsertSingleFixList(entities, rowsWithoutListId.fixList, identity, scan, stage => { saveStage = stage; });
     if (!fixList?.id) throw new RequestProblem(500, "authority_persistence_failed", "The authoritative FixList could not be saved.");
 
     saveStage = "build_rows";
@@ -527,7 +528,7 @@ function robotsPolicyMatches(scan, scanResult) {
     && storedOverride === resultOverride;
 }
 
-async function upsertSingleFixList(entities, desired, identity, scan) {
+async function upsertSingleFixList(entities, desired, identity, scan, markStage) {
   const existing = await entities.FixList.filter({
     scan_run_id: identity.scan_id,
     owner_user_id: identity.owner_user_id,
@@ -538,6 +539,7 @@ async function upsertSingleFixList(entities, desired, identity, scan) {
     || [...rows].sort((a, b) => String(a.id).localeCompare(String(b.id)))[0]
     || null;
 
+  markStage(current?.id ? "reconcile_existing_fix_list" : "create_fix_list");
   if (!current?.id) return entities.FixList.create(desired);
 
   for (const duplicate of rows) {

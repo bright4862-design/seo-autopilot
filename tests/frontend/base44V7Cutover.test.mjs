@@ -110,6 +110,9 @@ test("V8 packages preserve V7 behavior outside route identity, comparison, save 
             .replace('import { authoritySaveFailure } from "./authoritySaveFailure.js";\n', "")
             .replace(/^ *let saveStage = "verify_envelope";\n/m, "")
             .replace(/^ *saveStage = "[a-z_]+";\n/gm, "")
+            .replace(", stage => { saveStage = stage; }", "")
+            .replace("identity, scan, markStage)", "identity, scan)")
+            .replace('  markStage(current?.id ? "reconcile_existing_fix_list" : "create_fix_list");\n', "")
             .replace("JSON.stringify(authoritySaveFailure(saveStage, error))", 'error instanceof Error ? error.name : "unknown_error"');
         }
         actual = normalizeActivation(actual);

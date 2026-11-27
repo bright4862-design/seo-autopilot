@@ -5,6 +5,10 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 import ts from "typescript";
+import stagedDeployments from "../../data/generated-staged-v9-routes.json" with { type: "json" };
+import { materializeStagedV9Packages } from "../../scripts/lib/staged-v9-function-packages.mjs";
+import { checkHistoricalLimitedReopen } from "./helpers/historicalLimitedFixture.mjs";
+import { loadSavedReportClient, savedReportReader } from "./helpers/savedReportClient.mjs";
 
 import { buildAuthoritySnapshot } from "../../base44/functions/persistDurableScanAuthority/authoritySnapshot.js";
 import { authorityRowsFromSnapshot } from "../../base44/functions/persistDurableScanAuthority/authorityRows.js";
@@ -69,7 +73,9 @@ async function importHandler(harnessName, source) {
   await import(`data:text/javascript;base64,${Buffer.from(`${prelude}\n${javascript}\n// harness:${harnessName}`).toString("base64")}`);
 }
 
-async function sealedRows(fingerprint, staged, notice) {
+const headingFinding = { fix_id: "fix_hist", rule: "missing_h1", issue_title: "Review this page heading" };
+
+async function sealedRows(fingerprint, staged, notice, { findings = [headingFinding], savedCap = 150 } = {}) {
   const buildSnapshot = staged ? buildStagedAuthoritySnapshot : buildAuthoritySnapshot;
   const published = staged && [PROTECTED_PLAN_STAGED_FINGERPRINT, PREVIOUS_PILOT_FINGERPRINT].includes(fingerprint);
   const evidencePage = "https://www.funbooker.com/fr/ville/paris";
@@ -112,7 +118,11 @@ async function sealedRows(fingerprint, staged, notice) {
       },
       classification_verdict: "complete",
       worker_peak_memory_bytes: 1024,
-      ...(staged ? { scan_mode: "standard_150", pipeline_mode: "staged", page_cap: 150 } : {}),
+      ...(staged && savedCap !== null ? {
+        scan_mode: savedCap === 500 ? "standard_500" : "standard_150",
+        pipeline_mode: "staged",
+        page_cap: savedCap,
+      } : {}),
     },
     review: {
       archetype_classifier_version: "archetype_classifier_v10_structural_finance_member_retail",
@@ -150,8 +160,8 @@ async function sealedRows(fingerprint, staged, notice) {
       classification_verdict: "complete",
       worker_peak_memory_bytes: 1024,
       ...(staged ? { geo_readiness: emptyGeoReadiness() } : {}),
-      recommendations: [{
-        fix_id: "fix_hist", rule: "missing_h1", issue_title: "Review this page heading",
+      recommendations: findings.map(finding => ({
+        ...finding,
         priority: "medium", page_url: evidencePage,
         affected_pages: [evidencePage],
         recommended_value: "Keep the verified saved instruction.",
@@ -169,7 +179,7 @@ async function sealedRows(fingerprint, staged, notice) {
           indexable_affected: 1,
           indexable_checked_eligible: 1,
         } : {}),
-      }],
+      })),
     },
     identity: {
       scan_id: "scan_hist",
@@ -204,11 +214,11 @@ function matches(record, query) {
 
 async function invokeWithFingerprint(fingerprint, {
   active = false, stagedReader, mutateRows = () => {}, callerUserId = "user_hist", signingKey = SECRET,
-  notice, paid = true,
+  notice, paid = true, accessGrant, savedRows, payload = { action: "get", scan_id: "scan_hist" },
 } = {}) {
   const invocationId = ++handlerInvocationSequence;
   const harnessName = `__customerHistoricalReaderHarness_${invocationId}`;
-  const rows = await sealedRows(fingerprint, Boolean(stagedReader), notice);
+  const rows = savedRows ?? await sealedRows(fingerprint, Boolean(stagedReader), notice);
   await mutateRows(rows);
   const access = {
     id: "access_hist",
@@ -220,6 +230,7 @@ async function invokeWithFingerprint(fingerprint, {
     grant_source: "manual_grant",
     app_id: "6a498732ec779dfaaeab0e53",
     granted_at: "2026-08-31T09:00:00.000Z",
+    ...accessGrant,
   };
   const base44 = {
     auth: { me: async () => ({ id: callerUserId, email: "paid@example.com" }) },
@@ -278,13 +289,28 @@ async function invokeWithFingerprint(fingerprint, {
     return await handler(new Request("https://function.example", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "get", scan_id: "scan_hist" }),
+      body: JSON.stringify(payload),
     }));
   } finally {
     delete globalThis[harnessName];
     if (priorDeno === undefined) delete globalThis.Deno;
     else globalThis.Deno = priorDeno;
   }
+}
+
+async function loadReaderPackage(directory, entry = readFileSync(join(directory, "entry.ts"), "utf8")) {
+  const fromReader = file => import(pathToFileURL(join(directory, file)).href);
+  return {
+    entry,
+    modules: {
+      ...await fromReader("projection.js"),
+      ...await fromReader("limitedResultIntegrity.js"),
+      ...await fromReader("customerPreviewSeal.js"),
+      ...await fromReader("releaseCompatibility.js"),
+      ...await fromReader("generatedReleaseContract.js"),
+      ...await fromReader("generatedBuildId.js"),
+    },
+  };
 }
 
 test("the next V9 reader opens prior signed staged results without marking them current", async t => {
@@ -296,19 +322,9 @@ test("the next V9 reader opens prior signed staged results without marking them 
   const generatedContract = join(directory, "generatedReleaseContract.js");
   writeFileSync(generatedContract, readFileSync(generatedContract, "utf8")
     .replace(/RELEASE_FINGERPRINT = "[a-f0-9]{16}"/, `RELEASE_FINGERPRINT = "${nextFingerprint}"`));
-  const fromReader = file => import(pathToFileURL(join(directory, file)).href);
-  const stagedReader = {
-    entry: readFileSync(join(directory, "entry.ts"), "utf8")
-      .replace(/BASE44_HANDLER_RELEASE_FINGERPRINT = "[a-f0-9]{16}"/, `BASE44_HANDLER_RELEASE_FINGERPRINT = "${nextFingerprint}"`),
-    modules: {
-      ...await fromReader("projection.js"),
-      ...await fromReader("limitedResultIntegrity.js"),
-      ...await fromReader("customerPreviewSeal.js"),
-      ...await fromReader("releaseCompatibility.js"),
-      ...await fromReader("generatedReleaseContract.js"),
-      ...await fromReader("generatedBuildId.js"),
-    },
-  };
+  const nextEntry = readFileSync(join(directory, "entry.ts"), "utf8")
+    .replace(/BASE44_HANDLER_RELEASE_FINGERPRINT = "[a-f0-9]{16}"/, `BASE44_HANDLER_RELEASE_FINGERPRINT = "${nextFingerprint}"`);
+  const stagedReader = await loadReaderPackage(directory, nextEntry);
 
   assert.equal(stagedReader.modules.RELEASE_FINGERPRINT, nextFingerprint);
   for (const fingerprint of [PREVIOUS_STAGED_FINGERPRINT, PROTECTED_PLAN_STAGED_FINGERPRINT, PREVIOUS_PILOT_FINGERPRINT]) {
@@ -509,4 +525,168 @@ test("signed V9 previews carry only the bounded notice and reject a modified rea
       assert.equal(Object.hasOwn(body.run, "crawl_timing"), false);
     }
   }
+});
+
+test("reopening historical b36 reports through the customer frontend", async t => {
+  const temp = mkdtempSync(join(tmpdir(), "historical-saved-report-"));
+  t.after(() => rmSync(temp, { recursive: true, force: true }));
+  writeFileSync(join(temp, "package.json"), '{"type":"module"}');
+  const candidate = join(temp, "candidate");
+  materializeStagedV9Packages(process.cwd(), candidate);
+  const v8 = "getCustomerScanResultV8";
+  const v9 = stagedDeployments.functions.getCustomerScanResultV9.route_name;
+  const readers = {
+    [v8]: await loadReaderPackage(join("base44/functions", v8)),
+    [v9]: await loadReaderPackage(join(candidate, "base44/functions", v9)),
+  };
+
+  async function read(rows, options = {}) {
+    const routes = [];
+    const attempts = [];
+    let body;
+    let status;
+    const client = loadSavedReportClient(async (route, payload) => {
+      assert.ok(Object.hasOwn(readers, route), route);
+      assert.deepEqual(payload, { scan_id: rows.run.id });
+      routes.push(route);
+      const response = await invokeWithFingerprint(rows.run.beta_revision_fingerprint, {
+        ...options, savedRows: rows, payload, stagedReader: readers[route],
+        accessGrant: {
+          grant_source: "stripe_checkout",
+          stripe_checkout_session_id: "cs_test_local_historical",
+          paid_at: "2026-08-31T09:00:00.000Z",
+        },
+      });
+      status = response.status;
+      body = await response.clone().json();
+      attempts.push([status, body.error_code]);
+      return response;
+    }, { userId: options.callerUserId, generation: options.generation });
+    const original = structuredClone(rows);
+    const result = await savedReportReader(client)(rows.run.id);
+    assert.deepEqual(rows, original, "reopening must preserve the persisted rows and proofs");
+    return { body, status, routes, attempts, result };
+  }
+
+  const rows = await sealedRows(PREVIOUS_PILOT_FINGERPRINT, true, undefined, { findings: [
+    headingFinding,
+    { fix_id: "fix_hist_2", rule: "missing_title", issue_title: "Review this page title" },
+    { fix_id: "fix_hist_3", rule: "missing_description", issue_title: "Review this description" },
+  ] });
+  const preview = buildStagedPreviewPayload({
+    ...rows, ownerUserId: rows.run.owner_user_id, fullAuthorityProof: rows.run.authority_proof,
+  });
+  rows.run.customer_preview_seal_version = stagedPreview.CUSTOMER_PREVIEW_SEAL_VERSION;
+  rows.run.customer_preview_sealed_at = rows.run.authority_sealed_at;
+  rows.run.customer_preview_proof = await createStagedPreviewProof(preview, SECRET);
+  rows.run.customer_preview_payload = serializeStagedPreviewPayload(preview);
+
+  // The b36 writer at 743aa8786d31c1a2417e852c40b808d687d16337 produced
+  // these proofs from the same synthetic inputs and local signing key.
+  assert.equal(rows.run.authority_proof, "37ba8ec73a65935e45ea12aae0a516c848d8ecbbaaef352baa64c8f57c1eb6e7");
+  assert.equal(rows.run.customer_preview_proof, "1e509fbf5528d70a5236b7ddc76da9378d3e307601e7e79830e5bb67de39218e");
+
+  await t.test("the published pilot verifies the full report on its first V9 read", async () => {
+    const { attempts, routes, result } = await read(rows, { generation: "PUBLISHED_PILOT" });
+    assert.deepEqual(routes, [v9]);
+    assert.deepEqual(attempts, [[200, undefined]]);
+    assert.equal(result.ok, true, result.kind);
+    assert.equal(result.access, "full");
+    assert.equal(result.authority_verified, true);
+    assert.equal(result.scan_id, rows.run.id);
+    assert.equal(result.fix_list_id, rows.fixList.id);
+    assert.equal(result.run.health_score, rows.run.health_score);
+    assert.deepEqual(result.fixItems.map(item => item.fix_id), rows.fixItems.map(item => item.fix_id));
+  });
+
+  for (const paid of [true, false]) {
+    const access = paid ? "full" : "preview";
+    await t.test(`complete report preserves its signed ${access} projection`, async () => {
+      const { body, routes, attempts, result } = await read(rows, { paid });
+      assert.deepEqual(routes, [v8, v9]);
+      assert.deepEqual(attempts, [[503, "result_release_mismatch"], [200, undefined]]);
+      assert.equal(body.release_contract_current, false);
+      assert.equal(result.ok, true, result.kind);
+      assert.equal(result.access, access);
+      assert.equal(result.authority_verified, true);
+      assert.equal(result.scan_id, rows.run.id);
+      assert.equal(result.fix_list_id, rows.fixList.id);
+      assert.equal(result.run.project_id, rows.run.project_id);
+      assert.equal(preview.run.beta_revision_fingerprint, PREVIOUS_PILOT_FINGERPRINT);
+      assert.equal(result.run.beta_revision_fingerprint, paid ? PREVIOUS_PILOT_FINGERPRINT : undefined);
+      assert.equal(result.run.health_score, 48);
+      assert.equal(result.run.pages_crawled, 150);
+      assert.equal(result.fixList.total_fixes, 3);
+      for (const field of ["critical_count", "high_count", "medium_count", "low_count"]) {
+        assert.equal(result.fixList[field], rows.fixList[field], field);
+      }
+      const expectedItems = paid ? rows.fixItems : preview.fixItems;
+      assert.equal(expectedItems.length, paid ? 3 : 2);
+      assert.deepEqual(result.fixItems.map(item => item.fix_id), expectedItems.map(item => item.fix_id));
+      for (const [index, item] of result.fixItems.entries()) {
+        assert.equal(item.recommended_value, expectedItems[index].recommended_value);
+        if (paid) assert.deepEqual(item.affected_pages, expectedItems[index].affected_pages);
+        else {
+          assert.equal(item.preview_example_page, expectedItems[index].preview_example_page);
+          assert.equal(Object.hasOwn(item, "affected_pages"), false);
+          assert.equal(Object.hasOwn(item, "project_id"), false);
+        }
+      }
+    });
+  }
+
+  await t.test("a signed report with no recorded cap reopens with no inferred tier", async () => {
+    const saved = await sealedRows(PREVIOUS_PILOT_FINGERPRINT, true, undefined, { savedCap: null });
+    assert.equal(saved.run.authority_proof, "87173132d5b98fe79ca51f37d4968dc81fec5a727ce169ba29e5ec0397074669");
+    assert.equal(Object.hasOwn(saved.run, "page_cap"), false);
+    const { attempts, routes, result } = await read(saved);
+    assert.deepEqual(routes, [v8, v9]);
+    assert.deepEqual(attempts, [[503, "result_release_mismatch"], [200, undefined]]);
+    assert.equal(result.ok, true, result.kind);
+    assert.equal(result.authority_verified, true);
+    assert.equal(result.run.id, saved.run.id);
+    assert.equal(result.run.health_score, saved.run.health_score);
+    assert.equal(Object.hasOwn(result.run, "page_cap"), false);
+    assert.notEqual(result.run.scan_mode, "standard_500");
+  });
+
+  await t.test("the pilot reads a historical 500-page allowance and the original 150 checked pages", async () => {
+    const saved = await sealedRows(PREVIOUS_PILOT_FINGERPRINT, true, undefined, { savedCap: 500 });
+    assert.equal(saved.run.authority_proof, "5ef27e35c886cb15fc1dab395b0908c275e071953b83d104285e116b55f9ce44");
+    const { routes, result } = await read(saved, { generation: "PUBLISHED_PILOT" });
+    assert.deepEqual(routes, [v9]);
+    assert.equal(result.ok, true, result.kind);
+    assert.equal(result.authority_verified, true);
+    assert.equal(result.run.scan_mode, "standard_500");
+    assert.equal(result.run.page_cap, 500);
+    assert.equal(result.run.pages_crawled, 150);
+    assert.equal(result.fixList.total_fixes, saved.fixList.total_fixes);
+    assert.equal(result.run.health_score, saved.run.health_score);
+  });
+
+  for (const [label, options, mutate, expectedRoutes, expectedStatus, code, kind] of [
+    ["another owner", { callerUserId: "other_user" }, () => {}, [v8], 404, "scan_not_found", "not_found"],
+    ["altered finding", {}, saved => { saved.fixItems[0].recommended_value = "Unsigned replacement"; },
+      [v8, v9], 409, "result_authority_invalid", "authority_invalid"],
+    ["altered preview score", { paid: false }, saved => {
+      const changed = JSON.parse(saved.run.customer_preview_payload);
+      changed.run.health_score = 99;
+      saved.run.customer_preview_payload = serializeStagedPreviewPayload(changed);
+    }, [v8, v9], 409, "result_preview_invalid", "authority_invalid"],
+  ]) {
+    await t.test(`rejects ${label} without returning saved findings`, async () => {
+      const saved = structuredClone(rows);
+      mutate(saved);
+      const { body, status, routes, result } = await read(saved, options);
+      assert.deepEqual(routes, expectedRoutes);
+      assert.equal(status, expectedStatus);
+      assert.equal(body.error_code, code);
+      assert.equal(body.fixItems, undefined);
+      assert.equal(result.ok, false);
+      assert.equal(result.kind, kind);
+      assert.equal(result.fixItems, undefined);
+    });
+  }
+
+  await t.test("limited report preserves its original integrity boundary", () => checkHistoricalLimitedReopen(read));
 });

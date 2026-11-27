@@ -66,7 +66,7 @@ export function topFixIds(fixes = [], { handoff } = {}) {
   return selected.sort((a, b) => ordered.indexOf(a) - ordered.indexOf(b)).map(id);
 }
 
-export function withFirstFixes(projection, run = {}) {
+export function withFirstFixes(projection, run = {}, verifiedItems = []) {
   if (run.page_cap !== undefined && projection.result_integrity_verified && !projection.authority_verified) {
     // Limited seals bind evidence status, priority and rule. They omit Stage 3
     // ranks, action bands and owner assignments.
@@ -78,7 +78,15 @@ export function withFirstFixes(projection, run = {}) {
   }
   if (run.page_cap !== undefined && projection.authority_verified) {
     const handoff = run?.health_score_explanation?.stage3_delivery?.handoff_v2_source;
-    return {...projection, top_fix_ids: topFixIds(projection.fixItems || [], { handoff })};
+    let visible = projection.fixItems || [];
+    if (projection.access === "preview") {
+      // Preview rows omit verification details. Check the sealed source without
+      // returning its private fields or selecting beyond the visible preview.
+      const rows = Array.isArray(verifiedItems) ? verifiedItems : [];
+      const actionableIds = new Set(rows.filter(fix => id(fix) && isActionable(fix)).map(id));
+      visible = visible.filter(fix => actionableIds.has(id(fix)));
+    }
+    return { ...projection, top_fix_ids: topFixIds(visible, { handoff }) };
   }
   return projection;
 }

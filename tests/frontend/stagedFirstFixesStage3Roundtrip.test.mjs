@@ -179,5 +179,9 @@ test("review-only results retain all findings and have no immediate actions", as
   assert.deepEqual(result.customer.top_fix_ids, []);
   assert.deepEqual(result.snapshot.fix_list.top_action_fix_ids, []);
   assert.equal(result.customer.fixItems.length, 4);
+  const preview = buildCustomerProjection({ ...result.rows, fullAccess: false, previewAccess: true, authorityVerified: true });
+  assert.ok(preview.fixItems.length > 0);
+  assert.deepEqual(preview.top_fix_ids, []);
+  assert.ok(preview.fixItems.every(fix => !("verification_state" in fix) && !("raw_finding" in fix)));
   await assertSealedRoundtrip(result);
 });

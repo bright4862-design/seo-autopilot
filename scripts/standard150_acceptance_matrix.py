@@ -152,10 +152,25 @@ def build_acceptance_matrix(observation: dict[str, Any]) -> dict[str, dict[str, 
     ) else ""
 
     terminal_observed = status in TERMINAL_STATUSES
+    # A paid/full read verifies the complete persisted authority HMAC.
+    # A signed unpaid preview verifies only its independent bounded payload.
+    full_authority_verified = (
+        status == "complete"
+        and result.get("access") == "full"
+        and result.get("authority_verified") is True
+    )
+    preview_integrity_verified = (
+        status == "complete"
+        and result.get("access") == "preview"
+        and result.get("authority_verified") is True
+    )
     if not terminal_observed or not result:
         authority_state = "unavailable"
     elif status == "complete":
-        authority_state = "authoritative" if result.get("authority_verified") is True else "unverified"
+        authority_state = (
+            "authoritative" if full_authority_verified
+            else "preview_only" if preview_integrity_verified else "unverified"
+        )
     elif status == "limited":
         authority_state = "integrity_only" if result.get("result_integrity_verified") is True else "unverified"
     else:
@@ -177,7 +192,8 @@ def build_acceptance_matrix(observation: dict[str, Any]) -> dict[str, dict[str, 
         "authority_outcome": {
             "available": terminal_observed and bool(result),
             "state": authority_state,
-            "authority_verified": result.get("authority_verified") is True,
+            "authority_verified": full_authority_verified,
+            "preview_integrity_verified": preview_integrity_verified,
             "result_integrity_verified": result.get("result_integrity_verified") is True,
             "release_contract_current": result.get("release_contract_current") is True,
         },
@@ -235,6 +251,41 @@ def build_acceptance_matrix(observation: dict[str, Any]) -> dict[str, dict[str, 
         },
         "limited_access_failure_class": _limited_access_failure_class(observation),
     }
+
+
+def complete_verdict_failures(matrix: dict[str, Any]) -> list[str]:
+    """Reject contradictory measured verdicts on a claimed complete result.
+
+    Availability alone does not establish sufficient coverage or trustworthy
+    classification. Limited results may legitimately carry those negative
+    verdicts and must retain their separate integrity-only acceptance path.
+    Missing dimensions remain gaps in _matrix_contract_gaps, not failures here.
+    """
+    if not isinstance(matrix, dict):
+        return []
+    infrastructure = matrix.get("infrastructure_outcome")
+    if not isinstance(infrastructure, dict) or infrastructure.get("terminal_status") != "complete":
+        return []
+
+    failures: list[str] = []
+    coverage = matrix.get("coverage_sufficiency")
+    if (isinstance(coverage, dict) and coverage.get("available") is True
+            and coverage.get("state") != "sufficient"):
+        failures.append("complete_coverage_not_sufficient")
+
+    classification = matrix.get("classification_verdict")
+    if (isinstance(classification, dict) and classification.get("available") is True
+            and classification.get("state") == "inconclusive_insufficient_evidence"):
+        failures.append("complete_classification_inconclusive")
+
+    quality = matrix.get("evidence_quality_verdict")
+    if (isinstance(quality, dict) and quality.get("available") is True
+            and (quality.get("blocking") is True
+                 or quality.get("state") in {
+                     "no_usable_html", "insufficient_discovery", "access_limited",
+                 })):
+        failures.append("complete_evidence_quality_blocked")
+    return failures
 
 
 def _matrix_contract_gaps(matrix: dict[str, Any]) -> list[str]:

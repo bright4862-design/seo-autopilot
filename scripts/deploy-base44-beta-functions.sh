@@ -59,6 +59,16 @@ fixlist_set_base44_release_source_sha "$APP_ID" "$SOURCE_SHA"
 
 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions deploy "${CHECKOUT_FUNCTIONS[@]}"
 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions list
-BASE44_APP_ID="$APP_ID" bash "$REPO_ROOT/scripts/verify-base44-functions.sh"
+# The release-functions scope publishes the owner diagnostic that a fresh
+# Standard 150 owner-canary relies on. Its package identity must therefore
+# be attested before a release-functions deploy prints a success marker.
+# Explicitly override ambient settings; scanner-functions still verify only
+# the six public routes and do not require an owner-debug deployment.
+VERIFY_OWNER_DEBUG_RUNTIME=0
+if [[ "$DEPLOY_SCOPE" == "release-functions" ]]; then
+  VERIFY_OWNER_DEBUG_RUNTIME=1
+fi
+BASE44_APP_ID="$APP_ID" VERIFY_OWNER_DEBUG_RUNTIME="$VERIFY_OWNER_DEBUG_RUNTIME" \
+  bash "$REPO_ROOT/scripts/verify-base44-functions.sh"
 
 printf 'BASE44_RELEASE_FUNCTIONS_DEPLOYED\nsource_sha=%s\nfunction_count=%s\n' "$SOURCE_SHA" "${#FUNCTIONS[@]}"

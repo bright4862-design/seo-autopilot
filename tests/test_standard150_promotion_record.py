@@ -202,14 +202,35 @@ def test_restart_recovery_binds_independent_probe_package_to_accepted_source(v9_
     "scanner-api/requirements.txt",
     "cloudbuild.durable-worker.yaml",
     "data/cross-runtime-release-components.json",
+    "scanner-api/Dockerfile",
+    "scripts/staged_candidate_cloudbuild.py",
+    "scripts/verify-fixlist-static-egress-canary.sh",
+    "cloudbuild.durable-worker-static-egress-canary.yaml",
+    "scripts/build-worker-candidate.sh",
+    "scripts/assert_standard150_promotion_record.py",
+    "scripts/assert_standard150_rollback_readback.py",
+    "scripts/assert_standard150_rollback_ownership.py",
+    "scripts/fixlist-cloud-operator.sh",
+    "scripts/lib/release-source-guard.sh",
+    ".github/workflows/fixlist-cloud-operator.yml",
+    "scripts/verify_worker_build_provenance.py",
+    "scripts/resolve_serving_worker_revision.py",
+    "scripts/verify_staged_worker_base44_runtime.py",
+    "scripts/verify-base44-site.sh",
+    "scripts/verify-base44-functions.sh",
+    "scripts/lib/base44-public-routes.mjs",
+    "scripts/generate_release_contracts.mjs",
+    "scripts/base44_release_manifest.mjs",
+    "scripts/lib/staged-v9-function-packages.mjs",
 ])
-def test_worker_promotion_refuses_changed_runtime_inputs(v9_release_history, path):
+@pytest.mark.parametrize("flag", ["--worker", "--worker-promotion"])
+def test_worker_promotion_refuses_changed_runtime_inputs(v9_release_history, path, flag):
     root, files, commit, _, accept = v9_release_history
     files(path, "Accepted input\n")
     accepted = commit()
     accept(accepted)
     frozen = commit()
-    cli = [sys.executable, str(Path(gate.__file__)), "--repo-root", str(root), "--worker"]
+    cli = [sys.executable, str(Path(gate.__file__)), "--repo-root", str(root), flag]
     good = subprocess.run([*cli, "--source-sha", frozen], capture_output=True, text=True)
     assert good.returncode == 0, good.stderr
 

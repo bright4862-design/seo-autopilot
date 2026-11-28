@@ -75,7 +75,9 @@ async function fixture(t, {schemas = baseline(), rows = {}, changeReadback = fal
         const name = url.pathname.split('/entities/')[1].split('/')[0];
         const page = url.searchParams.get('cursor') ? 1 : 0;
         const pages = rows[name] || [[]];
-        response.end(JSON.stringify(rowsMalformed ? {items: []} : {items: pages[page] || [], has_more: page < pages.length - 1, ...(page < pages.length - 1 ? {next_cursor: 'next'} : {})}));
+        const projection = new Set((url.searchParams.get('fields') || '').split(','));
+        const items = (pages[page] || []).map(row => Object.fromEntries(Object.entries(row).filter(([key]) => projection.has(key))));
+        response.end(JSON.stringify(rowsMalformed ? {items: []} : {items, has_more: page < pages.length - 1, ...(page < pages.length - 1 ? {next_cursor: 'next'} : {})}));
       } else { response.statusCode = 404; response.end('{}'); }
     });
   });
@@ -335,6 +337,8 @@ for (const [label, rows, rowsMalformed] of [
   ['active scan', {ScanRun: [[{id: 'active', status: 'crawling'}]]}, false],
   ['terminal staged scan', {ScanRun: [[{id: 'staged', status: 'complete', pipeline_mode: 'staged'}]]}, false],
   ['later-page staged scan', {ScanRun: [[{id: 'old', status: 'complete'}], [{id: 'staged', status: 'limited', pipeline_mode: 'staged'}]]}, false],
+  ['retained rollout scope on a terminal monolith', {ScanRun: [[{id: 'old', status: 'complete', pipeline_mode: 'monolith', staged_rollout_scope: 'paid'}]]}, false],
+  ['retained rollout scope on a later page', {ScanRun: [[{id: 'old', status: 'complete'}], [{id: 'old2', status: 'complete', staged_rollout_scope: 'paid'}]]}, false],
   ['retained origin provenance', {ScanRun: [[{id: 'origin', status: 'complete', pipeline_mode: 'monolith', admission_target_origin: 'https://fixture.example:443'}]]}, false],
   ['500 entitlement', {Access: [[{id: 'grant', page_cap: 500}]]}, false],
   ['retained FixItem evidence', {FixItem: [[{id: 'fix', affected_page_count: 20}]]}, false],

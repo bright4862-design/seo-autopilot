@@ -91,6 +91,7 @@ const report = {
   expected_release_fingerprint:config.expectedFingerprint,
   scan_id:null, accepted:false, acceptance_verified:false, terminal_status:null,
   authority_verified:false, release_fingerprint:null, release_contract_current:false,
+  customer_reopen_verified:false, customer_reopen_fix_list_id:null,
   durable_worker_owned:false, ownership_evidence:[], page_cap:null, pages_crawled:null,
   pipeline_mode:null, last_committed_batch:null, committed_batch_count:null,
   duration_ms:null, worker_peak_memory_bytes:null, progress:[], unverified:[], failure_code:null,
@@ -110,6 +111,21 @@ function body(response) { return response?.data && typeof response.data === 'obj
 function canonicalUrl(value) { try { return new URL(String(value)).href; } catch { return ''; } }
 function finitePositive(value) { return typeof value === 'number' && Number.isFinite(value) && value > 0; }
 function safeInteger(value) { return Number.isInteger(value) && value >= 0; }
+function verifiedCustomerReopen(reopened, original, scanId, projectId, fingerprint) {
+  const initialFixListId = String(original?.fix_list_id || '');
+  const reopenedFixListId = String(reopened?.fix_list_id || '');
+  return /^[A-Za-z0-9_-]{6,160}$/.test(initialFixListId)
+    && initialFixListId === reopenedFixListId
+    && original?.scan_id === scanId && original?.run?.id === scanId && original?.run?.status === 'complete'
+    && reopened?.success === true && reopened?.access === 'full'
+    && reopened?.authority_verified === true && reopened?.release_contract_current === true
+    && reopened?.scan_id === scanId && reopened?.run?.id === scanId
+    && reopened?.run?.status === 'complete'
+    && reopened?.run?.beta_revision_fingerprint === fingerprint
+    && reopened?.fixList?.id === reopenedFixListId
+    && reopened?.fixList?.scan_run_id === scanId
+    && reopened?.fixList?.project_id === projectId;
+}
 function observe(run) {
   requireCondition(run?.id === report.scan_id && run?.owner_user_id === config.ownerId && run?.project_id === config.projectId, 'scan_identity_mismatch');
   requireCondition(run?.request_id === config.requestId && (run?.idempotency_key || run?.request_id) === config.requestId, 'scan_request_mismatch');
@@ -173,6 +189,17 @@ try {
   }
   report.terminal_status = String(run?.status || '');
   requireCondition(['complete', 'limited', 'failed', 'cancelled'].includes(report.terminal_status), 'canary_timeout');
+  if (report.terminal_status === 'complete') {
+    // A distinct, fresh user-scoped invocation after terminal persistence.
+    // The polling projection alone cannot establish that the result reopens.
+    const reopened = body(await bounded(() => base44.functions.invoke(config.resultRoute, {
+      action:'get', scan_id:report.scan_id,
+    })));
+    report.customer_reopen_verified = verifiedCustomerReopen(
+      reopened, projection, report.scan_id, config.projectId, config.expectedFingerprint,
+    );
+    if (report.customer_reopen_verified) report.customer_reopen_fix_list_id = reopened.fix_list_id;
+  }
   report.authority_verified = projection.authority_verified === true;
   report.release_contract_current = projection.release_contract_current === true;
   if (projection.run?.crawl_timing?.target_cooldown_publication?.state === 'unconfirmed') {
@@ -196,6 +223,7 @@ try {
   const checks = {
     terminal_complete:report.terminal_status === 'complete',
     signed_authority:report.authority_verified && /^[a-f0-9]{64}$/.test(String(run.authority_proof || '')) && Boolean(run.authority_seal_version),
+    customer_reopen:report.customer_reopen_verified === true,
     release_fingerprint:report.release_contract_current && report.release_fingerprint === config.expectedFingerprint && run.beta_revision_fingerprint === config.expectedFingerprint,
     staged_150:report.page_cap === 150 && report.pipeline_mode === 'staged',
     durable_ownership:report.durable_worker_owned,
@@ -219,16 +247,115 @@ cat "$TMP/config.js" "$TMP/canary.js" | timeout --signal=TERM "$((MAX_WAIT_SECON
 CLI_STATUS=$?
 set -e
 # Never print SDK responses, user email, authority proofs, credentials or raw evidence.
-node - "$TMP/runtime-output" "$ACCEPTANCE_OUTPUT" "$CLI_STATUS" "$SOURCE_SHA" "$EXPECTED_OWNER_USER_ID" "$PROJECT_ID" "$REQUEST_ID" <<'NODE'
+node - "$TMP/runtime-output" "$ACCEPTANCE_OUTPUT" "$CLI_STATUS" "$SOURCE_SHA" "$EXPECTED_OWNER_USER_ID" "$PROJECT_ID" "$REQUEST_ID" "$TMP/config.js" <<'NODE'
 const fs = require('node:fs');
-const [input, output, status, sourceSha, ownerId, projectId, requestId] = process.argv.slice(2);
-const prefix = 'FIXLIST_STAGED_OWNER_CANARY=';
-const line = fs.readFileSync(input, 'utf8').split('\n').filter(value => value.startsWith(prefix)).at(-1);
-let report;
-try { report = JSON.parse(line?.slice(prefix.length) || ''); } catch {
-  report = {schema_version:'staged_owner_canary_v1', production_freeze:false, source_sha:sourceSha, verified_owner_user_id:null, expected_owner_user_id:ownerId, project_id:projectId, request_id:requestId, acceptance_verified:false, failure_code:'cli_result_unavailable', unverified:['authenticated_runtime_result']};
+const [input, output, status, sourceSha, ownerId, projectId, requestId, configPath] = process.argv.slice(2);
+const configSource = fs.readFileSync(configPath, 'utf8').trim();
+const configPrefix = 'const config = ';
+if (!configSource.startsWith(configPrefix) || !configSource.endsWith(';')) throw new Error('Malformed locally pinned canary config');
+const pinned = JSON.parse(configSource.slice(configPrefix.length, -1));
+if (pinned.sourceSha !== sourceSha || pinned.ownerId !== ownerId
+    || pinned.projectId !== projectId || pinned.requestId !== requestId) {
+  throw new Error('Canary receipt configuration identity mismatch');
 }
-if (Number(status) !== 0) { report.acceptance_verified = false; report.failure_code = 'cli_execution_failed'; report.unverified = [...new Set([...(report.unverified || []), 'cli_execution'])]; }
+// The CLI is a transport, not an independent witness of evidence acceptance.
+// Refuse multiple stdout reports, foreign identities, or unsupported success claims.
+function parseCanaryReceipt(stdout, expected) {
+  const prefix = 'FIXLIST_STAGED_OWNER_CANARY=';
+  const makeFailure = code => ({
+    schema_version:'staged_owner_canary_v1', production_freeze:false,
+    source_sha:expected.sourceSha, app_id:expected.appId,
+    expected_owner_user_id:expected.ownerId, verified_owner_user_id:null,
+    project_id:expected.projectId, target_url:expected.targetUrl,
+    request_id:expected.requestId, expected_page_cap:150,
+    expected_release_fingerprint:expected.fingerprint,
+    accepted:false, acceptance_verified:false, failure_code:code,
+    unverified:['authenticated_runtime_result'],
+  });
+  const plain = value => value !== null && typeof value === 'object'
+    && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
+  const lines = stdout.split(/\r?\n/).filter(line => line.startsWith(prefix));
+  if (lines.length !== 1) return makeFailure(lines.length === 0 ? 'cli_result_unavailable' : 'cli_marker_ambiguous');
+  let report;
+  try { report = JSON.parse(lines[0].slice(prefix.length)); }
+  catch { return makeFailure('cli_report_malformed'); }
+  const permitted = new Set([
+    'schema_version','production_freeze','source_sha','local_source_verified',
+    'deployed_git_source_sha','app_id','expected_owner_user_id','verified_owner_user_id',
+    'project_id','target_url','request_id','expected_page_cap','expected_release_fingerprint',
+    'scan_id','accepted','acceptance_verified','terminal_status','authority_verified',
+    'release_fingerprint','release_contract_current','customer_reopen_verified',
+    'customer_reopen_fix_list_id','durable_worker_owned','ownership_evidence',
+    'page_cap','pages_crawled','pipeline_mode','last_committed_batch',
+    'committed_batch_count','duration_ms','worker_peak_memory_bytes','progress',
+    'unverified','failure_code',
+  ]);
+  if (!plain(report) || Object.keys(report).some(key => !permitted.has(key))
+      || !plain(report.deployed_git_source_sha)
+      || report.deployed_git_source_sha.state !== 'unverified'
+      || Object.keys(report.deployed_git_source_sha).some(key => !['state','reason'].includes(key))
+      || report.deployed_git_source_sha.reason !== 'The customer API does not attest a deployed Git SHA.'
+      || !Array.isArray(report.progress) || report.progress.length > 2000
+      || !report.progress.every(row => plain(row)
+        && Object.keys(row).every(key => ['observed_at','status','pages_crawled','pages_planned','last_committed_batch'].includes(key))
+        && typeof row.observed_at === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(row.observed_at)
+        && !Number.isNaN(Date.parse(row.observed_at))
+        && typeof row.status === 'string' && /^[a-z_]{1,32}$/.test(row.status)
+        && ['pages_crawled','pages_planned','last_committed_batch'].every(key =>
+          row[key] === null || (Number.isSafeInteger(row[key]) && row[key] >= 0)))
+      || !Array.isArray(report.unverified) || report.unverified.length > 100
+      || !report.unverified.every(value => typeof value === 'string' && /^[a-z][a-z0-9_]{0,127}$/.test(value))
+      || !Array.isArray(report.ownership_evidence) || report.ownership_evidence.length > 32
+      || !report.ownership_evidence.every(value => typeof value === 'string' && /^[a-z][a-z0-9_]{0,127}$/.test(value))
+      || (report.failure_code !== null && (typeof report.failure_code !== 'string' || !/^[a-z][a-z0-9_]{0,127}$/.test(report.failure_code)))
+      || typeof report.acceptance_verified !== 'boolean') {
+    return makeFailure('cli_report_invalid');
+  }
+  if (report.schema_version !== 'staged_owner_canary_v1'
+      || report.production_freeze !== false || report.local_source_verified !== true
+      || report.source_sha !== expected.sourceSha || report.app_id !== expected.appId
+      || report.expected_owner_user_id !== expected.ownerId
+      || report.project_id !== expected.projectId || report.target_url !== expected.targetUrl
+      || report.request_id !== expected.requestId
+      || report.expected_page_cap !== 150
+      || report.expected_release_fingerprint !== expected.fingerprint) {
+    return makeFailure('cli_report_identity_mismatch');
+  }
+  if (report.acceptance_verified === true) {
+    const idPattern = /^[A-Za-z0-9_-]{6,160}$/;
+    const positive = value => Number.isSafeInteger(value) && value > 0;
+    if (report.accepted !== true || report.verified_owner_user_id !== expected.ownerId
+        || !idPattern.test(String(report.scan_id || ''))
+        || !idPattern.test(String(report.customer_reopen_fix_list_id || ''))
+        || report.terminal_status !== 'complete'
+        || report.authority_verified !== true
+        || report.release_contract_current !== true
+        || report.customer_reopen_verified !== true
+        || report.durable_worker_owned !== true
+        || report.ownership_evidence.includes('authority_verified') !== true
+        || report.release_fingerprint !== expected.fingerprint
+        || report.page_cap !== 150 || report.pipeline_mode !== 'staged'
+        || !positive(report.pages_crawled) || report.pages_crawled > 150
+        || !Number.isSafeInteger(report.last_committed_batch) || report.last_committed_batch < 0
+        || report.committed_batch_count !== report.last_committed_batch + 1
+        || !positive(report.duration_ms) || !positive(report.worker_peak_memory_bytes)
+        || report.progress.length === 0 || report.unverified.length !== 0
+        || report.failure_code !== null) {
+      return makeFailure('cli_success_unsubstantiated');
+    }
+  }
+  return report;
+}
+// End of pure receipt-parser boundary.
+let report = parseCanaryReceipt(fs.readFileSync(input, 'utf8'), {
+  sourceSha, ownerId, projectId, requestId, appId:pinned.appId,
+  targetUrl:pinned.targetUrl, fingerprint:pinned.expectedFingerprint,
+});
+if (Number(status) !== 0) {
+  report.acceptance_verified = false;
+  report.failure_code = 'cli_execution_failed';
+  report.unverified = [...new Set([...(report.unverified || []), 'cli_execution'])];
+}
 const temporary = output + '.tmp-' + process.pid;
 fs.writeFileSync(temporary, JSON.stringify(report, null, 2) + '\n', {mode:0o600, flag:'wx'});
 fs.linkSync(temporary, output);

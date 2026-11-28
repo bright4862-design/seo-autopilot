@@ -56,7 +56,7 @@ const base44={auth:{me:async()=>{track('auth.me');return{id:scenario==='wrongOwn
 BusinessProject:{get:async(id)=>{track('BusinessProject.get',id);return{id,owner_user_id:scenario==='wrongProject'?'other_123':owner,website_url:url};},create:denied,update:denied},
 Access:{filter:async(query)=>{track('Access.filter',query);return scenario==='duplicateGrant'?[grant,{...grant,id:'access_456'}]:[grant];},create:denied,update:denied},
 ScanRun:{get:async(id)=>{track('ScanRun.get',id);return run;},create:denied,update:denied}
-},functions:{invoke:async(name,payload)=>{track(name,payload);if(name==='${launchRoute}')return{data:{success:true,accepted:true,scan_id:run.id,scan_mode:'standard_150',page_cap:150,pipeline_mode:scenario==='monolith'?'monolith':'staged'}};if(name==='${resultRoute}')return{data:{success:true,scan_id:run.id,authority_verified:true,release_contract_current:true,run:projected}};throw new Error('Unexpected function');}}};
+},functions:{invoke:async(name,payload)=>{track(name,payload);if(name==='${launchRoute}')return{data:{success:true,accepted:true,scan_id:run.id,scan_mode:'standard_150',page_cap:150,pipeline_mode:scenario==='monolith'?'monolith':'staged'}};if(name==='${resultRoute}'){ const fixListId='fixlist_123456'; const isReopen=payload?.action==='get'; return {data:{success:true,access:'full',scan_id:run.id,fix_list_id:isReopen&&scenario==='reopenMismatch'?'fixlist_foreign':fixListId,authority_verified:true,release_contract_current:true,run:projected,fixList:{id:fixListId,scan_run_id:run.id,project_id:project}}}; }throw new Error('Unexpected function');}}};
 const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
 await new AsyncFunction('base44',readFileSync(0,'utf8'))(base44);
 `);
@@ -107,6 +107,17 @@ test('canary refuses the old launcher route before CLI authentication', t => {
   assert.equal(result.report,null);
 });
 
+test('canary rejects missing or unsuffixed V9B reader before any CLI authentication', t => {
+  const canary=fixture(t);
+  const invalid=structuredClone(functions);
+  invalid.getCustomerScanResultV9.route_name='getCustomerScanResultV9';
+  writeFileSync(join(canary.root,routeManifest),JSON.stringify({functions:invalid}));
+  const result=canary.run();
+  assert.notEqual(result.status,0);
+  assert.match(result.stderr,/staged scan routes unavailable/);
+  assert.deepEqual(result.calls,[]);
+});
+
 test('authenticated identity mismatch stops before project lookup or scan start', t => {
   const result=fixture(t).run('wrongOwner');
   assert.equal(result.status,1);
@@ -136,7 +147,8 @@ test('one stable request produces a filtered verified staged-150 acceptance repo
   assert.equal(result.status,0,result.stderr);
   const starts=result.calls.filter(row=>row.name===launchRoute);
   assert.equal(starts.length,1);
-  assert.equal(result.calls.filter(row=>row.name===resultRoute).length,1);
+  assert.equal(result.calls.filter(row=>row.name===resultRoute).length,2);
+  assert.equal(result.calls.filter(row=>row.name===resultRoute)[1].payload.action,'get');
   assert.equal(starts[0].payload.request_id,requestId);
   assert.equal(starts[0].payload.idempotency_key,requestId);
   assert.equal(starts[0].payload.scan_mode,'standard_150');
@@ -154,6 +166,16 @@ test('one stable request produces a filtered verified staged-150 acceptance repo
   assert.equal(result.report.release_fingerprint,fingerprint);
   assert.doesNotMatch(JSON.stringify(result.report),/never-print|private page body|authority_proof/);
   assert.doesNotMatch(result.stdout,/never-print|private page body/);
+});
+
+test('fresh customer reopen rejects mismatched FixList on exact V9B route', t => {
+  const result=fixture(t).run('reopenMismatch');
+  assert.equal(result.status,1);
+  assert.equal(result.report.acceptance_verified,false);
+  assert.equal(result.report.customer_reopen_verified,false);
+  assert.ok(result.report.unverified.includes('customer_reopen'));
+  assert.equal(result.calls.filter(row=>row.name===launchRoute).length,1);
+  assert.equal(result.calls.filter(row=>row.name===resultRoute).length,2);
 });
 
 test('a legacy active grant without page_cap resolves to the server default 150', t => {

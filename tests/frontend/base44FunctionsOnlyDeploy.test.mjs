@@ -245,12 +245,35 @@ test("site publisher deploys and probes exact V9 and retained V8 both before and
     `active-restore ${physicalV9.join(" ")}`,
     `${cli} functions list`,
     ...probes,
+    "probe ownerScanDebugControl",
   ]);
   assert.match(contents(f.mutations), /verify --staged/);
   assert.match(contents(f.mutations), /release-guard-ran .*--base44-v9 site-and-functions/);
   assert.equal(contents(f.mutations).match(/current-main/g)?.length, 1);
   assert.match(contents(f.mutations), /site-verified/);
   assert.match(result.stdout, /BASE44_SITE_AND_BACKEND_DEPLOYED/);
+});
+
+test("site release attests owner-debug only after post-site restoration, and labels payment packages unverified", (t) => {
+  const f = fixture({ editRoutes: selectV9, publishSite: true });
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  const result = f.run("site-and-functions");
+  assert.equal(result.status, 0, result.stderr);
+  const calls = contents(f.calls);
+  assert.equal(calls.split("\n").filter((line) => line === "probe ownerScanDebugControl").length, 1);
+  assert.ok(calls.indexOf("site deploy --no-build --yes") < calls.indexOf("probe ownerScanDebugControl"));
+  assert.match(result.stdout, /build_verified=[^\n]*ownerScanDebugControl/);
+  assert.match(result.stdout, /build_unverified=createAccessCheckout stripeWebhook/);
+});
+
+test("stale owner-debug package after site reconciliation blocks success without making further writes", (t) => {
+  const f = fixture({ editRoutes: selectV9, publishSite: true, staleFunction: "ownerScanDebugControl" });
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  const result = f.run("site-and-functions");
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /FUNCTION_BUILD_MISMATCH name=ownerScanDebugControl/);
+  assert.match(contents(f.calls), /site deploy[\s\S]*functions deploy[\s\S]*probe ownerScanDebugControl/);
+  assert.doesNotMatch(result.stdout, /BASE44_SITE_AND_BACKEND_DEPLOYED/);
 });
 
 test("a failed site upload still restores the pinned V9 and V8 inventory", (t) => {
